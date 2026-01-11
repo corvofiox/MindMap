@@ -15,6 +15,7 @@ import { ConnectionStylePanel } from '@/components/canvas/ConnectionStylePanel'
 import { DomainContextMenu } from '@/components/canvas/DomainContextMenu'
 import { DomainStylePanel } from '@/components/canvas/DomainStylePanel'
 import { ContextMenuWrapper } from '@/components/ContextMenuWrapper'
+import { RichTextToolbar } from '@/components/canvas/RichTextToolbar'
 import { CONNECTION_DEFAULTS } from '@/constants'
 import { generateId, colorToHex, hexToRgba } from '@/utils/canvas'
 import { saveToCache, loadFromCache } from '@/utils/nodeCache'
@@ -316,6 +317,10 @@ export function CanvasPage() {
 
   // Cursor state
   const [customCursor, setCustomCursor] = useState<string | null>(null)
+
+  // Rich text toolbar state
+  const [richTextToolbarVisible, setRichTextToolbarVisible] = useState(false)
+  const [richTextToolbarPosition, setRichTextToolbarPosition] = useState({ x: 0, y: 0 })
 
   const { user } = useAuthStore()
   const {
@@ -2400,6 +2405,25 @@ export function CanvasPage() {
     }
   }, [])
 
+  // Show/hide rich text toolbar based on editing state
+  useEffect(() => {
+    if (editingId && containerRef.current) {
+      const node = nodes.get(editingId)
+      if (node) {
+        const rect = containerRef.current.getBoundingClientRect()
+        const nodeX = node.x * zoom + panX
+        const nodeY = node.y * zoom + panY + node.height * zoom
+        setRichTextToolbarPosition({
+          x: rect.left + nodeX + (node.width * zoom) / 2,
+          y: rect.top + nodeY,
+        })
+        setRichTextToolbarVisible(true)
+      }
+    } else {
+      setRichTextToolbarVisible(false)
+    }
+  }, [editingId, nodes, zoom, panX, panY])
+
   // 验证画布ID有效性
   const validCanvasId = canvasId ? parseInt(canvasId) : null
   const isCanvasValid = validCanvasId !== null && !isNaN(validCanvasId)
@@ -3673,6 +3697,30 @@ export function CanvasPage() {
           </div>
         </div>
       )}
+
+      {/* Rich Text Toolbar */}
+      <RichTextToolbar
+        visible={richTextToolbarVisible}
+        position={richTextToolbarPosition}
+        onCommand={(command, value) => {
+          // 只处理未被移除的命令
+          if (!['fontSize', 'justifyLeft', 'justifyCenter', 'justifyRight'].includes(command)) {
+            document.execCommand(command, false, value)
+          }
+        }}
+        onClose={() => setRichTextToolbarVisible(false)}
+        onFocus={() => {
+          if (editingId) {
+            const nodeElement = document.querySelector(`[data-node-id="${editingId}"]`)
+            if (nodeElement) {
+              const contentEditable = nodeElement.querySelector('[contenteditable="true"]')
+              if (contentEditable) {
+                (contentEditable as HTMLElement).focus()
+              }
+            }
+          }
+        }}
+      />
     </div>
   )
 }

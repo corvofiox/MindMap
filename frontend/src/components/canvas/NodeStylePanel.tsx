@@ -159,40 +159,53 @@ export function NodeStylePanel() {
           </div>
         </div>
 
+        {/* Text Alignment */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+            文字对齐
+          </label>
+          <div className="flex gap-2">
+            <button
+              className={`flex-1 py-2 px-3 rounded-lg border border-gray-300 dark:border-gray-600 transition-colors ${firstNode.textAlign === 'left' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400' : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'}`}
+              onClick={() => handleUpdate({ textAlign: 'left' })}
+              title="左对齐"
+            >
+              左对齐
+            </button>
+            <button
+              className={`flex-1 py-2 px-3 rounded-lg border border-gray-300 dark:border-gray-600 transition-colors ${firstNode.textAlign === 'center' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400' : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'}`}
+              onClick={() => handleUpdate({ textAlign: 'center' })}
+              title="居中对齐"
+            >
+              居中
+            </button>
+            <button
+              className={`flex-1 py-2 px-3 rounded-lg border border-gray-300 dark:border-gray-600 transition-colors ${firstNode.textAlign === 'right' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400' : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'}`}
+              onClick={() => handleUpdate({ textAlign: 'right' })}
+              title="右对齐"
+            >
+              右对齐
+            </button>
+          </div>
+        </div>
+
         {/* Font Size */}
         <div>
           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-            字体大小: {firstNode.fontSize}px
+            字体大小
           </label>
-          <input
-            type="range"
-            min="10"
-            max="36"
-            value={firstNode.fontSize}
-            onChange={(e) => handleUpdate({ fontSize: parseInt(e.target.value) })}
-            className="w-full"
-          />
-        </div>
-
-        {/* Text Align */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-            文本对齐
-          </label>
-          <div className="flex gap-2">
-            {(['left', 'center', 'right'] as const).map((align) => (
-              <button
-                key={align}
-                className={`flex-1 py-2 px-3 rounded-lg border capitalize transition-colors ${
-                  firstNode.textAlign === align
-                    ? 'bg-blue-500 text-white border-blue-500'
-                    : 'bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600'
-                }`}
-                onClick={() => handleUpdate({ textAlign: align })}
-              >
-                {align === 'left' ? '左对齐' : align === 'center' ? '居中' : '右对齐'}
-              </button>
-            ))}
+          <div className="flex items-center gap-2">
+            <input
+              type="range"
+              min="10"
+              max="36"
+              value={firstNode.fontSize}
+              onChange={(e) => handleUpdate({ fontSize: parseInt(e.target.value) })}
+              className="flex-1"
+            />
+            <span className="text-sm font-medium text-gray-700 dark:text-gray-300 w-12 text-center">
+              {firstNode.fontSize}px
+            </span>
           </div>
         </div>
 

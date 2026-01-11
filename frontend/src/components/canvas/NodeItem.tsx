@@ -114,15 +114,23 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
   // 将文本转换为安全HTML（转义HTML标签，保留换行）
   const textToSafeHtml = useCallback((text: string): string => {
     if (!text) return ''
-    // 转义HTML特殊字符
-    const escaped = text
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#x27;')
-    // 将换行符转换为<br>
-    return escaped.replace(/\n/g, '<br>')
+
+    // 检查是否包含 HTML 标签
+    const hasHtmlTags = /<[a-z][\s\S]*>/i.test(text)
+
+    if (hasHtmlTags) {
+      // 如果已经包含 HTML 标签，直接返回（假设是安全的 HTML）
+      return text
+    } else {
+      // 如果是纯文本，转义 HTML 特殊字符并将换行符转换为 <br>
+      const escaped = text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#x27;')
+      return escaped.replace(/\n/g, '<br>')
+    }
   }, [])
 
   // 进入编辑模式时初始化内容
@@ -181,33 +189,134 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
   }, [editingField, node.title, node.content, textToSafeHtml])
 
 
-  // 清理 HTML 内容，保留纯文本和换行
+  // 清理 HTML 内容，保留基本的文字格式标签
   const cleanHtmlContent = useCallback((html: string): string => {
     // 创建临时元素来解析 HTML
     const temp = document.createElement('div')
     temp.innerHTML = html
 
-    // 将 <br>, <div>, <p> 转换为换行符
-    // 注意：contentEditable 在不同浏览器中换行表现不同，有的用 br，有的用 div 包装
-    temp.querySelectorAll('br').forEach(el => {
-      el.replaceWith('\n')
-    })
-    temp.querySelectorAll('div, p').forEach(el => {
-      if (el.textContent || el.querySelector('br')) {
-        el.prepend('\n')
+    // 允许保留的标签及其属性白名单
+    const allowedTags = new Set([
+      'b', 'strong', 'i', 'em', 'u', 's', 'strike', 'sub', 'sup', 
+      'span', 'br', 'div', 'p', 'font'
+    ])
+    const allowedAttributes = new Set(['style', 'class', 'color', 'face'])
+
+    // 递归清理函数
+    const cleanNode = (node: globalThis.Node): globalThis.Node => {
+      if (node.nodeType === globalThis.Node.TEXT_NODE) {
+        return node
       }
-    })
 
-    // 获取纯文本，移除所有 HTML 标签
-    let text = temp.textContent || temp.innerText || ''
+      if (node.nodeType === globalThis.Node.ELEMENT_NODE) {
+        const element = node as Element
+        const tagName = element.tagName.toLowerCase()
 
-    // 清理多余的空白字符
-    text = text
-      .replace(/\n{3,}/g, '\n\n') // 多个连续换行缩减为两个
-      .replace(/[ \t]+/g, ' ') // 多个空格/制表符缩减为一个
-      .replace(/^ +| +$/g, '') // 去除首尾空格
+        // 如果是允许的标签，保留它并清理其属性
+        if (allowedTags.has(tagName)) {
+          const newElement = element.cloneNode(false) as Element
 
-    return text
+          // 特殊处理 font 标签，将其属性转换为内联样式
+          if (tagName === 'font') {
+            const color = element.getAttribute('color')
+            const face = element.getAttribute('face')
+            const styleParts: string[] = []
+
+            if (color) {
+              styleParts.push(`color: ${color}`)
+            }
+            if (face) {
+              styleParts.push(`font-family: ${face}`)
+            }
+
+            if (styleParts.length > 0) {
+              const existingStyle = element.getAttribute('style') || ''
+              const safeStyle = cleanStyle(existingStyle)
+              const combinedStyle = safeStyle 
+                ? `${safeStyle}; ${styleParts.join('; ')}`
+                : styleParts.join('; ')
+              if (combinedStyle) {
+                newElement.setAttribute('style', combinedStyle)
+              }
+            }
+          }
+
+          // 只保留允许的属性
+          Array.from(element.attributes).forEach(attr => {
+            if (allowedAttributes.has(attr.name.toLowerCase())) {
+              // 清理 style 属性，只保留安全的 CSS 属性
+              if (attr.name.toLowerCase() === 'style') {
+                const safeStyle = cleanStyle(attr.value)
+                if (safeStyle) {
+                  newElement.setAttribute('style', safeStyle)
+                }
+              } else if (tagName !== 'font' || 
+                         (attr.name.toLowerCase() !== 'color' && 
+                          attr.name.toLowerCase() !== 'size' && 
+                          attr.name.toLowerCase() !== 'face')) {
+                // 对于非 font 标签，保留其他允许的属性
+                newElement.setAttribute(attr.name, attr.value)
+              }
+            }
+          })
+
+          // 递归清理子节点
+          Array.from(element.childNodes).forEach(child => {
+            newElement.appendChild(cleanNode(child))
+          })
+
+          return newElement
+        } else {
+          // 不允许的标签，只保留其子节点
+          const fragment = document.createDocumentFragment()
+          Array.from(element.childNodes).forEach(child => {
+            fragment.appendChild(cleanNode(child))
+          })
+          return fragment
+        }
+      }
+
+      return node
+    }
+
+    // 清理样式属性，只保留安全的 CSS 属性
+    const cleanStyle = (style: string): string => {
+      const allowedStyles = new Set([
+        'color', 'background-color', 'font-weight', 'font-style',
+        'text-decoration', 'text-decoration-line',
+        'text-decoration-style', 'text-decoration-color', 'line-height',
+        'letter-spacing', 'word-spacing', 'text-transform', 'font-family'
+      ])
+
+      const styles = style.split(';').filter(s => s.trim())
+      return styles
+        .filter(s => {
+          const [property] = s.split(':').map(p => p.trim().toLowerCase())
+          return allowedStyles.has(property)
+        })
+        .join(';')
+    }
+
+    // 清理所有节点
+    const cleanedNodes = Array.from(temp.childNodes).map(child => cleanNode(child))
+    temp.innerHTML = ''
+    cleanedNodes.forEach(node => temp.appendChild(node))
+
+    // 清理多余的空白和空标签
+    let result = temp.innerHTML
+
+    // 移除空的 span 标签
+    result = result.replace(/<span[^>]*>\s*<\/span>/g, '')
+
+    // 清理连续的空 div/p 标签
+    result = result.replace(/(<div[^>]*>\s*<\/div>\s*){2,}/g, '<div><br></div>')
+    result = result.replace(/(<p[^>]*>\s*<\/p>\s*){2,}/g, '<p><br></p>')
+
+    // 确保换行标签正确
+    result = result.replace(/<div[^>]*>(?!<br>)/g, '<div>')
+    result = result.replace(/<p[^>]*>(?!<br>)/g, '<p>')
+
+    return result
   }, [])
 
   // 保存标题
@@ -434,14 +543,17 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
 
   // Handle double click to edit
   const handleDoubleClick = useCallback(
-    (e: React.MouseEvent, field: 'title' | 'content') => {
+    (e: React.MouseEvent, field?: 'title' | 'content') => {
       e.stopPropagation()
       if (!node.locked) {
+        if (!field) {
+          field = node.title && node.title.trim() !== '' ? 'content' : 'title'
+        }
         setEditingField(field)
         setEditingId(node.id)
       }
     },
-    [node.locked]
+    [node.locked, node.title]
   )
 
   // 中文输入法开始
@@ -465,6 +577,13 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
       // Prevent delete and backspace from bubbling up when editing
       if (e.key === 'Delete' || e.key === 'Backspace') {
         e.stopPropagation()
+        return
+      }
+
+      if (e.key === 'Tab') {
+        e.preventDefault()
+        e.stopPropagation()
+        document.execCommand('insertText', false, '  ')
         return
       }
 
@@ -494,20 +613,68 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
     [isComposing, saveTitle, saveContent]
   )
 
-  // Handle paste - 清理格式
+  // Handle paste - 保留格式但清理不安全的 HTML
   const handlePaste = useCallback((e: React.ClipboardEvent) => {
     e.preventDefault()
-    const text = e.clipboardData.getData('text/plain')
-    document.execCommand('insertText', false, text)
-  }, [])
+
+    // 获取剪贴板中的 HTML 和纯文本
+    const htmlData = e.clipboardData.getData('text/html')
+    const textData = e.clipboardData.getData('text/plain')
+
+    if (htmlData) {
+      // 如果有 HTML 数据，使用 cleanHtmlContent 清理后插入
+      const cleanedHtml = cleanHtmlContent(htmlData)
+
+      // 创建临时 div 来解析 HTML
+      const temp = document.createElement('div')
+      temp.innerHTML = cleanedHtml
+
+      // 将清理后的 HTML 插入到当前位置
+      const selection = window.getSelection()
+      if (selection && selection.rangeCount > 0) {
+        const range = selection.getRangeAt(0)
+        range.deleteContents()
+
+        // 插入清理后的内容
+        Array.from(temp.childNodes).forEach(node => {
+          range.insertNode(node.cloneNode(true))
+        })
+
+        // 移动光标到插入内容的末尾
+        range.collapse(false)
+        selection.removeAllRanges()
+        selection.addRange(range)
+      }
+    } else if (textData) {
+      // 如果只有纯文本，插入纯文本
+      document.execCommand('insertText', false, textData)
+    }
+  }, [cleanHtmlContent])
 
   // 失焦时保存
-  const handleBlur = useCallback((field: 'title' | 'content') => {
+  const handleBlur = useCallback((field: 'title' | 'content', e?: React.FocusEvent) => {
     if (field === 'title' && isEditingTitle) {
       saveTitle()
     } else if (field === 'content' && isEditingContent) {
       saveContent()
     }
+    
+    // 检查焦点是否转移到了富文本工具栏
+    if (e?.relatedTarget) {
+      const target = e.relatedTarget as HTMLElement
+      // 向上查找是否在富文本工具栏内
+      let current = target
+      while (current && current !== document.body) {
+        if (current.classList.contains('fixed') && 
+            current.classList.contains('bg-white') && 
+            current.classList.contains('border-gray-200')) {
+          // 焦点转移到了富文本工具栏，不清除编辑状态
+          return
+        }
+        current = current.parentElement
+      }
+    }
+    
     setEditingField(null)
     setEditingId(null)
   }, [isEditingTitle, isEditingContent, saveTitle, saveContent, setEditingId])
@@ -754,6 +921,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
               e.stopPropagation()
             }
           }}
+          onDoubleClick={(e) => handleDoubleClick(e)}
           onContextMenu={handleContextMenu}
           onMouseEnter={() => setIsHovered(true)}
           onMouseLeave={() => setIsHovered(false)}
@@ -786,34 +954,33 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
                     ref={titleRef}
                     contentEditable
                     suppressContentEditableWarning
-                    className="outline-none font-semibold"
+                    className="font-semibold"
                     style={{
-                      fontSize: node.fontSize + 2,
-                      textAlign: node.textAlign,
                       color: '#111827',
                       minHeight: '24px',
+                      caretColor: '#111827',
+                      outline: 'none',
+                      fontSize: `${node.fontSize + 2}px`,
+                      textAlign: node.textAlign,
                     }}
                     onInput={handleInputChange}
                     onKeyDown={(e) => handleKeyDown(e, 'title')}
                     onCompositionStart={handleCompositionStart}
                     onCompositionEnd={handleCompositionEnd}
                     onPaste={handlePaste}
-                    onBlur={() => handleBlur('title')}
+                    onBlur={(e) => handleBlur('title', e)}
                     onMouseDown={(e) => e.stopPropagation()}
                   />
                 ) : (
                   <div
                     className="font-semibold"
                     style={{
-                      fontSize: node.fontSize + 2,
-                      textAlign: node.textAlign,
                       color: '#111827',
                       minHeight: '24px',
                     }}
                     onDoubleClick={(e) => handleDoubleClick(e, 'title')}
-                  >
-                    {node.title?.replace(/<[^>]*>/g, '') || '图片节点'}
-                  </div>
+                    dangerouslySetInnerHTML={{ __html: node.title || '图片节点' }}
+                  />
                 )}
               </div>
 
@@ -881,34 +1048,35 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
                     ref={titleRef}
                     contentEditable
                     suppressContentEditableWarning
-                    className="outline-none font-semibold"
+                    className="font-semibold"
                     style={{
-                      fontSize: node.fontSize + 2,
-                      textAlign: node.textAlign,
                       color: '#111827',
                       minHeight: '24px',
+                      caretColor: '#111827',
+                      outline: 'none',
+                      fontSize: `${node.fontSize + 2}px`,
+                      textAlign: node.textAlign,
                     }}
                     onInput={handleInputChange}
                     onKeyDown={(e) => handleKeyDown(e, 'title')}
                     onCompositionStart={handleCompositionStart}
                     onCompositionEnd={handleCompositionEnd}
                     onPaste={handlePaste}
-                    onBlur={() => handleBlur('title')}
+                    onBlur={(e) => handleBlur('title', e)}
                     onMouseDown={(e) => e.stopPropagation()}
                   />
                 ) : (
                   <div
                     className="font-semibold"
                     style={{
-                      fontSize: node.fontSize + 2,
-                      textAlign: node.textAlign,
                       color: '#111827',
                       minHeight: '24px',
+                      fontSize: `${node.fontSize + 2}px`,
+                      textAlign: node.textAlign,
                     }}
                     onDoubleClick={(e) => handleDoubleClick(e, 'title')}
-                  >
-                    {node.title?.replace(/<[^>]*>/g, '') || '点击添加标题'}
-                  </div>
+                    dangerouslySetInnerHTML={{ __html: node.title || '点击添加标题' }}
+                  />
                 )}
               </div>
 
@@ -919,31 +1087,33 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
                     ref={contentRef}
                     contentEditable
                     suppressContentEditableWarning
-                    className="outline-none"
+                    className=""
                     style={{
-                      fontSize: node.fontSize,
-                      textAlign: node.textAlign,
                       color: '#4b5563',
                       minHeight: '60px',
+                      caretColor: '#4b5563',
+                      outline: 'none',
+                      fontSize: `${node.fontSize}px`,
+                      textAlign: node.textAlign,
                     }}
                     onInput={handleInputChange}
                     onKeyDown={(e) => handleKeyDown(e, 'content')}
                     onCompositionStart={handleCompositionStart}
                     onCompositionEnd={handleCompositionEnd}
                     onPaste={handlePaste}
-                    onBlur={() => handleBlur('content')}
+                    onBlur={(e) => handleBlur('content', e)}
                     onMouseDown={(e) => e.stopPropagation()}
                   />
                 ) : (
                   <div
                     style={{
-                      fontSize: node.fontSize,
-                      textAlign: node.textAlign,
                       color: '#4b5563',
                       minHeight: '40px',
                       wordBreak: 'break-word',
                       lineHeight: '1.6',
                       whiteSpace: 'pre-wrap',
+                      fontSize: `${node.fontSize}px`,
+                      textAlign: node.textAlign,
                     }}
                     onDoubleClick={(e) => handleDoubleClick(e, 'content')}
                     dangerouslySetInnerHTML={{ __html: node.content || '双击添加内容' }}
