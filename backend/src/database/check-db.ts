@@ -1,5 +1,4 @@
 import { db } from './connection.js'
-import { projects, users } from './schema.js'
 
 async function check() {
   const allProjects = await db.query.projects.findMany()

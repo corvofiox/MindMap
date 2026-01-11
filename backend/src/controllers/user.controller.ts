@@ -2,7 +2,7 @@ import { Router } from 'express'
 import bcrypt from 'bcrypt'
 import { db, saveDatabase } from '../database/connection.js'
 import { users, projects, projectMembers, groupMembers, nodeCards, files, canvases, folders, canvasRecycleBin, nodePoolFolders } from '../database/schema.js'
-import { eq, and, or } from 'drizzle-orm'
+import { eq, and } from 'drizzle-orm'
 import { authenticate, type AuthRequest } from '../middleware/auth.middleware.js'
 import { asyncHandler } from '../middleware/error.middleware.js'
 

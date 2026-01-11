@@ -1,8 +1,6 @@
 import { create } from 'zustand'
 import type { Node, NodeGroup, Domain, Connection } from '@/types'
-import { NODE_DEFAULTS, CANVAS_DEFAULTS } from '@/constants'
-import { debugLogger } from '@/utils/debugLogger'
-import { generateId } from '@/utils/canvas'
+import { CANVAS_DEFAULTS } from '@/constants'
 
 interface Command {
   type: string
@@ -211,7 +209,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     if (!node) return
 
     const removedConnections: Connection[] = []
-    for (const [connId, conn] of state.connections) {
+    for (const [_, conn] of state.connections) {
       if (conn.fromNodeId === id || conn.toNodeId === id) {
         removedConnections.push(conn)
       }

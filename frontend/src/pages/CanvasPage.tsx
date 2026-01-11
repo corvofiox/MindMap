@@ -952,23 +952,19 @@ export function CanvasPage() {
       return
     }
 
-    try {
-      const currentState = useCanvasStore.getState()
-      const { nodes, groups, domains, connections } = collectCanvasData(currentState)
+    const currentState = useCanvasStore.getState()
+    const { nodes, groups, domains, connections } = collectCanvasData(currentState)
 
-      await saveCanvasNodesData(id, { nodes, groups, domains, connections })
+    await saveCanvasNodesData(id, { nodes, groups, domains, connections })
 
-      const now = Date.now()
-      lastSaveTimeRef.current = now
-      setLastSaveTime(now)
-      setDirty(false)
+    const now = Date.now()
+    lastSaveTimeRef.current = now
+    setLastSaveTime(now)
+    setDirty(false)
 
-      // Generate thumbnail immediately when manually saving
-      if (hasCanvasContent(nodes, domains)) {
-        await generateThumbnail(id)
-      }
-    } catch (error) {
-      throw error
+    // Generate thumbnail immediately when manually saving
+    if (hasCanvasContent(nodes, domains)) {
+      await generateThumbnail(id)
     }
   }, [canvasId, setDirty, setLastSaveTime, generateThumbnail])
 

@@ -1,6 +1,5 @@
 import * as Y from 'yjs'
 import { WebsocketProvider } from 'y-websocket'
-import { awareness } from 'y-websocket'
 import type { AwarenessUserData, AwarenessState } from '@/types'
 import { WS_CONFIG } from '@/constants'
 
@@ -61,10 +60,10 @@ class WebSocketService {
     })
 
     // Handle connection status
-    this.provider.on('status', (event: { status: string }) => {
+    this.provider.on('status', (_: { status: string }) => {
     })
 
-    this.provider.on('sync', (synced: boolean) => {
+    this.provider.on('sync', (_: boolean) => {
     })
   }
 

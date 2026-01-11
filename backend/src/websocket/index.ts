@@ -153,7 +153,7 @@ async function handleConnection(ws: WebSocketWithUserData, req: any) {
     room!.clients.delete(ws)
   })
 
-  ws.on('error', (error) => {
+  ws.on('error', (_) => {
     // Silent error handling
   })
 }
@@ -284,15 +284,6 @@ function handleSyncMessage(
   }
 }
 
-function getMessageTypeName(type: number): string {
-  switch (type) {
-    case 0: return 'SYNC'
-    case 1: return 'QUERY_AWARENESS'
-    case 2: return 'AWARENESS'
-    case 3: return 'BROADCAST'
-    default: return 'UNKNOWN'
-  }
-}
 
 function broadcastUpdate(
   room: CanvasRoom,
