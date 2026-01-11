@@ -232,8 +232,8 @@ export function Sidebar({ open }: SidebarProps) {
   return (
     <aside
       className={clsx(
-        'bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 flex flex-col transition-all duration-200 overflow-hidden',
-        open ? 'w-64' : 'w-0'
+        'bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 flex flex-col transition-all duration-200 overflow-hidden fixed left-0 top-14 h-[calc(100vh-3.5rem)] z-20',
+        open ? 'w-64 transform translate-x-0' : 'w-64 transform -translate-x-full'
       )}
     >
       {isProjectsPage || !currentProject ? (

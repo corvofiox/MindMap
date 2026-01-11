@@ -28,7 +28,7 @@ export function MainLayout() {
         <Sidebar open={sidebarOpen} />
 
         {/* Main Content */}
-        <main className="flex-1 overflow-hidden min-h-0">
+        <main className={`flex-1 overflow-hidden min-h-0 transition-all duration-200 ${sidebarOpen ? 'ml-64' : 'ml-0'} ${nodePoolOpen ? 'mr-72' : 'mr-0'}`}>
           <Outlet />
         </main>
 
