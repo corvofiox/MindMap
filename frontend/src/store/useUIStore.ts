@@ -1,0 +1,240 @@
+import { create } from 'zustand'
+import { persist } from 'zustand/middleware'
+import type { Theme, Tool, DragMode, NodeCard } from '@/types'
+import { STORAGE_KEYS } from '@/constants'
+
+interface UIState {
+  // Theme
+  theme: Theme
+  setTheme: (theme: Theme) => void
+
+  // Sidebar
+  sidebarOpen: boolean
+  setSidebarOpen: (open: boolean) => void
+  toggleSidebar: () => void
+
+  // Node Pool
+  nodePoolOpen: boolean
+  setNodePoolOpen: (open: boolean) => void
+  toggleNodePool: () => void
+
+  // Canvas
+  currentTool: Tool
+  setCurrentTool: (tool: Tool) => void
+
+  dragMode: DragMode
+  setDragMode: (mode: DragMode) => void
+  toggleDragMode: () => void
+
+  gridVisible: boolean
+  setGridVisible: (visible: boolean) => void
+  toggleGrid: () => void
+
+  // Drag Ghost (for node pool copy to canvas)
+  dragGhostCard: NodeCard | null
+  dragGhostPosition: { x: number; y: number } | null
+  setDragGhost: (card: NodeCard | null, position: { x: number; y: number } | null) => void
+
+  // Minimap
+  minimapVisible: boolean
+  setMinimapVisible: (visible: boolean) => void
+  toggleMinimap: () => void
+
+  // Connection Direction
+  connectionDirection: 'directed' | 'bidirectional' | 'undirected'
+  setConnectionDirection: (direction: 'directed' | 'bidirectional' | 'undirected') => void
+
+  // Domain Edit Mode
+  domainEditMode: boolean
+  setDomainEditMode: (enabled: boolean) => void
+  toggleDomainEditMode: () => void
+
+  // Connection Style
+  connectionStyle: 'solid' | 'dashed' | 'dotted'
+  setConnectionStyle: (style: 'solid' | 'dashed' | 'dotted') => void
+
+  // Context Menu
+  contextMenuOpen: boolean
+  contextMenuPosition: { x: number; y: number } | null
+  contextMenuTarget: string | null
+  openContextMenu: (x: number, y: number, target?: string) => void
+  closeContextMenu: () => void
+
+  // Dialogs
+  settingsOpen: boolean
+  setSettingsOpen: (open: boolean) => void
+
+  accountSettingsOpen: boolean
+  setAccountSettingsOpen: (open: boolean) => void
+
+  shortcutsOpen: boolean
+  setShortcutsOpen: (open: boolean) => void
+
+  searchOpen: boolean
+  setSearchOpen: (open: boolean) => void
+
+  commandPaletteOpen: boolean
+  setCommandPaletteOpen: (open: boolean) => void
+
+  // Toasts
+  toasts: Toast[]
+  addToast: (toast: Omit<Toast, 'id'>) => void
+  removeToast: (id: string) => void
+
+  // Loading
+  isLoading: boolean
+  setLoading: (loading: boolean) => void
+
+  // Style Panel
+  stylePanelOpen: boolean
+  selectedType: 'node' | 'connection' | 'domain' | null
+  selectedNodeIds: string[]
+  openStylePanel: () => void
+  closeStylePanel: () => void
+  setSelectedType: (type: 'node' | 'connection' | 'domain' | null) => void
+  setSelectedNodeIds: (ids: string[]) => void
+}
+
+interface Toast {
+  id: string
+  type: 'success' | 'error' | 'warning' | 'info'
+  title: string
+  message?: string
+  duration?: number
+}
+
+export const useUIStore = create<UIState>()(
+  persist(
+    (set, get) => {
+      const createToggle = (key: keyof UIState) => () =>
+        set((state: any) => ({ [key]: !state[key] }))
+
+      return {
+        // Theme
+        theme: 'system',
+        setTheme: (theme) => set({ theme }),
+
+        // Sidebar
+        sidebarOpen: true,
+        setSidebarOpen: (open) => set({ sidebarOpen: open }),
+        toggleSidebar: createToggle('sidebarOpen'),
+
+        // Node Pool
+        nodePoolOpen: true,
+        setNodePoolOpen: (open) => set({ nodePoolOpen: open }),
+        toggleNodePool: createToggle('nodePoolOpen'),
+
+        // Canvas
+        currentTool: 'select',
+        setCurrentTool: (tool) => set({ currentTool: tool }),
+
+        dragMode: 'free',
+        setDragMode: (mode) => set({ dragMode: mode }),
+        toggleDragMode: () =>
+          set((state: any) => ({ dragMode: state.dragMode === 'free' ? 'grid' : 'free' })),
+
+        gridVisible: true,
+        setGridVisible: (visible) => set({ gridVisible: visible }),
+        toggleGrid: createToggle('gridVisible'),
+
+        // Drag Ghost (for node pool copy to canvas)
+        dragGhostCard: null,
+        dragGhostPosition: null,
+        setDragGhost: (card, position) => set({ dragGhostCard: card, dragGhostPosition: position }),
+
+        // Minimap
+        minimapVisible: true,
+        setMinimapVisible: (visible) => set({ minimapVisible: visible }),
+        toggleMinimap: createToggle('minimapVisible'),
+
+        // Connection Direction
+        connectionDirection: 'directed',
+        setConnectionDirection: (direction) => set({ connectionDirection: direction }),
+
+        // Domain Edit Mode
+        domainEditMode: false,
+        setDomainEditMode: (enabled) => set({ domainEditMode: enabled }),
+        toggleDomainEditMode: createToggle('domainEditMode'),
+
+        // Connection Style
+        connectionStyle: 'solid',
+        setConnectionStyle: (style) => set({ connectionStyle: style }),
+
+        // Context Menu
+        contextMenuOpen: false,
+        contextMenuPosition: null,
+        contextMenuTarget: null,
+        openContextMenu: (x, y, target) =>
+          set({
+            contextMenuOpen: true,
+            contextMenuPosition: { x, y },
+            contextMenuTarget: target || null,
+          }),
+        closeContextMenu: () =>
+          set({
+            contextMenuOpen: false,
+            contextMenuPosition: null,
+            contextMenuTarget: null,
+          }),
+
+        // Dialogs
+        settingsOpen: false,
+        setSettingsOpen: (open) => set({ settingsOpen: open }),
+
+        accountSettingsOpen: false,
+        setAccountSettingsOpen: (open) => set({ accountSettingsOpen: open }),
+
+        shortcutsOpen: false,
+        setShortcutsOpen: (open) => set({ shortcutsOpen: open }),
+
+        searchOpen: false,
+        setSearchOpen: (open) => set({ searchOpen: open }),
+
+        commandPaletteOpen: false,
+        setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
+
+        // Toasts
+        toasts: [],
+        addToast: (toast) => {
+          const id = Math.random().toString(36).substring(7)
+          set((state) => ({
+            toasts: [...state.toasts, { ...toast, id }],
+          }))
+          if (toast.duration !== 0) {
+            setTimeout(() => {
+              get().removeToast(id)
+            }, toast.duration || 3000)
+          }
+        },
+        removeToast: (id) =>
+          set((state) => ({
+            toasts: state.toasts.filter((t) => t.id !== id),
+          })),
+
+        // Loading
+        isLoading: false,
+        setLoading: (loading) => set({ isLoading: loading }),
+
+        // Style Panel
+        stylePanelOpen: false,
+        selectedType: null,
+        selectedNodeIds: [],
+        openStylePanel: () => set({ stylePanelOpen: true }),
+        closeStylePanel: () => set({ stylePanelOpen: false }),
+        setSelectedType: (type) => set({ selectedType: type }),
+        setSelectedNodeIds: (ids) => set({ selectedNodeIds: ids }),
+      }
+    },
+    {
+      name: STORAGE_KEYS.SETTINGS,
+      partialize: (state) => ({
+        theme: state.theme,
+        sidebarOpen: state.sidebarOpen,
+        nodePoolOpen: state.nodePoolOpen,
+        dragMode: state.dragMode,
+        gridVisible: state.gridVisible,
+        minimapVisible: state.minimapVisible,
+      }),
+    }
+  )
+)

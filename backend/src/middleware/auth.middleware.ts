@@ -1,0 +1,57 @@
+import { Request, Response, NextFunction } from 'express'
+import jwt from 'jsonwebtoken'
+import { db } from '../database/connection.js'
+import { users } from '../database/schema.js'
+import { eq } from 'drizzle-orm'
+
+export interface AuthRequest extends Request {
+  user?: {
+    id: number
+    email: string
+    nickname: string | null
+    avatar: string | null
+  }
+}
+
+export async function authenticate(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    const token = req.headers.authorization?.replace('Bearer ', '')
+
+    if (!token) {
+      return res.status(401).json({ success: false, error: 'No token provided' })
+    }
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key') as {
+      userId: number
+    }
+
+    const user = await db.query.users.findFirst({
+      where: eq(users.id, decoded.userId),
+    })
+
+    if (!user) {
+      return res.status(401).json({ success: false, error: 'Invalid token' })
+    }
+
+    req.user = {
+      id: user.id,
+      email: user.email,
+      nickname: user.nickname,
+      avatar: user.avatar,
+    }
+
+    next()
+  } catch (error) {
+    return res.status(401).json({ success: false, error: 'Invalid token' })
+  }
+}
+
+export function optionalAuth(req: AuthRequest, res: Response, next: NextFunction) {
+  const token = req.headers.authorization?.replace('Bearer ', '')
+
+  if (!token) {
+    return next()
+  }
+
+  authenticate(req, res, next)
+}

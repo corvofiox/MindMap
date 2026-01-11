@@ -1,0 +1,463 @@
+import { create } from 'zustand'
+import { persist } from 'zustand/middleware'
+import type { Project, Canvas, Folder, NodeCard, NodePoolFolder, NodePoolSortOption, NodePoolSortOrder } from '@/types'
+import * as api from '@/services/api'
+
+interface ProjectsState {
+  projects: Project[]
+  currentProject: Project | null
+  currentProjectId: number | null  // 持久化项目ID
+  canvases: Canvas[]
+  folders: Folder[]
+  nodePool: NodeCard[]
+  nodePoolFolders: NodePoolFolder[]
+  nodePoolSortBy: NodePoolSortOption
+  nodePoolSortOrder: NodePoolSortOrder
+  isLoading: boolean
+  error: string | null
+
+  // Actions
+  loadProjects: () => Promise<void>
+  setCurrentProject: (project: Project | null) => Promise<void>
+  restoreCurrentProject: () => Promise<void>  // 恢复上次的项目
+  loadCanvases: (projectId: number) => Promise<void>
+  loadFolders: (projectId: number) => Promise<void>
+  loadNodePool: (projectId: number) => Promise<void>
+  loadNodePoolFolders: (projectId: number) => Promise<void>
+  createProject: (data: Omit<Project, 'id' | 'createdAt' | 'updatedAt'>) => Promise<void>
+  updateProject: (id: number, data: Partial<Project>) => Promise<void>
+  deleteProject: (id: number) => Promise<void>
+
+  // Canvas actions
+  createCanvas: (projectId: number, data: Partial<Canvas>) => Promise<void>
+  updateCanvas: (id: number, data: Partial<Canvas>) => Promise<void>
+  deleteCanvas: (id: number) => Promise<void>
+  moveCanvasToFolder: (canvasId: number, folderId: number | null) => Promise<void>
+
+  // Folder actions
+  createFolder: (projectId: number, data: Omit<Folder, 'id' | 'createdAt'>) => Promise<void>
+  updateFolder: (id: number, data: Partial<Folder>) => Promise<void>
+  deleteFolder: (id: number) => Promise<void>
+
+  // Node pool actions
+  addToNodePool: (projectId: number, data: Omit<NodeCard, 'id' | 'createdAt' | 'useCount'>) => Promise<NodeCard>
+  removeFromNodePool: (id: number) => Promise<void>
+  updateNodeCard: (id: number, data: Partial<NodeCard>) => Promise<void>
+  incrementNodeCardUseCount: (id: number) => Promise<void>
+  setNodePoolSortBy: (sortBy: NodePoolSortOption) => void
+  setNodePoolSortOrder: (order: NodePoolSortOrder) => void
+
+  // Node pool folder actions
+  createNodePoolFolder: (projectId: number, data: Omit<NodePoolFolder, 'id' | 'createdAt' | 'children'>) => Promise<void>
+  updateNodePoolFolder: (id: number, data: Partial<NodePoolFolder>) => Promise<void>
+  deleteNodePoolFolder: (id: number) => Promise<void>
+  toggleNodePoolFolderCollapsed: (id: number) => void
+
+  // Batch sort order updates
+  reorderNodePoolFolders: (updates: Array<{ id: number; sortOrder: number }>) => Promise<void>
+  reorderNodeCards: (updates: Array<{ id: number; sortOrder: number }>) => Promise<void>
+
+  clearError: () => void
+}
+
+export const useProjectsStore = create<ProjectsState>()(
+  persist(
+    (set, get) => {
+      const handleError = (error: unknown, defaultMessage: string) => {
+        set({
+          error: error instanceof Error ? error.message : defaultMessage,
+          isLoading: false,
+        })
+        throw error
+      }
+
+      return {
+        projects: [],
+        currentProject: null,
+        currentProjectId: null,
+        canvases: [],
+        folders: [],
+        nodePool: [],
+        nodePoolFolders: [],
+        nodePoolSortBy: 'createdAt',
+        nodePoolSortOrder: 'desc',
+        isLoading: false,
+        error: null,
+
+        loadProjects: async () => {
+          set({ isLoading: true, error: null })
+          try {
+            const projects = await api.getProjects()
+            set({ projects, isLoading: false })
+          } catch (error) {
+            handleError(error, 'Failed to load projects')
+          }
+        },
+
+        setCurrentProject: async (project) => {
+          set({
+            currentProject: project,
+            currentProjectId: project?.id || null
+          })
+          if (project) {
+            await Promise.all([
+              get().loadCanvases(project.id),
+              get().loadFolders(project.id),
+              get().loadNodePool(project.id),
+              get().loadNodePoolFolders(project.id),
+            ])
+          }
+        },
+
+        restoreCurrentProject: async () => {
+          const { currentProjectId, projects } = get()
+          if (currentProjectId && projects.length > 0) {
+            const project = projects.find(p => p.id === currentProjectId)
+            if (project) {
+              await get().setCurrentProject(project)
+            }
+          }
+        },
+
+        loadCanvases: async (projectId) => {
+          set({ isLoading: true, error: null })
+          try {
+            const canvases = await api.getCanvases(projectId)
+            set({ canvases, isLoading: false })
+          } catch (error) {
+            handleError(error, 'Failed to load canvases')
+          }
+        },
+
+        loadFolders: async (projectId) => {
+          set({ isLoading: true, error: null })
+          try {
+            const folders = await api.getFolders(projectId)
+            set({ folders, isLoading: false })
+          } catch (error) {
+            handleError(error, 'Failed to load folders')
+          }
+        },
+
+        loadNodePoolFolders: async (projectId) => {
+          set({ isLoading: true, error: null })
+          try {
+            const folders = await api.getNodePoolFolders(projectId)
+            set({ nodePoolFolders: folders, isLoading: false })
+          } catch (error) {
+            handleError(error, 'Failed to load node pool folders')
+          }
+        },
+
+        loadNodePool: async (projectId) => {
+          set({ isLoading: true, error: null })
+          try {
+            const nodePool = await api.getNodePool(projectId)
+            set({ nodePool, isLoading: false })
+          } catch (error) {
+            handleError(error, 'Failed to load node pool')
+          }
+        },
+
+        createProject: async (data) => {
+          set({ isLoading: true, error: null })
+          try {
+            const project = await api.createProject(data)
+            set((state) => ({
+              projects: [...state.projects, project],
+              isLoading: false,
+            }))
+          } catch (error) {
+            handleError(error, 'Failed to create project')
+          }
+        },
+
+        updateProject: async (id, data) => {
+          set({ isLoading: true, error: null })
+          try {
+            const updated = await api.updateProject(id, data)
+            set((state) => ({
+              projects: state.projects.map((p) => (p.id === id ? updated : p)),
+              currentProject: state.currentProject?.id === id ? updated : state.currentProject,
+              isLoading: false,
+            }))
+          } catch (error) {
+            handleError(error, 'Failed to update project')
+          }
+        },
+
+        deleteProject: async (id) => {
+          set({ isLoading: true, error: null })
+          try {
+            await api.deleteProject(id)
+            set((state) => ({
+              projects: state.projects.filter((p) => p.id !== id),
+              currentProject: state.currentProject?.id === id ? null : state.currentProject,
+              currentProjectId: state.currentProjectId === id ? null : state.currentProjectId,
+              isLoading: false,
+            }))
+          } catch (error) {
+            handleError(error, 'Failed to delete project')
+          }
+        },
+
+        createCanvas: async (projectId, data) => {
+          set({ isLoading: true, error: null })
+          try {
+            const canvas = await api.createCanvas(projectId, data)
+            set((state) => ({
+              canvases: [...state.canvases, canvas],
+              isLoading: false,
+            }))
+          } catch (error) {
+            handleError(error, 'Failed to create canvas')
+          }
+        },
+
+        updateCanvas: async (id, data) => {
+          set({ isLoading: true, error: null })
+          try {
+            const updated = await api.updateCanvas(id, data)
+            set((state) => ({
+              canvases: state.canvases.map((c) => (c.id === id ? updated : c)),
+              isLoading: false,
+            }))
+          } catch (error) {
+            handleError(error, 'Failed to update canvas')
+          }
+        },
+
+        deleteCanvas: async (id) => {
+          set({ isLoading: true, error: null })
+          try {
+            await api.deleteCanvas(id)
+            set((state) => ({
+              canvases: state.canvases.filter((c) => c.id !== id),
+              isLoading: false,
+            }))
+          } catch (error) {
+            handleError(error, 'Failed to delete canvas')
+          }
+        },
+
+        moveCanvasToFolder: async (canvasId, folderId) => {
+          set({ isLoading: true, error: null })
+          try {
+            const updated = await api.updateCanvas(canvasId, { folderId })
+            set((state) => ({
+              canvases: state.canvases.map((c) => (c.id === canvasId ? updated : c)),
+              isLoading: false,
+            }))
+          } catch (error) {
+            handleError(error, 'Failed to move canvas to folder')
+          }
+        },
+
+        createFolder: async (projectId, data) => {
+          set({ isLoading: true, error: null })
+          try {
+            const folder = await api.createFolder(projectId, data)
+            set((state) => ({
+              folders: [...state.folders, folder],
+              isLoading: false,
+            }))
+          } catch (error) {
+            handleError(error, 'Failed to create folder')
+          }
+        },
+
+        updateFolder: async (id, data) => {
+          set({ isLoading: true, error: null })
+          try {
+            const updated = await api.updateFolder(id, data)
+            set((state) => ({
+              folders: state.folders.map((f) => (f.id === id ? updated : f)),
+              isLoading: false,
+            }))
+          } catch (error) {
+            handleError(error, 'Failed to update folder')
+          }
+        },
+
+        deleteFolder: async (id) => {
+          set({ isLoading: true, error: null })
+          try {
+            await api.deleteFolder(id)
+            set((state) => {
+              // Collect all folder IDs to delete (including subfolders)
+              const folderIdsToDelete = new Set<number>()
+              const queue: number[] = [id]
+
+              while (queue.length > 0) {
+                const currentId = queue.shift()!
+                folderIdsToDelete.add(currentId)
+
+                // Find all immediate children of the current folder
+                const children = state.folders.filter((f) => f.parentId === currentId)
+                for (const child of children) {
+                  queue.push(child.id)
+                }
+              }
+
+              // Remove all deleted folders and their canvases
+              return {
+                folders: state.folders.filter((f) => !folderIdsToDelete.has(f.id)),
+                canvases: state.canvases.filter((c) => !folderIdsToDelete.has(c.folderId!)),
+                isLoading: false,
+              }
+            })
+          } catch (error) {
+            handleError(error, 'Failed to delete folder')
+          }
+        },
+
+        addToNodePool: async (projectId, data) => {
+          set({ isLoading: true, error: null })
+          try {
+            const card = await api.addToNodePool(projectId, data)
+            set((state) => ({
+              nodePool: [...state.nodePool, card],
+              isLoading: false,
+            }))
+            return card
+          } catch (error) {
+            handleError(error, 'Failed to add to node pool')
+            throw error
+          }
+        },
+
+        removeFromNodePool: async (id) => {
+          set({ isLoading: true, error: null })
+          try {
+            await api.removeFromNodePool(id)
+            set((state) => ({
+              nodePool: state.nodePool.filter((c) => c.id !== id),
+              isLoading: false,
+            }))
+          } catch (error) {
+            handleError(error, 'Failed to remove from node pool')
+          }
+        },
+
+        updateNodeCard: async (id, data) => {
+          set({ isLoading: true, error: null })
+          try {
+            const updated = await api.updateNodeCard(id, data)
+            set((state) => ({
+              nodePool: state.nodePool.map((c) => (c.id === id ? updated : c)),
+              isLoading: false,
+            }))
+          } catch (error) {
+            handleError(error, 'Failed to update node card')
+          }
+        },
+
+        incrementNodeCardUseCount: async (id) => {
+          try {
+            const updated = await api.incrementNodeCardUseCount(id)
+            set((state) => ({
+              nodePool: state.nodePool.map((c) => (c.id === id ? updated : c)),
+            }))
+          } catch (error) {
+            // Silently fail for non-critical operation
+          }
+        },
+
+        setNodePoolSortBy: (sortBy) => set({ nodePoolSortBy: sortBy }),
+
+        setNodePoolSortOrder: (order) => set({ nodePoolSortOrder: order }),
+
+        createNodePoolFolder: async (projectId, data) => {
+          set({ isLoading: true, error: null })
+          try {
+            const folder = await api.createNodePoolFolder(projectId, data)
+            set((state) => ({
+              nodePoolFolders: [...state.nodePoolFolders, folder],
+              isLoading: false,
+            }))
+          } catch (error) {
+            handleError(error, 'Failed to create node pool folder')
+          }
+        },
+
+        updateNodePoolFolder: async (id, data) => {
+          set({ isLoading: true, error: null })
+          try {
+            const updated = await api.updateNodePoolFolder(id, data)
+            set((state) => ({
+              nodePoolFolders: state.nodePoolFolders.map((f) =>
+                f.id === id ? { ...f, ...updated } : f
+              ),
+              isLoading: false,
+            }))
+          } catch (error) {
+            handleError(error, 'Failed to update node pool folder')
+          }
+        },
+
+        deleteNodePoolFolder: async (id) => {
+          set({ isLoading: true, error: null })
+          try {
+            await api.deleteNodePoolFolder(id)
+            set((state) => ({
+              nodePoolFolders: state.nodePoolFolders.filter((f) => f.id !== id),
+              isLoading: false,
+            }))
+          } catch (error) {
+            handleError(error, 'Failed to delete node pool folder')
+          }
+        },
+
+        toggleNodePoolFolderCollapsed: (id) => {
+          set((state) => ({
+            nodePoolFolders: state.nodePoolFolders.map((f) =>
+              f.id === id ? { ...f, collapsed: !f.collapsed } : f
+            ),
+          }))
+        },
+
+        reorderNodePoolFolders: async (updates) => {
+          const folders = get().nodePoolFolders
+          const updatedFolders = folders.map(f => {
+            const update = updates.find(u => u.id === f.id)
+            return update ? { ...f, sortOrder: update.sortOrder } : f
+          })
+          set({ nodePoolFolders: updatedFolders })
+
+          try {
+            await Promise.all(
+              updates.map(u => api.updateNodePoolFolder(u.id, { sortOrder: u.sortOrder }))
+            )
+          } catch (error) {
+            handleError(error, 'Failed to reorder node pool folders')
+          }
+        },
+
+        reorderNodeCards: async (updates) => {
+          const nodePool = get().nodePool
+          const updatedCards = nodePool.map(c => {
+            const update = updates.find(u => u.id === c.id)
+            return update ? { ...c, sortOrder: update.sortOrder } : c
+          })
+          set({ nodePool: updatedCards })
+
+          try {
+            await Promise.all(
+              updates.map(u => api.updateNodeCard(u.id, { sortOrder: u.sortOrder }))
+            )
+          } catch (error) {
+            handleError(error, 'Failed to reorder node cards')
+          }
+        },
+
+        clearError: () => set({ error: null }),
+      }
+    },
+    {
+      name: 'projects-storage',
+      partialize: (state) => ({
+        currentProjectId: state.currentProjectId,
+      }),
+    }
+  )
+)
