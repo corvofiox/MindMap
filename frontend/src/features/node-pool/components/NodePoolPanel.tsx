@@ -40,7 +40,7 @@ interface NodePoolPanelProps {
  * Main node pool panel component
  */
 export function NodePoolPanel({ open }: NodePoolPanelProps) {
-  const { currentProject } = useProjectsStore()
+  const { currentProject, nodePool, nodePoolFolders, loadNodePool, loadNodePoolFolders } = useProjectsStore()
   const { selectedIds, addNode } = useCanvasStore()
   const { addToast } = useUIStore()
 
@@ -55,6 +55,7 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
     removeCard,
     toggleFolderCollapsed,
     addFolder,
+    isLoading,
   } = useNodePoolStore()
 
   // Local state
@@ -77,15 +78,22 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
   // Load data when project changes
   useEffect(() => {
     if (currentProject) {
-      // Load from existing store for now
-      // TODO: Direct API calls in the future
-      const existingCards = useProjectsStore.getState().nodePool
-      const existingFolders = useProjectsStore.getState().nodePoolFolders
-
-      setCards(existingCards)
-      setFolders(existingFolders)
+      Promise.all([
+        loadNodePool(currentProject.id),
+        loadNodePoolFolders(currentProject.id),
+      ])
     }
-  }, [currentProject, setCards, setFolders])
+  }, [currentProject, loadNodePool, loadNodePoolFolders])
+
+  // Sync data from useProjectsStore to useNodePoolStore
+  useEffect(() => {
+    if (nodePool.length > 0) {
+      setCards(nodePool)
+    }
+    if (nodePoolFolders.length > 0) {
+      setFolders(nodePoolFolders)
+    }
+  }, [nodePool, nodePoolFolders, setCards, setFolders])
 
   // Handle add selected node to pool
   const handleAddToPool = useCallback(async () => {

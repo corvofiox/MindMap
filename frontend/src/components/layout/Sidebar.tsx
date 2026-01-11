@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { Plus, Folder, FolderOpen, FileText, Trash2, MoreVertical, Edit2, Check, X, FolderKanban, Calendar, ChevronRight, ChevronDown } from 'lucide-react'
+import { Plus, Folder, FolderOpen, FolderPlus, FileText, Trash2, MoreVertical, Edit2, Check, X, FolderKanban, Calendar, ChevronRight, ChevronDown } from 'lucide-react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useProjectsStore } from '@/store/useProjectsStore'
 import { useUIStore } from '@/store/useUIStore'
@@ -429,7 +429,7 @@ export function Sidebar({ open }: SidebarProps) {
                   className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400 transition-colors"
                   title="新建文件夹"
                 >
-                  <Folder className="w-4 h-4" />
+                  <FolderPlus className="w-4 h-4" />
                 </button>
                 <button
                   onClick={handleCreateCanvas}

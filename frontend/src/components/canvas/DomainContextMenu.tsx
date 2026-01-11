@@ -104,21 +104,21 @@ export function DomainContextMenu({ domainId, position, onClose }: DomainContext
   }) => (
     <button
       className={`
-        w-full px-2.5 py-2 text-left flex items-center gap-2 rounded-lg
-        transition-all duration-150 group relative
+        w-full px-4 py-2 text-left flex items-center gap-2
+        transition-colors duration-150
         ${danger
           ? 'hover:bg-red-50 dark:hover:bg-red-900/20 text-gray-700 dark:text-gray-300'
-          : 'hover:bg-gray-100 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300'
+          : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300'
         }
       `}
       onClick={onClick}
     >
       <Icon className={`w-4 h-4 ${danger ? 'text-red-500' : 'text-gray-500 dark:text-gray-400'}`} />
-      <span className="flex-1 text-sm font-medium">{label}</span>
+      <span className="text-sm">{label}</span>
     </button>
   )
 
-  const MenuDivider = () => <div className="h-px bg-gray-200 dark:bg-gray-700/50 my-1 -mx-1" />
+  const MenuDivider = () => <div className="border-t border-gray-200 dark:border-gray-700 my-1" />
 
   return createPortal(
     <>
@@ -126,7 +126,7 @@ export function DomainContextMenu({ domainId, position, onClose }: DomainContext
 
       <div
         ref={menuRef}
-        className="fixed z-50 w-60 bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 py-2 px-2 animate-in fade-in zoom-in-95 duration-150"
+        className="fixed z-50 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg py-1 min-w-40"
         style={{
           left: adjustedPosition.x,
           top: adjustedPosition.y,
