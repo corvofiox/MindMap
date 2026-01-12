@@ -74,7 +74,7 @@ app.use('/api/logs', logRouter)
 app.use('/api/upload', uploadRouter)
 
 // 静态文件服务
-const frontendDistPath = path.join(__dirname, '../frontend/dist')
+const frontendDistPath = path.join(__dirname, '../../frontend/dist')
 app.use(express.static(frontendDistPath))
 
 // 所有未匹配的请求指向index.html
