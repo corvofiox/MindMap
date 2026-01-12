@@ -1,11 +1,13 @@
 import initSqlJs from 'sql.js'
-import { join } from 'path'
+import path, { join } from 'path'
 import { fileURLToPath } from 'url'
 import * as fs from 'fs'
 
 const __filename = fileURLToPath(import.meta.url)
-const __dirname = join(__filename, '..')
+const __dirname = path.dirname(__filename)
 
+// 注意：这些路径仅用于直接运行迁移脚本时使用
+// 在init.ts中会使用正确的Docker路径
 const dataDir = join(__dirname, '../../data')
 const dbPath = join(dataDir, 'mindmap.db')
 

@@ -13,7 +13,11 @@ async function initDatabase() {
   try {
     // Create data directory if it doesn't exist
     const fs = await import('fs')
-    const dataDir = path.join(__dirname, '../../data')
+    // 确保在Docker环境中使用正确的路径 - 与Dockerfile保持一致
+    // 源代码位置: /app/backend/src/database/init.ts
+    // 编译后位置: /app/backend/dist/database/init.js
+    // 正确的数据目录: /app/backend/data
+    const dataDir = process.env.DB_DIR || path.join(__dirname, '../../', 'data')
     if (!fs.existsSync(dataDir)) {
       fs.mkdirSync(dataDir, { recursive: true })
     }
