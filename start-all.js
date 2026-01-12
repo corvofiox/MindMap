@@ -199,7 +199,8 @@ const startProdServer = () => {
   log('WebSocket service will be available at ws://localhost:3001', 'blue');
   log('Press Ctrl+C to stop server', 'yellow');
   
-  exec('npm run start');
+  // 直接执行 node dist/index.js 命令，避免 npm run start 导致的无限循环
+  exec('node dist/index.js', { cwd: path.join(__dirname, 'backend') });
 };
 
 // 主函数
@@ -245,7 +246,8 @@ const main = () => {
         log('Application will be available at http://localhost:3000', 'blue');
         log('WebSocket service will be available at ws://localhost:3001', 'blue');
         log('Press Ctrl+C to stop server', 'yellow');
-        exec('npm run start', { cwd: path.join(__dirname, 'backend') });
+        // 直接执行 node dist/index.js 命令，避免 npm run start 导致的无限循环
+        exec('node dist/index.js', { cwd: path.join(__dirname, 'backend') });
       } else if (mode === 'production') {
         startProdServer();
       } else {
