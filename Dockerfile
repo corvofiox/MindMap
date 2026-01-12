@@ -44,10 +44,8 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
+# npm workspaces将所有依赖安装在根目录的node_modules中，只需复制根目录的node_modules即可
 COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/shared/node_modules ./shared/node_modules
-COPY --from=builder /app/frontend/node_modules ./frontend/node_modules
-COPY --from=builder /app/backend/node_modules ./backend/node_modules
 
 COPY --from=builder /app/frontend/dist ./frontend/dist
 COPY --from=builder /app/backend/dist ./backend/dist
