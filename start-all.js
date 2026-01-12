@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
-const { spawnSync, spawn } = require('child_process');
-const fs = require('fs');
-const path = require('path');
+import { spawnSync, spawn } from 'child_process';
+import fs from 'fs';
+import path from 'path';
 
 // 颜色输出
 const colors = {
