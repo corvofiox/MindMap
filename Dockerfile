@@ -1,6 +1,14 @@
 # 构建阶段
 FROM node:20-alpine AS builder
 
+# 安装sharp所需的系统依赖
+RUN apk add --no-cache --virtual .build-deps \
+    python3 \
+    make \
+    g++ \
+    vips-dev \
+    vips
+
 # 设置工作目录
 WORKDIR /app
 
@@ -28,6 +36,10 @@ RUN npm run build:backend
 
 # 运行阶段
 FROM node:20-alpine
+
+# 安装sharp运行时所需的系统依赖
+RUN apk add --no-cache \
+    vips
 
 # 设置工作目录
 WORKDIR /app

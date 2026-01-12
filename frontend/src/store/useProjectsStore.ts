@@ -73,7 +73,6 @@ export const useProjectsStore = create<ProjectsState>()(
         import('@/store/useUIStore').then(({ useUIStore }) => {
           useUIStore.getState().addErrorToast(errorMessage, '操作失败')
         })
-        throw error
       }
 
       return {

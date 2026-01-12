@@ -29,7 +29,6 @@ export const useAuthStore = create<AuthState>()(
           error: errorMessage,
           isLoading: false,
         })
-        throw error
       }
 
       return {

@@ -57,7 +57,6 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : '更新卡片失败'
       set({ error: errorMessage, isLoading: false })
-      throw error
     }
   },
 
@@ -75,7 +74,6 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : '移除卡片失败'
       set({ error: errorMessage, isLoading: false })
-      throw error
     }
   },
 
@@ -107,7 +105,6 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
 
       // Revert on error
       set({ cardsMap: state.cardsMap })
-      throw error
     }
   },
 
@@ -139,7 +136,7 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : '添加文件夹失败'
       set({ error: errorMessage, isLoading: false })
-      throw error
+      return null
     }
   },
 
@@ -157,7 +154,6 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : '更新文件夹失败'
       set({ error: errorMessage, isLoading: false })
-      throw error
     }
   },
 
@@ -175,7 +171,6 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : '移除文件夹失败'
       set({ error: errorMessage, isLoading: false })
-      throw error
     }
   },
 
@@ -206,7 +201,6 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
 
       // Revert on error
       set({ foldersMap: state.foldersMap })
-      throw error
     }
   },
 
