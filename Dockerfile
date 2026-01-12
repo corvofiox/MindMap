@@ -48,7 +48,9 @@ ENV NODE_ENV=production
 COPY --from=builder /app/node_modules ./node_modules
 
 COPY --from=builder /app/frontend/dist ./frontend/dist
+COPY --from=builder /app/frontend/.env.example ./frontend/
 COPY --from=builder /app/backend/dist ./backend/dist
+COPY --from=builder /app/backend/.env.example ./backend/
 COPY --from=builder /app/shared ./shared
 COPY --from=builder /app/package*.json ./
 COPY --from=builder /app/generate-env.js /app/start-all.js ./
