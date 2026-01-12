@@ -1,8 +1,8 @@
-{
-  "name": "mindmap-app",
+{  "name": "mindmap-app",
   "version": "1.0.0",
   "description": "MindMap - Personal Mind Organization Tool",
   "private": true,
+  "type": "module",
   "workspaces": [
     "frontend",
     "backend",
