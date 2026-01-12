@@ -42,6 +42,7 @@
     "@typescript-eslint/parser": "^6.17.0",
     "drizzle-kit": "^0.20.9",
     "eslint": "^8.56.0",
+    "node-gyp": "^10.0.0",
     "tsx": "^4.7.0",
     "typescript": "^5.3.3"
   }

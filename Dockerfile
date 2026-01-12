@@ -1,76 +1,61 @@
-# 构建阶段
-FROM node:20-alpine AS builder
+# --- 构建阶段 ---
+FROM node:20-slim AS builder
 
-# 安装sharp所需的系统依赖
-RUN apk add --no-cache --virtual .build-deps \
+# 设置sharp使用预编译二进制文件的环境变量
+ENV SHARP_IGNORE_GLOBAL_LIBVIPS=1
+ENV SHARP_USE_SYSTEM_LIBVIPS=1
+
+# 安装构建依赖 (编译 native 模块所需)
+RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     make \
     g++ \
-    vips-dev \
-    vips
+    libvips-dev \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
-# 设置工作目录
 WORKDIR /app
 
-# 复制必要文件
 COPY package*.json ./
-COPY shared/package*.json shared/
-COPY shared/src shared/src
-COPY frontend/package*.json frontend/
-COPY backend/package*.json backend/
-COPY backend/drizzle.config.ts backend/
-COPY backend/.env.example backend/
-COPY generate-env.js ./
-COPY start-all.js ./
+COPY shared/package*.json ./shared/
+COPY frontend/package*.json ./frontend/
+COPY backend/package*.json ./backend/
 
-# 安装所有依赖
+# 全局安装node-gyp
+RUN npm install -g node-gyp
+
 RUN npm ci --workspaces
 
-# 构建前端
-COPY frontend/ ./frontend/
-RUN npm run build:frontend
+COPY . .
 
-# 构建后端
-COPY backend/ ./backend/
+RUN npm run build:frontend
 RUN npm run build:backend
 
-# 运行阶段
-FROM node:20-alpine
+FROM node:20-slim
 
-# 安装sharp运行时所需的系统依赖
-RUN apk add --no-cache \
-    vips
+# 安装运行时依赖
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libvips \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
-# 设置工作目录
 WORKDIR /app
 
-# 设置环境变量
 ENV NODE_ENV=production
-ENV PORT=3000
-ENV WS_PORT=3001
 
-# 复制构建产物
-COPY --from=builder /app/frontend/dist /app/frontend/dist
-COPY --from=builder /app/backend/dist /app/backend/dist
-COPY --from=builder /app/backend/drizzle.config.ts /app/backend/
-COPY --from=builder /app/shared /app/shared
-COPY --from=builder /app/package*.json /app/
-COPY --from=builder /app/backend/package*.json /app/backend/
-COPY --from=builder /app/shared/package*.json /app/shared/
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/shared/node_modules ./shared/node_modules
+COPY --from=builder /app/frontend/node_modules ./frontend/node_modules
+COPY --from=builder /app/backend/node_modules ./backend/node_modules
 
-# 复制配置文件和生成脚本
-COPY --from=builder /app/generate-env.js /app/
-COPY --from=builder /app/start-all.js /app/
-COPY backend/.env.example /app/backend/
+COPY --from=builder /app/frontend/dist ./frontend/dist
+COPY --from=builder /app/backend/dist ./backend/dist
+COPY --from=builder /app/shared ./shared
+COPY --from=builder /app/package*.json ./
+COPY --from=builder /app/generate-env.js /app/start-all.js ./
 
-# 创建必要的目录
 RUN mkdir -p /app/backend/data
 
-# 安装生产依赖
-RUN npm ci --workspaces --only=production
-
-# 暴露端口
 EXPOSE 3000 3001
 
-# 启动脚本：集成一键启动功能
-CMD ["node", "/app/start-all.js", "--docker", "--mode=production"]
+CMD ["node", "start-all.js", "--docker", "--mode=production"]
