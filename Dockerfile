@@ -1,65 +1,125 @@
-# --- 构建阶段 ---
-FROM node:20-slim AS builder
+# syntax=docker/dockerfile:1
 
-# 设置sharp使用预编译二进制文件的环境变量
-ENV SHARP_IGNORE_GLOBAL_LIBVIPS=1
-ENV SHARP_USE_SYSTEM_LIBVIPS=1
+ARG NODE_VERSION=20-alpine
 
-# 安装构建依赖 (编译 native 模块所需)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 \
-    make \
-    g++ \
-    libvips-dev \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+# =============================================================================
+# Base Stage
+# =============================================================================
+FROM node:${NODE_VERSION} AS base
+
+WORKDIR /app
+ENV NODE_ENV=production
+
+RUN apk add --no-cache python3 make g++ vips-dev
+
+# =============================================================================
+# Dependencies Stage - Install all npm dependencies
+# =============================================================================
+FROM base AS deps
 
 WORKDIR /app
 
-COPY package*.json ./
-COPY shared/package*.json ./shared/
-COPY frontend/package*.json ./frontend/
-COPY backend/package*.json ./backend/
+COPY package.json package-lock.json* ./
 
-# 全局安装node-gyp
-RUN npm install -g node-gyp
+RUN npm ci --ignore-scripts
 
-# 使用npm install代替npm ci，自动处理依赖并更新lock文件
-RUN npm install --workspaces
+COPY shared ./shared
+COPY backend ./backend
+COPY frontend ./frontend
 
-COPY . .
+RUN npm install --workspaces --ignore-scripts
 
-RUN npm run build:frontend
-RUN npm run build:backend
+# =============================================================================
+# Backend Build Stage - Compile TypeScript
+# =============================================================================
+FROM base AS backend-builder
 
-FROM node:20-slim
+WORKDIR /app
 
-# 安装运行时依赖
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libvips \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /app/package.json ./
+COPY --from=deps /app/shared ./shared
+COPY --from=deps /app/backend ./backend
+
+WORKDIR /app/backend
+
+RUN npm install --include=dev
+
+RUN JWT_SECRET=$(head -c 64 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 64) && \
+    sed -i "s|^JWT_SECRET=.*|JWT_SECRET=${JWT_SECRET}|" .env.example && \
+    cp .env.example .env
+
+RUN npm run build
+
+# =============================================================================
+# Frontend Build Stage - Build with Vite
+# =============================================================================
+FROM base AS frontend-builder
+
+WORKDIR /app
+
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /app/package.json ./
+COPY --from=deps /app/shared ./shared
+COPY --from=deps /app/frontend ./frontend
+
+WORKDIR /app/frontend
+
+RUN npm install --include=dev
+
+ENV VITE_API_URL=/api
+ENV VITE_WS_URL=ws://localhost:3001
+
+RUN npm run build
+
+# =============================================================================
+# Production Stage - Final image
+# =============================================================================
+FROM base AS runner
 
 WORKDIR /app
 
 ENV NODE_ENV=production
-ENV PORT=3000
-ENV WS_PORT=3001
-ENV ALLOWED_ORIGINS=*
 
-# npm workspaces将所有依赖安装在根目录的node_modules中，只需复制根目录的node_modules即可
-COPY --from=builder /app/node_modules ./node_modules
+COPY --from=backend-builder /app/backend/dist ./backend/dist
+COPY --from=backend-builder /app/backend/node_modules ./backend/node_modules
+COPY --from=backend-builder /app/backend/package.json ./backend/package.json
+COPY --from=backend-builder /app/backend/.env ./backend/.env
 
-COPY --from=builder /app/frontend/dist ./frontend/dist
-COPY --from=builder /app/frontend/.env.example ./frontend/
-COPY --from=builder /app/backend/dist ./backend/dist
-COPY --from=builder /app/backend/.env.example ./backend/
-COPY --from=builder /app/shared ./shared
-COPY --from=builder /app/package*.json ./
-COPY --from=builder /app/generate-env.js /app/start-all.js ./
+COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
 
-RUN mkdir -p /app/backend/data
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /app/package.json ./
+COPY --from=deps /app/shared ./shared
+COPY --from=deps /app/backend ./backend
+COPY --from=deps /app/frontend ./frontend
+
+RUN mkdir -p /app/backend/data /app/backend/uploads /app/backend/logs
+
+RUN apk add --no-cache python3 make g++ && \
+    npm rebuild bcrypt && \
+    cd backend && npm rebuild bcrypt && \
+    cd .. && apk del python3 make g++
+
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser --system --uid 1001 app
+
+USER app
 
 EXPOSE 3000 3001
 
-CMD ["node", "start-all.js", "--docker", "--mode=production"]
+WORKDIR /app/backend
+
+ENV PORT=3000
+ENV WS_PORT=3001
+ENV DB_FILE=data/mindmap.db
+ENV LOG_FILE=data/app.log
+ENV UPLOAD_DIR=uploads
+ENV ALLOWED_ORIGINS=*
+ENV VITE_API_URL=/api
+ENV VITE_WS_URL=ws://localhost:3001
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:3000/health || exit 1
+
+CMD ["node", "dist/index.js"]

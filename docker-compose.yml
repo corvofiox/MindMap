@@ -2,18 +2,12 @@ version: '3.8'
 
 services:
   mindmap:
-    # 使用当前目录的Dockerfile构建镜像
     build: .
-    # 端口映射
     ports:
-      - "8001:3000"    # HTTP服务（前端+API）- 映射到主机的8001端口
-      - "3001:3001"  # WebSocket服务（实时协作）
-    # 环境变量配置
+      - "8001:3000"
+      - "3001:3001"
     environment:
       - NODE_ENV=production
-      - DB_FILE=/app/backend/data/mindmap.db
-    # 数据卷持久化 - 使用本地目录挂载（便于数据迁移）
     volumes:
       - ./data:/app/backend/data
-    # 自动重启策略
     restart: unless-stopped
