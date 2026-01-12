@@ -1,8 +1,8 @@
 import type { ApiResponse } from '@/types'
 import { useUIStore } from '@/store/useUIStore'
 
-// API配置
-export const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000'
+// API配置 - 使用相对路径，自动适应部署环境
+export const API_BASE_URL = ''
 
 // 常见错误信息
 export const ERROR_MESSAGES = {

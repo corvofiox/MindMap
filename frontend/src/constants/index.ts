@@ -36,7 +36,12 @@ export const API_ENDPOINTS = {
 
 // WebSocket configuration
 export const WS_CONFIG = {
-  URL: import.meta.env.VITE_WS_URL || 'ws://localhost:3001/ws',
+  // 自动根据当前页面URL构建WebSocket URL
+  get URL(): string {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = window.location.host;
+    return `${protocol}//${host}/ws`;
+  },
   PATH: '/ws',
   RECONNECT_INTERVAL: 1000,
   MAX_RECONNECT_ATTEMPTS: 10,
