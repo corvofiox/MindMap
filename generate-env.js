@@ -3,6 +3,7 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { fileURLToPath } from 'url';
 
 // 敏感配置生成函数
 const generateSensitiveConfig = () => {
@@ -15,6 +16,9 @@ const generateSensitiveConfig = () => {
 
 // 主函数
 const generateEnvFile = () => {
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
+  
   const envExamplePath = path.join(__dirname, 'backend', '.env.example');
   const envPath = path.join(__dirname, 'backend', '.env');
   
