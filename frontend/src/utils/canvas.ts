@@ -1,5 +1,5 @@
-import type { Node, NodeGroup, Domain, Connection } from '@/types'
-import { CANVAS_DEFAULTS, NODE_DEFAULTS } from '@/constants'
+import type { Connection } from '@/types'
+import { CANVAS_DEFAULTS } from '@/constants'
 
 /**
  * Snap value to grid

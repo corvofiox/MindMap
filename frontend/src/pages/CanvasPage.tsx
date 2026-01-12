@@ -227,7 +227,6 @@ export function CanvasPage() {
   const [isSpacePressed, setIsSpacePressed] = useState(false)
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 })
   const [containerReady, setContainerReady] = useState(false)
-  const [lastSaveTime, setLastSaveTime] = useState<number>(0)
   const lastSaveTimeRef = useRef<number>(0)
 
   const [isLoadingCanvas, setIsLoadingCanvas] = useState(false)
@@ -249,9 +248,9 @@ export function CanvasPage() {
   const [connectionEndPosition, setConnectionEndPosition] = useState({ x: 0, y: 0 })
 
   // Connection endpoint editing state
-  const [isEditingConnectionEndpoint, setIsEditingConnectionEndpoint] = useState(false)
-  const [editingConnectionId, setEditingConnectionId] = useState<string | null>(null)
-  const [editingEndpoint, setEditingEndpoint] = useState<'start' | 'end' | null>(null)
+  const [isEditingConnectionEndpoint] = useState(false)
+  const [editingConnectionId] = useState<string | null>(null)
+  const [editingEndpoint] = useState<'start' | 'end' | null>(null)
   const [editingEndpointPosition, setEditingEndpointPosition] = useState({ x: 0, y: 0 })
 
   // Connection endpoint dragging state
@@ -322,7 +321,7 @@ export function CanvasPage() {
   const [richTextToolbarVisible, setRichTextToolbarVisible] = useState(false)
   const [richTextToolbarPosition, setRichTextToolbarPosition] = useState({ x: 0, y: 0 })
 
-  const { user } = useAuthStore()
+
   const {
     nodes,
     groups,
@@ -424,8 +423,6 @@ export function CanvasPage() {
   }, [addNode, addToast, panX, panY, zoom])
 
   const { loadProjects, restoreCurrentProject, canvases, updateCanvas: updateCanvasInStore } = useProjectsStore()
-  const previousCanvasesRef = useRef<Canvas[]>([])
-  const canvasExistsRef = useRef(true)
 
   // 恢复项目状态（只在组件挂载时执行一次）
   useEffect(() => {
@@ -468,7 +465,6 @@ export function CanvasPage() {
 
     // Reset last save time when canvas changes
     lastSaveTimeRef.current = 0
-    setLastSaveTime(0)
 
     const loadFromDatabase = async () => {
       // Set loading state
@@ -894,7 +890,6 @@ export function CanvasPage() {
         await saveCanvasNodesData(id, { nodes, groups, domains, connections })
 
         lastSaveTimeRef.current = now
-        setLastSaveTime(now)
         setDirty(false)
 
         // Generate thumbnail after successful auto-save
@@ -915,7 +910,7 @@ export function CanvasPage() {
         clearTimeout(dbSaveTimeoutRef.current)
       }
     }
-  }, [canvasId, setDirty, setLastSaveTime])
+  }, [canvasId, setDirty])
 
   // Handle space key for panning
   useEffect(() => {
@@ -959,14 +954,13 @@ export function CanvasPage() {
 
     const now = Date.now()
     lastSaveTimeRef.current = now
-    setLastSaveTime(now)
     setDirty(false)
 
     // Generate thumbnail immediately when manually saving
     if (hasCanvasContent(nodes, domains)) {
       await generateThumbnail(id)
     }
-  }, [canvasId, setDirty, setLastSaveTime, generateThumbnail])
+  }, [canvasId, setDirty, generateThumbnail])
 
   // Handle page refresh/close - save data immediately before unloading
   useEffect(() => {

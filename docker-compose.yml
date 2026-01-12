@@ -6,22 +6,14 @@ services:
     build: .
     # 端口映射
     ports:
-      - "80:3000"    # HTTP服务（前端+API）
+      - "3000:3000"    # HTTP服务（前端+API）
       - "3001:3001"  # WebSocket服务（实时协作）
     # 环境变量配置
     environment:
       - NODE_ENV=production
       - DB_FILE=/app/backend/data/mindmap.db
-    # 数据卷持久化
+    # 数据卷持久化 - 使用本地目录挂载（便于数据迁移）
     volumes:
-      - mindmap-data:/app/backend/data
-      - mindmap-uploads:/app/backend/uploads
-      - mindmap-thumbnails:/app/backend/thumbnails
+      - ./data:/app/backend/data
     # 自动重启策略
     restart: unless-stopped
-
-# 数据卷定义
-volumes:
-  mindmap-data:
-  mindmap-uploads:
-  mindmap-thumbnails:

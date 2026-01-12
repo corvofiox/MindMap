@@ -31,10 +31,10 @@ export default defineConfig({
     outDir: 'dist',
     sourcemap: true,
     rollupOptions: {
+      external: ['fabric'],
       output: {
         manualChunks: {
           'react-vendor': ['react', 'react-dom', 'react-router-dom'],
-          'fabric-vendor': ['fabric'],
           'yjs-vendor': ['yjs', 'y-websocket'],
           'ui-vendor': ['@radix-ui/react-dialog', '@radix-ui/react-dropdown-menu', 'lucide-react'],
         },

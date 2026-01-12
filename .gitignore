@@ -1,4 +1,5 @@
 .claude/
+.trae/
 .vscode/
 .idea/
 node_modules/

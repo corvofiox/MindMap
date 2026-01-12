@@ -51,7 +51,7 @@ COPY --from=builder /app/start-all.js /app/
 COPY backend/.env.example /app/backend/
 
 # 创建必要的目录
-RUN mkdir -p /app/backend/data /app/backend/uploads /app/backend/thumbnails
+RUN mkdir -p /app/backend/data
 
 # 安装生产依赖
 RUN npm ci --workspaces --only=production

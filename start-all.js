@@ -242,10 +242,10 @@ const main = () => {
       if (isDocker) {
         // Docker环境：直接启动后端应用
         log('\n🚀 Starting MindMap application in Docker...', 'yellow');
-        log('Application will be available at http://localhost:80', 'blue');
+        log('Application will be available at http://localhost:3000', 'blue');
         log('WebSocket service will be available at ws://localhost:3001', 'blue');
         log('Press Ctrl+C to stop server', 'yellow');
-        exec('node backend/dist/index.js');
+        exec('npm run start', { cwd: path.join(__dirname, 'backend') });
       } else if (mode === 'production') {
         startProdServer();
       } else {

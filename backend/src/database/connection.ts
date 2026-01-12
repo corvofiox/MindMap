@@ -20,7 +20,9 @@ let dbData: Uint8Array | null = null
 try {
   const dbFile = await fs.promises.readFile(dbPath)
   dbData = new Uint8Array(dbFile)
-} catch {
+} catch (error) {
+  // Database file doesn't exist, will be created automatically
+  console.log('Database file not found, creating new one:', dbPath)
 }
 
 const sqlite = new SQL.Database(dbData)
