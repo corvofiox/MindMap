@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import { db } from '../database/connection.js'
+import { db, scheduleSave } from '../database/connection.js'
 import { projects, projectMembers, nodeCards, nodePoolFolders } from '../database/schema.js'
 import { eq, and } from 'drizzle-orm'
 import { authenticate, type AuthRequest } from '../middleware/auth.middleware.js'
@@ -34,7 +34,7 @@ projectRouter.get('/:id', authenticate, asyncHandler(async (req: AuthRequest, re
   if (!project) {
     return res.status(404).json({
       success: false,
-      error: 'Project not found',
+      error: '项目未找到',
     })
   }
 
@@ -61,6 +61,8 @@ projectRouter.post('/', authenticate, asyncHandler(async (req: AuthRequest, res)
     })
     .returning()
 
+  scheduleSave()
+
   // 转换时间戳字段
   const transformedProject = transformResponse(newProject, ['createdAt', 'updatedAt'])
 
@@ -85,7 +87,7 @@ projectRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, re
   if (!project || projectOwnerId !== req.user!.id) {
     return res.status(403).json({
       success: false,
-      error: 'Access denied',
+      error: '访问被拒绝',
     })
   }
 
@@ -99,6 +101,8 @@ projectRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, re
     })
     .where(eq(projects.id, projectId))
     .returning()
+
+  scheduleSave()
 
   // 转换时间戳字段
   const transformedProject = transformResponse(updatedProject, ['createdAt', 'updatedAt'])
@@ -121,7 +125,7 @@ projectRouter.delete('/:id', authenticate, asyncHandler(async (req: AuthRequest,
   if (!project) {
     return res.status(404).json({
       success: false,
-      error: 'Project not found',
+      error: '项目未找到',
     })
   }
 
@@ -131,11 +135,13 @@ projectRouter.delete('/:id', authenticate, asyncHandler(async (req: AuthRequest,
   if (projectOwnerId !== req.user!.id) {
     return res.status(403).json({
       success: false,
-      error: 'Access denied',
+      error: '访问被拒绝',
     })
   }
 
   await db.delete(projects).where(eq(projects.id, projectId))
+
+  scheduleSave()
 
   res.json({
     success: true,
@@ -161,7 +167,7 @@ projectRouter.post(
     if (!project || projectOwnerId !== req.user!.id) {
       return res.status(403).json({
         success: false,
-        error: 'Access denied',
+        error: '访问被拒绝',
       })
     }
 
@@ -173,6 +179,8 @@ projectRouter.post(
         role: role || 'viewer',
       })
       .returning()
+
+    scheduleSave()
 
     res.json({
       success: true,
@@ -199,7 +207,7 @@ projectRouter.delete(
     if (!project || projectOwnerId !== req.user!.id) {
       return res.status(403).json({
         success: false,
-        error: 'Access denied',
+        error: '访问被拒绝',
       })
     }
 
@@ -211,6 +219,8 @@ projectRouter.delete(
           eq(projectMembers.userId, userId)
         )
       )
+
+    scheduleSave()
 
     res.json({
       success: true,
@@ -234,7 +244,7 @@ projectRouter.get(
     if (!project) {
       return res.status(404).json({
         success: false,
-        error: 'Project not found',
+        error: '项目未找到',
       })
     }
 
@@ -269,7 +279,7 @@ projectRouter.post(
     if (!project) {
       return res.status(404).json({
         success: false,
-        error: 'Project not found',
+        error: '项目未找到',
       })
     }
 
@@ -286,6 +296,8 @@ projectRouter.post(
         createdBy: req.user!.id,
       })
       .returning()
+
+    scheduleSave()
 
     // 转换时间戳字段
     const transformedNode = transformResponse(newNode, ['createdAt'])
@@ -312,11 +324,13 @@ projectRouter.delete(
     if (!node) {
       return res.status(404).json({
         success: false,
-        error: 'Node not found',
+        error: '节点未找到',
       })
     }
 
     await db.delete(nodeCards).where(eq(nodeCards.id, nodeId))
+
+    scheduleSave()
 
     res.json({
       success: true,
@@ -341,7 +355,7 @@ projectRouter.put(
     if (!node) {
       return res.status(404).json({
         success: false,
-        error: 'Node not found',
+        error: '节点未找到',
       })
     }
 
@@ -358,6 +372,8 @@ projectRouter.put(
       })
       .where(eq(nodeCards.id, nodeId))
       .returning()
+
+    scheduleSave()
 
     const transformedNode = transformResponse(updatedNode, ['createdAt'])
 
@@ -383,7 +399,7 @@ projectRouter.post(
     if (!node) {
       return res.status(404).json({
         success: false,
-        error: 'Node not found',
+        error: '节点未找到',
       })
     }
 
@@ -396,6 +412,8 @@ projectRouter.post(
       })
       .where(eq(nodeCards.id, nodeId))
       .returning()
+
+    scheduleSave()
 
     const transformedNode = transformResponse(updatedNode, ['createdAt'])
 
@@ -421,7 +439,7 @@ projectRouter.get(
     if (!project) {
       return res.status(404).json({
         success: false,
-        error: 'Project not found',
+        error: '项目未找到',
       })
     }
 
@@ -455,7 +473,7 @@ projectRouter.post(
     if (!project) {
       return res.status(404).json({
         success: false,
-        error: 'Project not found',
+        error: '项目未找到',
       })
     }
 
@@ -471,6 +489,8 @@ projectRouter.post(
       .returning()
 
     const [newFolder] = result || []
+
+    scheduleSave()
 
     const transformedFolder = transformResponse(newFolder, ['createdAt'])
 
@@ -497,7 +517,7 @@ projectRouter.put(
     if (!folder) {
       return res.status(404).json({
         success: false,
-        error: 'Folder not found',
+        error: '文件夹未找到',
       })
     }
 
@@ -513,6 +533,8 @@ projectRouter.put(
       .returning()
 
     const [updatedFolder] = result || []
+
+    scheduleSave()
 
     const transformedFolder = transformResponse(updatedFolder, ['createdAt'])
 
@@ -538,7 +560,7 @@ projectRouter.delete(
     if (!folder) {
       return res.status(404).json({
         success: false,
-        error: 'Folder not found',
+        error: '文件夹未找到',
       })
     }
 

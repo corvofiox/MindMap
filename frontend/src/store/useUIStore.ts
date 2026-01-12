@@ -80,6 +80,10 @@ interface UIState {
   toasts: Toast[]
   addToast: (toast: Omit<Toast, 'id'>) => void
   removeToast: (id: string) => void
+  addErrorToast: (message: string, title?: string) => void
+  addSuccessToast: (message: string, title?: string) => void
+  addWarningToast: (message: string, title?: string) => void
+  addInfoToast: (message: string, title?: string) => void
 
   // Loading
   isLoading: boolean
@@ -210,6 +214,19 @@ export const useUIStore = create<UIState>()(
           set((state) => ({
             toasts: state.toasts.filter((t) => t.id !== id),
           })),
+        // Convenience methods for different toast types
+        addErrorToast: (message, title = '错误') => {
+          get().addToast({ type: 'error', title, message })
+        },
+        addSuccessToast: (message, title = '成功') => {
+          get().addToast({ type: 'success', title, message })
+        },
+        addWarningToast: (message, title = '警告') => {
+          get().addToast({ type: 'warning', title, message })
+        },
+        addInfoToast: (message, title = '提示') => {
+          get().addToast({ type: 'info', title, message })
+        },
 
         // Loading
         isLoading: false,

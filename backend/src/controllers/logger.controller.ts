@@ -48,7 +48,7 @@ export const writeLog = async (req: Request, res: Response) => {
 
     res.json({ success: true, message: 'Log written successfully' })
   } catch (error) {
-    res.status(500).json({ success: false, error: 'Failed to write log' })
+    res.status(500).json({ success: false, error: '写入日志失败' })
   }
 }
 
@@ -69,7 +69,7 @@ export const getLogs = async (req: Request, res: Response) => {
 
     res.json({ success: true, logs })
   } catch (error) {
-    res.status(500).json({ success: false, error: 'Failed to read logs' })
+    res.status(500).json({ success: false, error: '读取日志失败' })
   }
 }
 
@@ -85,6 +85,6 @@ export const clearLogs = async (req: Request, res: Response) => {
 
     res.json({ success: true, message: 'Logs cleared successfully' })
   } catch (error) {
-    res.status(500).json({ success: false, error: 'Failed to clear logs' })
+    res.status(500).json({ success: false, error: '清空日志失败' })
   }
 }

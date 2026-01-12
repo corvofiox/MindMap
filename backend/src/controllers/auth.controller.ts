@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import bcrypt from 'bcrypt'
 import jwt from 'jsonwebtoken'
-import { db, saveDatabase } from '../database/connection.js'
+import { db, scheduleSave } from '../database/connection.js'
 import { users } from '../database/schema.js'
 import { eq } from 'drizzle-orm'
 import { asyncHandler } from '../middleware/error.middleware.js'
@@ -16,7 +16,7 @@ authRouter.post('/register', asyncHandler(async (req, res) => {
   if (!email || !password) {
     return res.status(400).json({
       success: false,
-      error: 'Email and password are required',
+      error: '邮箱和密码不能为空',
     })
   }
 
@@ -30,7 +30,7 @@ authRouter.post('/register', asyncHandler(async (req, res) => {
   if (existingUser) {
     return res.status(400).json({
       success: false,
-      error: 'Email already registered',
+      error: '该邮箱已被注册',
     })
   }
 
@@ -53,11 +53,14 @@ authRouter.post('/register', asyncHandler(async (req, res) => {
   const token = (jwt as any).sign(
     { userId: newUser.id },
     process.env.JWT_SECRET || 'your-secret-key',
-    { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+    { 
+      expiresIn: process.env.JWT_EXPIRES_IN || '7d',
+      algorithm: 'HS256'
+    }
   )
 
   // Save database immediately
-  await saveDatabase()
+  scheduleSave()
 
   res.json({
     success: true,
@@ -89,7 +92,7 @@ authRouter.post('/login', asyncHandler(async (req, res) => {
   if (!user || !user.password) {
     return res.status(401).json({
       success: false,
-      error: 'Invalid credentials',
+      error: '用户名或密码错误',
     })
   }
 
@@ -99,7 +102,7 @@ authRouter.post('/login', asyncHandler(async (req, res) => {
   if (!isValid) {
     return res.status(401).json({
       success: false,
-      error: 'Invalid credentials',
+      error: '用户名或密码错误',
     })
   }
 
@@ -107,7 +110,10 @@ authRouter.post('/login', asyncHandler(async (req, res) => {
   const token = (jwt as any).sign(
     { userId: user.id },
     process.env.JWT_SECRET || 'your-secret-key',
-    { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+    { 
+      expiresIn: process.env.JWT_EXPIRES_IN || '7d',
+      algorithm: 'HS256'
+    }
   )
 
   res.json({
@@ -141,7 +147,7 @@ authRouter.post('/refresh', asyncHandler(async (req, res) => {
   if (!token) {
     return res.status(401).json({
       success: false,
-      error: 'No token provided',
+      error: '未提供令牌',
     })
   }
 
@@ -159,15 +165,18 @@ authRouter.post('/refresh', asyncHandler(async (req, res) => {
     if (!user) {
       return res.status(401).json({
         success: false,
-        error: 'Invalid token',
+        error: '无效的令牌',
       })
     }
 
     const newToken = (jwt as any).sign(
-      { userId: user.id },
-      process.env.JWT_SECRET || 'your-secret-key',
-      { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
-    )
+    { userId: user.id },
+    process.env.JWT_SECRET || 'your-secret-key',
+    { 
+      expiresIn: process.env.JWT_EXPIRES_IN || '7d',
+      algorithm: 'HS256'
+    }
+  )
 
     res.json({
       success: true,
@@ -186,7 +195,7 @@ authRouter.post('/refresh', asyncHandler(async (req, res) => {
   } catch (error) {
     return res.status(401).json({
       success: false,
-      error: 'Invalid token',
+      error: '无效的令牌',
     })
   }
 }))

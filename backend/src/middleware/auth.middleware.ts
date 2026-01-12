@@ -18,7 +18,7 @@ export async function authenticate(req: AuthRequest, res: Response, next: NextFu
     const token = req.headers.authorization?.replace('Bearer ', '')
 
     if (!token) {
-      return res.status(401).json({ success: false, error: 'No token provided' })
+      return res.status(401).json({ success: false, error: '未提供令牌' })
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key') as {
@@ -30,7 +30,7 @@ export async function authenticate(req: AuthRequest, res: Response, next: NextFu
     })
 
     if (!user) {
-      return res.status(401).json({ success: false, error: 'Invalid token' })
+      return res.status(401).json({ success: false, error: '无效的令牌' })
     }
 
     req.user = {
@@ -42,7 +42,7 @@ export async function authenticate(req: AuthRequest, res: Response, next: NextFu
 
     next()
   } catch (error) {
-    return res.status(401).json({ success: false, error: 'Invalid token' })
+    return res.status(401).json({ success: false, error: '无效的令牌' })
   }
 }
 

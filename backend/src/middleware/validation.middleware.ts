@@ -10,7 +10,7 @@ export function validateBody<T>(schema: z.ZodSchema<T>) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({
           success: false,
-          error: 'Validation error',
+          error: '验证错误',
           details: error.errors,
         })
       }
@@ -28,7 +28,7 @@ export function validateQuery<T>(schema: z.ZodSchema<T>) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({
           success: false,
-          error: 'Validation error',
+          error: '验证错误',
           details: error.errors,
         })
       }
@@ -46,7 +46,7 @@ export function validateParams<T>(schema: z.ZodSchema<T>) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({
           success: false,
-          error: 'Validation error',
+          error: '验证错误',
           details: error.errors,
         })
       }

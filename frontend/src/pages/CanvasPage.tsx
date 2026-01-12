@@ -2089,12 +2089,6 @@ export function CanvasPage() {
       return
     }
 
-    // Check if clicking on a domain
-    const clickedOnDomain = target.closest('[data-domain-id]')
-    if (clickedOnDomain) {
-      return
-    }
-
     // Check if clicking on other interactive elements
     if (target.closest('button') || target.closest('canvas') || target.closest('[role="button"]')) {
       return
@@ -2564,10 +2558,11 @@ export function CanvasPage() {
                 })
               }}
               onClick={(e) => {
-                e.stopPropagation()
                 if (currentTool === 'select') {
+                  e.stopPropagation()
                   setSelectedIds([domain.id])
                 }
+                // Don't stop propagation for node/image tools to allow creating nodes on domains
               }}
               style={{
                 left: domain.x,
@@ -2906,10 +2901,7 @@ export function CanvasPage() {
           {/* Render connections */}
           <svg
             className="absolute inset-0"
-            style={{ overflow: 'visible' }}
-            onClick={(e) => {
-              // SVG container click handler
-            }}
+            style={{ overflow: 'visible', pointerEvents: 'none' }}
           >
             <defs>
               {/* Connection shadow filter */}

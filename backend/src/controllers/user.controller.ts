@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import bcrypt from 'bcrypt'
-import { db, saveDatabase } from '../database/connection.js'
+import { db, scheduleSave } from '../database/connection.js'
 import { users, projects, projectMembers, groupMembers, nodeCards, files, canvases, folders, canvasRecycleBin, nodePoolFolders } from '../database/schema.js'
 import { eq, and } from 'drizzle-orm'
 import { authenticate, type AuthRequest } from '../middleware/auth.middleware.js'
@@ -17,7 +17,7 @@ userRouter.get('/profile', authenticate, asyncHandler(async (req: AuthRequest, r
   if (!user) {
     return res.status(404).json({
       success: false,
-      error: 'User not found',
+      error: '用户不存在',
     })
   }
 
@@ -78,14 +78,14 @@ userRouter.put('/password', authenticate, asyncHandler(async (req: AuthRequest, 
   if (!currentPassword || !newPassword) {
     return res.status(400).json({
       success: false,
-      error: 'Current password and new password are required',
+      error: '当前密码和新密码不能为空',
     })
   }
 
   if (newPassword.length < 6) {
     return res.status(400).json({
       success: false,
-      error: 'New password must be at least 6 characters',
+      error: '新密码长度不能少于6个字符',
     })
   }
 
@@ -99,7 +99,7 @@ userRouter.put('/password', authenticate, asyncHandler(async (req: AuthRequest, 
   if (!user || !user.password) {
     return res.status(404).json({
       success: false,
-      error: 'User not found',
+      error: '用户不存在',
     })
   }
 
@@ -108,7 +108,7 @@ userRouter.put('/password', authenticate, asyncHandler(async (req: AuthRequest, 
   if (!isValid) {
     return res.status(401).json({
       success: false,
-      error: 'Current password is incorrect',
+      error: '当前密码不正确',
     })
   }
 
@@ -124,7 +124,7 @@ userRouter.put('/password', authenticate, asyncHandler(async (req: AuthRequest, 
     })
     .where(eq(users.id, req.user!.id))
 
-  await saveDatabase()
+  scheduleSave()
 
   res.json({
     success: true,
@@ -140,7 +140,7 @@ userRouter.delete('/account', authenticate, asyncHandler(async (req: AuthRequest
   if (!confirmation || confirmation !== 'DELETE') {
     return res.status(400).json({
       success: false,
-      error: 'Please type DELETE to confirm account deletion',
+      error: '请输入DELETE确认删除账户',
     })
   }
 
@@ -154,7 +154,7 @@ userRouter.delete('/account', authenticate, asyncHandler(async (req: AuthRequest
   if (!user || !user.password) {
     return res.status(404).json({
       success: false,
-      error: 'User not found',
+      error: '用户未找到',
     })
   }
 
@@ -164,7 +164,7 @@ userRouter.delete('/account', authenticate, asyncHandler(async (req: AuthRequest
     if (!isValid) {
       return res.status(401).json({
         success: false,
-        error: 'Password is incorrect',
+        error: '密码不正确',
       })
     }
   }
@@ -270,7 +270,7 @@ userRouter.delete('/account', authenticate, asyncHandler(async (req: AuthRequest
     .delete(users)
     .where(eq(users.id, userId))
 
-  await saveDatabase()
+  scheduleSave()
 
   res.json({
     success: true,

@@ -64,9 +64,14 @@ export const useProjectsStore = create<ProjectsState>()(
   persist(
     (set, get) => {
       const handleError = (error: unknown, defaultMessage: string) => {
+        const errorMessage = error instanceof Error ? error.message : defaultMessage
         set({
-          error: error instanceof Error ? error.message : defaultMessage,
+          error: errorMessage,
           isLoading: false,
+        })
+        // Show error toast to user
+        import('@/store/useUIStore').then(({ useUIStore }) => {
+          useUIStore.getState().addErrorToast(errorMessage, '操作失败')
         })
         throw error
       }
@@ -90,7 +95,7 @@ export const useProjectsStore = create<ProjectsState>()(
             const projects = await api.getProjects()
             set({ projects, isLoading: false })
           } catch (error) {
-            handleError(error, 'Failed to load projects')
+            handleError(error, '加载项目失败')
           }
         },
 
@@ -125,7 +130,7 @@ export const useProjectsStore = create<ProjectsState>()(
             const canvases = await api.getCanvases(projectId)
             set({ canvases, isLoading: false })
           } catch (error) {
-            handleError(error, 'Failed to load canvases')
+            handleError(error, '加载画布失败')
           }
         },
 
@@ -135,7 +140,7 @@ export const useProjectsStore = create<ProjectsState>()(
             const folders = await api.getFolders(projectId)
             set({ folders, isLoading: false })
           } catch (error) {
-            handleError(error, 'Failed to load folders')
+            handleError(error, '加载文件夹失败')
           }
         },
 
@@ -145,7 +150,7 @@ export const useProjectsStore = create<ProjectsState>()(
             const folders = await api.getNodePoolFolders(projectId)
             set({ nodePoolFolders: folders, isLoading: false })
           } catch (error) {
-            handleError(error, 'Failed to load node pool folders')
+            handleError(error, '加载节点池文件夹失败')
           }
         },
 
@@ -155,7 +160,7 @@ export const useProjectsStore = create<ProjectsState>()(
             const nodePool = await api.getNodePool(projectId)
             set({ nodePool, isLoading: false })
           } catch (error) {
-            handleError(error, 'Failed to load node pool')
+            handleError(error, '加载节点池失败')
           }
         },
 
@@ -168,7 +173,7 @@ export const useProjectsStore = create<ProjectsState>()(
               isLoading: false,
             }))
           } catch (error) {
-            handleError(error, 'Failed to create project')
+            handleError(error, '创建项目失败')
           }
         },
 
@@ -182,7 +187,7 @@ export const useProjectsStore = create<ProjectsState>()(
               isLoading: false,
             }))
           } catch (error) {
-            handleError(error, 'Failed to update project')
+            handleError(error, '更新项目失败')
           }
         },
 
@@ -197,7 +202,7 @@ export const useProjectsStore = create<ProjectsState>()(
               isLoading: false,
             }))
           } catch (error) {
-            handleError(error, 'Failed to delete project')
+            handleError(error, '删除项目失败')
           }
         },
 
@@ -210,7 +215,7 @@ export const useProjectsStore = create<ProjectsState>()(
               isLoading: false,
             }))
           } catch (error) {
-            handleError(error, 'Failed to create canvas')
+            handleError(error, '创建画布失败')
           }
         },
 
@@ -223,7 +228,7 @@ export const useProjectsStore = create<ProjectsState>()(
               isLoading: false,
             }))
           } catch (error) {
-            handleError(error, 'Failed to update canvas')
+            handleError(error, '更新画布失败')
           }
         },
 
@@ -236,7 +241,7 @@ export const useProjectsStore = create<ProjectsState>()(
               isLoading: false,
             }))
           } catch (error) {
-            handleError(error, 'Failed to delete canvas')
+            handleError(error, '删除画布失败')
           }
         },
 
@@ -249,7 +254,7 @@ export const useProjectsStore = create<ProjectsState>()(
               isLoading: false,
             }))
           } catch (error) {
-            handleError(error, 'Failed to move canvas to folder')
+            handleError(error, '移动画布到文件夹失败')
           }
         },
 
@@ -262,7 +267,7 @@ export const useProjectsStore = create<ProjectsState>()(
               isLoading: false,
             }))
           } catch (error) {
-            handleError(error, 'Failed to create folder')
+            handleError(error, '创建文件夹失败')
           }
         },
 
@@ -275,7 +280,7 @@ export const useProjectsStore = create<ProjectsState>()(
               isLoading: false,
             }))
           } catch (error) {
-            handleError(error, 'Failed to update folder')
+            handleError(error, '更新文件夹失败')
           }
         },
 
@@ -307,7 +312,7 @@ export const useProjectsStore = create<ProjectsState>()(
               }
             })
           } catch (error) {
-            handleError(error, 'Failed to delete folder')
+            handleError(error, '删除文件夹失败')
           }
         },
 
@@ -321,7 +326,7 @@ export const useProjectsStore = create<ProjectsState>()(
             }))
             return card
           } catch (error) {
-            handleError(error, 'Failed to add to node pool')
+            handleError(error, '添加到节点池失败')
             throw error
           }
         },
@@ -335,7 +340,7 @@ export const useProjectsStore = create<ProjectsState>()(
               isLoading: false,
             }))
           } catch (error) {
-            handleError(error, 'Failed to remove from node pool')
+            handleError(error, '从节点池移除失败')
           }
         },
 
@@ -348,7 +353,7 @@ export const useProjectsStore = create<ProjectsState>()(
               isLoading: false,
             }))
           } catch (error) {
-            handleError(error, 'Failed to update node card')
+            handleError(error, '更新节点卡片失败')
           }
         },
 
@@ -376,7 +381,7 @@ export const useProjectsStore = create<ProjectsState>()(
               isLoading: false,
             }))
           } catch (error) {
-            handleError(error, 'Failed to create node pool folder')
+            handleError(error, '创建节点池文件夹失败')
           }
         },
 
@@ -391,7 +396,7 @@ export const useProjectsStore = create<ProjectsState>()(
               isLoading: false,
             }))
           } catch (error) {
-            handleError(error, 'Failed to update node pool folder')
+            handleError(error, '更新节点池文件夹失败')
           }
         },
 
@@ -404,7 +409,7 @@ export const useProjectsStore = create<ProjectsState>()(
               isLoading: false,
             }))
           } catch (error) {
-            handleError(error, 'Failed to delete node pool folder')
+            handleError(error, '删除节点池文件夹失败')
           }
         },
 
@@ -429,7 +434,7 @@ export const useProjectsStore = create<ProjectsState>()(
               updates.map(u => api.updateNodePoolFolder(u.id, { sortOrder: u.sortOrder }))
             )
           } catch (error) {
-            handleError(error, 'Failed to reorder node pool folders')
+            handleError(error, '重新排序节点池文件夹失败')
           }
         },
 
@@ -446,7 +451,7 @@ export const useProjectsStore = create<ProjectsState>()(
               updates.map(u => api.updateNodeCard(u.id, { sortOrder: u.sortOrder }))
             )
           } catch (error) {
-            handleError(error, 'Failed to reorder node cards')
+            handleError(error, '重新排序节点卡片失败')
           }
         },
 

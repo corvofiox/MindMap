@@ -78,6 +78,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
         updateNode(node.id, {
           imageUrl: url,
           aspectRatio: aspectRatio,
+          type: 'image', // Ensure node type is set to 'image'
           // Optional: Auto-resize node to match aspect ratio if needed, keeping width fixed
           height: node.width / aspectRatio
         })
@@ -312,9 +313,16 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
     result = result.replace(/(<div[^>]*>\s*<\/div>\s*){2,}/g, '<div><br></div>')
     result = result.replace(/(<p[^>]*>\s*<\/p>\s*){2,}/g, '<p><br></p>')
 
-    // 确保换行标签正确
-    result = result.replace(/<div[^>]*>(?!<br>)/g, '<div>')
-    result = result.replace(/<p[^>]*>(?!<br>)/g, '<p>')
+    // 确保换行标签正确，保留所有合法的div和p标签，即使它们内部没有<br>
+    result = result.replace(/<div[^>]*>/g, '<div>')
+    result = result.replace(/<p[^>]*>/g, '<p>')
+    
+    // 确保每个空的div和p标签内有<br>，以保持换行效果
+    result = result.replace(/<div>\s*<\/div>/g, '<div><br></div>')
+    result = result.replace(/<p>\s*<\/p>/g, '<p><br></p>')
+    
+    // 将连续的<br>标签转换为div或p标签，确保在编辑和非编辑模式下都能正确显示
+    result = result.replace(/(<br>\s*){2,}/g, '<div><br></div>')
 
     return result
   }, [])
@@ -549,11 +557,19 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
         if (!field) {
           field = node.title && node.title.trim() !== '' ? 'content' : 'title'
         }
+        
+        // Save current editing content before switching fields
+        if (isEditingTitle) {
+          saveTitle()
+        } else if (isEditingContent) {
+          saveContent()
+        }
+        
         setEditingField(field)
         setEditingId(node.id)
       }
     },
-    [node.locked, node.title]
+    [node.locked, node.title, isEditingTitle, isEditingContent, saveTitle, saveContent]
   )
 
   // 中文输入法开始
@@ -1056,6 +1072,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
                       outline: 'none',
                       fontSize: `${node.fontSize + 2}px`,
                       textAlign: node.textAlign,
+                      whiteSpace: 'pre-wrap',
                     }}
                     onInput={handleInputChange}
                     onKeyDown={(e) => handleKeyDown(e, 'title')}
@@ -1073,6 +1090,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
                       minHeight: '24px',
                       fontSize: `${node.fontSize + 2}px`,
                       textAlign: node.textAlign,
+                      whiteSpace: 'pre-wrap',
                     }}
                     onDoubleClick={(e) => handleDoubleClick(e, 'title')}
                     dangerouslySetInnerHTML={{ __html: node.title || '点击添加标题' }}
@@ -1095,6 +1113,9 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
                       outline: 'none',
                       fontSize: `${node.fontSize}px`,
                       textAlign: node.textAlign,
+                      wordBreak: 'break-word',
+                      lineHeight: '1.6',
+                      whiteSpace: 'pre-wrap',
                     }}
                     onInput={handleInputChange}
                     onKeyDown={(e) => handleKeyDown(e, 'content')}

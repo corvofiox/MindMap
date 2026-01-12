@@ -21,11 +21,7 @@ export function LoginPage() {
       addToast({ type: 'success', title: '欢迎回来！', message: '您已成功登录' })
       navigate('/projects')
     } catch (error) {
-      addToast({
-        type: 'error',
-        title: '登录失败',
-        message: error instanceof Error ? error.message : '请检查您的凭据后重试',
-      })
+      // Error is already handled in the login function
     } finally {
       setIsLoading(false)
     }

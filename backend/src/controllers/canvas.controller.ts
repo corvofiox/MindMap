@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import { db } from '../database/connection.js'
+import { db, scheduleSave } from '../database/connection.js'
 import { canvases, folders, projects } from '../database/schema.js'
 import { eq, inArray } from 'drizzle-orm'
 import { authenticate, type AuthRequest } from '../middleware/auth.middleware.js'
@@ -20,7 +20,7 @@ canvasRouter.get('/detail/:id', authenticate, asyncHandler(async (req: AuthReque
   if (!canvas) {
     return res.status(404).json({
       success: false,
-      error: 'Canvas not found',
+      error: '画布未找到',
     })
   }
 
@@ -43,7 +43,7 @@ canvasRouter.get('/:projectId', authenticate, asyncHandler(async (req: AuthReque
   if (!project) {
     return res.status(404).json({
       success: false,
-      error: 'Project not found',
+      error: '项目未找到',
     })
   }
 
@@ -52,7 +52,7 @@ canvasRouter.get('/:projectId', authenticate, asyncHandler(async (req: AuthReque
   if (projectOwnerId !== req.user!.id) {
     return res.status(403).json({
       success: false,
-      error: 'Access denied',
+      error: '访问被拒绝',
     })
   }
 
@@ -81,7 +81,7 @@ canvasRouter.post('/:projectId', authenticate, asyncHandler(async (req: AuthRequ
   if (!project) {
     return res.status(404).json({
       success: false,
-      error: 'Project not found',
+      error: '项目未找到',
     })
   }
 
@@ -90,7 +90,7 @@ canvasRouter.post('/:projectId', authenticate, asyncHandler(async (req: AuthRequ
   if (projectOwnerId !== req.user!.id) {
     return res.status(403).json({
       success: false,
-      error: 'Access denied',
+      error: '访问被拒绝',
     })
   }
 
@@ -102,6 +102,8 @@ canvasRouter.post('/:projectId', authenticate, asyncHandler(async (req: AuthRequ
       folderId: folderId || null,
     })
     .returning()
+
+  scheduleSave()
 
   const transformedCanvas = transformResponse(newCanvas, ['createdAt', 'updatedAt'])
 
@@ -129,7 +131,7 @@ canvasRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, res
       log('PUT canvas - Canvas not found', { canvasId })
       return res.status(404).json({
         success: false,
-        error: 'Canvas not found',
+        error: '画布未找到',
       })
     }
 
@@ -146,7 +148,7 @@ canvasRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, res
       log('PUT canvas - Project not found', { canvasId, projectId: canvasProjectId })
       return res.status(404).json({
         success: false,
-        error: 'Project not found',
+        error: '项目未找到',
       })
     }
 
@@ -156,7 +158,7 @@ canvasRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, res
       log('PUT canvas - Access denied', { canvasId, projectOwnerId, userId: req.user!.id })
       return res.status(403).json({
         success: false,
-        error: 'Access denied',
+        error: '访问被拒绝',
       })
     }
 
@@ -193,6 +195,8 @@ canvasRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, res
       .where(eq(canvases.id, canvasId))
       .returning()
 
+    scheduleSave()
+
     log('PUT canvas - Success', { canvasId })
 
     const transformedCanvas = transformResponse(updatedCanvas, ['createdAt', 'updatedAt'])
@@ -221,7 +225,7 @@ canvasRouter.delete('/:id', authenticate, asyncHandler(async (req: AuthRequest, 
     log('DELETE canvas - Canvas not found', { canvasId })
     return res.status(404).json({
       success: false,
-      error: 'Canvas not found',
+      error: '画布未找到',
     })
   }
 
@@ -243,7 +247,7 @@ canvasRouter.delete('/:id', authenticate, asyncHandler(async (req: AuthRequest, 
       log('DELETE canvas - Project not found', { canvasId, projectId: canvasProjectId })
       return res.status(404).json({
         success: false,
-        error: 'Project not found',
+        error: '项目未找到',
       })
     }
 
@@ -255,11 +259,13 @@ canvasRouter.delete('/:id', authenticate, asyncHandler(async (req: AuthRequest, 
       log('DELETE canvas - Access denied', { canvasId, projectOwnerId, userId: req.user!.id })
       return res.status(403).json({
         success: false,
-        error: 'Access denied',
+        error: '访问被拒绝',
       })
     }
 
     await db.delete(canvases).where(eq(canvases.id, canvasId))
+
+    scheduleSave()
 
     log('DELETE canvas - Success', { canvasId })
 
@@ -284,7 +290,7 @@ canvasRouter.post('/:id/data', authenticate, asyncHandler(async (req: AuthReques
   if (!canvas) {
     return res.status(404).json({
       success: false,
-      error: 'Canvas not found',
+      error: '画布未找到',
     })
   }
 
@@ -298,7 +304,7 @@ canvasRouter.post('/:id/data', authenticate, asyncHandler(async (req: AuthReques
   if (!project) {
     return res.status(404).json({
       success: false,
-      error: 'Project not found',
+      error: '项目未找到',
     })
   }
 
@@ -307,7 +313,7 @@ canvasRouter.post('/:id/data', authenticate, asyncHandler(async (req: AuthReques
   if (projectOwnerId !== req.user!.id) {
     return res.status(403).json({
       success: false,
-      error: 'Access denied',
+      error: '访问被拒绝',
     })
   }
 
@@ -325,6 +331,8 @@ canvasRouter.post('/:id/data', authenticate, asyncHandler(async (req: AuthReques
       updatedAt: Math.floor(Date.now() / 1000),
     })
     .where(eq(canvases.id, canvasId))
+
+  scheduleSave()
 
   res.json({
     success: true,
@@ -346,7 +354,7 @@ canvasRouter.get(
     if (!project) {
       return res.status(404).json({
         success: false,
-        error: 'Project not found',
+        error: '项目未找到',
       })
     }
 
@@ -355,7 +363,7 @@ canvasRouter.get(
     if (projectOwnerId !== req.user!.id) {
       return res.status(403).json({
         success: false,
-        error: 'Access denied',
+        error: '访问被拒绝',
       })
     }
 
@@ -386,7 +394,7 @@ canvasRouter.post(
     if (!project) {
       return res.status(404).json({
         success: false,
-        error: 'Project not found',
+        error: '项目未找到',
       })
     }
 
@@ -395,7 +403,7 @@ canvasRouter.post(
     if (projectOwnerId !== req.user!.id) {
       return res.status(403).json({
         success: false,
-        error: 'Access denied',
+        error: '访问被拒绝',
       })
     }
 
@@ -409,6 +417,8 @@ canvasRouter.post(
       .returning()
 
     const [newFolder] = result || []
+
+    scheduleSave()
 
     res.json({
       success: true,
@@ -432,7 +442,7 @@ canvasRouter.put(
     if (!folder) {
       return res.status(404).json({
         success: false,
-        error: 'Folder not found',
+        error: '文件夹未找到',
       })
     }
 
@@ -446,7 +456,7 @@ canvasRouter.put(
     if (!project) {
       return res.status(404).json({
         success: false,
-        error: 'Project not found',
+        error: '项目未找到',
       })
     }
 
@@ -455,7 +465,7 @@ canvasRouter.put(
     if (projectOwnerId !== req.user!.id) {
       return res.status(403).json({
         success: false,
-        error: 'Access denied',
+        error: '访问被拒绝',
       })
     }
 
@@ -468,6 +478,8 @@ canvasRouter.put(
       .returning()
 
     const [updatedFolder] = result || []
+
+    scheduleSave()
 
     res.json({
       success: true,
@@ -490,7 +502,7 @@ canvasRouter.delete(
     if (!folder) {
       return res.status(404).json({
         success: false,
-        error: 'Folder not found',
+        error: '文件夹未找到',
       })
     }
 
@@ -504,7 +516,7 @@ canvasRouter.delete(
     if (!project) {
       return res.status(404).json({
         success: false,
-        error: 'Project not found',
+        error: '项目未找到',
       })
     }
 
@@ -513,7 +525,7 @@ canvasRouter.delete(
     if (projectOwnerId !== req.user!.id) {
       return res.status(403).json({
         success: false,
-        error: 'Access denied',
+        error: '访问被拒绝',
       })
     }
 

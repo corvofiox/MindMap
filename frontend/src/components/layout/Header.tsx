@@ -8,12 +8,16 @@ import { DropdownMenu } from '../ui/DropdownMenu'
 export function Header() {
   const navigate = useNavigate()
   const { user, logout } = useAuthStore()
-  const { toggleSidebar, toggleNodePool } = useUIStore()
+  const { toggleSidebar, toggleNodePool, addErrorToast } = useUIStore()
   const { currentProject } = useProjectsStore()
 
   const handleLogout = async () => {
-    await logout()
-    navigate('/login')
+    try {
+      await logout()
+      navigate('/login')
+    } catch (error) {
+      addErrorToast(error instanceof Error ? error.message : '登出失败')
+    }
   }
 
   return (

@@ -55,7 +55,7 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
         return { cardsMap: newCardsMap, isLoading: false }
       })
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Failed to update card'
+      const errorMessage = error instanceof Error ? error.message : '更新卡片失败'
       set({ error: errorMessage, isLoading: false })
       throw error
     }
@@ -73,7 +73,7 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
         return { cardsMap: newCardsMap, isLoading: false }
       })
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Failed to remove card'
+      const errorMessage = error instanceof Error ? error.message : '移除卡片失败'
       set({ error: errorMessage, isLoading: false })
       throw error
     }
@@ -102,7 +102,7 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
         )
       )
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Failed to reorder cards'
+      const errorMessage = error instanceof Error ? error.message : '重新排序卡片失败'
       set({ error: errorMessage })
 
       // Revert on error
@@ -137,7 +137,7 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
 
       return created
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Failed to add folder'
+      const errorMessage = error instanceof Error ? error.message : '添加文件夹失败'
       set({ error: errorMessage, isLoading: false })
       throw error
     }
@@ -155,7 +155,7 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
         return { foldersMap: newFoldersMap, isLoading: false }
       })
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Failed to update folder'
+      const errorMessage = error instanceof Error ? error.message : '更新文件夹失败'
       set({ error: errorMessage, isLoading: false })
       throw error
     }
@@ -173,7 +173,7 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
         return { foldersMap: newFoldersMap, isLoading: false }
       })
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Failed to remove folder'
+      const errorMessage = error instanceof Error ? error.message : '移除文件夹失败'
       set({ error: errorMessage, isLoading: false })
       throw error
     }
@@ -201,7 +201,7 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
         )
       )
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Failed to reorder folders'
+      const errorMessage = error instanceof Error ? error.message : '重新排序文件夹失败'
       set({ error: errorMessage })
 
       // Revert on error

@@ -2,7 +2,6 @@ import { Outlet } from 'react-router-dom'
 import { Header } from './Header'
 import { Sidebar } from './Sidebar'
 import { NodePoolPanel } from '@/features/node-pool/components/NodePoolPanel'
-import { ToastContainer } from '../ui/ToastContainer'
 import { CommandPalette } from '../ui/CommandPalette'
 import { SettingsDialog } from '../ui/SettingsDialog'
 import { AccountSettingsDialog } from '../ui/AccountSettingsDialog'
@@ -37,7 +36,6 @@ export function MainLayout() {
       </div>
 
       {/* Overlays */}
-      <ToastContainer />
       <CommandPalette />
       <SettingsDialog />
       <AccountSettingsDialog />

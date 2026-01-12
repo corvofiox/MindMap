@@ -7,6 +7,7 @@ import { RegisterPage } from './pages/RegisterPage'
 import { CanvasPage } from './pages/CanvasPage'
 import { ProjectsPage } from './pages/ProjectsPage'
 import { DragGhost } from './components/DragGhost'
+import { ToastContainer } from './components/ui/ToastContainer'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuthStore()
@@ -23,6 +24,7 @@ function App() {
   return (
     <>
       <DragGhost />
+      <ToastContainer />
       <Routes>
         <Route path="/login" element={!isAuthenticated ? <LoginPage /> : <Navigate to="/projects" />} />
         <Route path="/register" element={!isAuthenticated ? <RegisterPage /> : <Navigate to="/projects" />} />
