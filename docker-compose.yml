@@ -6,7 +6,7 @@ services:
     build: .
     # 端口映射
     ports:
-      - "3000:3000"    # HTTP服务（前端+API）
+      - "8001:3000"    # HTTP服务（前端+API）- 映射到主机的8001端口
       - "3001:3001"  # WebSocket服务（实时协作）
     # 环境变量配置
     environment:

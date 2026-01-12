@@ -43,6 +43,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 ENV NODE_ENV=production
+ENV PORT=3000
+ENV WS_PORT=3001
+ENV ALLOWED_ORIGINS=*
 
 # npm workspaces将所有依赖安装在根目录的node_modules中，只需复制根目录的node_modules即可
 COPY --from=builder /app/node_modules ./node_modules

@@ -93,13 +93,13 @@ async function start() {
     await initDatabase()
     console.log('Application initialization complete')
 
-    // HTTP server
-    server.listen(PORT, () => {
+    // HTTP server - 监听0.0.0.0以允许外部访问
+    server.listen(PORT, '0.0.0.0', () => {
       console.log(`HTTP Server running on port ${PORT}`)
     })
 
-    // WebSocket server
-    const wsServer = new WebSocketServer({ port: WS_PORT })
+    // WebSocket server - 监听0.0.0.0以允许外部访问
+    const wsServer = new WebSocketServer({ port: WS_PORT, host: '0.0.0.0' })
     setupWebSocket(wsServer)
     console.log(`WebSocket Server running on port ${WS_PORT}`)
 
