@@ -1,9 +1,16 @@
-import 'dotenv/config'
-import express from 'express'
-import cors from 'cors'
+import dotenv from 'dotenv'
 import path from 'path'
 import { fileURLToPath } from 'url'
 
+// 获取当前文件路径
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+
+// 加载.env文件，确保路径正确
+dotenv.config({ path: path.resolve(__dirname, '../../.env') })
+
+import express from 'express'
+import cors from 'cors'
 import { createServer } from 'http'
 import { WebSocketServer } from 'ws'
 
@@ -16,9 +23,6 @@ import { uploadRouter } from './controllers/upload.controller.js'
 import { setupWebSocket } from './websocket/index.js'
 import { errorHandler } from './middleware/error.middleware.js'
 import { initDatabase } from './database/init.js'
-
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.dirname(__filename)
 
 const app = express()
 const server = createServer(app)
