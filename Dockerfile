@@ -13,6 +13,7 @@ COPY backend/package*.json backend/
 COPY backend/drizzle.config.ts backend/
 COPY backend/.env.example backend/
 COPY generate-env.js ./
+COPY start-all.js ./
 
 # 安装所有依赖
 RUN npm ci --workspaces
