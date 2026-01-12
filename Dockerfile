@@ -24,7 +24,8 @@ COPY backend/package*.json ./backend/
 # 全局安装node-gyp
 RUN npm install -g node-gyp
 
-RUN npm ci --workspaces
+# 使用npm install代替npm ci，自动处理依赖并更新lock文件
+RUN npm install --workspaces
 
 COPY . .
 
