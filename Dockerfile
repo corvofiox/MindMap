@@ -99,13 +99,7 @@ RUN apk add --no-cache python3 make g++ && \
     cd backend && npm rebuild bcrypt && \
     cd .. && apk del python3 make g++
 
-RUN addgroup -S nodejs -g 1001 && \
-    adduser -S app -u 1001 -G nodejs && \
-    mkdir -p /app/backend/data /app/backend/logs && \
-    chown -R app:nodejs /app/backend && \
-    chmod -R 755 /app/backend/data /app/backend/logs
-
-USER app
+RUN mkdir -p /app/backend/data /app/backend/logs
 
 EXPOSE 3000 3001
 
