@@ -16,7 +16,7 @@
   "dependencies": {
     "@types/sharp": "^0.31.1",
     "@types/uuid": "^10.0.0",
-    "bcrypt": "^5.1.1",
+    "bcrypt": "^6.0.0",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
     "drizzle-orm": "^0.30.1",

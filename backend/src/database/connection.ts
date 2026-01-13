@@ -3,31 +3,48 @@ import { drizzle } from 'drizzle-orm/sql-js'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import * as schema from './schema.js'
+import * as fs from 'fs/promises'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
-const fs = await import('fs')
 const dataDir = path.join(__dirname, '../../data')
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true })
+try {
+  await fs.mkdir(dataDir, { recursive: true })
+} catch (error) {
+  // Directory might already exist
 }
 
-const SQL = await initSqlJs() as any
 const dbPath = process.env.DB_FILE || path.join(dataDir, 'mindmap.db')
 
-let dbData: Uint8Array | null = null
-try {
-  const dbFile = await fs.promises.readFile(dbPath)
-  dbData = new Uint8Array(dbFile)
-} catch (error) {
-  // Database file doesn't exist, will be created automatically
-  console.log('Database file not found, creating new one:', dbPath)
+let sqlite: any = null
+let dbInstance: any = null
+
+export async function getSqlite() {
+  if (!sqlite) {
+    const SQL = await initSqlJs() as any
+    let dbData: Uint8Array | null = null
+    try {
+      const dbFile = await fs.readFile(dbPath)
+      dbData = new Uint8Array(dbFile)
+    } catch (error) {
+      console.log('Database file not found, creating new one:', dbPath)
+      dbData = null
+    }
+    sqlite = new SQL.Database(dbData)
+  }
+  return sqlite
 }
 
-const sqlite = new SQL.Database(dbData)
+export async function getDb() {
+  if (!dbInstance) {
+    const sqlite = await getSqlite()
+    dbInstance = drizzle(sqlite, { schema })
+  }
+  return dbInstance
+}
 
-export const db = drizzle(sqlite, { schema })
+export const db = await getDb()
 
 let saveTimeout: NodeJS.Timeout | null = null
 let lastSaveTime = Date.now()
@@ -35,9 +52,10 @@ const SAVE_INTERVAL = 5000
 
 async function saveToDisk() {
   try {
-    const data = (sqlite as any).export()
+    const sqlite = await getSqlite()
+    const data = sqlite.export()
     const buffer = Buffer.from(data)
-    await fs.promises.writeFile(dbPath, buffer)
+    await fs.writeFile(dbPath, buffer)
     lastSaveTime = Date.now()
   } catch (error) {
     console.error('Failed to save database:', error)

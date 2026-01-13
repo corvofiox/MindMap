@@ -34,6 +34,34 @@ function logStep(step, message) {
   log(`[${step}] ${message}`, 'blue');
 }
 
+function logSuccess(message) {
+  log(`✓ ${message}`, 'green');
+}
+
+function logError(message) {
+  log(`✗ ${message}`, 'red');
+}
+
+function logWarning(message) {
+  log(`⚠ ${message}`, 'yellow');
+}
+
+function isDockerEnvironment() {
+  return fs.existsSync('/.dockerenv') || process.env.DOCKER_CONTAINER === 'true';
+}
+
+function isWindows() {
+  return process.platform === 'win32';
+}
+
+function isProduction() {
+  return process.env.NODE_ENV === 'production';
+}
+
+function getNpmCommand() {
+  return isWindows() ? 'npm.cmd' : 'npm';
+}
+
 async function executeCommand(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
@@ -57,278 +85,459 @@ async function executeCommand(command, args, options = {}) {
   });
 }
 
-function generateSensitiveConfig() {
-  return {
-    JWT_SECRET: crypto.randomBytes(32).toString('base64'),
-  };
-}
+async function executeCommandWithOutput(command, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    let output = '';
+    let errorOutput = '';
 
-async function generateEnvFile(envExamplePath, envPath, generateSecrets = false) {
-  if (fs.existsSync(envPath)) {
-    log(`Environment file already exists: ${path.basename(envPath)}`, 'yellow');
-    return false;
-  }
+    const child = spawn(command, args, {
+      shell: true,
+      cwd: options.cwd || __dirname,
+      env: { ...process.env, ...options.env },
+    });
 
-  if (!fs.existsSync(envExamplePath)) {
-    throw new Error(`Environment template not found: ${envExamplePath}`);
-  }
+    child.stdout.on('data', (data) => {
+      output += data.toString();
+    });
 
-  const envExampleContent = fs.readFileSync(envExamplePath, 'utf8');
-  
-  const exampleConfig = envExampleContent
-    .split('\n')
-    .filter(line => line.trim() && !line.startsWith('#'))
-    .reduce((config, line) => {
-      const [key, ...valueParts] = line.split('=');
-      if (key) {
-        config[key.trim()] = valueParts.join('=').trim();
+    child.stderr.on('data', (data) => {
+      errorOutput += data.toString();
+    });
+
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolve(output);
+      } else {
+        reject(new Error(`Command failed with exit code ${code}: ${errorOutput}`));
       }
-      return config;
-    }, {});
+    });
 
-  let finalConfig = { ...exampleConfig };
-
-  if (generateSecrets) {
-    const sensitiveConfig = generateSensitiveConfig();
-    finalConfig = { ...finalConfig, ...sensitiveConfig };
-    log(`Generated secure keys: ${Object.keys(sensitiveConfig).join(', ')}`, 'green');
-  }
-
-  finalConfig.NODE_ENV = process.env.NODE_ENV || 'development';
-
-  const envContent = Object.entries(finalConfig)
-    .map(([key, value]) => `${key}=${value}`)
-    .join('\n');
-
-  fs.writeFileSync(envPath, envContent, 'utf8');
-  log(`Environment file generated: ${path.basename(envPath)}`, 'green');
-  
-  return true;
+    child.on('error', (error) => {
+      reject(error);
+    });
+  });
 }
 
-async function checkNodeVersion() {
-  const nodeVersion = process.version;
-  const majorVersion = parseInt(nodeVersion.replace('v', '').split('.')[0], 10);
-  
-  logStep('Node', `Version: ${nodeVersion}`);
-  
-  if (majorVersion < 18) {
-    log('Warning: Node.js version is below v18. Some features may not work.', 'yellow');
+function generateJWTSecret() {
+  return crypto.randomBytes(64).toString('hex');
+}
+
+function ensureDirectoryExists(dirPath) {
+  if (!fs.existsSync(dirPath)) {
+    fs.mkdirSync(dirPath, { recursive: true });
   }
 }
 
-async function checkPlatformSupport() {
-  const platform = process.platform;
-  logStep('Platform', platform);
-  
-  if (platform === 'win32') {
-    log('Note: On Windows, use PowerShell or WSL for best results', 'yellow');
+function copyEnvFile(sourcePath, targetPath) {
+  if (!fs.existsSync(targetPath)) {
+    fs.copyFileSync(sourcePath, targetPath);
+    return true;
   }
+  return false;
 }
 
-async function generateEnvironmentFiles() {
-  logSection('Environment Configuration');
-  
-  const backendEnvGenerated = await generateEnvFile(
-    path.join(__dirname, 'backend', '.env.example'),
-    path.join(__dirname, 'backend', '.env'),
-    true
-  );
-  
-  const frontendEnvGenerated = await generateEnvFile(
-    path.join(__dirname, 'frontend', '.env.example'),
-    path.join(__dirname, 'frontend', '.env'),
-    false
-  );
-  
-  if (!backendEnvGenerated && !frontendEnvGenerated) {
-    log('All environment files already exist', 'yellow');
+function updateEnvFile(envPath, key, value) {
+  let content = '';
+  if (fs.existsSync(envPath)) {
+    content = fs.readFileSync(envPath, 'utf-8');
   }
+
+  const lines = content.split('\n');
+  let found = false;
+  const updatedLines = lines.map(line => {
+    if (line.startsWith(`${key}=`)) {
+      found = true;
+      return `${key}=${value}`;
+    }
+    return line;
+  });
+
+  if (!found) {
+    updatedLines.push(`${key}=${value}`);
+  }
+
+  fs.writeFileSync(envPath, updatedLines.join('\n'));
+}
+
+function checkEnvFileExists(envPath) {
+  return fs.existsSync(envPath);
+}
+
+function checkNodeModulesExists(dir) {
+  return fs.existsSync(path.join(dir, 'node_modules'));
 }
 
 async function installDependencies() {
-  logSection('Dependencies');
-  
-  logStep('Root', 'Installing...');
-  await executeCommand('npm', ['install']);
-  
-  logStep('Workspaces', 'Installing...');
-  await executeCommand('npm', ['install', '--workspaces']);
-  
-  log('All dependencies installed', 'green');
+  logSection('Installing Dependencies');
+
+  const dirs = ['.', 'backend', 'frontend'];
+
+  for (const dir of dirs) {
+    const dirPath = path.join(__dirname, dir);
+    const nodeModulesPath = path.join(dirPath, 'node_modules');
+
+    if (checkNodeModulesExists(dirPath)) {
+      logStep('SKIP', `Dependencies already installed in ${dir || 'root'}`);
+      continue;
+    }
+
+    logStep('INSTALL', `Installing dependencies in ${dir || 'root'}...`);
+
+    try {
+      await executeCommand(getNpmCommand(), ['install'], { cwd: dirPath });
+      logSuccess(`Dependencies installed in ${dir || 'root'}`);
+    } catch (error) {
+      logError(`Failed to install dependencies in ${dir || 'root'}: ${error.message}`);
+      throw error;
+    }
+  }
+
+  logSuccess('All dependencies installed successfully');
+}
+
+async function setupEnvironmentFiles() {
+  logSection('Setting Up Environment Files');
+
+  const envConfigs = [
+    {
+      name: 'Root',
+      examplePath: path.join(__dirname, '.env.example'),
+      targetPath: path.join(__dirname, '.env'),
+    },
+    {
+      name: 'Backend',
+      examplePath: path.join(__dirname, 'backend', '.env.example'),
+      targetPath: path.join(__dirname, 'backend', '.env'),
+    },
+    {
+      name: 'Frontend',
+      examplePath: path.join(__dirname, 'frontend', '.env.example'),
+      targetPath: path.join(__dirname, 'frontend', '.env'),
+    },
+  ];
+
+  for (const config of envConfigs) {
+    if (!fs.existsSync(config.examplePath)) {
+      logWarning(`Example file not found for ${config.name}: ${config.examplePath}`);
+      continue;
+    }
+
+    const envExists = checkEnvFileExists(config.targetPath);
+
+    if (!envExists) {
+      logStep('CREATE', `Creating .env file for ${config.name}...`);
+      copyEnvFile(config.examplePath, config.targetPath);
+      logSuccess(`Created .env file for ${config.name}`);
+    } else {
+      logStep('CHECK', `.env file already exists for ${config.name}`);
+    }
+
+    if (config.name === 'Backend') {
+      const jwtSecret = generateJWTSecret();
+      updateEnvFile(config.targetPath, 'JWT_SECRET', jwtSecret);
+      logSuccess(`Generated and set JWT_SECRET for ${config.name}`);
+    }
+  }
+
+  logSuccess('Environment files setup completed');
 }
 
 async function initializeDatabase() {
-  logSection('Database');
-  
-  const dbInitScript = path.join(__dirname, 'backend', 'scripts', 'init-db.js');
-  
-  if (fs.existsSync(dbInitScript)) {
-    logStep('Init', 'Running database initialization...');
-    await executeCommand('node', [dbInitScript], { cwd: path.join(__dirname, 'backend') });
-  } else {
-    logStep('Init', 'No initialization script found, using npm run db:init');
-    await executeCommand('npm', ['run', 'db:init'], { cwd: path.join(__dirname, 'backend') });
+  logSection('Initializing Database');
+
+  const backendDir = path.join(__dirname, 'backend');
+  const dataDir = path.join(backendDir, 'data');
+
+  ensureDirectoryExists(dataDir);
+
+  const dbFile = path.join(dataDir, 'mindmap.db');
+  const dbExists = fs.existsSync(dbFile);
+
+  if (dbExists) {
+    logStep('CHECK', 'Database file already exists');
+    logStep('SKIP', 'Database initialization skipped');
+    return;
   }
-  
-  log('Database initialized', 'green');
-}
 
-async function startBackendServer() {
-  return new Promise((resolve, reject) => {
-    const backendProcess = spawn('npm', ['run', 'dev'], {
-      cwd: path.join(__dirname, 'backend'),
-      stdio: 'pipe',
-      shell: true,
-    });
-
-    backendProcess.stdout.on('data', (data) => {
-      const output = data.toString();
-      if (output.includes('Listening on') || output.includes('Server running')) {
-        log('Backend server started', 'green');
-        resolve(backendProcess);
-      }
-    });
-
-    backendProcess.stderr.on('data', (data) => {
-      console.error(`Backend: ${data}`);
-    });
-
-    backendProcess.on('error', (error) => {
-      reject(error);
-    });
-
-    backendProcess.on('close', (code) => {
-      if (code !== 0 && code !== null) {
-        log(`Backend process exited with code ${code}`, 'red');
-      }
-    });
-
-    setTimeout(() => {
-      log('Backend server starting...', 'yellow');
-      resolve(backendProcess);
-    }, 5000);
-  });
-}
-
-async function startFrontendServer() {
-  return new Promise((resolve, reject) => {
-    const frontendProcess = spawn('npm', ['run', 'dev'], {
-      cwd: path.join(__dirname, 'frontend'),
-      stdio: 'pipe',
-      shell: true,
-    });
-
-    frontendProcess.stdout.on('data', (data) => {
-      const output = data.toString();
-      if (output.includes('Local:') || output.includes('ready in')) {
-        log('Frontend server started', 'green');
-        resolve(frontendProcess);
-      }
-    });
-
-    frontendProcess.stderr.on('data', (data) => {
-      console.error(`Frontend: ${data}`);
-    });
-
-    frontendProcess.on('error', (error) => {
-      reject(error);
-    });
-
-    frontendProcess.on('close', (code) => {
-      if (code !== 0 && code !== null) {
-        log(`Frontend process exited with code ${code}`, 'red');
-      }
-    });
-
-    setTimeout(() => {
-      log('Frontend server starting...', 'yellow');
-      resolve(frontendProcess);
-    }, 5000);
-  });
-}
-
-async function startDevelopmentServers() {
-  logSection('Development Servers');
-  
-  log('Starting servers...', 'cyan');
-  
-  let backendProcess;
-  let frontendProcess;
+  logStep('INIT', 'Initializing database...');
 
   try {
-    backendProcess = await startBackendServer();
-    frontendProcess = await startFrontendServer();
+    await executeCommand('npm', ['run', 'db:init'], { cwd: backendDir });
+    logSuccess('Database initialized successfully');
   } catch (error) {
-    throw new Error(`Failed to start servers: ${error.message}`);
+    logError(`Failed to initialize database: ${error.message}`);
+    throw error;
   }
+}
 
-  log('\n' + '='.repeat(60));
-  log('🚀 MindMap Development Environment Running', 'green');
-  log('='.repeat(60));
-  log('Backend:  http://localhost:3001', 'green');
-  log('Frontend: http://localhost:5173', 'green');
-  log('API Docs: http://localhost:3001/api-docs', 'green');
-  log('\nPress Ctrl+C to stop all servers', 'cyan');
-  log('='.repeat(60) + '\n');
+async function startBackend() {
+  logSection('Starting Backend');
 
-  const cleanup = () => {
-    log('\nShutting down servers...', 'yellow');
-    if (backendProcess && !backendProcess.killed) {
-      backendProcess.kill('SIGTERM');
+  const backendDir = path.join(__dirname, 'backend');
+
+  try {
+    if (isProduction() || isDockerEnvironment()) {
+      logStep('START', 'Starting backend in production mode...');
+      const backendProcess = spawn('node', ['dist/index.js'], {
+        cwd: backendDir,
+        stdio: 'inherit',
+        shell: true,
+        env: process.env,
+      });
+
+      backendProcess.on('error', (error) => {
+        logError(`Backend process error: ${error.message}`);
+        throw error;
+      });
+
+      return backendProcess;
+    } else {
+      logStep('START', 'Starting backend in development mode...');
+      const backendProcess = spawn(getNpmCommand(), ['run', 'dev'], {
+        cwd: backendDir,
+        stdio: 'inherit',
+        shell: true,
+        env: process.env,
+      });
+
+      backendProcess.on('error', (error) => {
+        logError(`Backend process error: ${error.message}`);
+        throw error;
+      });
+
+      return backendProcess;
     }
-    if (frontendProcess && !frontendProcess.killed) {
-      frontendProcess.kill('SIGTERM');
+  } catch (error) {
+    logError(`Failed to start backend: ${error.message}`);
+    throw error;
+  }
+}
+
+async function startFrontend() {
+  logSection('Starting Frontend');
+
+  const frontendDir = path.join(__dirname, 'frontend');
+
+  try {
+    if (isProduction() || isDockerEnvironment()) {
+      logStep('CHECK', 'Frontend should be served statically in production');
+      logStep('INFO', 'Frontend build is handled by the backend');
+      return null;
+    } else {
+      logStep('START', 'Starting frontend in development mode...');
+      const frontendProcess = spawn(getNpmCommand(), ['run', 'dev'], {
+        cwd: frontendDir,
+        stdio: 'inherit',
+        shell: true,
+        env: process.env,
+      });
+
+      frontendProcess.on('error', (error) => {
+        logError(`Frontend process error: ${error.message}`);
+        throw error;
+      });
+
+      return frontendProcess;
     }
-    process.exit(0);
+  } catch (error) {
+    logError(`Failed to start frontend: ${error.message}`);
+    throw error;
+  }
+}
+
+async function buildFrontend() {
+  logSection('Building Frontend');
+
+  const frontendDir = path.join(__dirname, 'frontend');
+
+  try {
+    logStep('BUILD', 'Building frontend...');
+    await executeCommand('npm', ['run', 'build'], { cwd: frontendDir });
+    logSuccess('Frontend built successfully');
+  } catch (error) {
+    logError(`Failed to build frontend: ${error.message}`);
+    throw error;
+  }
+}
+
+async function buildBackend() {
+  logSection('Building Backend');
+
+  const backendDir = path.join(__dirname, 'backend');
+
+  try {
+    logStep('BUILD', 'Building backend...');
+    await executeCommand(getNpmCommand(), ['run', 'build'], { cwd: backendDir });
+    logSuccess('Backend built successfully');
+  } catch (error) {
+    logError(`Failed to build backend: ${error.message}`);
+    throw error;
+  }
+}
+
+async function runProductionSetup() {
+  logSection('Production Setup');
+
+  await installDependencies();
+  await setupEnvironmentFiles();
+  await initializeDatabase();
+  await buildFrontend();
+  await buildBackend();
+
+  logSuccess('Production setup completed');
+}
+
+async function runDevelopmentSetup() {
+  logSection('Development Setup');
+
+  await installDependencies();
+  await setupEnvironmentFiles();
+  await initializeDatabase();
+
+  logSuccess('Development setup completed');
+}
+
+async function startServers() {
+  logSection('Starting Servers');
+
+  const processes = [];
+
+  try {
+    const backendProcess = await startBackend();
+    if (backendProcess) {
+      processes.push({ name: 'Backend', process: backendProcess });
+    }
+
+    const frontendProcess = await startFrontend();
+    if (frontendProcess) {
+      processes.push({ name: 'Frontend', process: frontendProcess });
+    }
+
+    logSuccess('Servers started successfully');
+
+    console.log('\n' + '='.repeat(60));
+    log('Running Processes:', 'cyan');
+    console.log('='.repeat(60));
+    processes.forEach(p => {
+      log(`  - ${p.name}: PID ${p.process.pid}`, 'green');
+    });
+    console.log('='.repeat(60) + '\n');
+
+    return processes;
+  } catch (error) {
+    logError(`Failed to start servers: ${error.message}`);
+    processes.forEach(p => p.process.kill());
+    throw error;
+  }
+}
+
+function handleShutdown(processes) {
+  const shutdown = async (signal) => {
+    logSection(`Received ${signal}, shutting down...`);
+
+    processes.forEach(p => {
+      logStep('STOP', `Stopping ${p.name}...`);
+      p.process.kill(signal);
+    });
+
+    setTimeout(() => {
+      processes.forEach(p => {
+        if (!p.process.killed) {
+          p.process.kill('SIGKILL');
+        }
+      });
+      process.exit(0);
+    }, 5000);
   };
 
-  process.on('SIGINT', cleanup);
-  process.on('SIGTERM', cleanup);
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+}
 
-  return { backendProcess, frontendProcess };
+function printUsage() {
+  console.log(`
+Usage: node start.js [options]
+
+Options:
+  --install-only       Install dependencies only
+  --env-only           Setup environment files only
+  --db-only            Initialize database only
+  --build-only         Build frontend and backend only
+  --start-only         Start servers only (skip setup)
+  --production         Run in production mode
+  --help, -h           Show this help message
+
+Examples:
+  node start.js                    Full setup and start (development)
+  node start.js --production       Production setup and start
+  node start.js --install-only     Install dependencies only
+  node start.js --start-only       Start servers without setup
+  node start.js --build-only       Build only (for production)
+`);
 }
 
 async function main() {
-  console.clear();
-  logSection('MindMap Development Environment');
-  
-  log(`Working Directory: ${__dirname}`, 'blue');
-  log(`Node Version: ${process.version}`, 'blue');
-  log(`Platform: ${process.platform}`, 'blue');
-  
   const args = process.argv.slice(2);
-  const runMode = args[0];
-  
-  const startTime = Date.now();
+
+  if (args.includes('--help') || args.includes('-h')) {
+    printUsage();
+    process.exit(0);
+  }
+
+  const installOnly = args.includes('--install-only');
+  const envOnly = args.includes('--env-only');
+  const dbOnly = args.includes('--db-only');
+  const buildOnly = args.includes('--build-only');
+  const startOnly = args.includes('--start-only');
+  const productionMode = args.includes('--production') || isProduction();
+
+  console.log('\n' + '='.repeat(60));
+  log('MindMap Application Starter', 'magenta');
+  console.log('='.repeat(60));
+  log(`Environment: ${isDockerEnvironment() ? 'Docker' : (productionMode ? 'Production' : 'Development')}`, 'cyan');
+  log(`Platform: ${process.platform}`, 'cyan');
+  console.log('='.repeat(60) + '\n');
 
   try {
-    await checkNodeVersion();
-    await checkPlatformSupport();
-    
-    if (runMode === '--generate-env-only') {
-      await generateEnvironmentFiles();
-      log(`Environment generation completed in ${((Date.now() - startTime) / 1000).toFixed(2)}s`, 'green');
-      process.exit(0);
-    }
-    
-    if (runMode === '--install-only') {
+    if (installOnly) {
       await installDependencies();
-      log(`Installation completed in ${((Date.now() - startTime) / 1000).toFixed(2)}s`, 'green');
       process.exit(0);
     }
-    
-    await generateEnvironmentFiles();
-    await installDependencies();
-    await initializeDatabase();
-    await startDevelopmentServers();
-    
-    const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
-    log(`\nStartup completed in ${elapsed}s`, 'green');
-    
+
+    if (envOnly) {
+      await setupEnvironmentFiles();
+      process.exit(0);
+    }
+
+    if (dbOnly) {
+      await initializeDatabase();
+      process.exit(0);
+    }
+
+    if (buildOnly) {
+      await runProductionSetup();
+      process.exit(0);
+    }
+
+    if (startOnly) {
+      const processes = await startServers();
+      handleShutdown(processes);
+      return;
+    }
+
+    if (productionMode || isDockerEnvironment()) {
+      await runProductionSetup();
+      const processes = await startServers();
+      handleShutdown(processes);
+    } else {
+      await runDevelopmentSetup();
+      const processes = await startServers();
+      handleShutdown(processes);
+    }
+
   } catch (error) {
-    log(`\n❌ Error: ${error.message}`, 'red');
-    log(`Stack: ${error.stack}`, 'red');
+    logError(`Fatal error: ${error.message}`);
+    console.error(error);
     process.exit(1);
   }
 }
