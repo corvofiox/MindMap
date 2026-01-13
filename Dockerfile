@@ -94,7 +94,8 @@ COPY --from=deps /app/shared ./shared
 COPY --from=deps /app/backend ./backend
 COPY --from=deps /app/frontend ./frontend
 
-RUN mkdir -p /app/backend/data /app/backend/uploads /app/backend/logs
+RUN mkdir -p /app/backend/data /app/backend/uploads /app/backend/logs && \
+    chown -R app:app /app/backend/data /app/backend/uploads /app/backend/logs
 
 RUN apk add --no-cache python3 make g++ && \
     npm rebuild bcrypt && \
