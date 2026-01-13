@@ -92,7 +92,7 @@ app.use(errorHandler)
 // Start servers
 async function start() {
   try {
-    // Initialize database and uploads directory
+    // Initialize database
     console.log('Initializing application...')
     await initDatabase()
     console.log('Application initialization complete')

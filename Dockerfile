@@ -94,16 +94,16 @@ COPY --from=deps /app/shared ./shared
 COPY --from=deps /app/backend ./backend
 COPY --from=deps /app/frontend ./frontend
 
-RUN mkdir -p /app/backend/data /app/backend/uploads /app/backend/logs && \
-    chown -R app:app /app/backend/data /app/backend/uploads /app/backend/logs
-
 RUN apk add --no-cache python3 make g++ && \
     npm rebuild bcrypt && \
     cd backend && npm rebuild bcrypt && \
     cd .. && apk del python3 make g++
 
-RUN addgroup --system --gid 1001 nodejs && \
-    adduser --system --uid 1001 app
+RUN addgroup -S nodejs -g 1001 && \
+    adduser -S app -u 1001 -G nodejs && \
+    mkdir -p /app/backend/data /app/backend/logs && \
+    chown -R app:nodejs /app/backend && \
+    chmod -R 755 /app/backend/data /app/backend/logs
 
 USER app
 
@@ -115,7 +115,6 @@ ENV PORT=3000
 ENV WS_PORT=3001
 ENV DB_FILE=data/mindmap.db
 ENV LOG_FILE=data/app.log
-ENV UPLOAD_DIR=uploads
 ENV ALLOWED_ORIGINS=*
 ENV VITE_API_URL=/api
 ENV VITE_WS_URL=ws://localhost:3001
