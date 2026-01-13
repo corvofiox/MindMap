@@ -30,7 +30,9 @@ RUN npm prune --omit=dev && \
 
 RUN apk add --no-cache python3 make g++ && \
     npm rebuild bcrypt && \
+    npm rebuild sharp && \
     cd backend && npm rebuild bcrypt && \
+    npm rebuild sharp && \
     cd .. && apk del python3 make g++
 
 RUN mkdir -p /app/backend/data

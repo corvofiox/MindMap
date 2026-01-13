@@ -21,7 +21,7 @@ import { generateId, colorToHex, hexToRgba } from '@/utils/canvas'
 import { saveToCache, loadFromCache } from '@/utils/nodeCache'
 import { saveCanvasNodesData, loadCanvasNodesData } from '@/services/api'
 import type { Node, Connection, Canvas, NodeCard } from '@/types'
-import html2canvas from 'html2canvas'
+import html2canvas from 'html2canvas-pro'
 
 const AUTO_SAVE_INTERVAL = 5000
 const CACHE_SAVE_DELAY = 500

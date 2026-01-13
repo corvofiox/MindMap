@@ -21,7 +21,7 @@
     "clsx": "^2.0.0",
     "cmdk": "^0.2.0",
     "date-fns": "^3.0.0",
-    "html2canvas": "^1.4.1",
+    "html2canvas-pro": "^1.4.1",
     "lucide-react": "^0.303.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
