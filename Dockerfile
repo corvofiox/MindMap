@@ -47,8 +47,6 @@ ENV WS_PORT=3001
 ENV DB_FILE=data/mindmap.db
 ENV LOG_FILE=data/app.log
 ENV ALLOWED_ORIGINS=*
-ENV VITE_API_URL=/api
-ENV VITE_WS_URL=ws://localhost:3001
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:3000/health || exit 1
