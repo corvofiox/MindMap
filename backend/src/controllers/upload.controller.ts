@@ -29,16 +29,27 @@ const upload = multer({
 // Upload endpoint
 router.post('/', upload.single('image'), async (req: Request, res: Response) => {
     try {
+        console.log('[UPLOAD] Request received')
+        console.log('[UPLOAD] File:', req.file ? 'found' : 'NOT FOUND')
+
         if (!req.file) {
+            console.log('[UPLOAD] ERROR: No file in request')
             return res.status(400).json({
                 success: false,
                 error: '未上传任何文件'
             })
         }
 
+        console.log('[UPLOAD] File details:', {
+            originalname: req.file.originalname,
+            mimetype: req.file.mimetype,
+            size: req.file.size
+        })
+
         // Generate unique filename
         const uniqueName = `${uuidv4()}${req.file.originalname.split('.').pop() ? '.' + req.file.originalname.split('.').pop() : ''}`
-        
+
+        console.log('[UPLOAD] Starting sharp processing...')
         // Compress the image using sharp (lossy compression with balanced quality)
         const compressedBuffer = await sharp(req.file.buffer)
             .withMetadata() // Preserve metadata
@@ -46,10 +57,13 @@ router.post('/', upload.single('image'), async (req: Request, res: Response) => 
             .jpeg({ quality: 80, progressive: true, optimizeScans: true }) // Lossy JPEG compression with 80% quality
             .toBuffer()
 
+        console.log('[UPLOAD] Sharp processing complete, size:', compressedBuffer.length)
+
         // Convert to Base64
         const base64Image = compressedBuffer.toString('base64')
         const dataUrl = `data:${req.file.mimetype};base64,${base64Image}`
 
+        console.log('[UPLOAD] Upload successful')
         res.json({
             success: true,
             data: {
@@ -61,10 +75,16 @@ router.post('/', upload.single('image'), async (req: Request, res: Response) => 
             }
         })
     } catch (error) {
-        console.error('Error uploading file:', error)
+        console.error('[UPLOAD] ERROR:', error)
+        if (error instanceof Error) {
+            console.error('[UPLOAD] Error name:', error.name)
+            console.error('[UPLOAD] Error message:', error.message)
+            console.error('[UPLOAD] Error stack:', error.stack)
+        }
         res.status(500).json({
             success: false,
-            error: '文件上传失败'
+            error: '文件上传失败',
+            details: error instanceof Error ? error.message : 'Unknown error'
         })
     }
 })
