@@ -17,8 +17,9 @@ COPY shared ./shared
 COPY backend ./backend
 COPY frontend ./frontend
 
-RUN npm install --include=dev && \
-    npm install --workspaces --include=dev
+# Force Sharp to detect Alpine (musl) platform
+RUN SHARP_FORCE_PLATFORM=false npm install --include=dev && \
+    SHARP_FORCE_PLATFORM=false npm install --workspaces --include=dev
 
 RUN node start.js --env-only
 
@@ -26,13 +27,13 @@ RUN cd backend && npm run build && \
     cd ../frontend && npm run build
 
 RUN npm prune --omit=dev && \
-    npm install --workspaces --omit=dev
+    SHARP_FORCE_PLATFORM=false npm install --workspaces --omit=dev
 
 RUN apk add --no-cache python3 make g++ && \
     npm rebuild bcrypt && \
-    npm rebuild sharp && \
+    npm rebuild --arch=x64 --platform=linux --libc=musl sharp && \
     cd backend && npm rebuild bcrypt && \
-    npm rebuild sharp && \
+    npm rebuild --arch=x64 --platform=linux --libc=musl sharp && \
     cd .. && apk del python3 make g++
 
 RUN mkdir -p /app/backend/data
