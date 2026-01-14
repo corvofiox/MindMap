@@ -29,12 +29,15 @@ RUN cd backend && npm run build && \
 RUN npm prune --omit=dev && \
     SHARP_FORCE_PLATFORM=false npm install --workspaces --omit=dev
 
+# Rebuild Sharp from source for Alpine (musl)
 RUN apk add --no-cache python3 make g++ && \
     npm rebuild bcrypt && \
-    npm rebuild --arch=x64 --platform=linux --libc=musl sharp && \
-    cd backend && npm rebuild bcrypt && \
-    npm rebuild --arch=x64 --platform=linux --libc=musl sharp && \
-    cd .. && apk del python3 make g++
+    (rm -rf node_modules/sharp && npm install sharp --build-from-source) && \
+    cd backend && \
+    npm rebuild bcrypt && \
+    (rm -rf node_modules/sharp && npm install sharp --build-from-source) && \
+    cd ../.. && \
+    apk del python3 make g++
 
 RUN mkdir -p /app/backend/data
 
