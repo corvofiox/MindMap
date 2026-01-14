@@ -31,12 +31,14 @@ RUN npm prune --omit=dev && \
 
 # Rebuild Sharp from source for Alpine (musl)
 RUN apk add --no-cache python3 make g++ && \
+    npm install node-gyp && \
     npm rebuild bcrypt && \
     (rm -rf node_modules/sharp && npm install sharp --build-from-source) && \
     cd backend && \
+    npm install node-gyp && \
     npm rebuild bcrypt && \
     (rm -rf node_modules/sharp && npm install sharp --build-from-source) && \
-    cd ../.. && \
+    cd .. && \
     apk del python3 make g++
 
 RUN mkdir -p /app/backend/data
