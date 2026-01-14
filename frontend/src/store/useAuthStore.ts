@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { User, LoginCredentials, RegisterData } from '@/types'
 import * as api from '@/services/api'
+import { loadUIStore } from '@/utils/moduleLoader'
 
 interface AuthState {
   user: User | null
@@ -82,7 +83,7 @@ export const useAuthStore = create<AuthState>()(
               isLoading: false,
             })
             // Show error toast to user
-            import('@/store/useUIStore').then(({ useUIStore }) => {
+            loadUIStore().then(({ useUIStore }) => {
               useUIStore.getState().addErrorToast(errorMessage, '登录失败')
             })
             throw error
@@ -140,7 +141,7 @@ export const useAuthStore = create<AuthState>()(
             })
           } catch (error) {
             // Show warning toast for token refresh failure
-            import('@/store/useUIStore').then(({ useUIStore }) => {
+            loadUIStore().then(({ useUIStore }) => {
               useUIStore.getState().addWarningToast('会话已过期，请重新登录', '会话提醒')
             })
             localStorage.removeItem('mindmap_token')
@@ -163,7 +164,7 @@ export const useAuthStore = create<AuthState>()(
             const updatedUser = await api.updateProfile(data)
             set({ user: updatedUser, isLoading: false })
             // Show success toast
-            import('@/store/useUIStore').then(({ useUIStore }) => {
+            loadUIStore().then(({ useUIStore }) => {
               useUIStore.getState().addSuccessToast('个人资料已更新', '更新成功')
             })
           } catch (error) {

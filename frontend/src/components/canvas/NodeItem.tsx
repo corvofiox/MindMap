@@ -5,7 +5,7 @@ import { NodeContextMenu } from './NodeContextMenu'
 import { snapToGrid } from '@/utils/canvas'
 import { CANVAS_DEFAULTS } from '@/constants'
 import { debugLogger } from '@/utils/debugLogger'
-import { uploadImage } from '@/services/api'
+import { loadApiModule } from '@/utils/moduleLoader'
 import type { Node } from '@/types'
 
 // Helper function to check if in default selection mode
@@ -66,6 +66,9 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
   // Image Upload Handler
   const handleImageUpload = useCallback(async (file: File) => {
     try {
+      // 使用 import.meta.glob 预加载的模块
+      const apiModule = await loadApiModule()
+      const { uploadImage } = apiModule
       const { url } = await uploadImage(file)
 
       // Load image to get dimensions
