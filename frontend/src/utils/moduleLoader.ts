@@ -16,7 +16,7 @@ const storeModules = import.meta.glob('../store/*.ts', { eager: false })
 export async function loadApiModule() {
   const modulePath = '../services/api.ts'
   const module = await apiModules[modulePath]()
-  return module
+  return module as any
 }
 
 /**
