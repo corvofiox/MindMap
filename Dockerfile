@@ -1,6 +1,8 @@
 # syntax=docker/dockerfile:1
 
-ARG NODE_VERSION=20-alpine
+# 使用Debian slim镜像而非Alpine，避免Sharp库在musl libc上的兼容性问题
+# Debian使用glibc，Sharp预编译二进制可以直接使用，无需重新编译
+ARG NODE_VERSION=20-bookworm-slim
 
 FROM node:${NODE_VERSION}
 
@@ -9,7 +11,13 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV DOCKER_CONTAINER=true
 
-RUN apk add --no-cache python3 make g++ vips-dev curl
+# 安装构建依赖（Debian使用apt-get）
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    make \
+    g++ \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json* start.js ./
 
@@ -17,29 +25,18 @@ COPY shared ./shared
 COPY backend ./backend
 COPY frontend ./frontend
 
-# Force Sharp to detect Alpine (musl) platform
-RUN SHARP_FORCE_PLATFORM=false npm install --include=dev && \
-    SHARP_FORCE_PLATFORM=false npm install --workspaces --include=dev
+# 安装依赖（Debian环境下Sharp可直接使用预编译二进制）
+RUN npm install --include=dev && \
+    npm install --workspaces --include=dev
 
 RUN node start.js --env-only
 
 RUN cd backend && npm run build && \
     cd ../frontend && npm run build
 
+# 清理开发依赖，保留生产依赖
 RUN npm prune --omit=dev && \
-    SHARP_FORCE_PLATFORM=false npm install --workspaces --omit=dev
-
-# Rebuild Sharp from source for Alpine (musl)
-RUN apk add --no-cache python3 make g++ && \
-    npm install node-gyp && \
-    npm rebuild bcrypt && \
-    (rm -rf node_modules/sharp && npm install sharp --build-from-source) && \
-    cd backend && \
-    npm install node-gyp && \
-    npm rebuild bcrypt && \
-    (rm -rf node_modules/sharp && npm install sharp --build-from-source) && \
-    cd .. && \
-    apk del python3 make g++
+    npm install --workspaces --omit=dev
 
 RUN mkdir -p /app/backend/data
 
