@@ -5,6 +5,7 @@ import { NodeContextMenu } from './NodeContextMenu'
 import { snapToGrid } from '@/utils/canvas'
 import { CANVAS_DEFAULTS } from '@/constants'
 import { debugLogger } from '@/utils/debugLogger'
+import { uploadImage } from '@/services/api'
 import type { Node } from '@/types'
 
 // Helper function to check if in default selection mode
@@ -65,21 +66,17 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
   // Image Upload Handler
   const handleImageUpload = useCallback(async (file: File) => {
     try {
-      // Optimistic update or loading state could go here
-      const { url } = await import('@/services/api').then(m => m.uploadImage(file))
+      const { url } = await uploadImage(file)
 
       // Load image to get dimensions
       const img = new Image()
       img.src = url
       img.onload = () => {
-        // Calculate aspect ratio
         const aspectRatio = img.width / img.height
-
         updateNode(node.id, {
           imageUrl: url,
           aspectRatio: aspectRatio,
-          type: 'image', // Ensure node type is set to 'image'
-          // Optional: Auto-resize node to match aspect ratio if needed, keeping width fixed
+          type: 'image',
           height: node.width / aspectRatio
         })
         addToast({ type: 'success', title: '上传成功', message: '图片已上传' })
@@ -88,7 +85,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
       addToast({
         type: 'error',
         title: '上传失败',
-        message: '上传图片失败，请重试',
+        message: error instanceof Error ? error.message : '上传图片失败，请重试',
       })
     }
   }, [node.id, node.width, updateNode, addToast])
