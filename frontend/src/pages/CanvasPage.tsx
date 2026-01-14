@@ -532,8 +532,8 @@ export function CanvasPage() {
 
   // Center camera on content when canvas data is loaded (only on first load)
   useEffect(() => {
-    // Only proceed if not loading and we have some content
-    if (!canvasId || isLoadingCanvas || (nodes.size === 0 && groups.size === 0 && domains.size === 0)) return
+    // Only proceed if not loading
+    if (!canvasId || isLoadingCanvas) return
 
     const id = parseInt(canvasId)
     if (isNaN(id)) return
@@ -550,8 +550,6 @@ export function CanvasPage() {
       const currentNodes = useCanvasStore.getState().nodes
       const currentGroups = useCanvasStore.getState().groups
       const currentDomains = useCanvasStore.getState().domains
-
-      if (currentNodes.size === 0 && currentGroups.size === 0 && currentDomains.size === 0) return
 
       // Calculate content bounds
       let minX = Infinity
@@ -580,12 +578,17 @@ export function CanvasPage() {
         maxY = Math.max(maxY, domain.y + domain.height)
       })
 
-      // If no content, don't center
-      if (minX === Infinity || minY === Infinity) return
+      let contentCenterX = 0
+      let contentCenterY = 0
 
-      // Calculate content center
-      const contentCenterX = (minX + maxX) / 2
-      const contentCenterY = (minY + maxY) / 2
+      if (minX === Infinity || minY === Infinity) {
+        // Empty canvas - center on origin
+        contentCenterX = 0
+        contentCenterY = 0
+      } else {
+        contentCenterX = (minX + maxX) / 2
+        contentCenterY = (minY + maxY) / 2
+      }
 
       // Set camera to center on content
       const newPanX = containerSize.width / 2 - contentCenterX * zoom
@@ -596,7 +599,7 @@ export function CanvasPage() {
     }, 100)
 
     return () => clearTimeout(timer)
-  }, [canvasId, isLoadingCanvas, nodes, groups, domains, containerReady, containerSize.width, containerSize.height, setPan, zoom])
+  }, [canvasId, isLoadingCanvas, containerReady, containerSize.width, containerSize.height, setPan, zoom])
 
   const generateThumbnail = useCallback(async (canvasId: number) => {
     if (!containerRef.current) {
