@@ -71,6 +71,11 @@ interface CanvasState {
   updateConnection: (id: string, updates: Partial<Connection>) => void
   removeConnection: (id: string) => void
 
+  // Bend point actions
+  addConnectionBendPoint: (connectionId: string, bendPointId: string, x: number, y: number, insertIndex?: number) => void
+  updateConnectionBendPoint: (connectionId: string, bendPointId: string, x: number, y: number) => void
+  removeConnectionBendPoint: (connectionId: string, bendPointId: string) => void
+
   // Selection actions
   setSelectedIds: (ids: string[]) => void
   addToSelection: (id: string) => void
@@ -499,6 +504,140 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         const state = get()
         const connections = new Map(state.connections)
         connections.set(id, connection)
+        return { connections, isDirty: true }
+      },
+    })
+  },
+
+  addConnectionBendPoint: (connectionId, bendPointId, x, y, insertIndex = undefined) => {
+    const state = get()
+    const connection = state.connections.get(connectionId)
+    if (!connection) return
+
+    const newBendPoint = { id: bendPointId, x, y }
+    const existingBendPoints = connection.bendPoints || []
+
+    get().executeCommand({
+      type: 'addConnectionBendPoint',
+      timestamp: Date.now(),
+      execute: () => {
+        const state = get()
+        const connections = new Map(state.connections)
+        const conn = connections.get(connectionId)
+        if (conn) {
+          let newBendPoints
+          if (insertIndex !== undefined && insertIndex >= 0 && insertIndex <= existingBendPoints.length) {
+            newBendPoints = [
+              ...existingBendPoints.slice(0, insertIndex),
+              newBendPoint,
+              ...existingBendPoints.slice(insertIndex)
+            ]
+          } else {
+            newBendPoints = [...existingBendPoints, newBendPoint]
+          }
+
+          connections.set(connectionId, {
+            ...conn,
+            bendPoints: newBendPoints,
+          })
+        }
+        return { connections, isDirty: true }
+      },
+      undo: () => {
+        const state = get()
+        const connections = new Map(state.connections)
+        const conn = connections.get(connectionId)
+        if (conn) {
+          connections.set(connectionId, {
+            ...conn,
+            bendPoints: existingBendPoints,
+          })
+        }
+        return { connections, isDirty: true }
+      },
+    })
+  },
+
+  updateConnectionBendPoint: (connectionId, bendPointId, x, y) => {
+    const state = get()
+    const connection = state.connections.get(connectionId)
+    if (!connection || !connection.bendPoints) return
+
+    const bendPoint = connection.bendPoints.find(bp => bp.id === bendPointId)
+    if (!bendPoint) return
+
+    const originalX = bendPoint.x
+    const originalY = bendPoint.y
+
+    get().executeCommand({
+      type: 'updateConnectionBendPoint',
+      timestamp: Date.now(),
+      execute: () => {
+        const state = get()
+        const connections = new Map(state.connections)
+        const conn = connections.get(connectionId)
+        if (conn && conn.bendPoints) {
+          connections.set(connectionId, {
+            ...conn,
+            bendPoints: conn.bendPoints.map(bp =>
+              bp.id === bendPointId ? { ...bp, x, y } : bp
+            ),
+          })
+        }
+        return { connections, isDirty: true }
+      },
+      undo: () => {
+        const state = get()
+        const connections = new Map(state.connections)
+        const conn = connections.get(connectionId)
+        if (conn && conn.bendPoints) {
+          connections.set(connectionId, {
+            ...conn,
+            bendPoints: conn.bendPoints.map(bp =>
+              bp.id === bendPointId ? { ...bp, x: originalX, y: originalY } : bp
+            ),
+          })
+        }
+        return { connections, isDirty: true }
+      },
+    })
+  },
+
+  removeConnectionBendPoint: (connectionId, bendPointId) => {
+    const state = get()
+    const connection = state.connections.get(connectionId)
+    if (!connection || !connection.bendPoints) return
+
+    const bendPoint = connection.bendPoints.find(bp => bp.id === bendPointId)
+    if (!bendPoint) return
+
+    const existingBendPoints = connection.bendPoints
+
+    get().executeCommand({
+      type: 'removeConnectionBendPoint',
+      timestamp: Date.now(),
+      execute: () => {
+        const state = get()
+        const connections = new Map(state.connections)
+        const conn = connections.get(connectionId)
+        if (conn && conn.bendPoints) {
+          connections.set(connectionId, {
+            ...conn,
+            bendPoints: conn.bendPoints.filter(bp => bp.id !== bendPointId),
+          })
+        }
+        return { connections, isDirty: true }
+      },
+      undo: () => {
+        const state = get()
+        const connections = new Map(state.connections)
+        const conn = connections.get(connectionId)
+        if (conn) {
+          connections.set(connectionId, {
+            ...conn,
+            bendPoints: existingBendPoints,
+          })
+        }
         return { connections, isDirty: true }
       },
     })

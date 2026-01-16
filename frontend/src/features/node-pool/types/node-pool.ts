@@ -170,6 +170,16 @@ export interface FolderItemProps {
   onCancelEdit?: () => void
   /** ID of folder currently being edited */
   editingFolderId?: number | null
+  /** Callback to use a card */
+  onUseCard?: (card: NodeCard) => void
+  /** Callback to remove a card */
+  onRemoveCard?: (id: number) => void
+  /** Callback to save card name */
+  onSaveCardName?: (id: number, name: string) => void
+  /** ID of card currently being edited */
+  editingCardId?: number | null
+  /** Callback to start editing a card */
+  onStartCardEdit?: (card: NodeCard) => void
 }
 
 /**
@@ -191,7 +201,7 @@ export interface NodeCardItemProps {
   /** Callback to save card name */
   onSaveName: (id: number, name: string) => void
   /** Callback to show context menu */
-  onContextMenu: (event: React.MouseEvent, card: NodeCard) => void
+  onContextMenu?: (event: React.MouseEvent, card: NodeCard) => void
   /** Whether this card's preview is shown */
   showPreview?: boolean
   /** Callback to toggle preview */

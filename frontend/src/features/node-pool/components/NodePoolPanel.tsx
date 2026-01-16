@@ -42,7 +42,7 @@ interface NodePoolPanelProps {
 export function NodePoolPanel({ open }: NodePoolPanelProps) {
   const { currentProject, nodePool, nodePoolFolders, loadNodePool, loadNodePoolFolders } = useProjectsStore()
   const { selectedIds, addNode } = useCanvasStore()
-  const { addToast } = useUIStore()
+  const { addToast, setDragGhost } = useUIStore()
 
   // Node pool store
   const {
@@ -194,7 +194,7 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
       folder,
       position: { x: e.clientX, y: e.clientY }
     })
-  }, [])
+  }, [setFolderContextMenu])
 
   // Handle card context menu
   const handleCardContextMenu = useCallback((e: React.MouseEvent, card: NodeCard) => {
@@ -203,7 +203,7 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
       card,
       position: { x: e.clientX, y: e.clientY }
     })
-  }, [])
+  }, [setCardContextMenu])
 
   // Handle rename folder
   const handleRenameFolder = useCallback((folder: NodePoolFolder) => {
@@ -436,12 +436,16 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
         onSaveEdit={handleSaveFolderName}
         onCancelEdit={handleCancelFolderEdit}
         editingFolderId={editingFolderId}
+        onUseCard={handleUseCard}
+        onRemoveCard={handleRemoveCard}
+        onSaveCardName={handleSaveCardName}
+        editingCardId={editingCardId}
       />
     )
   }
 
   return (
-    <aside className={`w-72 bg-white dark:bg-gray-800 border-l border-gray-200 dark:border-gray-700 flex flex-col transition-all duration-200 fixed right-0 top-14 h-[calc(100vh-3.5rem)] z-20 ${open ? 'transform translate-x-0' : 'transform translate-x-full'}`}>
+    <aside data-node-pool="true" className={`w-72 bg-white dark:bg-gray-800 border-l border-gray-200 dark:border-gray-700 flex flex-col transition-all duration-200 fixed right-0 top-14 h-[calc(100vh-3.5rem)] z-[70] ${open ? 'transform translate-x-0' : 'transform translate-x-full'}`}>
       {/* Header */}
       <div className="h-12 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-4 flex-shrink-0">
         <h2 className="font-semibold text-gray-800 dark:text-white">节点池</h2>
@@ -466,23 +470,23 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
       {/* New folder input */}
       {showNewFolderInput && (
         <div className="p-3 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
-          <div className="flex gap-2">
+          <div className="flex gap-2 items-center">
             <input
               type="text"
               placeholder="文件夹名称..."
               value={newFolderName}
               onChange={(e) => setNewFolderName(e.target.value)}
-              className="flex-1 px-2 py-1 text-sm bg-gray-100 dark:bg-gray-700 border-0 rounded focus:ring-2 focus:ring-blue-500 text-gray-800 dark:text-white"
+              className="flex-1 min-w-0 px-2 py-1.5 text-sm bg-gray-100 dark:bg-gray-700 border-0 rounded focus:ring-2 focus:ring-blue-500 text-gray-800 dark:text-white"
             />
             <button
               onClick={handleCreateFolder}
-              className="px-3 py-1 text-sm bg-blue-500 text-white rounded hover:bg-blue-600"
+              className="flex-shrink-0 px-3 py-1.5 text-sm bg-blue-500 text-white rounded hover:bg-blue-600 whitespace-nowrap"
             >
               创建
             </button>
             <button
               onClick={() => setShowNewFolderInput(false)}
-              className="p-1 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+              className="flex-shrink-0 p-1.5 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
             >
               <X className="w-4 h-4" />
             </button>
@@ -591,7 +595,10 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
         <NodeCardContextMenu
           card={cardContextMenu.card}
           position={cardContextMenu.position}
-          onClose={() => setCardContextMenu(null)}
+          onClose={() => {
+            setCardContextMenu(null)
+            setDragGhost(null, null)
+          }}
           onRename={() => handleRenameCard(cardContextMenu.card)}
           onMoveToFolder={(folderId) => handleMoveCardToFolder(cardContextMenu.card, folderId)}
         />

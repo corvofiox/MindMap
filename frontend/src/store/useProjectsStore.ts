@@ -4,7 +4,7 @@ import type { Project, Canvas, Folder, NodeCard, NodePoolFolder, NodePoolSortOpt
 import * as api from '@/services/api'
 import { loadUIStore } from '@/utils/moduleLoader'
 
-interface ProjectsState {
+ interface ProjectsState {
   projects: Project[]
   currentProject: Project | null
   currentProjectId: number | null  // 持久化项目ID
@@ -15,6 +15,7 @@ interface ProjectsState {
   nodePoolSortBy: NodePoolSortOption
   nodePoolSortOrder: NodePoolSortOrder
   isLoading: boolean
+  loadingMessage: string  // 当前加载操作的提示信息
   error: string | null
 
   // Actions
@@ -87,13 +88,14 @@ export const useProjectsStore = create<ProjectsState>()(
         nodePoolSortBy: 'createdAt',
         nodePoolSortOrder: 'desc',
         isLoading: false,
+        loadingMessage: '',
         error: null,
 
         loadProjects: async () => {
-          set({ isLoading: true, error: null })
+          set({ isLoading: true, loadingMessage: '正在加载项目...', error: null })
           try {
             const projects = await api.getProjects()
-            set({ projects, isLoading: false })
+            set({ projects, isLoading: false, loadingMessage: '' })
           } catch (error) {
             handleError(error, '加载项目失败')
           }
@@ -125,52 +127,53 @@ export const useProjectsStore = create<ProjectsState>()(
         },
 
         loadCanvases: async (projectId) => {
-          set({ isLoading: true, error: null })
+          set({ isLoading: true, loadingMessage: '正在加载画布...', error: null })
           try {
             const canvases = await api.getCanvases(projectId)
-            set({ canvases, isLoading: false })
+            set({ canvases, isLoading: false, loadingMessage: '' })
           } catch (error) {
             handleError(error, '加载画布失败')
           }
         },
 
         loadFolders: async (projectId) => {
-          set({ isLoading: true, error: null })
+          set({ isLoading: true, loadingMessage: '正在加载文件夹...', error: null })
           try {
             const folders = await api.getFolders(projectId)
-            set({ folders, isLoading: false })
+            set({ folders, isLoading: false, loadingMessage: '' })
           } catch (error) {
             handleError(error, '加载文件夹失败')
           }
         },
 
         loadNodePoolFolders: async (projectId) => {
-          set({ isLoading: true, error: null })
+          set({ isLoading: true, loadingMessage: '正在加载节点池...', error: null })
           try {
             const folders = await api.getNodePoolFolders(projectId)
-            set({ nodePoolFolders: folders, isLoading: false })
+            set({ nodePoolFolders: folders, isLoading: false, loadingMessage: '' })
           } catch (error) {
             handleError(error, '加载节点池文件夹失败')
           }
         },
 
         loadNodePool: async (projectId) => {
-          set({ isLoading: true, error: null })
+          set({ isLoading: true, loadingMessage: '正在加载节点池...', error: null })
           try {
             const nodePool = await api.getNodePool(projectId)
-            set({ nodePool, isLoading: false })
+            set({ nodePool, isLoading: false, loadingMessage: '' })
           } catch (error) {
             handleError(error, '加载节点池失败')
           }
         },
 
         createProject: async (data) => {
-          set({ isLoading: true, error: null })
+          set({ isLoading: true, loadingMessage: '正在创建项目...', error: null })
           try {
             const project = await api.createProject(data)
             set((state) => ({
               projects: [...state.projects, project],
               isLoading: false,
+              loadingMessage: '',
             }))
           } catch (error) {
             handleError(error, '创建项目失败')
@@ -178,13 +181,14 @@ export const useProjectsStore = create<ProjectsState>()(
         },
 
         updateProject: async (id, data) => {
-          set({ isLoading: true, error: null })
+          set({ isLoading: true, loadingMessage: '正在更新项目...', error: null })
           try {
             const updated = await api.updateProject(id, data)
             set((state) => ({
               projects: state.projects.map((p) => (p.id === id ? updated : p)),
               currentProject: state.currentProject?.id === id ? updated : state.currentProject,
               isLoading: false,
+              loadingMessage: '',
             }))
           } catch (error) {
             handleError(error, '更新项目失败')
@@ -192,7 +196,7 @@ export const useProjectsStore = create<ProjectsState>()(
         },
 
         deleteProject: async (id) => {
-          set({ isLoading: true, error: null })
+          set({ isLoading: true, loadingMessage: '正在删除项目...', error: null })
           try {
             await api.deleteProject(id)
             set((state) => ({
@@ -200,6 +204,7 @@ export const useProjectsStore = create<ProjectsState>()(
               currentProject: state.currentProject?.id === id ? null : state.currentProject,
               currentProjectId: state.currentProjectId === id ? null : state.currentProjectId,
               isLoading: false,
+              loadingMessage: '',
             }))
           } catch (error) {
             handleError(error, '删除项目失败')
@@ -207,12 +212,13 @@ export const useProjectsStore = create<ProjectsState>()(
         },
 
         createCanvas: async (projectId, data) => {
-          set({ isLoading: true, error: null })
+          set({ isLoading: true, loadingMessage: '正在创建画布...', error: null })
           try {
             const canvas = await api.createCanvas(projectId, data)
             set((state) => ({
               canvases: [...state.canvases, canvas],
               isLoading: false,
+              loadingMessage: '',
             }))
           } catch (error) {
             handleError(error, '创建画布失败')
@@ -220,12 +226,13 @@ export const useProjectsStore = create<ProjectsState>()(
         },
 
         updateCanvas: async (id, data) => {
-          set({ isLoading: true, error: null })
+          set({ isLoading: true, loadingMessage: '正在更新画布...', error: null })
           try {
             const updated = await api.updateCanvas(id, data)
             set((state) => ({
               canvases: state.canvases.map((c) => (c.id === id ? updated : c)),
               isLoading: false,
+              loadingMessage: '',
             }))
           } catch (error) {
             handleError(error, '更新画布失败')
@@ -233,12 +240,13 @@ export const useProjectsStore = create<ProjectsState>()(
         },
 
         deleteCanvas: async (id) => {
-          set({ isLoading: true, error: null })
+          set({ isLoading: true, loadingMessage: '正在删除画布...', error: null })
           try {
             await api.deleteCanvas(id)
             set((state) => ({
               canvases: state.canvases.filter((c) => c.id !== id),
               isLoading: false,
+              loadingMessage: '',
             }))
           } catch (error) {
             handleError(error, '删除画布失败')
@@ -246,25 +254,27 @@ export const useProjectsStore = create<ProjectsState>()(
         },
 
         moveCanvasToFolder: async (canvasId, folderId) => {
-          set({ isLoading: true, error: null })
+          set({ isLoading: true, loadingMessage: '正在移动画布...', error: null })
           try {
-            const updated = await api.updateCanvas(canvasId, { folderId })
+            await api.updateCanvas(canvasId, { folderId })
             set((state) => ({
-              canvases: state.canvases.map((c) => (c.id === canvasId ? updated : c)),
+              canvases: state.canvases.map((c) => (c.id === canvasId ? { ...c, folderId } : c)),
               isLoading: false,
+              loadingMessage: '',
             }))
           } catch (error) {
-            handleError(error, '移动画布到文件夹失败')
+            handleError(error, '移动画布失败')
           }
         },
 
         createFolder: async (projectId, data) => {
-          set({ isLoading: true, error: null })
+          set({ isLoading: true, loadingMessage: '正在创建文件夹...', error: null })
           try {
             const folder = await api.createFolder(projectId, data)
             set((state) => ({
               folders: [...state.folders, folder],
               isLoading: false,
+              loadingMessage: '',
             }))
           } catch (error) {
             handleError(error, '创建文件夹失败')
@@ -272,12 +282,13 @@ export const useProjectsStore = create<ProjectsState>()(
         },
 
         updateFolder: async (id, data) => {
-          set({ isLoading: true, error: null })
+          set({ isLoading: true, loadingMessage: '正在更新文件夹...', error: null })
           try {
             const updated = await api.updateFolder(id, data)
             set((state) => ({
               folders: state.folders.map((f) => (f.id === id ? updated : f)),
               isLoading: false,
+              loadingMessage: '',
             }))
           } catch (error) {
             handleError(error, '更新文件夹失败')
@@ -285,7 +296,7 @@ export const useProjectsStore = create<ProjectsState>()(
         },
 
         deleteFolder: async (id) => {
-          set({ isLoading: true, error: null })
+          set({ isLoading: true, loadingMessage: '正在删除文件夹...', error: null })
           try {
             await api.deleteFolder(id)
             set((state) => {
@@ -297,7 +308,7 @@ export const useProjectsStore = create<ProjectsState>()(
                 const currentId = queue.shift()!
                 folderIdsToDelete.add(currentId)
 
-                // Find all immediate children of the current folder
+                // Find all immediate children of current folder
                 const children = state.folders.filter((f) => f.parentId === currentId)
                 for (const child of children) {
                   queue.push(child.id)
@@ -309,6 +320,7 @@ export const useProjectsStore = create<ProjectsState>()(
                 folders: state.folders.filter((f) => !folderIdsToDelete.has(f.id)),
                 canvases: state.canvases.filter((c) => !folderIdsToDelete.has(c.folderId!)),
                 isLoading: false,
+                loadingMessage: '',
               }
             })
           } catch (error) {
@@ -317,12 +329,13 @@ export const useProjectsStore = create<ProjectsState>()(
         },
 
         addToNodePool: async (projectId, data) => {
-          set({ isLoading: true, error: null })
+          set({ isLoading: true, loadingMessage: '正在添加到节点池...', error: null })
           try {
             const card = await api.addToNodePool(projectId, data)
             set((state) => ({
               nodePool: [...state.nodePool, card],
               isLoading: false,
+              loadingMessage: '',
             }))
             return card
           } catch (error) {
@@ -332,12 +345,13 @@ export const useProjectsStore = create<ProjectsState>()(
         },
 
         removeFromNodePool: async (id) => {
-          set({ isLoading: true, error: null })
+          set({ isLoading: true, loadingMessage: '正在从节点池移除...', error: null })
           try {
             await api.removeFromNodePool(id)
             set((state) => ({
               nodePool: state.nodePool.filter((c) => c.id !== id),
               isLoading: false,
+              loadingMessage: '',
             }))
           } catch (error) {
             handleError(error, '从节点池移除失败')
@@ -345,12 +359,13 @@ export const useProjectsStore = create<ProjectsState>()(
         },
 
         updateNodeCard: async (id, data) => {
-          set({ isLoading: true, error: null })
+          set({ isLoading: true, loadingMessage: '正在更新节点卡片...', error: null })
           try {
             const updated = await api.updateNodeCard(id, data)
             set((state) => ({
               nodePool: state.nodePool.map((c) => (c.id === id ? updated : c)),
               isLoading: false,
+              loadingMessage: '',
             }))
           } catch (error) {
             handleError(error, '更新节点卡片失败')
@@ -373,12 +388,13 @@ export const useProjectsStore = create<ProjectsState>()(
         setNodePoolSortOrder: (order) => set({ nodePoolSortOrder: order }),
 
         createNodePoolFolder: async (projectId, data) => {
-          set({ isLoading: true, error: null })
+          set({ isLoading: true, loadingMessage: '正在创建节点池文件夹...', error: null })
           try {
             const folder = await api.createNodePoolFolder(projectId, data)
             set((state) => ({
               nodePoolFolders: [...state.nodePoolFolders, folder],
               isLoading: false,
+              loadingMessage: '',
             }))
           } catch (error) {
             handleError(error, '创建节点池文件夹失败')
@@ -386,7 +402,7 @@ export const useProjectsStore = create<ProjectsState>()(
         },
 
         updateNodePoolFolder: async (id, data) => {
-          set({ isLoading: true, error: null })
+          set({ isLoading: true, loadingMessage: '正在更新节点池文件夹...', error: null })
           try {
             const updated = await api.updateNodePoolFolder(id, data)
             set((state) => ({
@@ -394,6 +410,7 @@ export const useProjectsStore = create<ProjectsState>()(
                 f.id === id ? { ...f, ...updated } : f
               ),
               isLoading: false,
+              loadingMessage: '',
             }))
           } catch (error) {
             handleError(error, '更新节点池文件夹失败')
@@ -401,12 +418,13 @@ export const useProjectsStore = create<ProjectsState>()(
         },
 
         deleteNodePoolFolder: async (id) => {
-          set({ isLoading: true, error: null })
+          set({ isLoading: true, loadingMessage: '正在删除节点池文件夹...', error: null })
           try {
             await api.deleteNodePoolFolder(id)
             set((state) => ({
               nodePoolFolders: state.nodePoolFolders.filter((f) => f.id !== id),
               isLoading: false,
+              loadingMessage: '',
             }))
           } catch (error) {
             handleError(error, '删除节点池文件夹失败')

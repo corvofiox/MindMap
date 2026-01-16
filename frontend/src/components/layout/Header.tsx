@@ -1,5 +1,5 @@
 import { useNavigate } from 'react-router-dom'
-import { Users, Settings, LogOut, User as UserIcon } from 'lucide-react'
+import { Settings, LogOut, User as UserIcon } from 'lucide-react'
 import { useAuthStore } from '@/store/useAuthStore'
 import { useUIStore } from '@/store/useUIStore'
 import { useProjectsStore } from '@/store/useProjectsStore'

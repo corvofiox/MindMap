@@ -31,7 +31,6 @@ export function CanvasMinimap({
   panY,
   containerWidth,
   containerHeight,
-  nodePoolOpen,
   secondaryToolbarOpen,
   onViewportChange,
 }: CanvasMinimapProps) {
@@ -173,14 +172,13 @@ export function CanvasMinimap({
     ctx.fillStyle = '#ffffff'
     ctx.strokeStyle = '#374151'
     ctx.lineWidth = 0.5
-    const nodePositions = Array.from(nodes.values()).map((node) => {
+    Array.from(nodes.values()).forEach((node) => {
       const x = (node.x - contentBounds.x) * newScale + offsetX
       const y = (node.y - contentBounds.y) * newScale + offsetY
       const w = Math.max(node.width * newScale, 3)
       const h = Math.max(node.height * newScale, 2)
       ctx.fillRect(x, y, w, h)
       ctx.strokeRect(x, y, w, h)
-      return { id: node.id, canvasX: node.x, canvasY: node.y, minimapX: x, minimapY: y }
     })
 
     // Restore context

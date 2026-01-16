@@ -4,7 +4,6 @@ import { useUIStore } from '@/store/useUIStore'
 import { NodeContextMenu } from './NodeContextMenu'
 import { snapToGrid } from '@/utils/canvas'
 import { CANVAS_DEFAULTS } from '@/constants'
-import { debugLogger } from '@/utils/debugLogger'
 import { loadApiModule } from '@/utils/moduleLoader'
 import type { Node } from '@/types'
 
@@ -22,13 +21,10 @@ interface NodeItemProps {
   groupDragOffset?: { x: number; y: number }
 }
 
-const RESIZE_HANDLE_SIZE = 16
-
 type EditingField = 'title' | 'content' | null
 
 export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, groupDragOffset }: NodeItemProps) {
   const {
-    nodes,
     updateNode,
     setSelectedIds,
     addToSelection,
@@ -724,8 +720,6 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
   // Toggle collapsed state
   const toggleCollapsed = useCallback(() => {
     const newCollapsed = !node.collapsed
-
-    debugLogger.info('[NodeItem] Toggle collapsed:', { nodeId: node.id, newCollapsed })
 
     if (newCollapsed) {
       updateNode(node.id, {

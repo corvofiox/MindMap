@@ -100,7 +100,17 @@ export function NodeCardContextMenu({ card, position, onClose, onRename, onMoveT
   }
 
   const handleCopyToCanvas = () => {
+    // 设置dragGhost以显示拖动效果
     setDragGhost(card, { x: position.x, y: position.y })
+    
+    // 立即触发canvasDrop事件，将节点添加到画布中央
+    const customEvent = new CustomEvent('canvasDrop', {
+      detail: {
+        card,
+      },
+    })
+    document.dispatchEvent(customEvent)
+    
     onClose()
   }
 
@@ -153,11 +163,11 @@ export function NodeCardContextMenu({ card, position, onClose, onRename, onMoveT
 
   return createPortal(
     <>
-      <div className="fixed inset-0 z-40" onClick={onClose} />
+      <div className="fixed inset-0 z-[75]" onClick={onClose} />
 
       <div
         ref={menuRef}
-        className="fixed z-50 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1 min-w-[160px]"
+        className="fixed z-[80] bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1 min-w-[160px]"
         style={{
           left: adjustedPosition.x,
           top: adjustedPosition.y,

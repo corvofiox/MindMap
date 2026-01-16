@@ -4,6 +4,7 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { useProjectsStore } from '@/store/useProjectsStore'
 import { useUIStore } from '@/store/useUIStore'
 import clsx from 'clsx'
+import { createPortal } from 'react-dom'
 
 interface SidebarProps {
   open: boolean
@@ -14,7 +15,7 @@ export function Sidebar({ open }: SidebarProps) {
   const location = useLocation()
   const canvasIdMatch = location.pathname.match(/\/canvas\/(\d+)/)
   const activeCanvasId = canvasIdMatch ? parseInt(canvasIdMatch[1]) : null
-  const { projects, canvases, folders, currentProject, createCanvas, createFolder, updateCanvas, updateProject, deleteProject, setCurrentProject, loadProjects, moveCanvasToFolder } = useProjectsStore()
+  const { projects, canvases, folders, currentProject, createCanvas, createFolder, updateCanvas, updateProject, deleteProject, setCurrentProject, loadProjects, moveCanvasToFolder, isLoading, loadingMessage } = useProjectsStore()
   const { addToast } = useUIStore()
 
   // 判断当前是否在项目页面
@@ -123,7 +124,7 @@ export function Sidebar({ open }: SidebarProps) {
   // 拖拽放置到文件夹
   const handleDropOnFolder = async (e: React.DragEvent, folderId: number) => {
     e.preventDefault()
-    if (draggedCanvasId && draggedCanvasId !== folderId) {
+    if (draggedCanvasId) {
       try {
         await moveCanvasToFolder(draggedCanvasId, folderId)
         addToast({ type: 'success', title: '移动成功', message: '画布已移动到文件夹' })
@@ -230,12 +231,23 @@ export function Sidebar({ open }: SidebarProps) {
   }
 
   return (
-    <aside
-      className={clsx(
-        'bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 flex flex-col transition-all duration-200 overflow-hidden fixed left-0 top-14 h-[calc(100vh-3.5rem)] z-20',
-        open ? 'w-64 transform translate-x-0' : 'w-64 transform -translate-x-full'
+    <>
+      {/* Loading overlay - Fixed position to cover screen */}
+      {isLoading && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-gray-100/50 dark:bg-gray-900/50 backdrop-blur-sm transition-opacity duration-300">
+          <div className="text-center bg-white dark:bg-gray-800 p-6 rounded-xl shadow-xl border border-gray-200 dark:border-gray-700">
+            <div className="inline-block animate-spin rounded-full h-10 w-10 border-4 border-gray-300 border-t-blue-500 mb-3" />
+            <p className="text-sm font-medium text-gray-600 dark:text-gray-400">{loadingMessage || '正在处理...'}</p>
+          </div>
+        </div>
       )}
-    >
+
+      <aside
+        className={clsx(
+          'bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 flex flex-col transition-all duration-200 overflow-hidden fixed left-0 top-14 h-[calc(100vh-3.5rem)] z-40',
+          open ? 'w-64 transform translate-x-0' : 'w-64 transform -translate-x-full'
+        )}
+      >
       {isProjectsPage || !currentProject ? (
         // 项目选择视图
         <>
@@ -345,8 +357,8 @@ export function Sidebar({ open }: SidebarProps) {
                             </button>
 
                             {/* 下拉菜单 */}
-                            {showProjectMenu === project.id && (
-                              <div className="absolute right-0 top-full mt-1 w-32 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1 z-50">
+                            {showProjectMenu === project.id && createPortal(
+                              <div className="fixed w-32 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1 z-[100]">
                                 <button
                                   onClick={(e) => {
                                     e.stopPropagation()
@@ -367,7 +379,8 @@ export function Sidebar({ open }: SidebarProps) {
                                   <Trash2 className="w-3 h-3" />
                                   删除
                                 </button>
-                              </div>
+                              </div>,
+                              document.body
                             )}
                           </div>
                         </div>
@@ -444,7 +457,7 @@ export function Sidebar({ open }: SidebarProps) {
             {/* 新建文件夹输入框 */}
             {showNewFolderInput && (
               <div className="p-3 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
-                <div className="flex gap-2">
+                <div className="flex gap-2 items-center">
                   <input
                     type="text"
                     placeholder="文件夹名称..."
@@ -458,11 +471,11 @@ export function Sidebar({ open }: SidebarProps) {
                         setNewFolderName('')
                       }
                     }}
-                    className="flex-1 px-2 py-1 text-sm bg-gray-100 dark:bg-gray-700 border-0 rounded focus:ring-2 focus:ring-blue-500 text-gray-800 dark:text-white"
+                    className="flex-1 min-w-0 px-2 py-1.5 text-sm bg-gray-100 dark:bg-gray-700 border-0 rounded focus:ring-2 focus:ring-blue-500 text-gray-800 dark:text-white"
                   />
                   <button
                     onClick={handleCreateFolder}
-                    className="px-3 py-1 text-sm bg-blue-500 text-white rounded hover:bg-blue-600"
+                    className="flex-shrink-0 px-3 py-1.5 text-sm bg-blue-500 text-white rounded hover:bg-blue-600 whitespace-nowrap"
                   >
                     创建
                   </button>
@@ -471,7 +484,7 @@ export function Sidebar({ open }: SidebarProps) {
                       setShowNewFolderInput(false)
                       setNewFolderName('')
                     }}
-                    className="p-1 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+                    className="flex-shrink-0 p-1.5 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
                   >
                     <X className="w-4 h-4" />
                   </button>
@@ -522,8 +535,9 @@ export function Sidebar({ open }: SidebarProps) {
             </div>
           </div>
         </>
-      )}
-    </aside>
+       )}
+       </aside>
+    </>
   )
 }
 
@@ -795,10 +809,10 @@ function FolderItem({
           )}
 
           {/* 右键菜单 */}
-          {contextMenu && (
+          {contextMenu && createPortal(
             <div
               ref={contextMenuRef}
-              className="fixed bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1 z-50 min-w-[120px]"
+              className="fixed bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1 z-[100] min-w-[120px]"
               style={{
                 left: contextMenu.x,
                 top: contextMenu.y
@@ -824,7 +838,8 @@ function FolderItem({
                 <Trash2 className="w-3 h-3" />
                 删除
               </button>
-            </div>
+            </div>,
+            document.body
           )}
         </div>
       )}
@@ -1018,6 +1033,7 @@ function CanvasItem({
                 src={canvas.thumbnail}
                 alt={canvas.name}
                 className="w-full h-full object-cover"
+                onDragStart={(e) => e.preventDefault()}
               />
             ) : (
               <div className="w-full h-full flex items-center justify-center">
@@ -1049,14 +1065,15 @@ function CanvasItem({
           </div>
 
           {/* 右键菜单 */}
-          {showContextMenu && (
+          {showContextMenu && createPortal(
             <div
               ref={contextMenuRef}
-              className="fixed bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1 z-50 min-w-[160px]"
+              className="fixed bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1 z-[100] min-w-[160px]"
               style={{
                 left: contextMenuPosition.x,
                 top: contextMenuPosition.y
               }}
+              onContextMenu={(e) => e.preventDefault()}
             >
               <button
                 onClick={(e) => {
@@ -1120,7 +1137,8 @@ function CanvasItem({
                 <Trash2 className="w-3 h-3" />
                 删除
               </button>
-            </div>
+            </div>,
+            document.body
           )}
         </div>
         </>

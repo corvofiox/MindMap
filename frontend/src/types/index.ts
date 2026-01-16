@@ -121,19 +121,26 @@ export interface Domain {
 }
 
 // Connection types
+export interface ConnectionBendPoint {
+  id: string
+  x: number
+  y: number
+}
+
 export interface Connection {
   id: string
   fromNodeId: string
   toNodeId: string
   fromPort: 'top' | 'right' | 'bottom' | 'left'
   toPort: 'top' | 'right' | 'bottom' | 'left'
-  type: 'straight' | 'curve' | 'step'
+  type: 'straight' | 'curve' | 'step' | 'orthogonal'
   style: 'solid' | 'dashed' | 'dotted'
   color: string
   width: number
   arrowType: 'none' | 'start' | 'end' | 'both'
   direction: 'directed' | 'bidirectional' | 'undirected'
   label?: string
+  bendPoints?: ConnectionBendPoint[]
 }
 
 // Node Pool types

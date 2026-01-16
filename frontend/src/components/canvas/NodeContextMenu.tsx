@@ -22,7 +22,6 @@ import { useUIStore } from '@/store/useUIStore'
 import { useProjectsStore } from '@/store/useProjectsStore'
 import { useNodePoolStore } from '@/features/node-pool/stores/useNodePoolStore'
 import { uploadImage } from '@/services/api'
-import type { Node as CanvasNode } from '@/types'
 import { NODE_COLORS, BORDER_COLORS } from '@/constants'
 
 interface NodeContextMenuProps {
@@ -334,7 +333,7 @@ export function NodeContextMenu({ nodeId, position, onClose }: NodeContextMenuPr
 
         <div
           ref={menuRef}
-          className="fixed z-50 w-60 bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 py-2 px-2 animate-in fade-in zoom-in-95 duration-150"
+          className="fixed z-[80] w-60 bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 py-2 px-2 animate-in fade-in zoom-in-95 duration-150"
           style={{
             left: adjustedPosition.x,
             top: adjustedPosition.y,

@@ -1,4 +1,3 @@
-import { useEffect, useState } from 'react'
 import type { AwarenessState } from '@/types'
 import { useAuthStore } from '@/store/useAuthStore'
 

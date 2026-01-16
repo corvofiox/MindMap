@@ -44,14 +44,13 @@ interface UIState {
   connectionDirection: 'directed' | 'bidirectional' | 'undirected'
   setConnectionDirection: (direction: 'directed' | 'bidirectional' | 'undirected') => void
 
-  // Domain Edit Mode
-  domainEditMode: boolean
-  setDomainEditMode: (enabled: boolean) => void
-  toggleDomainEditMode: () => void
-
   // Connection Style
   connectionStyle: 'solid' | 'dashed' | 'dotted'
   setConnectionStyle: (style: 'solid' | 'dashed' | 'dotted') => void
+
+  // Connection Type
+  connectionType: 'straight' | 'curve' | 'step' | 'orthogonal'
+  setConnectionType: (type: 'straight' | 'curve' | 'step' | 'orthogonal') => void
 
   // Context Menu
   contextMenuOpen: boolean
@@ -155,14 +154,13 @@ export const useUIStore = create<UIState>()(
         connectionDirection: 'directed',
         setConnectionDirection: (direction) => set({ connectionDirection: direction }),
 
-        // Domain Edit Mode
-        domainEditMode: false,
-        setDomainEditMode: (enabled) => set({ domainEditMode: enabled }),
-        toggleDomainEditMode: createToggle('domainEditMode'),
-
         // Connection Style
         connectionStyle: 'solid',
         setConnectionStyle: (style) => set({ connectionStyle: style }),
+
+        // Connection Type
+        connectionType: 'curve',
+        setConnectionType: (type) => set({ connectionType: type }),
 
         // Context Menu
         contextMenuOpen: false,

@@ -16,8 +16,8 @@ interface FolderContextMenuProps {
   onRename?: () => void
 }
 
-export function FolderContextMenu({ folder, position, onClose, onCreateSubfolder, onRename }: FolderContextMenuProps) {
-  const { updateFolder, removeFolder } = useNodePoolStore()
+export function FolderContextMenu({ folder, position, onClose, onRename }: FolderContextMenuProps) {
+  const { removeFolder } = useNodePoolStore()
   const { addToast } = useUIStore()
   const menuRef = useRef<HTMLDivElement>(null)
   const [adjustedPosition, setAdjustedPosition] = useState(position)
@@ -76,11 +76,6 @@ export function FolderContextMenu({ folder, position, onClose, onCreateSubfolder
       document.removeEventListener('keydown', handleEscape)
     }
   }, [onClose])
-
-  const handleCreateSubfolder = () => {
-    onCreateSubfolder?.()
-    onClose()
-  }
 
   const handleRename = () => {
     onRename?.()
@@ -159,15 +154,13 @@ export function FolderContextMenu({ folder, position, onClose, onCreateSubfolder
     </button>
   )
 
-  const MenuDivider = () => <div className="h-px bg-gray-200 dark:border-gray-700 border-t border-gray-200 dark:border-gray-700 my-1" />
-
   return createPortal(
     <>
-      <div className="fixed inset-0 z-40" onClick={onClose} />
+      <div className="fixed inset-0 z-[75]" onClick={onClose} />
 
       <div
         ref={menuRef}
-        className="fixed z-50 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1 min-w-[120px]"
+        className="fixed z-[80] bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1 min-w-[120px]"
         style={{
           left: adjustedPosition.x,
           top: adjustedPosition.y,

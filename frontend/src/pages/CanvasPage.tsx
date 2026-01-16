@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from 'react'
+import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useCanvasStore } from '@/store/useCanvasStore'
 import { useProjectsStore } from '@/store/useProjectsStore'
@@ -16,6 +16,7 @@ import { DomainContextMenu } from '@/components/canvas/DomainContextMenu'
 import { DomainStylePanel } from '@/components/canvas/DomainStylePanel'
 import { ContextMenuWrapper } from '@/components/ContextMenuWrapper'
 import { RichTextToolbar } from '@/components/canvas/RichTextToolbar'
+import { ConnectionLine } from '@/components/canvas/ConnectionLine'
 import { CONNECTION_DEFAULTS } from '@/constants'
 import { generateId, colorToHex, hexToRgba } from '@/utils/canvas'
 import { saveToCache, loadFromCache } from '@/utils/nodeCache'
@@ -99,14 +100,296 @@ function getConnectionPort(conn: Connection, endpointType: 'start' | 'end'): 'to
 function findBestPort(node: Node, mouseX: number, mouseY: number): 'top' | 'right' | 'bottom' | 'left' {
   const centerX = node.x + node.width / 2
   const centerY = node.y + node.height / 2
+
   const dx = mouseX - centerX
   const dy = mouseY - centerY
 
-  if (Math.abs(dx) > Math.abs(dy)) {
-    return dx > 0 ? 'right' : 'left'
-  } else {
-    return dy > 0 ? 'bottom' : 'top'
+  const angle = Math.atan2(dy, dx)
+  const degrees = angle * (180 / Math.PI)
+
+  if (degrees >= -45 && degrees < 45) return 'right'
+  if (degrees >= 45 && degrees < 135) return 'bottom'
+  if (degrees >= 135 || degrees < -135) return 'left'
+  return 'top'
+}
+
+// Helper function to calculate orthogonal path with bend points
+function getOrthogonalPath(
+  fromX: number, fromY: number,
+  toX: number, toY: number,
+  bendPoints: { x: number; y: number }[]
+): { x: number; y: number }[] {
+  return [
+    { x: fromX, y: fromY },
+    ...bendPoints,
+    { x: toX, y: toY }
+  ]
+}
+
+// Helper function to convert points to SVG path string
+function pointsToPath(points: { x: number; y: number }[]): string {
+  return points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ')
+}
+
+// Helper function to calculate optimal bend point position
+function calculateOptimalBendPoint(
+  fromX: number, fromY: number,
+  toX: number, toY: number
+): { x: number; y: number } {
+  const dx = toX - fromX
+  const dy = toY - fromY
+
+  const distance = Math.sqrt(dx * dx + dy * dy)
+  if (distance < 100) {
+    return { x: (fromX + toX) / 2, y: fromY }
   }
+
+  return { x: fromX + dx / 3, y: fromY }
+}
+
+// Helper function to calculate distance from point to line segment
+function pointToLineSegmentDistance(
+  px: number, py: number,
+  x1: number, y1: number,
+  x2: number, y2: number
+): number {
+  const A = px - x1
+  const B = py - y1
+  const C = x2 - x1
+  const D = y2 - y1
+
+  const dot = A * C + B * D
+  const lenSq = C * C + D * D
+
+  if (lenSq === 0) return Math.sqrt(A * A + B * B)
+
+  let param = -1
+  if (lenSq !== 0) param = dot / lenSq
+
+  let xx, yy
+  if (param < 0) {
+    xx = x1
+    yy = y1
+  } else if (param > 1) {
+    xx = x2
+    yy = y2
+  } else {
+    xx = x1 + param * C
+    yy = y1 + param * D
+  }
+
+  const dx = px - xx
+  const dy = py - yy
+
+  return Math.sqrt(dx * dx + dy * dy)
+}
+
+// Helper function to find the correct insert index for a new bend point
+function findBendPointInsertIndex(
+  clickX: number, clickY: number,
+  fromX: number, fromY: number,
+  toX: number, toY: number,
+  bendPoints: { x: number; y: number }[]
+): number {
+  if (bendPoints.length === 0) return 0
+
+  // Build all points including endpoints
+  const allPoints = [
+    { x: fromX, y: fromY },
+    ...bendPoints,
+    { x: toX, y: toY }
+  ]
+
+  // Find which line segment is closest to the click point
+  let minDistance = Infinity
+  let insertIndex = 0
+
+  for (let i = 0; i < allPoints.length - 1; i++) {
+    const p1 = allPoints[i]
+    const p2 = allPoints[i + 1]
+    const distance = pointToLineSegmentDistance(clickX, clickY, p1.x, p1.y, p2.x, p2.y)
+
+    if (distance < minDistance) {
+      minDistance = distance
+      insertIndex = i
+    }
+  }
+
+  return insertIndex
+}
+
+// Helper function to calculate the midpoint along a path
+function getLabelPosition(
+  connType: string,
+  fromX: number, fromY: number,
+  toX: number, toY: number,
+  bendPoints: { x: number; y: number }[]
+): { x: number; y: number } {
+  if (connType === 'straight') {
+    return { x: (fromX + toX) / 2, y: (fromY + toY) / 2 }
+  }
+
+  if (connType === 'curve' && bendPoints.length > 0) {
+    const points = [{ x: fromX, y: fromY }, ...bendPoints, { x: toX, y: toY }]
+    return getCatmullRomMidpoint(points)
+  }
+
+  if (connType === 'orthogonal' && bendPoints.length > 0) {
+    const points = [{ x: fromX, y: fromY }, ...bendPoints, { x: toX, y: toY }]
+    return getPolylineMidpoint(points)
+  }
+
+  if (connType === 'curve') {
+    const midX = (fromX + toX) / 2
+    const midY = (fromY + toY) / 2
+    const dx = toX - fromX
+    const dy = toY - fromY
+    const controlX = midX - dy * 0.2
+    const controlY = midY + dx * 0.2
+    return getQuadraticBezierMidpoint(fromX, fromY, controlX, controlY, toX, toY)
+  }
+
+  if (connType === 'step') {
+    const midX = (fromX + toX) / 2
+    const points = [
+      { x: fromX, y: fromY },
+      { x: midX, y: fromY },
+      { x: midX, y: toY },
+      { x: toX, y: toY }
+    ]
+    return getPolylineMidpoint(points)
+  }
+
+  return { x: (fromX + toX) / 2, y: (fromY + toY) / 2 }
+}
+
+// Get midpoint of a quadratic bezier curve
+function getQuadraticBezierMidpoint(x1: number, y1: number, cx: number, cy: number, x2: number, y2: number): { x: number; y: number } {
+  const t = 0.5
+  const mt = 1 - t
+  const mt2 = mt * mt
+  const t2 = t * t
+  const x = mt2 * x1 + 2 * mt * t * cx + t2 * x2
+  const y = mt2 * y1 + 2 * mt * t * cy + t2 * y2
+  return { x, y }
+}
+
+// Get midpoint of a polyline path
+function getPolylineMidpoint(points: { x: number; y: number }[]): { x: number; y: number } {
+  if (points.length < 2) return points[0] || { x: 0, y: 0 }
+
+  let totalLength = 0
+  const segmentLengths: number[] = []
+
+  for (let i = 0; i < points.length - 1; i++) {
+    const dx = points[i + 1].x - points[i].x
+    const dy = points[i + 1].y - points[i].y
+    const length = Math.sqrt(dx * dx + dy * dy)
+    segmentLengths.push(length)
+    totalLength += length
+  }
+
+  const midLength = totalLength / 2
+  let currentLength = 0
+
+  for (let i = 0; i < segmentLengths.length; i++) {
+    if (currentLength + segmentLengths[i] >= midLength) {
+      const t = (midLength - currentLength) / segmentLengths[i]
+      return {
+        x: points[i].x + (points[i + 1].x - points[i].x) * t,
+        y: points[i].y + (points[i + 1].y - points[i].y) * t
+      }
+    }
+    currentLength += segmentLengths[i]
+  }
+
+  return points[points.length - 1]
+}
+
+// Get midpoint of a Catmull-Rom spline
+function getCatmullRomMidpoint(points: { x: number; y: number }[]): { x: number; y: number } {
+  if (points.length < 2) return points[0] || { x: 0, y: 0 }
+
+  let totalLength = 0
+  const segmentLengths: number[] = []
+
+  for (let i = 0; i < points.length - 1; i++) {
+    const p0 = points[Math.max(0, i - 1)]
+    const p1 = points[i]
+    const p2 = points[i + 1]
+    const p3 = points[Math.min(points.length - 1, i + 2)]
+
+    const cp1x = p1.x + (p2.x - p0.x) / 6
+    const cp1y = p1.y + (p2.y - p0.y) / 6
+    const cp2x = p2.x - (p3.x - p1.x) / 6
+    const cp2y = p2.y - (p3.y - p1.y) / 6
+
+    const length = getCubicBezierLength(p1.x, p1.y, cp1x, cp1y, cp2x, cp2y, p2.x, p2.y)
+    segmentLengths.push(length)
+    totalLength += length
+  }
+
+  const midLength = totalLength / 2
+  let currentLength = 0
+
+  for (let i = 0; i < segmentLengths.length; i++) {
+    if (currentLength + segmentLengths[i] >= midLength) {
+      const p0 = points[Math.max(0, i - 1)]
+      const p1 = points[i]
+      const p2 = points[i + 1]
+      const p3 = points[Math.min(points.length - 1, i + 2)]
+
+      const cp1x = p1.x + (p2.x - p0.x) / 6
+      const cp1y = p1.y + (p2.y - p0.y) / 6
+      const cp2x = p2.x - (p3.x - p1.x) / 6
+      const cp2y = p2.y - (p3.y - p1.y) / 6
+
+      const t = (midLength - currentLength) / segmentLengths[i]
+      return getCubicBezierPoint(t, p1.x, p1.y, cp1x, cp1y, cp2x, cp2y, p2.x, p2.y)
+    }
+    currentLength += segmentLengths[i]
+  }
+
+  return points[points.length - 1]
+}
+
+// Get length of a cubic bezier curve
+function getCubicBezierLength(x1: number, y1: number, cx1: number, cy1: number, cx2: number, cy2: number, x2: number, y2: number): number {
+  const steps = 20
+  let length = 0
+  let prevX = x1, prevY = y1
+
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps
+    const point = getCubicBezierPoint(t, x1, y1, cx1, cy1, cx2, cy2, x2, y2)
+    const dx = point.x - prevX
+    const dy = point.y - prevY
+    length += Math.sqrt(dx * dx + dy * dy)
+    prevX = point.x
+    prevY = point.y
+  }
+
+  return length
+}
+
+// Get point on a cubic bezier curve at parameter t
+function getCubicBezierPoint(
+  t: number,
+  x1: number, y1: number,
+  cx1: number, cy1: number,
+  cx2: number, cy2: number,
+  x2: number, y2: number
+): { x: number; y: number } {
+  const mt = 1 - t
+  const mt2 = mt * mt
+  const mt3 = mt2 * mt
+  const t2 = t * t
+  const t3 = t2 * t
+
+  const x = mt3 * x1 + 3 * mt2 * t * cx1 + 3 * mt * t2 * cx2 + t3 * x2
+  const y = mt3 * y1 + 3 * mt2 * t * cy1 + 3 * mt * t2 * cy2 + t3 * y2
+
+  return { x, y }
 }
 
 function isNodeInGroup(node: Node, groupX: number, groupY: number, groupWidth: number, groupHeight: number): boolean {
@@ -240,6 +523,8 @@ export function CanvasPage() {
   const hasInitializedCameraRef = useRef(false) // Track if camera has been initialized
   const justFinishedConnectionRef = useRef(false) // Track if just finished creating a connection
   const justFinishedBoxSelectingRef = useRef(false) // Track if just finished box selection
+  const justFinishedEndpointDraggingRef = useRef(false) // Track if just finished dragging endpoint
+  const justFinishedBendPointDraggingRef = useRef(false) // Track if just finished dragging bend point
 
   // Connection creation state
   const [isCreatingConnection, setIsCreatingConnection] = useState(false)
@@ -257,6 +542,17 @@ export function CanvasPage() {
   const [isDraggingConnectionEndpoint, setIsDraggingConnectionEndpoint] = useState(false)
   const [draggingConnectionId, setDraggingConnectionId] = useState<string | null>(null)
   const [draggingEndpoint, setDraggingEndpoint] = useState<'start' | 'end' | null>(null)
+
+  // Bend point dragging state
+  const [isDraggingBendPoint, setIsDraggingBendPoint] = useState(false)
+  const [draggingBendPointId, setDraggingBendPointId] = useState<string | null>(null)
+  const [dragBendPointStart, setDragBendPointStart] = useState({ x: 0, y: 0 })
+
+  // Bend point context menu state
+  const [bendPointContextMenu, setBendPointContextMenu] = useState<{ x: number; y: number; connectionId: string; bendPointId: string } | null>(null)
+
+  // Hovered bend point state
+  const [hoveredBendPoint, setHoveredBendPoint] = useState<{ connectionId: string; bendPointId: string } | null>(null)
 
   // Snapping state for connection creation and endpoint dragging
   const [snappedPort, setSnappedPort] = useState<{ nodeId: string; port: 'top' | 'right' | 'bottom' | 'left'; position: { x: number; y: number } } | null>(null)
@@ -290,7 +586,7 @@ export function CanvasPage() {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; groupId: string } | null>(null)
 
   // Connection context menu state
-  const [connectionContextMenu, setConnectionContextMenu] = useState<{ x: number; y: number; connectionId: string } | null>(null)
+  const [connectionContextMenu, setConnectionContextMenu] = useState<{ x: number; y: number; connectionId: string; clickX?: number; clickY?: number } | null>(null)
 
   // Domain context menu state
   const [domainContextMenu, setDomainContextMenu] = useState<{ x: number; y: number; domainId: string } | null>(null)
@@ -373,6 +669,7 @@ export function CanvasPage() {
     connectionDirection,
     connectionStyle,
     closeStylePanel,
+    openStylePanel,
     addToast,
   } = useUIStore()
 
@@ -391,25 +688,29 @@ export function CanvasPage() {
   // Handle canvas drop event from node pool (copy to canvas)
   useEffect(() => {
     const handleCanvasDrop = async (e: CustomEvent) => {
-      const { card, clientX, clientY } = e.detail
+      const { card } = e.detail
       if (!card || !containerRef.current) return
 
       const rect = containerRef.current.getBoundingClientRect()
-      const mouseX = clientX - rect.left
-      const mouseY = clientY - rect.top
-      const canvasX = (mouseX - panX) / zoom
-      const canvasY = (mouseY - panY) / zoom
+      
+      // 计算视图中央的屏幕坐标
+      const screenCenterX = rect.width / 2
+      const screenCenterY = rect.height / 2
+      
+      // 将屏幕坐标转换为画布坐标
+      const canvasCenterX = (screenCenterX - panX) / zoom
+      const canvasCenterY = (screenCenterY - panY) / zoom
 
       try {
         const nodeData = JSON.parse(card.content)
         const newNode = {
           ...nodeData,
           id: `${nodeData.id}-pool-${Date.now()}`,
-          x: canvasX - (nodeData.width || 200) / 2,
-          y: canvasY - (nodeData.height || 120) / 2,
+          x: canvasCenterX - (nodeData.width || 200) / 2,
+          y: canvasCenterY - (nodeData.height || 120) / 2,
         }
         addNode(newNode)
-        addToast({ type: 'success', title: '复制成功', message: '节点已复制到画布' })
+        addToast({ type: 'success', title: '复制成功', message: '节点已复制到画布中央' })
       } catch (error) {
         addToast({ type: 'error', title: '复制失败', message: '无法解析节点数据' })
       }
@@ -1249,6 +1550,7 @@ export function CanvasPage() {
     mouseDownOnContentRef.current = false
     justFinishedConnectionRef.current = false
     justFinishedBoxSelectingRef.current = false
+    justFinishedEndpointDraggingRef.current = false
 
     const target = e.target as HTMLElement
     const clickedOnNode = target.closest('.node-item')
@@ -1314,6 +1616,7 @@ export function CanvasPage() {
       if (!selectedIds.includes(clickedEndpointConnId)) {
         setSelectedIds([clickedEndpointConnId])
         setSelectedType('connection')
+        openStylePanel()
       }
 
       setIsDraggingConnectionEndpoint(true)
@@ -1559,11 +1862,20 @@ export function CanvasPage() {
           x: canvasMouseX,
           y: canvasMouseY,
         })
-      }
-    }
+  }
+} else if (isDraggingBendPoint && draggingBendPointId && draggingConnectionId && containerRef.current) {
+    const rect = containerRef.current.getBoundingClientRect()
+    const mouseX = e.clientX - rect.left
+    const mouseY = e.clientY - rect.top
+    const canvasX = (mouseX - panX) / zoom
+    const canvasY = (mouseY - panY) / zoom
 
-    // Check if mouse is near any endpoint of selected connections to update cursor
-    if (containerRef.current && !isDragging && !isBoxSelecting && !isCreatingConnection && !isDraggingConnectionEndpoint && !isResizingGroup && !isCreatingGroup && !isDraggingGroup) {
+    const { updateConnectionBendPoint } = useCanvasStore.getState()
+    updateConnectionBendPoint(draggingConnectionId, draggingBendPointId, canvasX, canvasY)
+  }
+
+  // Check if mouse is near any endpoint of selected connections to update cursor
+  if (containerRef.current && !isDragging && !isBoxSelecting && !isCreatingConnection && !isDraggingConnectionEndpoint && !isResizingGroup && !isCreatingGroup && !isDraggingGroup && !isDraggingBendPoint) {
       const rect = containerRef.current.getBoundingClientRect()
       const mouseX = e.clientX - rect.left
       const mouseY = e.clientY - rect.top
@@ -1592,7 +1904,7 @@ export function CanvasPage() {
 
       setCustomCursor(isNearEndpoint ? 'crosshair' : null)
     }
-  }, [isDragging, isBoxSelecting, isCreatingDomain, isCreatingConnection, isDraggingConnectionEndpoint, isResizingGroup, isCreatingGroup, panX, panY, zoom, setPan, nodes, connectionStartNodeId, draggingConnectionId, draggingEndpoint, connections, isDraggingGroup, draggingGroupId, groups, groupDragStart, groupInitialPositions, initialGroupNodeIds, groupDragInitialGroupPos, resizeHandle, resizeStart, resizeInitialGroup, resizeInitialNodePositions, updateGroup, resizingGroupId, currentTool, selectedIds, customCursor, setCustomCursor])
+  }, [isDragging, isBoxSelecting, isCreatingDomain, isCreatingConnection, isDraggingConnectionEndpoint, isDraggingBendPoint, isResizingGroup, isCreatingGroup, panX, panY, zoom, setPan, nodes, connectionStartNodeId, draggingConnectionId, draggingEndpoint, draggingBendPointId, connections, isDraggingGroup, draggingGroupId, groups, groupDragStart, groupInitialPositions, initialGroupNodeIds, groupDragInitialGroupPos, resizeHandle, resizeStart, resizeInitialGroup, resizeInitialNodePositions, updateGroup, resizingGroupId, currentTool, selectedIds, customCursor, setCustomCursor])
 
   // Handle mouse up
   const handleMouseUp = useCallback(async (e: React.MouseEvent) => {
@@ -2041,6 +2353,8 @@ export function CanvasPage() {
           toPort: newToPort,
         })
         removeConnection(draggingConnectionId)
+        setSelectedIds([existingConnection.id])
+        setSelectedType('connection')
       } else {
         updateConnection(draggingConnectionId, {
           fromNodeId: newFromNodeId,
@@ -2048,14 +2362,68 @@ export function CanvasPage() {
           toNodeId: newToNodeId,
           toPort: newToPort,
         })
+        setSelectedIds([draggingConnectionId])
+        setSelectedType('connection')
       }
 
       setIsDraggingConnectionEndpoint(false)
       setDraggingConnectionId(null)
       setDraggingEndpoint(null)
       setSnappedPort(null)
+      justFinishedEndpointDraggingRef.current = true
+      setTimeout(() => {
+        justFinishedEndpointDraggingRef.current = false
+      }, 0)
     }
-  }, [isDragging, isDraggingGroup, isCreatingGroup, groupStartPos, groupEndPos, groupDragStart, groupInitialPositions, initialGroupNodeIds, groupDragInitialGroupPos, draggingGroupId, groupDragOffset, nodes, groups, updateGroup, addGroup, isCreatingConnection, connectionStartNodeId, connectionStartPort, isDraggingConnectionEndpoint, draggingConnectionId, draggingEndpoint, connections, panX, panY, zoom, containerRef, updateConnection, findBestPort, snappedPort, addConnection, removeConnection, isBoxSelecting, boxSelectionStart, boxSelectionEnd, addToSelection, isCreatingDomain, domainBoxStart, domainBoxEnd, domains, addDomain])
+
+    if (isDraggingBendPoint) {
+      setIsDraggingBendPoint(false)
+      setDraggingBendPointId(null)
+      setDraggingConnectionId(null)
+      justFinishedBendPointDraggingRef.current = true
+      setTimeout(() => {
+        justFinishedBendPointDraggingRef.current = false
+      }, 0)
+    }
+  }, [isDragging, isDraggingGroup, isCreatingGroup, groupStartPos, groupEndPos, groupDragStart, groupInitialPositions, initialGroupNodeIds, groupDragInitialGroupPos, draggingGroupId, groupDragOffset, nodes, groups, updateGroup, addGroup, isCreatingConnection, connectionStartNodeId, connectionStartPort, isDraggingConnectionEndpoint, draggingConnectionId, draggingEndpoint, connections, panX, panY, zoom, containerRef, updateConnection, findBestPort, snappedPort, addConnection, removeConnection, isBoxSelecting, boxSelectionStart, boxSelectionEnd, addToSelection, isCreatingDomain, domainBoxStart, domainBoxEnd, domains, addDomain, isDraggingBendPoint, draggingBendPointId, setSelectedIds, setSelectedType])
+
+  // Handle connection click
+  const handleConnectionClick = useCallback((e: React.MouseEvent, connectionId: string) => {
+    if (isDraggingBendPoint || isDraggingConnectionEndpoint) return
+    e.stopPropagation()
+    setSelectedIds([connectionId])
+    setSelectedType('connection')
+    openStylePanel()
+  }, [isDraggingBendPoint, isDraggingConnectionEndpoint, setSelectedIds, setSelectedType, openStylePanel])
+
+  // Handle connection context menu
+  const handleConnectionContextMenu = useCallback((e: React.MouseEvent, connectionId: string) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const rect = containerRef.current?.getBoundingClientRect()
+    const clickX = rect ? (e.clientX - rect.left - panX) / zoom : 0
+    const clickY = rect ? (e.clientY - rect.top - panY) / zoom : 0
+    setConnectionContextMenu({
+      x: e.clientX,
+      y: e.clientY,
+      connectionId,
+      clickX,
+      clickY,
+    })
+  }, [containerRef, panX, panY, zoom, setConnectionContextMenu])
+
+  // Handle connection double click
+  const handleConnectionDoubleClick = useCallback((e: React.MouseEvent, connectionId: string) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const connection = connections.get(connectionId)
+    if (connection) {
+      setEditingConnectionLabel({
+        connectionId,
+        label: connection.label || '',
+      })
+    }
+  }, [connections, setEditingConnectionLabel])
 
   // Handle canvas click
   const handleCanvasClick = useCallback((e: React.MouseEvent) => {
@@ -2064,6 +2432,12 @@ export function CanvasPage() {
 
     // Don't handle click if just finished box selection
     if (justFinishedBoxSelectingRef.current) return
+
+    // Don't handle click if just finished dragging connection endpoint
+    if (justFinishedEndpointDraggingRef.current) return
+
+    // Don't handle click if just finished dragging bend point
+    if (justFinishedBendPointDraggingRef.current) return
 
     // Prevent double-firing
     if (e.detail > 1) return
@@ -2479,7 +2853,13 @@ export function CanvasPage() {
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
         onClick={handleCanvasClick}
-        onContextMenu={(e) => e.preventDefault()}
+        onContextMenu={(e) => {
+          // 只阻止画布区域的右键菜单，允许节点池等侧边栏的右键菜单正常显示
+          const target = e.target as HTMLElement
+          if (!target.closest('[data-node-pool]') && !target.closest('.node-pool')) {
+            e.preventDefault()
+          }
+        }}
         onDragOver={(e) => e.preventDefault()}
         onDrop={handleCanvasDrop}
         style={{
@@ -2983,213 +3363,11 @@ export function CanvasPage() {
 
               const lineColor = conn.color
 
-              const getLinePath = () => {
-                if (conn.type === 'straight') {
-                  // Calculate the line direction and create a hit area that excludes endpoints
-                  const dx = toX - fromX
-                  const dy = toY - fromY
-                  const length = Math.sqrt(dx * dx + dy * dy)
-                  const endpointExclusion = 20 // Exclude 20px from each endpoint
-
-                  // Only create hit area if line is long enough
-                  const shouldCreateHitArea = length > endpointExclusion * 2
-
-                  // Calculate the start and end points for the hit area (excluding endpoints)
-                  let hitStartX = fromX
-                  let hitStartY = fromY
-                  let hitEndX = toX
-                  let hitEndY = toY
-
-                  if (shouldCreateHitArea && length > 0) {
-                    const ratio = endpointExclusion / length
-                    hitStartX = fromX + dx * ratio
-                    hitStartY = fromY + dy * ratio
-                    hitEndX = toX - dx * ratio
-                    hitEndY = toY - dy * ratio
-                  }
-
-                  return (
-                    <g>
-                      {/* Invisible hit area for easier clicking - excludes endpoints */}
-                      {shouldCreateHitArea && (
-                        <line
-                          x1={hitStartX}
-                          y1={hitStartY}
-                          x2={hitEndX}
-                          y2={hitEndY}
-                          stroke="transparent"
-                          strokeWidth={24}
-                          data-connection-id={conn.id}
-                          style={{ cursor: 'pointer', pointerEvents: 'stroke' }}
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            setSelectedIds([conn.id])
-                            setSelectedType('connection')
-                          }}
-                          onContextMenu={(e) => {
-                            e.preventDefault()
-                            e.stopPropagation()
-                            setConnectionContextMenu({
-                              x: e.clientX,
-                              y: e.clientY,
-                              connectionId: conn.id,
-                            })
-                          }}
-                          onDoubleClick={(e) => {
-                            e.preventDefault()
-                            e.stopPropagation()
-                            const connection = connections.get(conn.id)
-                            if (connection) {
-                              setEditingConnectionLabel({
-                                connectionId: conn.id,
-                                label: connection.label || '',
-                              })
-                            }
-                          }}
-                        />
-                      )}
-                      {/* Main line */}
-                      <line
-                        x1={fromX}
-                        y1={fromY}
-                        x2={toX}
-                        y2={toY}
-                        stroke={lineColor}
-                        strokeWidth={conn.width}
-                        strokeDasharray={conn.style === 'dashed' ? '6,4' : conn.style === 'dotted' ? '3,3' : undefined}
-                        strokeLinecap="round"
-                        markerEnd={conn.arrowType === 'end' || conn.arrowType === 'both' ? `url(#arrowhead-${conn.id})` : undefined}
-                        markerStart={conn.arrowType === 'start' || conn.arrowType === 'both' ? `url(#arrowhead-reverse-${conn.id})` : undefined}
-                        style={{
-                          pointerEvents: 'none',
-                          // Disable transition during group drag for better performance
-                          transition: isDraggingGroup ? 'none' : 'all 0.2s ease',
-                        }}
-                      />
-                    </g>
-                  )
-                } else if (conn.type === 'curve') {
-                  const midX = (fromX + toX) / 2
-                  const midY = (fromY + toY) / 2
-                  const dx = toX - fromX
-                  const dy = toY - fromY
-                  const controlX = midX - dy * 0.2
-                  const controlY = midY + dx * 0.2
-                  return (
-                    <g>
-                      {/* Invisible hit area */}
-                      <path
-                        d={`M ${fromX} ${fromY} Q ${controlX} ${controlY} ${toX} ${toY}`}
-                        stroke="transparent"
-                        strokeWidth={24}
-                        fill="none"
-                        style={{ cursor: 'pointer', pointerEvents: 'stroke' }}
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          setSelectedIds([conn.id])
-                          setSelectedType('connection')
-                        }}
-                        onContextMenu={(e) => {
-                          e.preventDefault()
-                          e.stopPropagation()
-                          setConnectionContextMenu({
-                            x: e.clientX,
-                            y: e.clientY,
-                            connectionId: conn.id,
-                          })
-                        }}
-                        onDoubleClick={(e) => {
-                          e.preventDefault()
-                          e.stopPropagation()
-                          const connection = connections.get(conn.id)
-                          if (connection) {
-                            setEditingConnectionLabel({
-                              connectionId: conn.id,
-                              label: connection.label || '',
-                            })
-                          }
-                        }}
-                      />
-                      {/* Main curve */}
-                      <path
-                        d={`M ${fromX} ${fromY} Q ${controlX} ${controlY} ${toX} ${toY}`}
-                        stroke={lineColor}
-                        strokeWidth={conn.width}
-                        strokeDasharray={conn.style === 'dashed' ? '6,4' : conn.style === 'dotted' ? '3,3' : undefined}
-                        strokeLinecap="round"
-                        fill="none"
-                        markerEnd={conn.arrowType === 'end' || conn.arrowType === 'both' ? `url(#arrowhead-${conn.id})` : undefined}
-                        markerStart={conn.arrowType === 'start' || conn.arrowType === 'both' ? `url(#arrowhead-reverse-${conn.id})` : undefined}
-                        style={{
-                          pointerEvents: 'none',
-                          // Disable transition during group drag for better performance
-                          transition: isDraggingGroup ? 'none' : 'all 0.2s ease',
-                        }}
-                      />
-                    </g>
-                  )
-                } else if (conn.type === 'step') {
-                  const midX = (fromX + toX) / 2
-                  return (
-                    <g>
-                      {/* Invisible hit area */}
-                      <path
-                        d={`M ${fromX} ${fromY} L ${midX} ${fromY} L ${midX} ${toY} L ${toX} ${toY}`}
-                        stroke="transparent"
-                        strokeWidth={24}
-                        fill="none"
-                        style={{ cursor: 'pointer', pointerEvents: 'stroke' }}
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          setSelectedIds([conn.id])
-                          setSelectedType('connection')
-                        }}
-                        onContextMenu={(e) => {
-                          e.preventDefault()
-                          e.stopPropagation()
-                          setConnectionContextMenu({
-                            x: e.clientX,
-                            y: e.clientY,
-                            connectionId: conn.id,
-                          })
-                        }}
-                        onDoubleClick={(e) => {
-                          e.preventDefault()
-                          e.stopPropagation()
-                          const connection = connections.get(conn.id)
-                          if (connection) {
-                            setEditingConnectionLabel({
-                              connectionId: conn.id,
-                              label: connection.label || '',
-                            })
-                          }
-                        }}
-                      />
-                      {/* Main step line */}
-                      <path
-                        d={`M ${fromX} ${fromY} L ${midX} ${fromY} L ${midX} ${toY} L ${toX} ${toY}`}
-                        stroke={lineColor}
-                        strokeWidth={conn.width}
-                        strokeDasharray={conn.style === 'dashed' ? '6,4' : conn.style === 'dotted' ? '3,3' : undefined}
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        fill="none"
-                        markerEnd={conn.arrowType === 'end' || conn.arrowType === 'both' ? `url(#arrowhead-${conn.id})` : undefined}
-                        markerStart={conn.arrowType === 'start' || conn.arrowType === 'both' ? `url(#arrowhead-reverse-${conn.id})` : undefined}
-                        style={{
-                          pointerEvents: 'none',
-                          // Disable transition during group drag for better performance
-                          transition: isDraggingGroup ? 'none' : 'all 0.2s ease',
-                        }}
-                      />
-                    </g>
-                  )
-                }
-              }
+              // Disable transition during dragging for better performance
+              const disableTransition = isDragging || isDraggingGroup || isDraggingBendPoint
 
               return (
                 <g key={conn.id}>
-                  {/* Dynamic markers for this connection's color */}
                   {conn.arrowType !== 'none' && (
                     <defs>
                       {conn.arrowType === 'end' || conn.arrowType === 'both' ? (
@@ -3218,23 +3396,36 @@ export function CanvasPage() {
                       ) : null}
                     </defs>
                   )}
-                  {getLinePath()}
-                  {conn.label && (
-                    <text
-                      x={(fromX + toX) / 2}
-                      y={(fromY + toY) / 2 - 5}
-                      textAnchor="middle"
-                      fontSize={11}
-                      fontWeight="500"
-                      fill="#64748b"
-                      style={{
-                        pointerEvents: 'none',
-                        textShadow: '0 1px 3px rgba(255,255,255,0.9)',
-                      }}
-                    >
-                      {conn.label}
-                    </text>
-                  )}
+                  <ConnectionLine
+                    conn={conn}
+                    fromX={fromX}
+                    fromY={fromY}
+                    toX={toX}
+                    toY={toY}
+                    disableTransition={disableTransition}
+                    onClick={handleConnectionClick}
+                    onContextMenu={handleConnectionContextMenu}
+                    onDoubleClick={handleConnectionDoubleClick}
+                  />
+                  {conn.label && (() => {
+                    const labelPos = getLabelPosition(conn.type, fromX, fromY, toX, toY, conn.bendPoints || [])
+                    return (
+                      <text
+                        x={labelPos.x}
+                        y={labelPos.y - 5}
+                        textAnchor="middle"
+                        fontSize={11}
+                        fontWeight="500"
+                        fill="#64748b"
+                        style={{
+                          pointerEvents: 'none',
+                          textShadow: '0 1px 3px rgba(255,255,255,0.9)',
+                        }}
+                      >
+                        {conn.label}
+                      </text>
+                    )
+                  })()}
                 </g>
               )
             })}
@@ -3388,6 +3579,96 @@ export function CanvasPage() {
                     {/* Visible end endpoint circle */}
                     <div style={ENDPOINT_VISIBLE_CIRCLE_STYLE} />
                   </div>
+                </div>
+              )
+            })}
+
+          {/* Render bend points for orthogonal and curve connections */}
+          {Array.from(connections.values())
+            .filter(conn => (conn.type === 'orthogonal' || conn.type === 'curve') && selectedIds.includes(conn.id) && conn.bendPoints && conn.bendPoints.length > 0)
+            .map((conn) => {
+              const fromNode = nodes.get(conn.fromNodeId)
+              const toNode = nodes.get(conn.toNodeId)
+              if (!fromNode || !toNode) return null
+
+              const fromDraggingPos = draggingNodePositions.get(conn.fromNodeId)
+              const toDraggingPos = draggingNodePositions.get(conn.toNodeId)
+
+              const actualFromNode = getActualNodePosition(fromNode, fromDraggingPos, isDraggingGroup, draggingGroupId, initialGroupNodeIds, groupDragOffset)
+              const actualToNode = getActualNodePosition(toNode, toDraggingPos, isDraggingGroup, draggingGroupId, initialGroupNodeIds, groupDragOffset)
+
+              const bendPoints = conn.bendPoints || []
+
+              return (
+                <div key={`bendpoints-${conn.id}`}>
+                  {bendPoints.map((bendPoint) => {
+                    const isHovered = hoveredBendPoint?.connectionId === conn.id && hoveredBendPoint?.bendPointId === bendPoint.id
+                    const isDragging = isDraggingBendPoint && draggingBendPointId === bendPoint.id
+
+                    return (
+                      <div
+                        key={bendPoint.id}
+                        style={{
+                          position: 'absolute',
+                          left: bendPoint.x - (isHovered ? 14 : 12),
+                          top: bendPoint.y - (isHovered ? 14 : 12),
+                          width: (isHovered ? 28 : 24),
+                          height: (isHovered ? 28 : 24),
+                          cursor: 'move',
+                          pointerEvents: 'all',
+                          zIndex: 100,
+                          transition: 'all 0.15s ease',
+                        }}
+                        onMouseEnter={() => {
+                          setHoveredBendPoint({ connectionId: conn.id, bendPointId: bendPoint.id })
+                        }}
+                        onMouseLeave={() => {
+                          setHoveredBendPoint(null)
+                        }}
+                        onMouseDown={(e) => {
+                          e.preventDefault()
+                          e.stopPropagation()
+                          if (!selectedIds.includes(conn.id)) {
+                            setSelectedIds([conn.id])
+                            setSelectedType('connection')
+                            openStylePanel()
+                          }
+                          setIsDraggingBendPoint(true)
+                          setDraggingBendPointId(bendPoint.id)
+                          setDraggingConnectionId(conn.id)
+                          setDragBendPointStart({ x: e.clientX, y: e.clientY })
+                        }}
+                        onContextMenu={(e) => {
+                          e.preventDefault()
+                          e.stopPropagation()
+                          setBendPointContextMenu({
+                            x: e.clientX,
+                            y: e.clientY,
+                            connectionId: conn.id,
+                            bendPointId: bendPoint.id,
+                          })
+                        }}
+                      >
+                        {/* Visible bend point circle */}
+                        <div
+                          style={{
+                            position: 'absolute',
+                            left: isHovered ? 6 : 4,
+                            top: isHovered ? 6 : 4,
+                            width: isHovered ? 16 : 16,
+                            height: isHovered ? 16 : 16,
+                            borderRadius: '50%',
+                            border: `2px solid ${isHovered ? '#2563eb' : '#3b82f6'}`,
+                            backgroundColor: isDragging ? '#eff6ff' : 'white',
+                            boxShadow: isHovered
+                              ? '0 2px 8px rgba(37, 99, 235, 0.3), 0 0 0 3px rgba(59, 130, 246, 0.2)'
+                              : '0 1px 3px rgba(0,0,0,0.1)',
+                            transition: 'all 0.15s ease',
+                          }}
+                        />
+                      </div>
+                    )
+                  })}
                 </div>
               )
             })}
@@ -3591,6 +3872,81 @@ export function CanvasPage() {
             改变颜色
           </label>
 
+          {/* Add Bend Point - only for orthogonal and curve connections */}
+          {(() => {
+            const connection = connections.get(connectionContextMenu.connectionId)
+            if (connection?.type === 'orthogonal' || connection?.type === 'curve') {
+              return (
+                  <button
+                    className="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
+                    onClick={() => {
+                      const connection = connections.get(connectionContextMenu.connectionId)
+                      if (connection) {
+                        const { addConnectionBendPoint } = useCanvasStore.getState()
+                        let newBendPointX, newBendPointY, insertIndex
+
+                        // Use click position if available, otherwise calculate optimal position
+                        if (connectionContextMenu.clickX !== undefined && connectionContextMenu.clickY !== undefined) {
+                          newBendPointX = connectionContextMenu.clickX
+                          newBendPointY = connectionContextMenu.clickY
+
+                          // Calculate insert index based on existing bend points
+                          const fromNode = nodes.get(connection.fromNodeId)
+                          const toNode = nodes.get(connection.toNodeId)
+                          if (fromNode && toNode) {
+                            const fromPos = getPortPosition(fromNode, getConnectionPort(connection, 'start'))
+                            const toPos = getPortPosition(toNode, getConnectionPort(connection, 'end'))
+                            insertIndex = findBendPointInsertIndex(
+                              newBendPointX,
+                              newBendPointY,
+                              fromPos.x,
+                              fromPos.y,
+                              toPos.x,
+                              toPos.y,
+                              connection.bendPoints || []
+                            )
+                          }
+                        } else {
+                          const fromNode = nodes.get(connection.fromNodeId)
+                          const toNode = nodes.get(connection.toNodeId)
+                          if (fromNode && toNode) {
+                            const fromPos = getPortPosition(fromNode, getConnectionPort(connection, 'start'))
+                            const toPos = getPortPosition(toNode, getConnectionPort(connection, 'end'))
+                            const optimalPos = calculateOptimalBendPoint(fromPos.x, fromPos.y, toPos.x, toPos.y)
+                            newBendPointX = optimalPos.x
+                            newBendPointY = optimalPos.y
+
+                            // Calculate insert index for optimal position
+                            insertIndex = findBendPointInsertIndex(
+                              newBendPointX,
+                              newBendPointY,
+                              fromPos.x,
+                              fromPos.y,
+                              toPos.x,
+                              toPos.y,
+                              connection.bendPoints || []
+                            )
+                          } else {
+                            return
+                          }
+                        }
+
+                        const newBendPointId = `${connection.id}-bend-${Date.now()}`
+                        addConnectionBendPoint(connectionContextMenu.connectionId, newBendPointId, newBendPointX, newBendPointY, insertIndex)
+                      }
+                      setConnectionContextMenu(null)
+                    }}
+                  >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                  </svg>
+                  添加弯折点
+                </button>
+              )
+            }
+            return null
+          })()}
+
           <div className="border-t border-gray-200 dark:border-gray-700 my-1" />
 
           {/* Delete Connection */}
@@ -3610,6 +3966,31 @@ export function CanvasPage() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
             </svg>
             删除连线
+          </button>
+        </ContextMenuWrapper>
+      )}
+
+      {/* Bend Point Context Menu */}
+      {bendPointContextMenu && (
+        <ContextMenuWrapper
+          x={bendPointContextMenu.x}
+          y={bendPointContextMenu.y}
+          onClose={() => setBendPointContextMenu(null)}
+        >
+          {/* Delete Bend Point */}
+          <button
+            className="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 text-red-600 dark:text-red-400"
+            onClick={(e) => {
+              e.stopPropagation()
+              const { removeConnectionBendPoint } = useCanvasStore.getState()
+              removeConnectionBendPoint(bendPointContextMenu.connectionId, bendPointContextMenu.bendPointId)
+              setBendPointContextMenu(null)
+            }}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+            </svg>
+            删除弯折点
           </button>
         </ContextMenuWrapper>
       )}

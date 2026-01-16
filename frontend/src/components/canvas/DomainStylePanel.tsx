@@ -1,7 +1,6 @@
 import { X } from 'lucide-react'
 import { useCanvasStore } from '@/store/useCanvasStore'
 import { useUIStore } from '@/store/useUIStore'
-import { DOMAIN_DEFAULTS } from '@/constants'
 import type { Domain } from '@/types'
 
 export function DomainStylePanel() {
@@ -50,7 +49,7 @@ export function DomainStylePanel() {
   }
 
   return (
-    <div className="fixed right-0 top-0 h-full w-80 bg-white dark:bg-gray-800 shadow-xl border-l border-gray-200 dark:border-gray-700 z-40">
+    <div className="fixed right-0 top-0 h-full w-80 bg-white dark:bg-gray-800 shadow-xl border-l border-gray-200 dark:border-gray-700 z-[80]">
       {/* Header */}
       <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
         <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">

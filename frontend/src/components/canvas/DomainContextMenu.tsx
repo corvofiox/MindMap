@@ -11,8 +11,8 @@ interface DomainContextMenuProps {
 }
 
 export function DomainContextMenu({ domainId, position, onClose }: DomainContextMenuProps) {
-  const { domains, updateDomain, removeDomain, selectedIds, setSelectedIds } = useCanvasStore()
-  const { openStylePanel, setSelectedType, addToast } = useUIStore()
+  const { domains, updateDomain, removeDomain, setSelectedIds } = useCanvasStore()
+  const { openStylePanel, setSelectedType } = useUIStore()
 
   const menuRef = useRef<HTMLDivElement>(null)
   const [adjustedPosition, setAdjustedPosition] = useState(position)
@@ -126,7 +126,7 @@ export function DomainContextMenu({ domainId, position, onClose }: DomainContext
 
       <div
         ref={menuRef}
-        className="fixed z-50 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg py-1 min-w-40"
+        className="fixed z-[80] bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg py-1 min-w-40"
         style={{
           left: adjustedPosition.x,
           top: adjustedPosition.y,

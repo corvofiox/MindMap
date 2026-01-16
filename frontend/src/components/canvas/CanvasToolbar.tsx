@@ -1,9 +1,9 @@
-import { MousePointer2, Square, Layers, Link, Grid3x3, Undo, Redo, Trash2, ArrowRight, ArrowLeftRight, Minus, Group, Save, Download, Check, Map, Layout, Image as ImageIcon } from 'lucide-react'
-import { useCanvasStore } from '@/store/useCanvasStore'
-import { useUIStore } from '@/store/useUIStore'
-import type { Tool } from '@/types'
-import { useState, useCallback } from 'react'
-import { generateId } from '@/utils/canvas'
+ import { MousePointer2, Square, Layers, Link, Grid3x3, Undo, Redo, Trash2, ArrowRight, ArrowLeftRight, Minus, Group, Save, Download, Check, Map, Layout, Image as ImageIcon, MinusCircle, MoreHorizontal } from 'lucide-react'
+  import { useCanvasStore } from '@/store/useCanvasStore'
+  import { useUIStore } from '@/store/useUIStore'
+  import type { Tool } from '@/types'
+  import { useState, useCallback } from 'react'
+  import { generateId } from '@/utils/canvas'
 
 interface CanvasToolbarProps {
   onSave?: () => Promise<void>
@@ -19,12 +19,12 @@ const tools: { id: Tool; icon: typeof MousePointer2; label: string; shortcut: st
 
 const toolSeparators = [1, 2]
 
-export function CanvasToolbar({ onSave }: CanvasToolbarProps) {
-  const { currentTool, gridVisible, dragMode, minimapVisible, setCurrentTool, toggleGrid, toggleDragMode, toggleMinimap, connectionDirection, setConnectionDirection, connectionStyle, setConnectionStyle, addToast } = useUIStore()
-  const { zoom, selectedIds, removeNode, removeConnection, removeGroup, removeDomain, nodes, connections, undo, redo, history, groups, domains, addGroup } = useCanvasStore()
+  export function CanvasToolbar({ onSave }: CanvasToolbarProps) {
+    const { currentTool, gridVisible, dragMode, minimapVisible, setCurrentTool, toggleGrid, toggleDragMode, toggleMinimap, connectionDirection, setConnectionDirection, connectionStyle, setConnectionStyle, connectionType, setConnectionType, addToast } = useUIStore()
+    const { selectedIds, removeNode, removeConnection, removeGroup, removeDomain, nodes, connections, undo, redo, history, groups, domains, addGroup, updateConnection } = useCanvasStore()
 
-  const [isSaving, setIsSaving] = useState(false)
-  const [saveSuccess, setSaveSuccess] = useState(false)
+    const [isSaving, setIsSaving] = useState(false)
+    const [saveSuccess, setSaveSuccess] = useState(false)
 
   const connectionDirections = [
     { id: 'directed' as const, icon: ArrowRight, label: '单向' },
@@ -32,11 +32,18 @@ export function CanvasToolbar({ onSave }: CanvasToolbarProps) {
     { id: 'undirected' as const, icon: Minus, label: '无向' },
   ]
 
-  const connectionStyles = [
-    { id: 'solid' as const, label: '实线' },
-    { id: 'dashed' as const, label: '虚线' },
-    { id: 'dotted' as const, label: '点线' },
-  ]
+   const connectionStyles = [
+     { id: 'solid' as const, label: '实线' },
+     { id: 'dashed' as const, label: '虚线' },
+     { id: 'dotted' as const, label: '点线' },
+   ]
+
+    const connectionTypes = [
+      { id: 'straight' as const, label: '直线' },
+      { id: 'step' as const, label: '折线' },
+      { id: 'curve' as const, label: '曲线' },
+      { id: 'orthogonal' as const, label: '直角线' },
+    ]
 
   const canUndo = history.currentIndex >= 0
   const canRedo = history.currentIndex < history.commands.length - 1
@@ -308,12 +315,12 @@ export function CanvasToolbar({ onSave }: CanvasToolbarProps) {
 
       {/* Secondary Toolbar - Connection Options */}
       {showSecondaryToolbar && (
-        <div className="absolute left-0 right-0 top-12 h-12 border-t border-gray-200 dark:border-gray-700 flex items-center justify-center px-4 bg-gray-50 dark:bg-gray-900/50 shadow-md z-10">
+        <div className="inline-grid h-auto min-h-12 border-t border-gray-200 dark:border-gray-700 grid grid-cols-1 xl:grid-cols-3 xl:grid-auto-rows xl:grid-flow-col gap-y-1 xl:gap-x-4 px-4 py-2 bg-gray-50 dark:bg-gray-900/50 shadow-md z-10">
           {currentTool === 'connection' ? (
             <>
               {/* Connection Directions */}
-              <div className="flex items-center gap-1 mr-4">
-                <span className="text-xs text-gray-500 dark:text-gray-400 mr-2">方向</span>
+              <div className="flex items-center xl:justify-center gap-1 min-w-fit">
+                <span className="text-xs text-gray-500 dark:text-gray-400 mr-1 px-1 shrink-0 bg-gray-100 dark:bg-gray-800 rounded">方向：</span>
                 {connectionDirections.map((dir) => {
                   const DirIcon = dir.icon
                   const isActive = connectionDirection === dir.id
@@ -322,7 +329,7 @@ export function CanvasToolbar({ onSave }: CanvasToolbarProps) {
                       key={dir.id}
                       onClick={() => setConnectionDirection(dir.id)}
                       className={`
-                        px-3 py-1.5 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5
+                        px-2 py-1 rounded-lg text-xs font-medium transition-colors flex items-center gap-1 shrink-0
                         ${isActive
                           ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
                           : 'hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
@@ -330,18 +337,16 @@ export function CanvasToolbar({ onSave }: CanvasToolbarProps) {
                       `}
                       title={dir.label}
                     >
-                      <DirIcon className="w-4 h-4" />
+                      <DirIcon className="w-3 h-3" />
                       {dir.label}
                     </button>
                   )
                 })}
               </div>
 
-              <div className="h-6 w-px bg-gray-300 dark:bg-gray-600" />
-
               {/* Connection Styles */}
-              <div className="flex items-center gap-1 ml-4">
-                <span className="text-xs text-gray-500 dark:text-gray-400 mr-2">样式</span>
+              <div className="flex items-center xl:justify-center gap-1 min-w-fit">
+                <span className="text-xs text-gray-500 dark:text-gray-400 mr-1 px-1 shrink-0 bg-gray-100 dark:bg-gray-800 rounded">样式：</span>
                 {connectionStyles.map((style) => {
                   const isActive = connectionStyle === style.id
                   return (
@@ -349,7 +354,7 @@ export function CanvasToolbar({ onSave }: CanvasToolbarProps) {
                       key={style.id}
                       onClick={() => setConnectionStyle(style.id)}
                       className={`
-                        px-3 py-1.5 rounded-lg text-sm font-medium transition-colors
+                        px-2 py-1 rounded-lg text-xs font-medium transition-colors shrink-0
                         ${isActive
                           ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
                           : 'hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
@@ -358,6 +363,44 @@ export function CanvasToolbar({ onSave }: CanvasToolbarProps) {
                       title={style.label}
                     >
                       {style.label}
+                    </button>
+                  )
+                })}
+              </div>
+
+              {/* Connection Types */}
+              <div className="flex items-center xl:justify-center gap-1 min-w-fit">
+                <span className="text-xs text-gray-500 dark:text-gray-400 mr-1 px-1 shrink-0 bg-gray-100 dark:bg-gray-800 rounded">类型：</span>
+                {connectionTypes.map((type) => {
+                  const isActive = connectionType === type.id
+                  return (
+                    <button
+                      key={type.id}
+                      onClick={() => {
+                        setConnectionType(type.id)
+                        // Update all selected connections to this type and reset bend points
+                        selectedIds.forEach(id => {
+                          const connection = connections.get(id)
+                          if (connection && connection.type !== type.id) {
+                            // Clear bend points when switching to non-orthogonal and non-curve type
+                            if (type.id !== 'orthogonal' && type.id !== 'curve') {
+                              updateConnection(id, { type: type.id, bendPoints: undefined })
+                            } else {
+                              updateConnection(id, { type: type.id })
+                            }
+                          }
+                        })
+                      }}
+                      className={`
+                        px-2 py-1 rounded-lg text-xs font-medium transition-colors shrink-0
+                        ${isActive
+                          ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
+                          : 'hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
+                        }
+                      `}
+                      title={type.label}
+                    >
+                      {type.label}
                     </button>
                   )
                 })}

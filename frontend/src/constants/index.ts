@@ -91,10 +91,11 @@ export const DOMAIN_DEFAULTS = {
 export const CONNECTION_DEFAULTS = {
   COLOR: '#3b82f6',
   WIDTH: 2,
-  ARROW_SIZE: 10,
-  TYPE: 'curve' as const,
-  STYLE: 'solid' as const,
-  ARROW_TYPE: 'end' as const,
+  TYPE: 'curve',
+  STYLE: 'solid',
+  ARROW_TYPE: 'end',
+  BEND_POINT_RADIUS: 8,
+  BEND_POINT_HIT_RADIUS: 12,
 } as const
 
 // Colors

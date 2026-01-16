@@ -26,8 +26,6 @@ export const FolderItem = memo(function FolderItem({
   level = 0,
   cards,
   children,
-  isDragOver,
-  dragOverPosition,
   onToggle,
   onContextMenu,
   onCardContextMenu,
@@ -40,6 +38,10 @@ export const FolderItem = memo(function FolderItem({
   onSaveEdit,
   onCancelEdit,
   editingFolderId = null,
+  onUseCard,
+  onRemoveCard,
+  onSaveCardName,
+  editingCardId,
 }: FolderItemProps) {
   const [isLocalDragOver, setIsLocalDragOver] = useState(false)
   const [editName, setEditName] = useState(folder.name)
@@ -103,11 +105,6 @@ export const FolderItem = memo(function FolderItem({
     } else if (e.key === 'Escape') {
       handleCancelEdit()
     }
-  }
-
-  const handleDelete = (e: React.MouseEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
   }
 
   const handleFolderDragOver = useCallback((e: React.DragEvent) => {
@@ -207,15 +204,9 @@ export const FolderItem = memo(function FolderItem({
                 isDragging={false}
                 isDragOver={false}
                 dragOverPosition={null}
-                onUse={(c) => {
-                  // TODO: Implement use card
-                }}
-                onRemove={(id) => {
-                  // TODO: Implement remove
-                }}
-                onSaveName={(id, name) => {
-                  // TODO: Implement save name
-                }}
+                onUse={onUseCard || (() => {})}
+                onRemove={onRemoveCard || (() => {})}
+                onSaveName={onSaveCardName || (() => Promise.resolve())}
                 onContextMenu={onCardContextMenu}
                 showPreview={previewCardId === card.id}
                 onTogglePreview={onTogglePreview}
@@ -245,6 +236,10 @@ export const FolderItem = memo(function FolderItem({
               onSaveEdit={onSaveEdit}
               onCancelEdit={onCancelEdit}
               editingFolderId={editingFolderId}
+              onUseCard={onUseCard}
+              onRemoveCard={onRemoveCard}
+              onSaveCardName={onSaveCardName}
+              editingCardId={editingCardId}
             />
           ))}
 

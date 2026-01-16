@@ -15,15 +15,21 @@ export function ConnectionStylePanel() {
     selectedIds.forEach((id) => {
       const connection = connections.get(id)
       if (connection) {
-        updateConnection(id, updates)
+        // If changing to non-orthogonal and non-curve type, clear bend points
+        if (updates.type && updates.type !== 'orthogonal' && updates.type !== 'curve' && (connection.type === 'orthogonal' || connection.type === 'curve')) {
+          updateConnection(id, { ...updates, bendPoints: undefined })
+        } else {
+          updateConnection(id, updates)
+        }
       }
     })
   }
 
   const CONNECTION_TYPES = [
     { value: 'straight', label: '直线' },
-    { value: 'curve', label: '曲线' },
     { value: 'step', label: '折线' },
+    { value: 'curve', label: '曲线' },
+    { value: 'orthogonal', label: '直角线' },
   ] as const
 
   const CONNECTION_STYLES = [
@@ -50,7 +56,7 @@ export function ConnectionStylePanel() {
   ]
 
   return (
-    <div className="fixed right-0 top-0 h-full w-80 bg-white dark:bg-gray-800 shadow-xl border-l border-gray-200 dark:border-gray-700 z-50 flex flex-col">
+    <div className="fixed right-0 top-0 h-full w-80 bg-white dark:bg-gray-800 shadow-xl border-l border-gray-200 dark:border-gray-700 z-[80] flex flex-col">
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700">
         <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
@@ -83,7 +89,7 @@ export function ConnectionStylePanel() {
           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
             连线类型
           </label>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-4 gap-2">
             {CONNECTION_TYPES.map((type) => (
               <button
                 key={type.value}
@@ -191,7 +197,7 @@ export function ConnectionStylePanel() {
           </div>
         </div>
 
-        {/* Label */}
+          {/* Label */}
         <div>
           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
             标签文本
@@ -204,6 +210,18 @@ export function ConnectionStylePanel() {
             className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
           />
         </div>
+
+        {/* Orthogonal Mode Info */}
+        {firstConnection.type === 'orthogonal' && (
+          <div className="mt-4 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
+            <div className="text-sm text-blue-700 dark:text-blue-300 mb-1">
+              💡 直角线模式
+            </div>
+            <div className="text-xs text-blue-600 dark:text-blue-400">
+              右键点击连线可添加或删除弯折点，拖拽弯折点可调整连线形状。
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )

@@ -93,9 +93,12 @@ export const NodeCardItem = memo(function NodeCardItem({
   }, [isEditing, showPreview, card.id, onTogglePreview])
 
   const handleDragStart = useCallback((e: React.DragEvent) => {
+    if (showPreview && onTogglePreview) {
+      onTogglePreview(null)
+    }
     e.dataTransfer.setData('application/nodepool-card', JSON.stringify(card))
     e.dataTransfer.effectAllowed = 'copy'
-  }, [card])
+  }, [card, showPreview, onTogglePreview])
 
   const handleDragEnd = useCallback(() => {
     hasMoved.current = false
@@ -170,7 +173,7 @@ export const NodeCardItem = memo(function NodeCardItem({
           isDragOver && dragOverPosition === 'inside' && 'ring-2 ring-blue-500'
         )}
         onClick={handleCardClick}
-        onContextMenu={(e) => onContextMenu(e, card)}
+        onContextMenu={(e) => onContextMenu?.(e, card)}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onDragStart={handleDragStart}
@@ -234,8 +237,8 @@ export const NodeCardItem = memo(function NodeCardItem({
 
         {/* Preview tooltip */}
         {showPreview && (
-          <div 
-            className="fixed z-[9999] pointer-events-auto"
+          <div
+            className="fixed z-[80] pointer-events-auto"
             style={{
               right: '288px',
               top: previewPosition.top,
