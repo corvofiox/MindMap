@@ -31,7 +31,7 @@ import { loadUIStore } from '@/utils/moduleLoader'
   deleteProject: (id: number) => Promise<void>
 
   // Canvas actions
-  createCanvas: (projectId: number, data: Partial<Canvas>) => Promise<void>
+  createCanvas: (projectId: number, data: Partial<Canvas>) => Promise<Canvas | null>
   updateCanvas: (id: number, data: Partial<Canvas>) => Promise<void>
   deleteCanvas: (id: number) => Promise<void>
   moveCanvasToFolder: (canvasId: number, folderId: number | null) => Promise<void>
@@ -216,16 +216,17 @@ export const useProjectsStore = create<ProjectsState>()(
           const tempId = -Date.now()
           
           // 创建临时画布对象，添加tempId字段用于跟踪
-          const tempCanvas = {
+          const tempCanvas: Canvas = {
             id: tempId,
             tempId: tempId,
+            name: data.name || '未命名画布',
+            sortOrder: data.sortOrder || 0,
             ...data,
             projectId,
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
             folderId: data.folderId || null,
-            thumbnail: null,
-            isFavorite: false
+            thumbnail: null
           }
           
           // 乐观更新：立即添加到本地状态

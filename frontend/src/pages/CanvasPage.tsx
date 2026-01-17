@@ -10,6 +10,7 @@ import { CanvasGrid } from '@/components/canvas/CanvasGrid'
 import { CanvasMinimap } from '@/components/canvas/CanvasMinimap'
 import { ZoomControls } from '@/components/canvas/ZoomControls'
 import { NodeItem } from '@/components/canvas/NodeItem'
+import { NodeContextMenu } from '@/components/canvas/NodeContextMenu'
 import { NodeStylePanel } from '@/components/canvas/NodeStylePanel'
 import { ConnectionStylePanel } from '@/components/canvas/ConnectionStylePanel'
 import { DomainContextMenu } from '@/components/canvas/DomainContextMenu'
@@ -591,6 +592,9 @@ export function CanvasPage() {
   // Domain context menu state
   const [domainContextMenu, setDomainContextMenu] = useState<{ x: number; y: number; domainId: string } | null>(null)
 
+  // Node context menu state
+  const [nodeContextMenu, setNodeContextMenu] = useState<{ x: number; y: number; nodeId: string } | null>(null)
+
   // Domain creation state (box selection style)
   const [isCreatingDomain, setIsCreatingDomain] = useState(false)
   const [domainBoxStart, setDomainBoxStart] = useState({ x: 0, y: 0 })
@@ -616,6 +620,15 @@ export function CanvasPage() {
   // Rich text toolbar state
   const [richTextToolbarVisible, setRichTextToolbarVisible] = useState(false)
   const [richTextToolbarPosition, setRichTextToolbarPosition] = useState({ x: 0, y: 0 })
+
+  // Helper to close all context menus
+  const closeAllContextMenus = useCallback(() => {
+    setContextMenu(null)
+    setConnectionContextMenu(null)
+    setDomainContextMenu(null)
+    setNodeContextMenu(null)
+    setBendPointContextMenu(null)
+  }, [])
 
 
   const {
@@ -692,11 +705,11 @@ export function CanvasPage() {
       if (!card || !containerRef.current) return
 
       const rect = containerRef.current.getBoundingClientRect()
-      
+
       // 计算视图中央的屏幕坐标
       const screenCenterX = rect.width / 2
       const screenCenterY = rect.height / 2
-      
+
       // 将屏幕坐标转换为画布坐标
       const canvasCenterX = (screenCenterX - panX) / zoom
       const canvasCenterY = (screenCenterY - panY) / zoom
@@ -743,7 +756,7 @@ export function CanvasPage() {
 
     // 检查当前画布是否还在画布列表中
     const canvasExists = canvases.some(c => c.id === id)
-    
+
     // 检查是否有临时画布正在替换为真实画布
     const hasTemporaryCanvas = canvases.some(c => c.id < 0)
 
@@ -756,7 +769,7 @@ export function CanvasPage() {
       // 重定向到项目列表
       navigate('/projects', { replace: true })
     }
-    
+
     // 如果当前是临时ID，检查是否已经被真实ID替换
     if (id < 0) {
       const realCanvas = canvases.find(c => c.tempId === id && c.id > 0)
@@ -1577,6 +1590,7 @@ export function CanvasPage() {
     const target = e.target as HTMLElement
     const clickedOnNode = target.closest('.node-item')
     const clickedOnGroup = target.closest('[data-group-id]')
+    const clickedOnDomain = target.closest('[data-domain-id]')
     const clickedOnInteractive = target.closest('button') || target.closest('[role="button"]') || target.closest('input') || target.closest('textarea')
     // Check if clicking on SVG connection endpoint circles (both visible circles and invisible hit circles)
     const fill = target.getAttribute('fill')
@@ -1626,8 +1640,8 @@ export function CanvasPage() {
     const clickedOnConnectionEndpoint =
       target.tagName === 'circle' &&
       ((fill === 'none' && target.getAttribute('stroke') === '#3b82f6' && r === '8') || // Visible endpoint circle
-       (fill?.startsWith('rgba') && r === '12')) || // Invisible hit circle (fallback if stopPropagation fails)
-       clickedNearEndpoint
+        (fill?.startsWith('rgba') && r === '12')) || // Invisible hit circle (fallback if stopPropagation fails)
+      clickedNearEndpoint
 
     // Handle endpoint dragging (even if connection is not yet selected)
     if (clickedNearEndpoint && clickedEndpointConnId && clickedEndpointType) {
@@ -1884,20 +1898,20 @@ export function CanvasPage() {
           x: canvasMouseX,
           y: canvasMouseY,
         })
-  }
-} else if (isDraggingBendPoint && draggingBendPointId && draggingConnectionId && containerRef.current) {
-    const rect = containerRef.current.getBoundingClientRect()
-    const mouseX = e.clientX - rect.left
-    const mouseY = e.clientY - rect.top
-    const canvasX = (mouseX - panX) / zoom
-    const canvasY = (mouseY - panY) / zoom
+      }
+    } else if (isDraggingBendPoint && draggingBendPointId && draggingConnectionId && containerRef.current) {
+      const rect = containerRef.current.getBoundingClientRect()
+      const mouseX = e.clientX - rect.left
+      const mouseY = e.clientY - rect.top
+      const canvasX = (mouseX - panX) / zoom
+      const canvasY = (mouseY - panY) / zoom
 
-    const { updateConnectionBendPoint } = useCanvasStore.getState()
-    updateConnectionBendPoint(draggingConnectionId, draggingBendPointId, canvasX, canvasY)
-  }
+      const { updateConnectionBendPoint } = useCanvasStore.getState()
+      updateConnectionBendPoint(draggingConnectionId, draggingBendPointId, canvasX, canvasY)
+    }
 
-  // Check if mouse is near any endpoint of selected connections to update cursor
-  if (containerRef.current && !isDragging && !isBoxSelecting && !isCreatingConnection && !isDraggingConnectionEndpoint && !isResizingGroup && !isCreatingGroup && !isDraggingGroup && !isDraggingBendPoint) {
+    // Check if mouse is near any endpoint of selected connections to update cursor
+    if (containerRef.current && !isDragging && !isBoxSelecting && !isCreatingConnection && !isDraggingConnectionEndpoint && !isResizingGroup && !isCreatingGroup && !isDraggingGroup && !isDraggingBendPoint) {
       const rect = containerRef.current.getBoundingClientRect()
       const mouseX = e.clientX - rect.left
       const mouseY = e.clientY - rect.top
@@ -2413,10 +2427,10 @@ export function CanvasPage() {
   const handleConnectionClick = useCallback((e: React.MouseEvent, connectionId: string) => {
     if (isDraggingBendPoint || isDraggingConnectionEndpoint) return
     e.stopPropagation()
+    closeAllContextMenus()
     setSelectedIds([connectionId])
     setSelectedType('connection')
-    openStylePanel()
-  }, [isDraggingBendPoint, isDraggingConnectionEndpoint, setSelectedIds, setSelectedType, openStylePanel])
+  }, [isDraggingBendPoint, isDraggingConnectionEndpoint, setSelectedIds, setSelectedType, closeAllContextMenus])
 
   // Handle connection context menu
   const handleConnectionContextMenu = useCallback((e: React.MouseEvent, connectionId: string) => {
@@ -2425,6 +2439,9 @@ export function CanvasPage() {
     const rect = containerRef.current?.getBoundingClientRect()
     const clickX = rect ? (e.clientX - rect.left - panX) / zoom : 0
     const clickY = rect ? (e.clientY - rect.top - panY) / zoom : 0
+    setContextMenu(null)
+    setDomainContextMenu(null)
+    setNodeContextMenu(null)
     setConnectionContextMenu({
       x: e.clientX,
       y: e.clientY,
@@ -2432,7 +2449,19 @@ export function CanvasPage() {
       clickX,
       clickY,
     })
-  }, [containerRef, panX, panY, zoom, setConnectionContextMenu])
+  }, [containerRef, panX, panY, zoom])
+
+  // Handle node context menu
+  const handleNodeContextMenu = useCallback((x: number, y: number, nodeId: string) => {
+    setContextMenu(null)
+    setConnectionContextMenu(null)
+    setDomainContextMenu(null)
+    setNodeContextMenu({
+      x,
+      y,
+      nodeId,
+    })
+  }, [])
 
   // Handle connection double click
   const handleConnectionDoubleClick = useCallback((e: React.MouseEvent, connectionId: string) => {
@@ -2465,8 +2494,11 @@ export function CanvasPage() {
     if (e.detail > 1) return
 
     // Close context menus when clicking on canvas
-    if (domainContextMenu) {
+    if (contextMenu || connectionContextMenu || domainContextMenu || nodeContextMenu) {
+      setContextMenu(null)
+      setConnectionContextMenu(null)
       setDomainContextMenu(null)
+      setNodeContextMenu(null)
     }
 
     // Check if clicking on an existing node
@@ -2498,6 +2530,7 @@ export function CanvasPage() {
     // Clear selection when clicking on empty canvas with default selection tool
     if (isDefaultSelectionTool(currentTool)) {
       setSelectedIds([])
+      setSelectedType(null)
       if (stylePanelOpen) {
         closeStylePanel()
       }
@@ -2745,6 +2778,8 @@ export function CanvasPage() {
         if (contextMenuElement && !contextMenuElement.contains(e.target as unknown as globalThis.Node)) {
           setContextMenu(null)
           setConnectionContextMenu(null)
+          setDomainContextMenu(null)
+          setNodeContextMenu(null)
         }
       }
     }
@@ -2953,6 +2988,9 @@ export function CanvasPage() {
                 const dy = e.clientY - domainContextMenuStartRef.current.y
                 if (Math.hypot(dx, dy) > 5) return
 
+                setContextMenu(null)
+                setConnectionContextMenu(null)
+                setNodeContextMenu(null)
                 setDomainContextMenu({
                   x: e.clientX,
                   y: e.clientY,
@@ -2961,10 +2999,20 @@ export function CanvasPage() {
               }}
               onClick={(e) => {
                 if (currentTool === 'select') {
-                  e.stopPropagation()
-                  setSelectedIds([domain.id])
+                  // Check if this is a box selection by measuring the distance moved
+                  const dx = boxSelectionEnd.x - boxSelectionStart.x
+                  const dy = boxSelectionEnd.y - boxSelectionStart.y
+                  const isBoxSelection = Math.hypot(dx, dy) > 5
+
+                  if (!isBoxSelection && !justFinishedBoxSelectingRef.current) {
+                    // This is a regular click, select the domain
+                    e.stopPropagation()
+                    closeAllContextMenus()
+                    setSelectedIds([domain.id])
+                    setSelectedType('domain')
+                  }
+                  // If it's a box selection, don't stop propagation to allow handleMouseUp to process it
                 }
-                // Don't stop propagation for node/image tools to allow creating nodes on domains
               }}
               style={{
                 left: domain.x,
@@ -2975,7 +3023,7 @@ export function CanvasPage() {
               }}
             >
               {domain.titleVisible && domain.name && (
-                <span 
+                <span
                   className="absolute top-2 left-1/2 -translate-x-1/2 font-black pointer-events-none"
                   style={{
                     color: 'rgba(30, 41, 59, 0.3)',
@@ -3025,6 +3073,7 @@ export function CanvasPage() {
                   }
 
                   if (isDefaultSelectionTool(currentTool)) {
+                    closeAllContextMenus()
                     if (e.ctrlKey || e.metaKey) {
                       if (selectedIds.includes(group.id)) {
                         removeFromSelection(group.id)
@@ -3033,6 +3082,7 @@ export function CanvasPage() {
                       }
                     } else if (!selectedIds.includes(group.id)) {
                       setSelectedIds([group.id])
+                      setSelectedType(null)
                     }
                   }
 
@@ -3656,8 +3706,8 @@ export function CanvasPage() {
                           if (!selectedIds.includes(conn.id)) {
                             setSelectedIds([conn.id])
                             setSelectedType('connection')
-                            openStylePanel()
                           }
+                          closeAllContextMenus()
                           setIsDraggingBendPoint(true)
                           setDraggingBendPointId(bendPoint.id)
                           setDraggingConnectionId(conn.id)
@@ -3716,6 +3766,8 @@ export function CanvasPage() {
                 isSelected={selectedIds.includes(node.id)}
                 zoom={zoom}
                 groupDragOffset={nodeGroupDragOffset}
+                onNodeContextMenuOpen={handleNodeContextMenu}
+                onMouseDown={closeAllContextMenus}
               />
             )
           })}
@@ -3877,6 +3929,26 @@ export function CanvasPage() {
             编辑说明文字
           </button>
 
+          {/* Advanced Style */}
+          <button
+            className="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
+            onClick={() => {
+              const connection = connections.get(connectionContextMenu.connectionId)
+              if (connection) {
+                setSelectedIds([connectionContextMenu.connectionId])
+                setSelectedType('connection')
+                openStylePanel()
+              }
+              setConnectionContextMenu(null)
+            }}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+            高级样式...
+          </button>
+
           {/* Color Picker */}
           <label className="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 cursor-pointer">
             <input
@@ -3899,66 +3971,66 @@ export function CanvasPage() {
             const connection = connections.get(connectionContextMenu.connectionId)
             if (connection?.type === 'orthogonal' || connection?.type === 'curve') {
               return (
-                  <button
-                    className="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
-                    onClick={() => {
-                      const connection = connections.get(connectionContextMenu.connectionId)
-                      if (connection) {
-                        const { addConnectionBendPoint } = useCanvasStore.getState()
-                        let newBendPointX, newBendPointY, insertIndex
+                <button
+                  className="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
+                  onClick={() => {
+                    const connection = connections.get(connectionContextMenu.connectionId)
+                    if (connection) {
+                      const { addConnectionBendPoint } = useCanvasStore.getState()
+                      let newBendPointX, newBendPointY, insertIndex
 
-                        // Use click position if available, otherwise calculate optimal position
-                        if (connectionContextMenu.clickX !== undefined && connectionContextMenu.clickY !== undefined) {
-                          newBendPointX = connectionContextMenu.clickX
-                          newBendPointY = connectionContextMenu.clickY
+                      // Use click position if available, otherwise calculate optimal position
+                      if (connectionContextMenu.clickX !== undefined && connectionContextMenu.clickY !== undefined) {
+                        newBendPointX = connectionContextMenu.clickX
+                        newBendPointY = connectionContextMenu.clickY
 
-                          // Calculate insert index based on existing bend points
-                          const fromNode = nodes.get(connection.fromNodeId)
-                          const toNode = nodes.get(connection.toNodeId)
-                          if (fromNode && toNode) {
-                            const fromPos = getPortPosition(fromNode, getConnectionPort(connection, 'start'))
-                            const toPos = getPortPosition(toNode, getConnectionPort(connection, 'end'))
-                            insertIndex = findBendPointInsertIndex(
-                              newBendPointX,
-                              newBendPointY,
-                              fromPos.x,
-                              fromPos.y,
-                              toPos.x,
-                              toPos.y,
-                              connection.bendPoints || []
-                            )
-                          }
-                        } else {
-                          const fromNode = nodes.get(connection.fromNodeId)
-                          const toNode = nodes.get(connection.toNodeId)
-                          if (fromNode && toNode) {
-                            const fromPos = getPortPosition(fromNode, getConnectionPort(connection, 'start'))
-                            const toPos = getPortPosition(toNode, getConnectionPort(connection, 'end'))
-                            const optimalPos = calculateOptimalBendPoint(fromPos.x, fromPos.y, toPos.x, toPos.y)
-                            newBendPointX = optimalPos.x
-                            newBendPointY = optimalPos.y
-
-                            // Calculate insert index for optimal position
-                            insertIndex = findBendPointInsertIndex(
-                              newBendPointX,
-                              newBendPointY,
-                              fromPos.x,
-                              fromPos.y,
-                              toPos.x,
-                              toPos.y,
-                              connection.bendPoints || []
-                            )
-                          } else {
-                            return
-                          }
+                        // Calculate insert index based on existing bend points
+                        const fromNode = nodes.get(connection.fromNodeId)
+                        const toNode = nodes.get(connection.toNodeId)
+                        if (fromNode && toNode) {
+                          const fromPos = getPortPosition(fromNode, getConnectionPort(connection, 'start'))
+                          const toPos = getPortPosition(toNode, getConnectionPort(connection, 'end'))
+                          insertIndex = findBendPointInsertIndex(
+                            newBendPointX,
+                            newBendPointY,
+                            fromPos.x,
+                            fromPos.y,
+                            toPos.x,
+                            toPos.y,
+                            connection.bendPoints || []
+                          )
                         }
+                      } else {
+                        const fromNode = nodes.get(connection.fromNodeId)
+                        const toNode = nodes.get(connection.toNodeId)
+                        if (fromNode && toNode) {
+                          const fromPos = getPortPosition(fromNode, getConnectionPort(connection, 'start'))
+                          const toPos = getPortPosition(toNode, getConnectionPort(connection, 'end'))
+                          const optimalPos = calculateOptimalBendPoint(fromPos.x, fromPos.y, toPos.x, toPos.y)
+                          newBendPointX = optimalPos.x
+                          newBendPointY = optimalPos.y
 
-                        const newBendPointId = `${connection.id}-bend-${Date.now()}`
-                        addConnectionBendPoint(connectionContextMenu.connectionId, newBendPointId, newBendPointX, newBendPointY, insertIndex)
+                          // Calculate insert index for optimal position
+                          insertIndex = findBendPointInsertIndex(
+                            newBendPointX,
+                            newBendPointY,
+                            fromPos.x,
+                            fromPos.y,
+                            toPos.x,
+                            toPos.y,
+                            connection.bendPoints || []
+                          )
+                        } else {
+                          return
+                        }
                       }
-                      setConnectionContextMenu(null)
-                    }}
-                  >
+
+                      const newBendPointId = `${connection.id}-bend-${Date.now()}`
+                      addConnectionBendPoint(connectionContextMenu.connectionId, newBendPointId, newBendPointX, newBendPointY, insertIndex)
+                    }
+                    setConnectionContextMenu(null)
+                  }}
+                >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
                   </svg>
@@ -4023,6 +4095,15 @@ export function CanvasPage() {
           domainId={domainContextMenu.domainId}
           position={{ x: domainContextMenu.x, y: domainContextMenu.y }}
           onClose={() => setDomainContextMenu(null)}
+        />
+      )}
+
+      {/* Node Context Menu */}
+      {nodeContextMenu && (
+        <NodeContextMenu
+          nodeId={nodeContextMenu.nodeId}
+          position={{ x: nodeContextMenu.x, y: nodeContextMenu.y }}
+          onClose={() => setNodeContextMenu(null)}
         />
       )}
 

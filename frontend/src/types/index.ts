@@ -60,6 +60,7 @@ export interface Canvas {
   createdAt: string
   updatedAt: string
   previewText?: string
+  tempId?: number
 }
 
 // Node types

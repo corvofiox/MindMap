@@ -40,6 +40,10 @@ interface UIState {
   setMinimapVisible: (visible: boolean) => void
   toggleMinimap: () => void
 
+  // Domain Edit Mode
+  domainEditMode: boolean
+  setDomainEditMode: (enabled: boolean) => void
+
   // Connection Direction
   connectionDirection: 'directed' | 'bidirectional' | 'undirected'
   setConnectionDirection: (direction: 'directed' | 'bidirectional' | 'undirected') => void
@@ -150,6 +154,10 @@ export const useUIStore = create<UIState>()(
         setMinimapVisible: (visible) => set({ minimapVisible: visible }),
         toggleMinimap: createToggle('minimapVisible'),
 
+        // Domain Edit Mode
+        domainEditMode: false,
+        setDomainEditMode: (enabled) => set({ domainEditMode: enabled }),
+
         // Connection Direction
         connectionDirection: 'directed',
         setConnectionDirection: (direction) => set({ connectionDirection: direction }),
@@ -236,7 +244,13 @@ export const useUIStore = create<UIState>()(
         selectedNodeIds: [],
         openStylePanel: () => set({ stylePanelOpen: true }),
         closeStylePanel: () => set({ stylePanelOpen: false }),
-        setSelectedType: (type) => set({ selectedType: type }),
+        setSelectedType: (type) => {
+          const state = get()
+          if (state.stylePanelOpen && state.selectedType !== type) {
+            set({ stylePanelOpen: false })
+          }
+          set({ selectedType: type })
+        },
         setSelectedNodeIds: (ids) => set({ selectedNodeIds: ids }),
       }
     },

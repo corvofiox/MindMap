@@ -1,7 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useCanvasStore } from '@/store/useCanvasStore'
 import { useUIStore } from '@/store/useUIStore'
-import { NodeContextMenu } from './NodeContextMenu'
 import { snapToGrid } from '@/utils/canvas'
 import { CANVAS_DEFAULTS } from '@/constants'
 import { loadApiModule } from '@/utils/moduleLoader'
@@ -19,11 +18,13 @@ interface NodeItemProps {
   onDragStart?: (nodeId: string, e: React.MouseEvent) => void
   onDragEnd?: () => void
   groupDragOffset?: { x: number; y: number }
+  onNodeContextMenuOpen?: (x: number, y: number, nodeId: string) => void
+  onMouseDown?: () => void
 }
 
 type EditingField = 'title' | 'content' | null
 
-export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, groupDragOffset }: NodeItemProps) {
+export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, groupDragOffset, onNodeContextMenuOpen, onMouseDown }: NodeItemProps) {
   const {
     updateNode,
     setSelectedIds,
@@ -38,8 +39,6 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
   const [isDragging, setIsDragging] = useState(false)
   const [isResizing, setIsResizing] = useState(false)
   const [resizeDirection, setResizeDirection] = useState<string>('')
-  const [isContextMenuOpen, setIsContextMenuOpen] = useState(false)
-  const [contextMenuPosition, setContextMenuPosition] = useState({ x: 0, y: 0 })
   const [isComposing, setIsComposing] = useState(false)
   const [editingField, setEditingField] = useState<EditingField>(null)
   const [isHovered, setIsHovered] = useState(false)
@@ -194,7 +193,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
 
     // 允许保留的标签及其属性白名单
     const allowedTags = new Set([
-      'b', 'strong', 'i', 'em', 'u', 's', 'strike', 'sub', 'sup', 
+      'b', 'strong', 'i', 'em', 'u', 's', 'strike', 'sub', 'sup',
       'span', 'br', 'div', 'p', 'font'
     ])
     const allowedAttributes = new Set(['style', 'class', 'color', 'face'])
@@ -229,7 +228,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
             if (styleParts.length > 0) {
               const existingStyle = element.getAttribute('style') || ''
               const safeStyle = cleanStyle(existingStyle)
-              const combinedStyle = safeStyle 
+              const combinedStyle = safeStyle
                 ? `${safeStyle}; ${styleParts.join('; ')}`
                 : styleParts.join('; ')
               if (combinedStyle) {
@@ -247,10 +246,10 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
                 if (safeStyle) {
                   newElement.setAttribute('style', safeStyle)
                 }
-              } else if (tagName !== 'font' || 
-                         (attr.name.toLowerCase() !== 'color' && 
-                          attr.name.toLowerCase() !== 'size' && 
-                          attr.name.toLowerCase() !== 'face')) {
+              } else if (tagName !== 'font' ||
+                (attr.name.toLowerCase() !== 'color' &&
+                  attr.name.toLowerCase() !== 'size' &&
+                  attr.name.toLowerCase() !== 'face')) {
                 // 对于非 font 标签，保留其他允许的属性
                 newElement.setAttribute(attr.name, attr.value)
               }
@@ -312,11 +311,11 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
     // 确保换行标签正确，保留所有合法的div和p标签，即使它们内部没有<br>
     result = result.replace(/<div[^>]*>/g, '<div>')
     result = result.replace(/<p[^>]*>/g, '<p>')
-    
+
     // 确保每个空的div和p标签内有<br>，以保持换行效果
     result = result.replace(/<div>\s*<\/div>/g, '<div><br></div>')
     result = result.replace(/<p>\s*<\/p>/g, '<p><br></p>')
-    
+
     // 将连续的<br>标签转换为div或p标签，确保在编辑和非编辑模式下都能正确显示
     result = result.replace(/(<br>\s*){2,}/g, '<div><br></div>')
 
@@ -366,6 +365,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
         return
       }
 
+      onMouseDown?.()
       e.stopPropagation()
 
       const target = e.target as HTMLElement
@@ -553,14 +553,14 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
         if (!field) {
           field = node.title && node.title.trim() !== '' ? 'content' : 'title'
         }
-        
+
         // Save current editing content before switching fields
         if (isEditingTitle) {
           saveTitle()
         } else if (isEditingContent) {
           saveContent()
         }
-        
+
         setEditingField(field)
         setEditingId(node.id)
       }
@@ -670,23 +670,23 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
     } else if (field === 'content' && isEditingContent) {
       saveContent()
     }
-    
+
     // 检查焦点是否转移到了富文本工具栏
     if (e?.relatedTarget) {
       const target = e.relatedTarget as HTMLElement
       // 向上查找是否在富文本工具栏内
       let current = target
       while (current && current !== document.body) {
-        if (current.classList.contains('fixed') && 
-            current.classList.contains('bg-white') && 
-            current.classList.contains('border-gray-200')) {
+        if (current.classList.contains('fixed') &&
+          current.classList.contains('bg-white') &&
+          current.classList.contains('border-gray-200')) {
           // 焦点转移到了富文本工具栏，不清除编辑状态
           return
         }
         current = current.parentElement
       }
     }
-    
+
     setEditingField(null)
     setEditingId(null)
   }, [isEditingTitle, isEditingContent, saveTitle, saveContent, setEditingId])
@@ -704,17 +704,15 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
       const dy = e.clientY - contextMenuStartRef.current.y
       if (Math.hypot(dx, dy) > 5) return
 
-      setContextMenuPosition({
-        x: e.clientX + 5,  // 5px offset from mouse
-        y: e.clientY + 5
-      })
+      if (onNodeContextMenuOpen) {
+        onNodeContextMenuOpen(e.clientX + 5, e.clientY + 5, node.id)
+      }
 
-      setIsContextMenuOpen(true)
       if (!isSelected) {
         setSelectedIds([node.id])
       }
     },
-    [editingField, isSelected, node.id, setSelectedIds]
+    [editingField, isSelected, node.id, setSelectedIds, onNodeContextMenuOpen]
   )
 
   // Toggle collapsed state
@@ -737,11 +735,6 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
       setLocalSize({ width: node.width, height: expandedHeight })
     }
   }, [node.id, node.collapsed, node.height, node.expandedHeight, node.width, updateNode])
-
-  // Close context menu
-  const closeContextMenu = useCallback(() => {
-    setIsContextMenuOpen(false)
-  }, [])
 
   // Sync with global editing state
   useEffect(() => {
@@ -1179,15 +1172,6 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
         </div>
       </div>
       {/* End wrapper for node and resize handles */}
-
-      {/* Context menu */}
-      {isContextMenuOpen && (
-        <NodeContextMenu
-          nodeId={node.id}
-          position={contextMenuPosition}
-          onClose={closeContextMenu}
-        />
-      )}
     </>
   )
 }
