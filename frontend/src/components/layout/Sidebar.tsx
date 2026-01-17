@@ -144,31 +144,38 @@ export function Sidebar({ open }: SidebarProps) {
   }
 
   // 拖拽放置到文件夹
-  const handleDropOnFolder = async (e: React.DragEvent, folderId: number) => {
+  const handleDropOnFolder = (e: React.DragEvent, folderId: number) => {
     e.preventDefault()
     e.stopPropagation()
     if (draggedCanvasId) {
-      try {
-        await moveCanvasToFolder(draggedCanvasId, folderId)
-        addToast({ type: 'success', title: '移动成功', message: '画布已移动到文件夹' })
-      } catch (error) {
-        addToast({ type: 'error', title: '移动失败', message: error instanceof Error ? error.message : '未知错误' })
+      const canvas = canvases.find(c => c.id === draggedCanvasId)
+      if (canvas && canvas.folderId === folderId) {
+        // 画布已经在该文件夹内，不触发移动
+        setDraggedCanvasId(null)
+        setDragOverFolderId(null)
+        return
       }
+      // 乐观更新：立即更新UI状态
+      moveCanvasToFolder(draggedCanvasId, folderId)
     }
     setDraggedCanvasId(null)
     setDragOverFolderId(null)
   }
 
   // 拖拽放置到根目录
-  const handleDropOnRoot = async (e: React.DragEvent) => {
+  const handleDropOnRoot = (e: React.DragEvent) => {
     e.preventDefault()
     if (draggedCanvasId) {
-      try {
-        await moveCanvasToFolder(draggedCanvasId, null)
-        addToast({ type: 'success', title: '移动成功', message: '画布已移动到根目录' })
-      } catch (error) {
-        addToast({ type: 'error', title: '移动失败', message: error instanceof Error ? error.message : '未知错误' })
+      const canvas = canvases.find(c => c.id === draggedCanvasId)
+      if (canvas && canvas.folderId === null) {
+        // 画布已经在根目录，不触发移动
+        setDraggedCanvasId(null)
+        setDragOverFolderId(null)
+        setIsRootDragOver(false)
+        return
       }
+      // 乐观更新：立即更新UI状态
+      moveCanvasToFolder(draggedCanvasId, null)
     }
     setDraggedCanvasId(null)
     setDragOverFolderId(null)
@@ -190,20 +197,23 @@ export function Sidebar({ open }: SidebarProps) {
       // 释放在 sidebar 内但不是文件夹上，则移动到根目录
       const folderElement = target.closest('[data-folder-item]')
       if (!folderElement) {
+        const canvas = canvases.find(c => c.id === draggedCanvasId)
+        if (canvas && canvas.folderId === null) {
+          // 画布已经在根目录，不触发移动
+          setDraggedCanvasId(null)
+          setDragOverFolderId(null)
+          setIsRootDragOver(false)
+          return
+        }
+        // 乐观更新：立即更新UI状态
         moveCanvasToFolder(draggedCanvasId, null)
-          .then(() => {
-            addToast({ type: 'success', title: '移动成功', message: '画布已移动到根目录' })
-          })
-          .catch((error) => {
-            addToast({ type: 'error', title: '移动失败', message: error instanceof Error ? error.message : '未知错误' })
-          })
       }
     }
 
     setDraggedCanvasId(null)
     setDragOverFolderId(null)
     setIsRootDragOver(false)
-  }, [draggedCanvasId, addToast])
+  }, [draggedCanvasId, canvases])
 
   // 全局拖拽结束处理
   const handleGlobalDragOver = useCallback((e: DragEvent) => {

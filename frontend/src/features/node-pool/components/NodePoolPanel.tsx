@@ -280,83 +280,75 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
   }, [newFolderName, currentProject, addFolder, addToast])
 
   // Handle move card to folder
-  const handleMoveCardToFolder = useCallback(async (card: NodeCard, folderId: number | null) => {
-    try {
-      await updateCard(card.id, { folderId })
-      addToast({ type: 'success', title: '移动成功', message: '节点已移动' })
-    } catch (error) {
-      addToast({ type: 'error', title: '移动失败', message: error instanceof Error ? error.message : '未知错误' })
-    }
-  }, [updateCard, addToast])
+  const handleMoveCardToFolder = useCallback((card: NodeCard, folderId: number | null) => {
+    // 使用乐观更新，立即返回
+    updateCard(card.id, { folderId })
+  }, [updateCard])
 
   // Handle drop on folder
-  const handleFolderDrop = useCallback(async (e: React.DragEvent, folder: NodePoolFolder) => {
+  const handleFolderDrop = useCallback((e: React.DragEvent, folder: NodePoolFolder) => {
+    e.preventDefault()
+    e.stopPropagation()
+    
     const cardData = e.dataTransfer.getData('application/nodepool-card')
     const canvasNodeData = e.dataTransfer.getData('application/canvas-node')
     
     if (cardData) {
-      try {
-        const card = JSON.parse(cardData) as NodeCard
-        await handleMoveCardToFolder(card, folder.id)
-      } catch (error) {
-        addToast({ type: 'error', title: '移动失败', message: error instanceof Error ? error.message : '未知错误' })
-      }
+      const card = JSON.parse(cardData) as NodeCard
+      handleMoveCardToFolder(card, folder.id)
     } else if (canvasNodeData) {
-      try {
-        const node = JSON.parse(canvasNodeData) as any
-        const card = await useProjectsStore.getState().addToNodePool(currentProject!.id, {
-          projectId: currentProject!.id,
-          name: node.title || node.content || '未命名',
-          content: JSON.stringify(node),
-          type: node.type || 'text',
-          color: node.color,
-          tags: null,
-          createdBy: 1,
-          sortOrder: 0,
-          folderId: folder.id,
-        })
-
+      // 添加新卡片到节点池仍然需要异步处理
+      const node = JSON.parse(canvasNodeData) as any
+      useProjectsStore.getState().addToNodePool(currentProject!.id, {
+        projectId: currentProject!.id,
+        name: node.title || node.content || '未命名',
+        content: JSON.stringify(node),
+        type: node.type || 'text',
+        color: node.color,
+        tags: null,
+        createdBy: 1,
+        sortOrder: 0,
+        folderId: folder.id,
+      }).then(card => {
         setCards([...cardsMap.values(), card])
         addToast({ type: 'success', title: '已添加到节点池', message: '节点已添加到节点池' })
-      } catch (error) {
+      }).catch(error => {
         addToast({ type: 'error', title: '添加失败', message: error instanceof Error ? error.message : '未知错误' })
-      }
+      })
     }
   }, [handleMoveCardToFolder, addToast, currentProject, setCards, cardsMap])
 
   // Handle drop on root (move to root folder)
-  const handleRootDrop = useCallback(async (e: React.DragEvent) => {
+  const handleRootDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    
     setIsRootDragOver(false)
     const cardData = e.dataTransfer.getData('application/nodepool-card')
     const canvasNodeData = e.dataTransfer.getData('application/canvas-node')
     
     if (cardData) {
-      try {
-        const card = JSON.parse(cardData) as NodeCard
-        await handleMoveCardToFolder(card, null)
-      } catch (error) {
-        addToast({ type: 'error', title: '移动失败', message: error instanceof Error ? error.message : '未知错误' })
-      }
+      const card = JSON.parse(cardData) as NodeCard
+      handleMoveCardToFolder(card, null)
     } else if (canvasNodeData) {
-      try {
-        const node = JSON.parse(canvasNodeData) as any
-        const card = await useProjectsStore.getState().addToNodePool(currentProject!.id, {
-          projectId: currentProject!.id,
-          name: node.title || node.content || '未命名',
-          content: JSON.stringify(node),
-          type: node.type || 'text',
-          color: node.color,
-          tags: null,
-          createdBy: 1,
-          sortOrder: 0,
-          folderId: null,
-        })
-
+      // 添加新卡片到节点池仍然需要异步处理
+      const node = JSON.parse(canvasNodeData) as any
+      useProjectsStore.getState().addToNodePool(currentProject!.id, {
+        projectId: currentProject!.id,
+        name: node.title || node.content || '未命名',
+        content: JSON.stringify(node),
+        type: node.type || 'text',
+        color: node.color,
+        tags: null,
+        createdBy: 1,
+        sortOrder: 0,
+        folderId: null,
+      }).then(card => {
         setCards([...cardsMap.values(), card])
         addToast({ type: 'success', title: '已添加到节点池', message: '节点已添加到节点池' })
-      } catch (error) {
+      }).catch(error => {
         addToast({ type: 'error', title: '添加失败', message: error instanceof Error ? error.message : '未知错误' })
-      }
+      })
     }
   }, [handleMoveCardToFolder, addToast, currentProject, setCards, cardsMap])
 

@@ -44,19 +44,32 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
   },
 
   updateCard: async (id: number, data: Partial<NodeCard>) => {
-    set({ isLoading: true, error: null })
+    // 获取原始卡片数据用于回滚
+    const originalCard = get().cardsMap.get(id)
+    if (!originalCard) return
+    
+    // 立即更新本地状态（乐观更新）
+    set((state) => {
+      const newCardsMap = new Map(state.cardsMap)
+      const updatedCard = { ...originalCard, ...data }
+      newCardsMap.set(id, updatedCard)
+      return { cardsMap: newCardsMap }
+    })
 
     try {
-      const updated = await api.updateNodeCard(id, data)
-
+      // 后台执行API请求
+      await api.updateNodeCard(id, data)
+    } catch (error) {
+      // API失败：回滚本地状态
       set((state) => {
         const newCardsMap = new Map(state.cardsMap)
-        newCardsMap.set(id, updated)
-        return { cardsMap: newCardsMap, isLoading: false }
+        newCardsMap.set(id, originalCard)
+        return { cardsMap: newCardsMap }
       })
-    } catch (error) {
+      
+      // 显示错误信息
       const errorMessage = error instanceof Error ? error.message : '更新卡片失败'
-      set({ error: errorMessage, isLoading: false })
+      set({ error: errorMessage })
     }
   },
 

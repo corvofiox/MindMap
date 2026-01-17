@@ -254,15 +254,24 @@ export const useProjectsStore = create<ProjectsState>()(
         },
 
         moveCanvasToFolder: async (canvasId, folderId) => {
-          set({ isLoading: true, loadingMessage: '正在移动画布...', error: null })
+          // 保存原始状态用于回滚
+          const canvas = get().canvases.find(c => c.id === canvasId)
+          if (!canvas) return
+          const originalFolderId = canvas.folderId
+          
+          // 乐观更新：立即更新本地状态
+          set((state) => ({
+            canvases: state.canvases.map((c) => (c.id === canvasId ? { ...c, folderId } : c)),
+          }))
+          
           try {
+            // 后台执行API请求
             await api.updateCanvas(canvasId, { folderId })
-            set((state) => ({
-              canvases: state.canvases.map((c) => (c.id === canvasId ? { ...c, folderId } : c)),
-              isLoading: false,
-              loadingMessage: '',
-            }))
           } catch (error) {
+            // API失败：回滚本地状态
+            set((state) => ({
+              canvases: state.canvases.map((c) => (c.id === canvasId ? { ...c, folderId: originalFolderId } : c)),
+            }))
             handleError(error, '移动画布失败')
           }
         },
