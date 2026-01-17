@@ -74,19 +74,30 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
   },
 
   removeCard: async (id: number) => {
-    set({ isLoading: true, error: null })
+    const state = get()
+    
+    // 保存原始状态用于回滚
+    const originalCardsMap = new Map(state.cardsMap)
+    
+    // 乐观更新：立即从本地状态移除卡片
+    set((state) => {
+      const newCardsMap = new Map(state.cardsMap)
+      newCardsMap.delete(id)
+      return { cardsMap: newCardsMap }
+    })
 
     try {
+      // 后台执行API请求
       await api.removeFromNodePool(id)
-
-      set((state) => {
-        const newCardsMap = new Map(state.cardsMap)
-        newCardsMap.delete(id)
-        return { cardsMap: newCardsMap, isLoading: false }
-      })
     } catch (error) {
+      // API失败：回滚到原始状态
+      set((state) => {
+        return { cardsMap: originalCardsMap }
+      })
+      
+      // 显示错误信息
       const errorMessage = error instanceof Error ? error.message : '移除卡片失败'
-      set({ error: errorMessage, isLoading: false })
+      set({ error: errorMessage })
     }
   },
 
@@ -133,22 +144,49 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
   },
 
   addFolder: async (folder: Omit<NodePoolFolder, 'id' | 'createdAt'>) => {
-    set({ isLoading: true, error: null })
+    // 生成临时ID
+    const tempId = -Date.now()
+    
+    // 创建临时文件夹对象
+    const tempFolder = {
+      id: tempId,
+      ...folder,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      children: []
+    }
+    
+    // 乐观更新：立即添加到本地状态
+    set((state) => {
+      const newFoldersMap = new Map(state.foldersMap)
+      newFoldersMap.set(tempId, tempFolder)
+      return { foldersMap: newFoldersMap }
+    })
 
     try {
+      // 后台执行API请求
       const projectId = folder.projectId
       const created = await api.createNodePoolFolder(projectId, folder)
 
+      // 用真实数据替换临时文件夹
       set((state) => {
         const newFoldersMap = new Map(state.foldersMap)
+        newFoldersMap.delete(tempId)
         newFoldersMap.set(created.id, { ...created, children: [] }) // children computed separately
-        return { foldersMap: newFoldersMap, isLoading: false }
+        return { foldersMap: newFoldersMap }
       })
 
       return created
     } catch (error) {
+      // API失败：从本地状态移除临时文件夹
+      set((state) => {
+        const newFoldersMap = new Map(state.foldersMap)
+        newFoldersMap.delete(tempId)
+        return { foldersMap: newFoldersMap }
+      })
+      
       const errorMessage = error instanceof Error ? error.message : '添加文件夹失败'
-      set({ error: errorMessage, isLoading: false })
+      set({ error: errorMessage })
       return null
     }
   },
@@ -171,19 +209,30 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
   },
 
   removeFolder: async (id: number) => {
-    set({ isLoading: true, error: null })
+    const state = get()
+    
+    // 保存原始状态用于回滚
+    const originalFoldersMap = new Map(state.foldersMap)
+    
+    // 乐观更新：立即从本地状态移除文件夹
+    set((state) => {
+      const newFoldersMap = new Map(state.foldersMap)
+      newFoldersMap.delete(id)
+      return { foldersMap: newFoldersMap }
+    })
 
     try {
+      // 后台执行API请求
       await api.deleteNodePoolFolder(id)
-
-      set((state) => {
-        const newFoldersMap = new Map(state.foldersMap)
-        newFoldersMap.delete(id)
-        return { foldersMap: newFoldersMap, isLoading: false }
-      })
     } catch (error) {
+      // API失败：回滚到原始状态
+      set((state) => {
+        return { foldersMap: originalFoldersMap }
+      })
+      
+      // 显示错误信息
       const errorMessage = error instanceof Error ? error.message : '移除文件夹失败'
-      set({ error: errorMessage, isLoading: false })
+      set({ error: errorMessage })
     }
   },
 
