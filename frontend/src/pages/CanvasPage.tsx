@@ -734,7 +734,7 @@ export function CanvasPage() {
     initProject()
   }, [])
 
-  // 检查当前画布是否已被删除
+  // 检查当前画布是否已被删除，同时处理临时ID的情况
   useEffect(() => {
     if (!canvasId) return
 
@@ -743,16 +743,29 @@ export function CanvasPage() {
 
     // 检查当前画布是否还在画布列表中
     const canvasExists = canvases.some(c => c.id === id)
+    
+    // 检查是否有临时画布正在替换为真实画布
+    const hasTemporaryCanvas = canvases.some(c => c.id < 0)
 
-    // 如果画布已被删除，重定向到项目列表
-    if (!canvasExists && canvases.length >= 0) {
+    // 如果画布已被删除且没有临时画布正在处理，重定向到项目列表
+    // 临时ID（负数）被允许存在，因为它们会被真实ID替换
+    if (!canvasExists && !hasTemporaryCanvas && canvases.length >= 0) {
       // 清空画布状态
       clearCanvas()
       setCanvasId(null)
       // 重定向到项目列表
       navigate('/projects', { replace: true })
     }
-  }, [canvasId, navigate])
+    
+    // 如果当前是临时ID，检查是否已经被真实ID替换
+    if (id < 0) {
+      const realCanvas = canvases.find(c => c.tempId === id && c.id > 0)
+      if (realCanvas) {
+        // 更新URL为真实ID
+        navigate(`/canvas/${realCanvas.id}`, { replace: true })
+      }
+    }
+  }, [canvasId, canvases, navigate, clearCanvas, setCanvasId])
 
   // Load canvas data on mount
   useEffect(() => {
@@ -775,6 +788,15 @@ export function CanvasPage() {
       setCanvasId(id)
 
       try {
+        // 如果是临时ID，不尝试从数据库加载数据
+        if (id < 0) {
+          // 清空画布，准备一个新的画布
+          clearCanvas()
+          setDirty(false)
+          setIsLoadingCanvas(false)
+          return
+        }
+
         // Ensure projects are loaded first to get correct context
         if (useProjectsStore.getState().projects.length === 0) {
           await loadProjects()

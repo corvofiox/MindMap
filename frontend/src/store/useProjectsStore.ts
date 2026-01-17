@@ -215,9 +215,10 @@ export const useProjectsStore = create<ProjectsState>()(
           // 生成临时ID
           const tempId = -Date.now()
           
-          // 创建临时画布对象
+          // 创建临时画布对象，添加tempId字段用于跟踪
           const tempCanvas = {
             id: tempId,
+            tempId: tempId,
             ...data,
             projectId,
             createdAt: new Date().toISOString(),
@@ -236,12 +237,18 @@ export const useProjectsStore = create<ProjectsState>()(
             // 后台执行API请求
             const canvas = await api.createCanvas(projectId, data)
             
+            // 用真实数据替换临时画布，并保留tempId字段用于跟踪
+            const updatedCanvas = {
+              ...canvas,
+              tempId: tempId
+            }
+            
             // 用真实数据替换临时画布
             set((state) => ({
-              canvases: state.canvases.map(c => c.id === tempId ? canvas : c),
+              canvases: state.canvases.map(c => c.id === tempId ? updatedCanvas : c),
             }))
             
-            return canvas
+            return updatedCanvas
           } catch (error) {
             // API失败：从本地状态移除临时画布
             set((state) => ({

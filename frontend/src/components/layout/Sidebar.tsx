@@ -1057,6 +1057,11 @@ function CanvasItem({
       await deleteCanvas(canvas.id)
       addToast({ type: 'success', title: '已删除', message: '画布已被删除' })
       setShowContextMenu(false)
+      
+      // 如果删除的是当前活跃的画布，导航到新建画布页面
+      if (isActive) {
+        navigate('/canvas/new')
+      }
     } catch (error) {
       addToast({ type: 'error', title: '删除失败', message: error instanceof Error ? error.message : '未知错误' })
     }
