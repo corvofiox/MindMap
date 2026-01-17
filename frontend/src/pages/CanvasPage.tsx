@@ -2864,6 +2864,9 @@ export function CanvasPage() {
         <CanvasToolbar onSave={handleManualSave} />
       </div>
 
+      {/* Zoom Controls */}
+      <ZoomControls />
+
       {/* Canvas Container */}
       <div
         ref={containerRef}
@@ -3744,9 +3747,6 @@ export function CanvasPage() {
           )}
         </div>
       </div>
-
-      {/* Zoom Controls */}
-      <ZoomControls />
 
       {/* Node Style Panel */}
       <NodeStylePanel />
