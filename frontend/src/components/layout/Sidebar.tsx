@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { Plus, Folder, FolderOpen, FolderPlus, FileText, Trash2, MoreVertical, Edit2, Check, X, FolderKanban, Calendar, ChevronRight, ChevronDown } from 'lucide-react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useProjectsStore } from '@/store/useProjectsStore'
@@ -27,6 +27,7 @@ export function Sidebar({ open }: SidebarProps) {
   // 拖拽状态
   const [draggedCanvasId, setDraggedCanvasId] = useState<number | null>(null)
   const [dragOverFolderId, setDragOverFolderId] = useState<number | null>(null)
+  const [isRootDragOver, setIsRootDragOver] = useState(false)
 
   // 其他状态
   const [editingProjectId, setEditingProjectId] = useState<number | null>(null)
@@ -105,13 +106,16 @@ export function Sidebar({ open }: SidebarProps) {
   const handleDragEnd = () => {
     setDraggedCanvasId(null)
     setDragOverFolderId(null)
+    setIsRootDragOver(false)
   }
 
   // 拖拽进入文件夹
   const handleDragOverFolder = (e: React.DragEvent, folderId: number) => {
     e.preventDefault()
+    e.stopPropagation()
     if (draggedCanvasId) {
       setDragOverFolderId(folderId)
+      setIsRootDragOver(false)
     }
   }
 
@@ -119,11 +123,30 @@ export function Sidebar({ open }: SidebarProps) {
   const handleDragLeaveFolder = (e: React.DragEvent) => {
     e.preventDefault()
     setDragOverFolderId(null)
+    // 恢复根目录区域的高亮状态
+    if (draggedCanvasId) {
+      setIsRootDragOver(true)
+    }
+  }
+
+  // 拖拽进入根目录
+  const handleDragOverRoot = (e: React.DragEvent) => {
+    e.preventDefault()
+    if (draggedCanvasId && !dragOverFolderId) {
+      setIsRootDragOver(true)
+    }
+  }
+
+  // 拖拽离开根目录
+  const handleDragLeaveRoot = (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsRootDragOver(false)
   }
 
   // 拖拽放置到文件夹
   const handleDropOnFolder = async (e: React.DragEvent, folderId: number) => {
     e.preventDefault()
+    e.stopPropagation()
     if (draggedCanvasId) {
       try {
         await moveCanvasToFolder(draggedCanvasId, folderId)
@@ -149,6 +172,49 @@ export function Sidebar({ open }: SidebarProps) {
     }
     setDraggedCanvasId(null)
     setDragOverFolderId(null)
+    setIsRootDragOver(false)
+  }
+
+  // 检测拖拽释放位置并处理
+  const handleGlobalDragEnd = useCallback((e: DragEvent) => {
+    if (!draggedCanvasId) return
+
+    // 移除全局监听器
+    document.removeEventListener('dragend', handleGlobalDragEnd)
+    document.removeEventListener('dragover', handleGlobalDragOver)
+
+    // 检查释放位置是否在 sidebar 内容区域内
+    const target = e.target as HTMLElement
+    const sidebar = document.querySelector('[data-sidebar-content]')
+    if (sidebar && sidebar.contains(target)) {
+      // 释放在 sidebar 内但不是文件夹上，则移动到根目录
+      const folderElement = target.closest('[data-folder-item]')
+      if (!folderElement) {
+        moveCanvasToFolder(draggedCanvasId, null)
+          .then(() => {
+            addToast({ type: 'success', title: '移动成功', message: '画布已移动到根目录' })
+          })
+          .catch((error) => {
+            addToast({ type: 'error', title: '移动失败', message: error instanceof Error ? error.message : '未知错误' })
+          })
+      }
+    }
+
+    setDraggedCanvasId(null)
+    setDragOverFolderId(null)
+    setIsRootDragOver(false)
+  }, [draggedCanvasId, addToast])
+
+  // 全局拖拽结束处理
+  const handleGlobalDragOver = useCallback((e: DragEvent) => {
+    e.preventDefault()
+  }, [])
+
+  // 包装拖拽开始以添加全局监听
+  const handleDragStartWithGlobal = (canvasId: number) => {
+    setDraggedCanvasId(canvasId)
+    document.addEventListener('dragend', handleGlobalDragEnd)
+    document.addEventListener('dragover', handleGlobalDragOver)
   }
 
   // 加载项目列表
@@ -425,7 +491,7 @@ export function Sidebar({ open }: SidebarProps) {
           </div>
 
           {/* 画布管理区域 */}
-          <div className="flex-1 flex flex-col min-h-0">
+          <div className='flex-1 flex flex-col min-h-0'>
             <div className="relative h-12 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-4 flex-shrink-0">
               <div className="flex items-center gap-3">
                 <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shadow-md">
@@ -492,7 +558,23 @@ export function Sidebar({ open }: SidebarProps) {
               </div>
             )}
 
-            <div className="flex-1 overflow-y-auto custom-scrollbar p-2">
+            <div
+              className={clsx(
+                'flex-1 overflow-y-auto custom-scrollbar p-3 transition-all duration-200',
+                isRootDragOver && !dragOverFolderId && 'bg-blue-50 dark:bg-blue-900/20'
+              )}
+              style={isRootDragOver && !dragOverFolderId ? {
+                border: '2px solid rgba(59, 130, 246, 0.5)',
+                borderRadius: '8px'
+              } : {}}
+              data-sidebar-content
+              onDragOver={(e) => {
+                handleDragOverRoot(e);
+                e.stopPropagation();
+              }}
+              onDragLeave={handleDragLeaveRoot}
+              onDrop={handleDropOnRoot}
+            >
               {/* 文件夹列表 */}
               {folders
                 .filter(f => !f.parentId)
@@ -505,33 +587,35 @@ export function Sidebar({ open }: SidebarProps) {
                     activeCanvasId={activeCanvasId}
                     isExpanded={expandedFolderIds.has(folder.id)}
                     onToggle={handleToggleFolder}
+                    draggedCanvasId={draggedCanvasId}
                     dragOverFolderId={dragOverFolderId}
                     onDragOverFolder={handleDragOverFolder}
                     onDragLeaveFolder={handleDragLeaveFolder}
                     onDropOnFolder={handleDropOnFolder}
-                    onDragStart={handleDragStart}
+                    onDragStart={handleDragStartWithGlobal}
                     onDragEnd={handleDragEnd}
                   />
                 ))}
 
               {/* 根目录画布 */}
-              <div
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={handleDropOnRoot}
-                className="rounded transition-colors"
-              >
-                {rootCanvases
+              {rootCanvases.length > 0 ? (
+                rootCanvases
                   .sort((a, b) => a.sortOrder - b.sortOrder)
                   .map((canvas) => (
                     <CanvasItem
                       key={canvas.id}
                       canvas={canvas}
                       isActive={activeCanvasId === canvas.id}
-                      onDragStart={handleDragStart}
+                      isDragging={draggedCanvasId === canvas.id}
+                      onDragStart={handleDragStartWithGlobal}
                       onDragEnd={handleDragEnd}
                     />
-                  ))}
-              </div>
+                  ))
+              ) : (
+                <div className="text-center text-sm text-gray-400 px-4 py-4">
+                  根目录 (拖拽画布到此处移出文件夹)
+                </div>
+              )}
             </div>
           </div>
         </>
@@ -547,6 +631,7 @@ function FolderItem({
   activeCanvasId,
   isExpanded,
   onToggle,
+  draggedCanvasId,
   dragOverFolderId,
   onDragOverFolder,
   onDragLeaveFolder,
@@ -559,6 +644,7 @@ function FolderItem({
   activeCanvasId: number | null
   isExpanded: boolean
   onToggle: (folderId: number) => void
+  draggedCanvasId: number | null
   dragOverFolderId: number | null
   onDragOverFolder: (e: React.DragEvent, folderId: number) => void
   onDragLeaveFolder: (e: React.DragEvent) => void
@@ -749,7 +835,7 @@ function FolderItem({
         </div>
       ) : (
         // 查看模式
-        <div className="relative group">
+        <div className="relative group" data-folder-item>
           <div
             onClick={handleToggle}
             onContextMenu={(e) => {
@@ -761,9 +847,9 @@ function FolderItem({
             onDragLeave={onDragLeaveFolder}
             onDrop={(e) => onDropOnFolder(e, folder.id)}
             className={clsx(
-              'w-full flex items-center gap-2 px-2 py-1 rounded text-gray-700 dark:text-gray-300 cursor-pointer',
+              'w-full flex items-center gap-2 px-2 py-2 rounded-lg cursor-pointer transition-all duration-200',
               dragOverFolderId === folder.id
-                ? 'bg-blue-100 dark:bg-blue-900/30 border border-blue-500'
+                ? 'bg-blue-100 dark:bg-blue-900/40 ring-2 ring-blue-500 ring-opacity-50 scale-[1.02] shadow-sm'
                 : 'hover:bg-gray-100 dark:hover:bg-gray-700'
             )}
           >
@@ -778,30 +864,54 @@ function FolderItem({
             )}
             <div onClick={(e) => e.stopPropagation()}>
               {isExpanded ? (
-                <FolderOpen className="w-4 h-4" />
+                <FolderOpen className={clsx('w-4 h-4', dragOverFolderId === folder.id ? 'text-blue-600' : 'text-blue-500')} />
               ) : (
-                <Folder className="w-4 h-4" />
+                <Folder className={clsx('w-4 h-4', dragOverFolderId === folder.id ? 'text-blue-500' : 'text-gray-400 dark:text-gray-500')} />
               )}
             </div>
-            <span className="text-sm flex-1 truncate font-medium">{folder.name}</span>
-            <span className="text-[10px] font-bold text-gray-400 dark:text-gray-500 bg-gray-100 dark:bg-gray-700/50 px-1.5 py-0.5 rounded-full min-w-[20px] text-center">
+            <span className={clsx(
+              'text-sm flex-1 truncate font-medium transition-colors duration-200',
+              dragOverFolderId === folder.id ? 'text-blue-700 dark:text-blue-300' : 'text-gray-700 dark:text-gray-300'
+            )}>{folder.name}</span>
+            <span className={clsx(
+              'text-[10px] font-bold transition-colors duration-200',
+              dragOverFolderId === folder.id
+                ? 'text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-900/50'
+                : 'text-gray-400 dark:text-gray-500 bg-gray-100 dark:bg-gray-700/50'
+            )}>
               {folderCanvases.length}
             </span>
           </div>
 
           {isExpanded && (
-            <div className="ml-4 pl-3 mt-1 border-l border-gray-100 dark:border-gray-700/50 space-y-0.5">
+            <div 
+              className={clsx(
+                'ml-4 pl-3 mt-1 space-y-0.5 rounded-lg transition-all duration-200',
+                dragOverFolderId === folder.id
+                  ? 'bg-blue-50 dark:bg-blue-900/30 border-l-2 border-blue-400 dark:border-blue-600'
+                  : 'border-l border-gray-100 dark:border-gray-700/50'
+              )}
+              onDragOver={(e) => onDragOverFolder(e, folder.id)}
+              onDragLeave={onDragLeaveFolder}
+              onDrop={(e) => onDropOnFolder(e, folder.id)}
+            >
               {folderCanvases.map((canvas) => (
                 <CanvasItem
                   key={canvas.id}
                   canvas={canvas}
                   isActive={activeCanvasId === canvas.id}
+                  isDragging={draggedCanvasId === canvas.id}
                   onDragStart={onDragStart}
                   onDragEnd={onDragEnd}
                 />
               ))}
               {folderCanvases.length === 0 && (
-                <div className="text-center py-4 text-sm text-gray-400">
+                <div className={clsx(
+                  'text-center py-4 text-sm rounded-lg transition-all duration-200',
+                  dragOverFolderId === folder.id
+                    ? 'text-blue-500 bg-blue-50 dark:bg-blue-900/20'
+                    : 'text-gray-400'
+                )}>
                   空文件夹
                 </div>
               )}
@@ -850,11 +960,13 @@ function FolderItem({
 function CanvasItem({
   canvas,
   isActive,
+  isDragging,
   onDragStart,
   onDragEnd,
 }: {
   canvas: any
   isActive?: boolean
+  isDragging?: boolean
   onDragStart?: (canvasId: number) => void
   onDragEnd?: () => void
 }) {
@@ -1012,6 +1124,7 @@ function CanvasItem({
               isActive
                 ? 'border-blue-500 ring-2 ring-blue-500/20 shadow-blue-500/10'
                 : 'border-gray-200 dark:border-gray-700 hover:border-blue-400 dark:hover:border-blue-500',
+              isDragging && 'opacity-50 rotate-1 scale-[1.02] shadow-lg ring-2 ring-blue-400',
               onDragStart ? 'cursor-move' : 'cursor-pointer'
             )}
           >

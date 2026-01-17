@@ -70,6 +70,7 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
   const [editingCardId, setEditingCardId] = useState<number | null>(null)
   const [editingFolderId, setEditingFolderId] = useState<number | null>(null)
   const [isRootDragOver, setIsRootDragOver] = useState(false)
+  const [isDragOverFolder, setIsDragOverFolder] = useState(false)
 
   // Sort functionality
   const { sortedRootFolders, sortedCardsByFolder, handleReorder } = useNodePoolSort({ sortBy, sortOrder })
@@ -362,8 +363,11 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
   // Handle drag over root
   const handleRootDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
-    setIsRootDragOver(true)
-  }, [])
+    e.stopPropagation()
+    if (!isDragOverFolder) {
+      setIsRootDragOver(true)
+    }
+  }, [isDragOverFolder])
 
   // Handle drag leave root
   const handleRootDragLeave = useCallback((e: React.DragEvent) => {
@@ -430,8 +434,14 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
         previewCardId={previewCardId}
         onTogglePreview={setPreviewCardId}
         onDrop={handleFolderDrop}
-        onDragOver={() => {}}
-        onDragLeave={() => {}}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setIsDragOverFolder(true);
+          setIsRootDragOver(false);
+        }}
+        onDragLeave={() => {
+          setIsDragOverFolder(false);
+        }}
         onStartEdit={handleStartFolderEdit}
         onSaveEdit={handleSaveFolderName}
         onCancelEdit={handleCancelFolderEdit}
@@ -445,7 +455,7 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
   }
 
   return (
-    <aside data-node-pool="true" className={`w-72 bg-white dark:bg-gray-800 border-l border-gray-200 dark:border-gray-700 flex flex-col transition-all duration-200 fixed right-0 top-14 h-[calc(100vh-3.5rem)] z-[70] ${open ? 'transform translate-x-0' : 'transform translate-x-full'}`}>
+    <aside data-node-pool="true" className={`w-72 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 flex flex-col transition-all duration-200 fixed right-0 top-14 h-[calc(100vh-3.5rem)] z-[70] ${open ? 'transform translate-x-0' : 'transform translate-x-full'}`}>
       {/* Header */}
       <div className="h-12 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-4 flex-shrink-0">
         <h2 className="font-semibold text-gray-800 dark:text-white">节点池</h2>
@@ -544,8 +554,12 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
       <div
         className={clsx(
           'flex-1 overflow-y-auto custom-scrollbar p-3 transition-all duration-200',
-          isRootDragOver && 'bg-blue-50 dark:bg-blue-900/20 ring-2 ring-blue-500 ring-opacity-50'
+          isRootDragOver && 'bg-blue-50 dark:bg-blue-900/20'
         )}
+        style={isRootDragOver ? {
+          border: '2px solid rgba(59, 130, 246, 0.5)',
+          borderRadius: '8px'
+        } : {}}
         onDragOver={handleRootDragOver}
         onDragLeave={handleRootDragLeave}
         onDrop={handleRootDrop}
