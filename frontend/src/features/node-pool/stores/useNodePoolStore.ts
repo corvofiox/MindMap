@@ -15,7 +15,6 @@ import type {
   DragState,
 } from '../types/node-pool'
 import * as api from '@/services/api'
-import { useProjectsStore } from '@/store/useProjectsStore'
 
 /**
  * Node pool store with complete state management
@@ -158,9 +157,6 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
     try {
       // Call API to remove card
       await api.removeFromNodePool(id)
-      
-      // Update useProjectsStore to keep consistency
-      useProjectsStore.getState().loadNodePool(originalCard.projectId)
     } catch (error) {
       // Rollback on error
       set((state) => {
@@ -249,9 +245,6 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
         return { foldersMap: newFoldersMap }
       })
 
-      // Update useProjectsStore
-      useProjectsStore.getState().loadNodePoolFolders(folder.projectId)
-      
       return created
     } catch (error) {
       // Rollback on error
@@ -278,12 +271,6 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
         newFoldersMap.set(id, { ...updated, children: [] })
         return { foldersMap: newFoldersMap, isLoading: false }
       })
-      
-      // Update useProjectsStore if project ID is available
-      const folder = get().foldersMap.get(id)
-      if (folder) {
-        useProjectsStore.getState().loadNodePoolFolders(folder.projectId)
-      }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : '更新文件夹失败'
       set({ error: errorMessage, isLoading: false })
@@ -308,9 +295,6 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
     try {
       // Call API to remove folder
       await api.deleteNodePoolFolder(id)
-      
-      // Update useProjectsStore
-      useProjectsStore.getState().loadNodePoolFolders(originalFolder.projectId)
     } catch (error) {
       // Rollback on error
       set({ foldersMap: originalFoldersMap })
@@ -342,12 +326,6 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
           api.updateNodePoolFolder(id, { sortOrder })
         )
       )
-      
-      // Update useProjectsStore if needed
-      const firstFolder = get().foldersMap.get(updates[0]?.id)
-      if (firstFolder) {
-        useProjectsStore.getState().loadNodePoolFolders(firstFolder.projectId)
-      }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : '重新排序文件夹失败'
       set({ error: errorMessage })

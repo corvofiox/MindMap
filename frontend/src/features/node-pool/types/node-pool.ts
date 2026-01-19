@@ -19,9 +19,9 @@ export type DropPosition = 'before' | 'after' | 'inside'
  */
 export interface DragState {
   /** The item currently being dragged (if any) */
-  active: any | null
+  active: NodeCard | NodePoolFolder | null
   /** The item currently being dragged over (if any) */
-  over: any | null
+  over: NodeCard | NodePoolFolder | null
 }
 
 /**
@@ -148,6 +148,8 @@ export interface FolderItemProps {
   isDragOver: boolean
   /** Drag over position */
   dragOverPosition: DropPosition | null
+  /** Search query for highlighting */
+  searchQuery?: string
   /** Callback to toggle folder collapse state */
   onToggle?: (id: number) => void
   /** Callback to show context menu for folder */
@@ -196,6 +198,8 @@ export interface NodeCardItemProps {
   isDragOver: boolean
   /** Drag over position */
   dragOverPosition: DropPosition | null
+  /** Search query for highlighting */
+  searchQuery?: string
   /** Callback to use the card */
   onUse: (card: NodeCard) => void
   /** Callback to remove the card */

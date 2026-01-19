@@ -10,7 +10,7 @@
  * - Optimized performance with Map lookups
  */
 
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useMemo, useEffect } from 'react'
 import {
   Plus,
   Search,
@@ -18,22 +18,43 @@ import {
   SortAsc,
   SortDesc,
   X,
+  FileUp,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useProjectsStore } from '@/store/useProjectsStore'
 import { useUIStore } from '@/store/useUIStore'
 import { useCanvasStore } from '@/store/useCanvasStore'
-import { useNodePoolStore } from '../stores/useNodePoolStore'
+import { useNodePoolStore, selectCardsByFolder } from '../stores/useNodePoolStore'
 import { useNodePoolSort, useFolderTree } from '../hooks/useNodePoolSort'
 import { FolderItem } from './FolderItem'
 import { NodeCardItem } from './NodeCardItem'
 import { FolderContextMenu } from './FolderContextMenu'
 import { NodeCardContextMenu } from './NodeCardContextMenu'
-import type { NodePoolSortOption, NodePoolSortOrder } from '@/types'
+import { ContextMenuErrorBoundary } from './ContextMenuErrorBoundary'
+import type { NodePoolSortOption, NodePoolSortOrder, Node } from '@/types'
 import type { NodeCard, NodePoolFolder } from '../types/node-pool'
 
 interface NodePoolPanelProps {
   open: boolean
+}
+
+function SearchHighlighter({ text, query }: { text: string; query: string }) {
+  if (!query.trim() || !text.toLowerCase().includes(query.toLowerCase())) {
+    return <span>{text}</span>
+  }
+
+  const parts = text.split(new RegExp(`(${query})`, 'gi'))
+  return (
+    <span>
+      {parts.map((part, index) =>
+        part.toLowerCase() === query.toLowerCase() ? (
+          <span key={index} className="bg-yellow-200 dark:bg-yellow-800 font-semibold">{part}</span>
+        ) : (
+          <span key={index}>{part}</span>
+        )
+      )}
+    </span>
+  )
 }
 
 /**
@@ -277,7 +298,7 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
       handleMoveCardToFolder(card, folder.id)
     } else if (canvasNodeData) {
       // 添加新卡片到节点池
-      const node = JSON.parse(canvasNodeData) as any
+      const node = JSON.parse(canvasNodeData) as unknown as Node
       addCard(currentProject!.id, {
         projectId: currentProject!.id,
         name: node.title || node.content || '未命名',
@@ -310,7 +331,7 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
       handleMoveCardToFolder(card, null)
     } else if (canvasNodeData) {
       // 添加新卡片到节点池
-      const node = JSON.parse(canvasNodeData) as any
+      const node = JSON.parse(canvasNodeData) as unknown as Node
       addCard(currentProject!.id, {
         projectId: currentProject!.id,
         name: node.title || node.content || '未命名',
@@ -344,48 +365,110 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
     setIsRootDragOver(false)
   }, [])
 
-  // Filter cards based on search
-  const filteredCards = useCallback((): NodeCard[] => {
+  // Filter cards based on search - optimized with useMemo
+  const filteredCardsByFolder = useMemo(() => {
     if (!searchQuery.trim()) {
-      return Array.from(cardsMap.values()) as NodeCard[]
+      const result = new Map<number | null, NodeCard[]>()
+      cardsMap.forEach((card) => {
+        const folderId = card.folderId || null
+        if (!result.has(folderId)) {
+          result.set(folderId, [])
+        }
+        result.get(folderId)!.push(card)
+      })
+      return result
     }
 
     const searchTerms = searchQuery.trim().toLowerCase().split(/\s+/).filter(term => term.length > 0)
-    return (Array.from(cardsMap.values()) as NodeCard[]).filter((card: NodeCard) => {
+    const result = new Map<number | null, NodeCard[]>()
+
+    cardsMap.forEach((card: NodeCard) => {
       const name = card.name.toLowerCase()
       let content = ''
 
       try {
         const nodeData = JSON.parse(card.content)
-        content = (nodeData.content || '').toLowerCase()
+        content = (nodeData.content || nodeData.title || '').toLowerCase()
       } catch {
         content = card.content.toLowerCase()
       }
 
-      return searchTerms.every(term => name.includes(term) || content.includes(term))
-    })
-  }, [cardsMap, searchQuery])
-
-  // Get filtered cards by folder
-  const getFilteredCardsByFolder = useCallback((): Map<number | null, NodeCard[]> => {
-    const filtered = filteredCards()
-    const result = new Map<number | null, NodeCard[]>()
-
-    filtered.forEach((card) => {
-      const folderId = card.folderId || null
-      if (!result.has(folderId)) {
-        result.set(folderId, [])
+      const matches = searchTerms.every(term => name.includes(term) || content.includes(term))
+      if (matches) {
+        const folderId = card.folderId || null
+        if (!result.has(folderId)) {
+          result.set(folderId, [])
+        }
+        result.get(folderId)!.push(card)
       }
-      result.get(folderId)!.push(card)
     })
 
     return result
-  }, [filteredCards])
+  }, [cardsMap, searchQuery])
+
+  // Get folders that have matching cards
+  const filteredFolderIds = useMemo(() => {
+    if (!searchQuery.trim()) {
+      return new Set<number>(foldersMap.keys())
+    }
+
+    const folderIds = new Set<number>()
+    filteredCardsByFolder.forEach((_, folderId) => {
+      if (folderId !== null) {
+        folderIds.add(folderId)
+      }
+    })
+    return folderIds
+  }, [foldersMap, filteredCardsByFolder, searchQuery])
+
+  // Filter folder tree to only show folders with matching cards
+  const filteredFolderTree = useMemo(() => {
+    const buildFilteredTree = (parentId: number | null): (NodePoolFolder & { children?: NodePoolFolder[] })[] => {
+      const folders = Array.from(foldersMap.values())
+        .filter(folder => folder.parentId === parentId)
+        .sort((a, b) => a.sortOrder - b.sortOrder)
+
+      return folders
+        .filter(folder => {
+          if (searchQuery.trim()) {
+            return filteredFolderIds.has(folder.id) || hasMatchingDescendant(folder.id)
+          }
+          return true
+        })
+        .map(folder => ({
+          ...folder,
+          children: buildFilteredTree(folder.id)
+        }))
+    }
+
+    const hasMatchingDescendant = (folderId: number): boolean => {
+      const childFolders = Array.from(foldersMap.values()).filter(f => f.parentId === folderId)
+      return childFolders.some(child =>
+        filteredFolderIds.has(child.id) || hasMatchingDescendant(child.id)
+      )
+    }
+
+    return buildFilteredTree(null)
+  }, [foldersMap, filteredFolderIds, searchQuery])
+
+  // Calculate total matching cards count
+  const totalMatchingCards = useMemo(() => {
+    let count = 0
+    filteredCardsByFolder.forEach(cards => count += cards.length)
+    return count
+  }, [filteredCardsByFolder])
 
   // Render folder with its contents
-  const renderFolder = (folder: NodePoolFolder & { children?: NodePoolFolder[] }, level = 0) => {
-    const filteredCardsByFolder = getFilteredCardsByFolder()
+  const renderFolder = useCallback((folder: NodePoolFolder & { children?: NodePoolFolder[] }, level = 0) => {
     const cards = filteredCardsByFolder.get(folder.id) || []
+    const children = (folder.children || []).filter(childFolder => {
+      if (!searchQuery.trim()) return true
+      const childCards = filteredCardsByFolder.get(childFolder.id) || []
+      const grandChildren = (childFolder.children || []).some(gc => (filteredCardsByFolder.get(gc.id) || []).length > 0)
+      return childCards.length > 0 || grandChildren
+    })
+
+    const hasContent = cards.length > 0 || children.length > 0
 
     return (
       <FolderItem
@@ -393,7 +476,8 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
         folder={folder}
         level={level}
         cards={cards}
-        children={folder.children || []}
+        children={children}
+        searchQuery={searchQuery}
         isDragOver={false}
         dragOverPosition={null}
         onToggle={handleToggleFolder}
@@ -420,7 +504,7 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
         editingCardId={editingCardId}
       />
     )
-  }
+  }, [filteredCardsByFolder, handleToggleFolder, handleFolderContextMenu, handleCardContextMenu, previewCardId, handleFolderDrop, handleStartFolderEdit, handleSaveFolderName, handleCancelFolderEdit, editingFolderId, handleUseCard, handleRemoveCard, handleSaveCardName, editingCardId, searchQuery])
 
   return (
     <aside data-node-pool="true" className={`w-72 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 flex flex-col transition-all duration-200 fixed right-0 top-14 h-[calc(100vh-3.5rem)] z-[70] ${open ? 'transform translate-x-0' : 'transform translate-x-full'}`}>
@@ -533,59 +617,109 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
         onDrop={handleRootDrop}
       >
         {/* Render folder tree */}
-        {folderTree.map((folder) => renderFolder(folder))}
-
-        {/* Root cards */}
-        {getFilteredCardsByFolder().get(null)?.map((card) => (
-          <div key={card.id} className="mb-2">
-            <NodeCardItem
-              card={card}
-              isDragging={false}
-              isDragOver={false}
-              dragOverPosition={null}
-              onUse={handleUseCard}
-              onRemove={handleRemoveCard}
-              onSaveName={handleSaveCardName}
-              onContextMenu={handleCardContextMenu}
-              showPreview={previewCardId === card.id}
-              onTogglePreview={setPreviewCardId}
-            />
-          </div>
-        ))}
-
-        {/* Empty state */}
-        {cardsMap.size === 0 && (
+        {filteredFolderTree.length === 0 && !searchQuery.trim() ? (
+          <EmptyState onAddToPool={handleAddToPool} />
+        ) : filteredFolderTree.length === 0 && searchQuery.trim() ? (
           <div className="text-center py-8 text-gray-500 dark:text-gray-400">
-            <p className="text-sm">节点池为空</p>
-            <p className="text-xs mt-1">选择节点并点击 + 添加</p>
+            <Search className="w-8 h-8 mx-auto mb-2 opacity-50" />
+            <p className="text-sm">未找到匹配的节点</p>
+            <p className="text-xs mt-1">尝试其他关键词</p>
+            <button
+              onClick={() => setSearchQuery('')}
+              className="mt-3 px-3 py-1.5 text-sm bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600"
+            >
+              清除搜索
+            </button>
           </div>
+        ) : (
+          <>
+            {/* Search results summary */}
+            {searchQuery.trim() && (
+              <div className="mb-3 px-2 py-1.5 bg-blue-50 dark:bg-blue-900/30 rounded-lg text-xs text-blue-600 dark:text-blue-400 flex items-center gap-2">
+                <Search className="w-3 h-3" />
+                <span>找到 <strong>{totalMatchingCards}</strong> 个匹配结果</span>
+                {totalMatchingCards > 0 && (
+                  <button
+                    onClick={() => setSearchQuery('')}
+                    className="ml-auto text-blue-500 hover:text-blue-700 dark:hover:text-blue-300"
+                  >
+                    清除搜索
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* Render filtered folder tree */}
+            {filteredFolderTree.map((folder) => renderFolder(folder, 0))}
+
+            {/* Root cards */}
+            {filteredCardsByFolder.get(null)?.map((card) => (
+              <div key={card.id} className="mb-2">
+                <NodeCardItem
+                  card={card}
+                  isDragging={false}
+                  isDragOver={false}
+                  dragOverPosition={null}
+                  onUse={handleUseCard}
+                  onRemove={handleRemoveCard}
+                  onSaveName={handleSaveCardName}
+                  onContextMenu={handleCardContextMenu}
+                  showPreview={previewCardId === card.id}
+                  onTogglePreview={setPreviewCardId}
+                  searchQuery={searchQuery}
+                />
+              </div>
+            ))}
+          </>
         )}
       </div>
 
-      {/* Folder Context Menu */}
-      {folderContextMenu && (
-        <FolderContextMenu
-          folder={folderContextMenu.folder}
-          position={folderContextMenu.position}
-          onClose={() => setFolderContextMenu(null)}
-          onRename={() => handleRenameFolder(folderContextMenu.folder)}
-        />
-      )}
+      {/* Folder Context Menu with Error Boundary */}
+      <ContextMenuErrorBoundary>
+        {folderContextMenu && (
+          <FolderContextMenu
+            folder={folderContextMenu.folder}
+            position={folderContextMenu.position}
+            onClose={() => setFolderContextMenu(null)}
+            onRename={() => handleRenameFolder(folderContextMenu.folder)}
+          />
+        )}
+      </ContextMenuErrorBoundary>
 
-      {/* Card Context Menu */}
-      {cardContextMenu && (
-        <NodeCardContextMenu
-          card={cardContextMenu.card}
-          position={cardContextMenu.position}
-          onClose={() => {
-            setCardContextMenu(null)
-            setDragGhost(null, null)
-          }}
-          onRename={() => handleRenameCard(cardContextMenu.card)}
-          onMoveToFolder={(folderId) => handleMoveCardToFolder(cardContextMenu.card, folderId)}
-        />
-      )}
+      {/* Card Context Menu with Error Boundary */}
+      <ContextMenuErrorBoundary>
+        {cardContextMenu && (
+          <NodeCardContextMenu
+            card={cardContextMenu.card}
+            position={cardContextMenu.position}
+            onClose={() => {
+              setCardContextMenu(null)
+              setDragGhost(null, null)
+            }}
+            onRename={() => handleRenameCard(cardContextMenu.card)}
+            onMoveToFolder={(folderId) => handleMoveCardToFolder(cardContextMenu.card, folderId)}
+          />
+        )}
+      </ContextMenuErrorBoundary>
     </aside>
+  )
+}
+
+function EmptyState({ onAddToPool }: { onAddToPool: () => void }) {
+  return (
+    <div className="text-center py-8">
+      <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-gray-100 dark:bg-gray-700 flex items-center justify-center">
+        <FileUp className="w-6 h-6 text-gray-400 dark:text-gray-500" />
+      </div>
+      <p className="text-sm text-gray-600 dark:text-gray-400">节点池为空</p>
+      <p className="text-xs text-gray-500 dark:text-gray-500 mt-1">从画布拖入节点或选择节点后添加</p>
+      <button
+        onClick={onAddToPool}
+        className="mt-4 px-4 py-2 text-sm bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors"
+      >
+        添加选中节点
+      </button>
+    </div>
   )
 }
 

@@ -1,92 +1,35 @@
 import { createPortal } from 'react-dom'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback } from 'react'
 import {
   Edit2,
   Trash2,
 } from 'lucide-react'
 import { useNodePoolStore } from '../stores/useNodePoolStore'
 import { useUIStore } from '@/store/useUIStore'
+import { useContextMenu, MenuItem, MenuDivider } from '../hooks/useContextMenu'
 import type { NodePoolFolder } from '@/types'
 
 interface FolderContextMenuProps {
   folder: NodePoolFolder
   position: { x: number; y: number }
   onClose: () => void
-  onCreateSubfolder?: () => void
   onRename?: () => void
 }
 
 export function FolderContextMenu({ folder, position, onClose, onRename }: FolderContextMenuProps) {
   const { removeFolder } = useNodePoolStore()
   const { addToast } = useUIStore()
-  const menuRef = useRef<HTMLDivElement>(null)
-  const [adjustedPosition, setAdjustedPosition] = useState(position)
+  const { adjustedPosition, menuRef } = useContextMenu({ initialPosition: position, onClose })
 
-  useEffect(() => {
-    const adjustPosition = () => {
-      if (!menuRef.current) return
-
-      const rect = menuRef.current.getBoundingClientRect()
-      const padding = 10
-      const viewportWidth = window.innerWidth
-      const viewportHeight = window.innerHeight
-
-      let x = position.x
-      let y = position.y
-
-      if (x + rect.width > viewportWidth - padding) {
-        x = viewportWidth - rect.width - padding
-      }
-      if (x < padding) {
-        x = padding
-      }
-
-      if (y + rect.height > viewportHeight - padding) {
-        y = viewportHeight - rect.height - padding
-      }
-      if (y < padding) {
-        y = padding
-      }
-
-      setAdjustedPosition({ x, y })
-    }
-
-    const timeoutId = setTimeout(adjustPosition, 0)
-    return () => clearTimeout(timeoutId)
-  }, [position])
-
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as unknown as globalThis.Node)) {
-        onClose()
-      }
-    }
-
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        onClose()
-      }
-    }
-
-    document.addEventListener('mousedown', handleClickOutside)
-    document.addEventListener('keydown', handleEscape)
-
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside)
-      document.removeEventListener('keydown', handleEscape)
-    }
-  }, [onClose])
-
-  const handleRename = () => {
+  const handleRename = useCallback(() => {
     onRename?.()
     onClose()
-  }
+  }, [onRename, onClose])
 
-  const handleDelete = async () => {
+  const handleDelete = useCallback(async () => {
     const cardsMap = useNodePoolStore.getState().cardsMap
     const foldersMap = useNodePoolStore.getState().foldersMap
 
-    // Count cards in this folder and all subfolders
     const countCardsInFolderTree = (folderId: number): number => {
       let count = Array.from(cardsMap.values()).filter((c) => c.folderId === folderId).length
       const children = Array.from(foldersMap.values()).filter((f) => f.parentId === folderId)
@@ -98,7 +41,6 @@ export function FolderContextMenu({ folder, position, onClose, onRename }: Folde
 
     const cardCount = countCardsInFolderTree(folder.id)
 
-    // If folder contains cards, show confirmation dialog
     if (cardCount > 0) {
       const confirmMessage = `确定要删除文件夹"${folder.name}"吗？文件夹内的 ${cardCount} 个节点卡片也将被删除。此操作不可恢复。`
       if (!confirm(confirmMessage)) {
@@ -113,46 +55,7 @@ export function FolderContextMenu({ folder, position, onClose, onRename }: Folde
       addToast({ type: 'error', title: '删除失败', message: error instanceof Error ? error.message : '未知错误' })
     }
     onClose()
-  }
-
-  const MenuItem = ({
-    icon: Icon,
-    label,
-    onClick,
-    shortcut,
-    disabled = false,
-    danger = false,
-    rightElement,
-  }: {
-    icon: typeof Edit2
-    label: string
-    onClick: () => void
-    shortcut?: string
-    disabled?: boolean
-    danger?: boolean
-    rightElement?: React.ReactNode
-  }) => (
-    <button
-      className={`
-        w-full flex items-center gap-2 px-3 py-2 text-sm rounded
-        ${disabled
-          ? 'opacity-40 cursor-not-allowed'
-          : danger
-            ? 'text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30'
-            : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'
-        }
-      `}
-      onClick={onClick}
-      disabled={disabled}
-    >
-      <Icon className="w-3 h-3" />
-      {label}
-      {shortcut && (
-        <span className="text-xs text-gray-400 dark:text-gray-500">{shortcut}</span>
-      )}
-      {rightElement}
-    </button>
-  )
+  }, [folder, removeFolder, addToast, onClose])
 
   return createPortal(
     <>
@@ -171,6 +74,7 @@ export function FolderContextMenu({ folder, position, onClose, onRename }: Folde
           label="重命名"
           onClick={handleRename}
         />
+        <MenuDivider />
         <MenuItem
           icon={Trash2}
           label="删除"

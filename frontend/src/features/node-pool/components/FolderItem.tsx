@@ -26,6 +26,7 @@ export const FolderItem = memo(function FolderItem({
   level = 0,
   cards,
   children,
+  searchQuery = '',
   onToggle,
   onContextMenu,
   onCardContextMenu,
@@ -210,6 +211,7 @@ export const FolderItem = memo(function FolderItem({
                 onContextMenu={onCardContextMenu}
                 showPreview={previewCardId === card.id}
                 onTogglePreview={onTogglePreview}
+                searchQuery={searchQuery}
               />
             </div>
           ))}
@@ -222,6 +224,7 @@ export const FolderItem = memo(function FolderItem({
               level={level + 1}
               cards={[]} // Cards will be passed from parent
               children={child.children || []}
+              searchQuery={searchQuery}
               isDragOver={false}
               dragOverPosition={null}
               onToggle={onToggle}

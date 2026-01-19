@@ -12,6 +12,25 @@ import type { NodeCard } from '@/types'
 import type { NodeCardItemProps } from '../types/node-pool'
 import { containsHTML, safeHTML } from '@/utils/sanitizeHTML'
 
+function SearchHighlighter({ text, query }: { text: string; query: string }) {
+  if (!query.trim() || !text.toLowerCase().includes(query.toLowerCase())) {
+    return <span>{containsHTML(text) ? <span dangerouslySetInnerHTML={{ __html: safeHTML(text) }} /> : text}</span>
+  }
+
+  const parts = text.split(new RegExp(`(${query})`, 'gi'))
+  return (
+    <span>
+      {parts.map((part, index) =>
+        part.toLowerCase() === query.toLowerCase() ? (
+          <span key={index} className="bg-yellow-200 dark:bg-yellow-800 font-semibold rounded px-0.5">{containsHTML(part) ? <span dangerouslySetInnerHTML={{ __html: safeHTML(part) }} /> : part}</span>
+        ) : (
+          <span key={index}>{containsHTML(part) ? <span dangerouslySetInnerHTML={{ __html: safeHTML(part) }} /> : part}</span>
+        )
+      )}
+    </span>
+  )
+}
+
 /**
  * Node card item component with drag and drop support
  */
@@ -26,7 +45,8 @@ export const NodeCardItem = memo(function NodeCardItem({
   onContextMenu,
   showPreview = false,
   onTogglePreview,
-}: NodeCardItemProps) {
+  searchQuery = '',
+}: NodeCardItemProps & { searchQuery?: string }) {
   const [isEditing, setIsEditing] = useState(false)
   const [editName, setEditName] = useState(card.name)
   const [previewPosition, setPreviewPosition] = useState({ top: 0 })
@@ -207,11 +227,7 @@ export const NodeCardItem = memo(function NodeCardItem({
                 />
               ) : (
                 <h4 className="text-sm font-medium text-gray-800 dark:text-white truncate">
-                  {containsHTML(card.name) ? (
-                    <span dangerouslySetInnerHTML={{ __html: safeHTML(card.name) }} />
-                  ) : (
-                    card.name
-                  )}
+                  <SearchHighlighter text={card.name} query={searchQuery} />
                 </h4>
               )}
               {card.description && !isEditing && (

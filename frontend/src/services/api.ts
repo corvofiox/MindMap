@@ -8,6 +8,10 @@ import type {
   Folder,
   NodeCard,
   NodePoolFolder,
+  Node,
+  NodeGroup,
+  Domain,
+  Connection,
 } from '@/types'
 import { API_ENDPOINTS } from '@/constants'
 import { apiClient } from './apiClient'
@@ -129,11 +133,11 @@ export async function saveCanvasData(id: number, yjsData: Uint8Array): Promise<v
  * Stores the data in yjsData field as a JSON string in base64 encoding
  */
 export async function saveCanvasNodesData(id: number, nodesData: {
-  nodes: any[]
-  groups: any[]
-  domains: any[]
-  connections: any[]
-  drawings?: any[]
+  nodes: Node[]
+  groups: NodeGroup[]
+  domains: Domain[]
+  connections: Connection[]
+  drawings?: unknown[]
 }): Promise<void> {
   // Convert to JSON and encode as base64 to store in yjsData field
   // Use proper UTF-8 encoding to handle Unicode characters (like Chinese)
@@ -151,15 +155,15 @@ export async function saveCanvasNodesData(id: number, nodesData: {
  * Returns empty object if canvas exists but has no data
  */
 export async function loadCanvasNodesData(id: number): Promise<{
-  nodes: any[]
-  groups: any[]
-  domains: any[]
-  connections: any[]
-  drawings?: any[]
+  nodes: Node[]
+  groups: NodeGroup[]
+  domains: Domain[]
+  connections: Connection[]
+  drawings?: unknown[]
 } | null> {
   try {
     const canvas = await getCanvas(id)
-    const yjsData = (canvas as any).yjsData
+    const yjsData = (canvas as { yjsData?: string }).yjsData
 
     if (!yjsData) {
       return {
