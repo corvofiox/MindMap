@@ -738,6 +738,9 @@ export function CanvasPage() {
 
   const { loadProjects, restoreCurrentProject, canvases, updateCanvas: updateCanvasInStore } = useProjectsStore()
 
+  const stableLoadProjects = useCallback(loadProjects, [])
+  const stableRestoreCurrentProject = useCallback(restoreCurrentProject, [])
+
   // 恢复项目状态（只在组件挂载时执行一次）
   useEffect(() => {
     const initProject = async () => {
@@ -812,8 +815,8 @@ export function CanvasPage() {
 
         // Ensure projects are loaded first to get correct context
         if (useProjectsStore.getState().projects.length === 0) {
-          await loadProjects()
-          await restoreCurrentProject()
+          await stableLoadProjects()
+          await stableRestoreCurrentProject()
         }
 
         const dbData = await loadCanvasNodesData(id)
@@ -864,7 +867,7 @@ export function CanvasPage() {
       clearTimeout(cacheTimeoutRef.current)
       clearTimeout(dbSaveTimeoutRef.current)
     }
-  }, [canvasId, loadProjects, restoreCurrentProject, setCanvasData, clearCanvas, setDirty, setCanvasId])
+  }, [canvasId])
 
   // Center camera on content when canvas data is loaded (only on first load)
   useEffect(() => {
