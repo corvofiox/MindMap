@@ -19,7 +19,7 @@ interface FolderContextMenuProps {
 export function FolderContextMenu({ folder, position, onClose, onRename }: FolderContextMenuProps) {
   const { removeFolder } = useNodePoolStore()
   const { addToast } = useUIStore()
-  const { adjustedPosition, menuRef } = useContextMenu({ initialPosition: position, onClose })
+  const { isPositioned, finalPosition, menuRef } = useContextMenu({ initialPosition: position, onClose })
 
   const handleRename = useCallback(() => {
     onRename?.()
@@ -65,8 +65,11 @@ export function FolderContextMenu({ folder, position, onClose, onRename }: Folde
         ref={menuRef}
         className="fixed z-[80] bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1 min-w-[120px]"
         style={{
-          left: adjustedPosition.x,
-          top: adjustedPosition.y,
+          left: finalPosition.x,
+          top: finalPosition.y,
+          opacity: isPositioned ? 1 : 0,
+          pointerEvents: isPositioned ? 'auto' : 'none',
+          transition: 'opacity 0.1s ease-out',
         }}
       >
         <MenuItem

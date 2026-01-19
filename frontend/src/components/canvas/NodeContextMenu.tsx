@@ -33,13 +33,14 @@ interface NodeContextMenuProps {
 export function NodeContextMenu({ nodeId, position, onClose }: NodeContextMenuProps) {
   const { nodes, updateNode, removeNode, duplicateNode } = useCanvasStore()
   const { openStylePanel, setSelectedNodeIds, setSelectedType, addToast } = useUIStore()
-  const { currentProject, addToNodePool } = useProjectsStore()
-  const { setCards, cardsMap } = useNodePoolStore()
+  const { currentProject } = useProjectsStore()
+  const { setCards, cardsMap, addCard } = useNodePoolStore()
 
   const menuRef = useRef<HTMLDivElement>(null)
   const colorSectionRef = useRef<HTMLDivElement>(null)
   const [colorSectionOpen, setColorSectionOpen] = useState(false)
-  const [adjustedPosition, setAdjustedPosition] = useState(position)
+  const [isPositioned, setIsPositioned] = useState(false)
+  const [finalPosition, setFinalPosition] = useState(position)
   const node = nodes.get(nodeId)
 
   // Adjust menu position based on actual menu size and viewport boundaries
@@ -71,19 +72,42 @@ export function NodeContextMenu({ nodeId, position, onClose }: NodeContextMenuPr
         y = padding
       }
 
-      setAdjustedPosition({ x, y })
+      setFinalPosition({ x, y })
+      setIsPositioned(true)
     }
 
-    // Initial adjustment
-    adjustPosition()
+    const rafId = requestAnimationFrame(adjustPosition)
+    return () => cancelAnimationFrame(rafId)
+  }, [position])
 
-    // Re-adjust when color section opens/closes
-    if (colorSectionOpen) {
-      // Use setTimeout to ensure the menu has finished rendering with the new size
-      const timeoutId = setTimeout(adjustPosition, 0)
-      return () => clearTimeout(timeoutId)
+  // Re-adjust when color section opens/closes
+  useEffect(() => {
+    if (colorSectionOpen && menuRef.current) {
+      const rect = menuRef.current.getBoundingClientRect()
+      const padding = 10
+      const viewportWidth = window.innerWidth
+      const viewportHeight = window.innerHeight
+
+      let x = position.x
+      let y = position.y
+
+      if (x + rect.width > viewportWidth - padding) {
+        x = viewportWidth - rect.width - padding
+      }
+      if (x < padding) {
+        x = padding
+      }
+
+      if (y + rect.height > viewportHeight - padding) {
+        y = viewportHeight - rect.height - padding
+      }
+      if (y < padding) {
+        y = padding
+      }
+
+      setFinalPosition({ x, y })
     }
-  }, [position, colorSectionOpen])
+  }, [colorSectionOpen, position])
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -115,23 +139,26 @@ export function NodeContextMenu({ nodeId, position, onClose }: NodeContextMenuPr
       return
     }
 
-    try {
-      const card = await addToNodePool(currentProject.id, {
-        projectId: currentProject.id,
-        name: node.title || node.content || '未命名',
-        content: JSON.stringify(node),
-        type: node.type || 'text',
-        color: node.color,
-        tags: null,
-        createdBy: 1,
-        sortOrder: 0,
+    const cardData = {
+      projectId: currentProject.id,
+      name: node.title || node.content || '未命名',
+      content: JSON.stringify(node),
+      type: node.type || 'text',
+      color: node.color,
+      tags: null,
+      createdBy: 1,
+      sortOrder: 0,
+    }
+
+    addCard(currentProject.id, cardData)
+      .then((card) => {
+        setCards([...cardsMap.values(), card])
+        addToast({ type: 'success', title: '已添加到节点池', message: '节点已添加到节点池' })
+      })
+      .catch((error) => {
+        addToast({ type: 'error', title: '添加失败', message: error instanceof Error ? error.message : '未知错误' })
       })
 
-      setCards([...cardsMap.values(), card])
-      addToast({ type: 'success', title: '已添加到节点池', message: '节点已添加到节点池' })
-    } catch (error) {
-      addToast({ type: 'error', title: '添加失败', message: error instanceof Error ? error.message : '未知错误' })
-    }
     onClose()
   }
 
@@ -335,8 +362,11 @@ export function NodeContextMenu({ nodeId, position, onClose }: NodeContextMenuPr
           ref={menuRef}
           className="fixed z-[80] w-60 bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 py-2 px-2 animate-in fade-in zoom-in-95 duration-150"
           style={{
-            left: adjustedPosition.x,
-            top: adjustedPosition.y,
+            left: finalPosition.x,
+            top: finalPosition.y,
+            opacity: isPositioned ? 1 : 0,
+            pointerEvents: isPositioned ? 'auto' : 'none',
+            transition: 'opacity 0.1s ease-out',
           }}
         >
           {/* Edit Actions */}

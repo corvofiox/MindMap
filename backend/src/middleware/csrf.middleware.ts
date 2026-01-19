@@ -28,7 +28,7 @@ const { doubleCsrfProtection, generateCsrfToken } = doubleCsrf({
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'strict',
     httpOnly: false,
-    maxAge: 86400 // 24 hours
+    maxAge: 604800 // 7 days
   },
   size: 64,
   ignoredMethods: ['GET', 'HEAD', 'OPTIONS']

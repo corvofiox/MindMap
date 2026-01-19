@@ -125,6 +125,18 @@ export class ApiClient {
     return null
   }
 
+  // 检查CSRF token是否有效
+  private hasValidCsrfToken(): boolean {
+    return this.getCsrfToken() !== null
+  }
+
+  // 确保CSRF token有效（如果无效则刷新）
+  async ensureCsrfToken(): Promise<void> {
+    if (!this.hasValidCsrfToken()) {
+      await this.getCsrfTokenFromServer()
+    }
+  }
+
   // 解析响应
   private async parseResponse<T>(response: Response): Promise<ApiResponse<T>> {
     // 检查响应是否为JSON
@@ -177,6 +189,11 @@ export class ApiClient {
     options: RequestInit = {}
   ): Promise<T> {
     try {
+      // 确保CSRF token有效（针对非GET请求）
+      if (options.method && options.method !== 'GET' && options.method !== 'HEAD' && options.method !== 'OPTIONS') {
+        await this.ensureCsrfToken()
+      }
+
       // 确定Content-Type
       let contentType = options.headers?.['Content-Type'] as string
       // 如果是FormData且没有设置Content-Type，则不指定（浏览器会自动处理）
@@ -197,8 +214,10 @@ export class ApiClient {
         // 检查是否是CSRF错误（403 Forbidden）
         if (response.status === 403) {
           const errorData = await this.parseResponse<any>(response)
-          if (errorData && errorData.error && errorData.error.includes('CSRF')) {
-            // 尝试使用新的CSRF token重试
+          if (errorData && errorData.error && 
+              (errorData.error.includes('CSRF') || errorData.error.includes('csrf'))) {
+            // 清除旧的CSRF token并尝试获取新的
+            document.cookie = 'x-csrf-token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;'
             return this.retryWithNewCsrfToken<T>(endpoint, options)
           }
         }

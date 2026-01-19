@@ -22,7 +22,7 @@ interface NodeCardContextMenuProps {
 export function NodeCardContextMenu({ card, position, onClose, onRename, onMoveToFolder }: NodeCardContextMenuProps) {
   const { removeCard } = useNodePoolStore()
   const { addToast, setDragGhost } = useUIStore()
-  const { adjustedPosition, menuRef } = useContextMenu({ initialPosition: position, onClose })
+  const { isPositioned, finalPosition, menuRef } = useContextMenu({ initialPosition: position, onClose })
   const [moveMenuOpen, setMoveMenuOpen] = useState(false)
 
   const folders = useNodePoolStore((state) => Array.from(state.foldersMap.values()).sort((a, b) => a.sortOrder - b.sortOrder))
@@ -43,13 +43,13 @@ export function NodeCardContextMenu({ card, position, onClose, onRename, onMoveT
   }, [card.id, removeCard, addToast, onClose])
 
   const handleCopyToCanvas = useCallback(() => {
-    setDragGhost(card, { x: adjustedPosition.x, y: adjustedPosition.y })
+    setDragGhost(card, { x: finalPosition.x, y: finalPosition.y })
     const customEvent = new CustomEvent('canvasDrop', {
       detail: { card },
     })
     document.dispatchEvent(customEvent)
     onClose()
-  }, [card, setDragGhost, adjustedPosition, onClose])
+  }, [card, setDragGhost, finalPosition, onClose])
 
   const handleMoveToFolder = useCallback((folderId: number | null) => {
     onMoveToFolder?.(folderId)
@@ -65,8 +65,11 @@ export function NodeCardContextMenu({ card, position, onClose, onRename, onMoveT
         ref={menuRef}
         className="fixed z-[80] bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1 min-w-[160px]"
         style={{
-          left: adjustedPosition.x,
-          top: adjustedPosition.y,
+          left: finalPosition.x,
+          top: finalPosition.y,
+          opacity: isPositioned ? 1 : 0,
+          pointerEvents: isPositioned ? 'auto' : 'none',
+          transition: 'opacity 0.1s ease-out',
         }}
       >
         <MenuItem

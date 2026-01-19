@@ -13,12 +13,14 @@ interface UseContextMenuOptions {
 }
 
 interface UseContextMenuReturn {
-  adjustedPosition: { x: number; y: number }
+  isPositioned: boolean
+  finalPosition: { x: number; y: number }
   menuRef: React.RefObject<HTMLDivElement>
 }
 
 export function useContextMenu({ initialPosition, onClose }: UseContextMenuOptions): UseContextMenuReturn {
-  const [adjustedPosition, setAdjustedPosition] = useState(initialPosition)
+  const [isPositioned, setIsPositioned] = useState(false)
+  const [finalPosition, setFinalPosition] = useState(initialPosition)
   const menuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -41,11 +43,12 @@ export function useContextMenu({ initialPosition, onClose }: UseContextMenuOptio
         y = Math.max(padding, viewportHeight - rect.height - padding)
       }
 
-      setAdjustedPosition({ x, y })
+      setFinalPosition({ x, y })
+      setIsPositioned(true)
     }
 
-    const timeoutId = setTimeout(adjustPosition, 0)
-    return () => clearTimeout(timeoutId)
+    const rafId = requestAnimationFrame(adjustPosition)
+    return () => cancelAnimationFrame(rafId)
   }, [initialPosition])
 
   useEffect(() => {
@@ -70,7 +73,7 @@ export function useContextMenu({ initialPosition, onClose }: UseContextMenuOptio
     }
   }, [onClose])
 
-  return { adjustedPosition, menuRef }
+  return { isPositioned, finalPosition, menuRef }
 }
 
 interface MenuItemProps {
