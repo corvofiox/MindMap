@@ -40,7 +40,7 @@ interface NodePoolPanelProps {
  * Main node pool panel component
  */
 export function NodePoolPanel({ open }: NodePoolPanelProps) {
-  const { currentProject, nodePool, nodePoolFolders, loadNodePool, loadNodePoolFolders } = useProjectsStore()
+  const { currentProject } = useProjectsStore()
   const { selectedIds, addNode } = useCanvasStore()
   const { addToast, setDragGhost } = useUIStore()
 
@@ -48,14 +48,13 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
   const {
     cardsMap,
     foldersMap,
-    setCards,
-    setFolders,
     updateCard,
     updateFolder,
     removeCard,
     toggleFolderCollapsed,
     addFolder,
-    isLoading,
+    addCard,
+    loadNodePool,
   } = useNodePoolStore()
 
   // Local state
@@ -76,25 +75,12 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
   const { sortedRootFolders, sortedCardsByFolder, handleReorder } = useNodePoolSort({ sortBy, sortOrder })
   const folderTree = useFolderTree()
 
-  // Load data when project changes
+  // Load node pool data when project changes
   useEffect(() => {
     if (currentProject) {
-      Promise.all([
-        loadNodePool(currentProject.id),
-        loadNodePoolFolders(currentProject.id),
-      ])
+      loadNodePool(currentProject.id)
     }
-  }, [currentProject, loadNodePool, loadNodePoolFolders])
-
-  // Sync data from useProjectsStore to useNodePoolStore
-  useEffect(() => {
-    if (nodePool.length > 0) {
-      setCards(nodePool)
-    }
-    if (nodePoolFolders.length > 0) {
-      setFolders(nodePoolFolders)
-    }
-  }, [nodePool, nodePoolFolders, setCards, setFolders])
+  }, [currentProject, loadNodePool])
 
   // Handle add selected node to pool
   const handleAddToPool = useCallback(async () => {
@@ -109,7 +95,7 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
     if (!node) return
 
     try {
-      const card = await useProjectsStore.getState().addToNodePool(currentProject!.id, {
+      await addCard(currentProject!.id, {
         projectId: currentProject!.id,
         name: node.title || node.content || '未命名',
         content: JSON.stringify(node),
@@ -120,14 +106,11 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
         sortOrder: 0,
       })
 
-      // Update both stores
-      setCards([...cardsMap.values(), card])
-
       addToast({ type: 'success', title: '已添加到节点池', message: '节点已添加到节点池' })
     } catch (error) {
       addToast({ type: 'error', title: '添加失败', message: error instanceof Error ? error.message : '未知错误' })
     }
-  }, [selectedIds, currentProject, addToast, setCards, cardsMap])
+  }, [selectedIds, currentProject, addToast, addCard])
 
   // Handle use card from pool
   const handleUseCard = useCallback(async (card: NodeCard) => {
@@ -293,9 +276,9 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
       const card = JSON.parse(cardData) as NodeCard
       handleMoveCardToFolder(card, folder.id)
     } else if (canvasNodeData) {
-      // 添加新卡片到节点池仍然需要异步处理
+      // 添加新卡片到节点池
       const node = JSON.parse(canvasNodeData) as any
-      useProjectsStore.getState().addToNodePool(currentProject!.id, {
+      addCard(currentProject!.id, {
         projectId: currentProject!.id,
         name: node.title || node.content || '未命名',
         content: JSON.stringify(node),
@@ -305,14 +288,13 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
         createdBy: 1,
         sortOrder: 0,
         folderId: folder.id,
-      }).then(card => {
-        setCards([...cardsMap.values(), card])
+      }).then(() => {
         addToast({ type: 'success', title: '已添加到节点池', message: '节点已添加到节点池' })
       }).catch(error => {
         addToast({ type: 'error', title: '添加失败', message: error instanceof Error ? error.message : '未知错误' })
       })
     }
-  }, [handleMoveCardToFolder, addToast, currentProject, setCards, cardsMap])
+  }, [handleMoveCardToFolder, addToast, currentProject, addCard])
 
   // Handle drop on root (move to root folder)
   const handleRootDrop = useCallback((e: React.DragEvent) => {
@@ -327,9 +309,9 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
       const card = JSON.parse(cardData) as NodeCard
       handleMoveCardToFolder(card, null)
     } else if (canvasNodeData) {
-      // 添加新卡片到节点池仍然需要异步处理
+      // 添加新卡片到节点池
       const node = JSON.parse(canvasNodeData) as any
-      useProjectsStore.getState().addToNodePool(currentProject!.id, {
+      addCard(currentProject!.id, {
         projectId: currentProject!.id,
         name: node.title || node.content || '未命名',
         content: JSON.stringify(node),
@@ -339,14 +321,13 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
         createdBy: 1,
         sortOrder: 0,
         folderId: null,
-      }).then(card => {
-        setCards([...cardsMap.values(), card])
+      }).then(() => {
         addToast({ type: 'success', title: '已添加到节点池', message: '节点已添加到节点池' })
       }).catch(error => {
         addToast({ type: 'error', title: '添加失败', message: error instanceof Error ? error.message : '未知错误' })
       })
     }
-  }, [handleMoveCardToFolder, addToast, currentProject, setCards, cardsMap])
+  }, [handleMoveCardToFolder, addToast, currentProject, addCard])
 
   // Handle drag over root
   const handleRootDragOver = useCallback((e: React.DragEvent) => {
@@ -405,7 +386,6 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
   const renderFolder = (folder: NodePoolFolder & { children?: NodePoolFolder[] }, level = 0) => {
     const filteredCardsByFolder = getFilteredCardsByFolder()
     const cards = filteredCardsByFolder.get(folder.id) || []
-    const isCollapsed = folder.collapsed
 
     return (
       <FolderItem

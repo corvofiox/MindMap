@@ -254,6 +254,24 @@ export interface ContextMenuItem {
   divider?: boolean
 }
 
+// Toast types
+export interface Toast {
+  id: string
+  type: 'success' | 'error' | 'warning' | 'info'
+  title: string
+  message?: string
+  duration?: number
+  priority?: number
+}
+
+export interface ToastOptions {
+  type: Toast['type']
+  title: string
+  message?: string
+  duration?: number
+  priority?: number
+}
+
 // API Response types
 export interface ApiResponse<T = any> {
   success: boolean

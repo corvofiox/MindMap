@@ -1,7 +1,9 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import type { Theme, Tool, DragMode, NodeCard } from '@/types'
+import { nanoid } from 'nanoid'
+import type { Theme, Tool, DragMode, NodeCard, Toast } from '@/types'
 import { STORAGE_KEYS } from '@/constants'
+import { getToastConfig } from '@/config/messageConfig'
 
 interface UIState {
   // Theme
@@ -102,13 +104,7 @@ interface UIState {
   setSelectedNodeIds: (ids: string[]) => void
 }
 
-interface Toast {
-  id: string
-  type: 'success' | 'error' | 'warning' | 'info'
-  title: string
-  message?: string
-  duration?: number
-}
+
 
 export const useUIStore = create<UIState>()(
   persist(
@@ -206,14 +202,17 @@ export const useUIStore = create<UIState>()(
         // Toasts
         toasts: [],
         addToast: (toast) => {
-          const id = Math.random().toString(36).substring(7)
-          set((state) => ({
-            toasts: [...state.toasts, { ...toast, id }],
-          }))
+          const config = getToastConfig()
+          const id = nanoid()
+          set((state) => {
+            const newToasts = [...state.toasts, { ...toast, id }]
+            // 限制最大显示数量
+            return { toasts: newToasts.slice(-config.maxToasts) }
+          })
           if (toast.duration !== 0) {
             setTimeout(() => {
               get().removeToast(id)
-            }, toast.duration || 3000)
+            }, toast.duration || config.defaultDuration)
           }
         },
         removeToast: (id) =>

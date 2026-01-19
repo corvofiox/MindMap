@@ -15,15 +15,12 @@ import type {
   DragState,
 } from '../types/node-pool'
 import * as api from '@/services/api'
+import { useProjectsStore } from '@/store/useProjectsStore'
 
-// Get current project ID helper
-const getCurrentProjectId = (): number => {
-  // Import from useProjectsStore to get current project
-  // This avoids circular dependencies
-  const state = (window as any).__projectsStore__
-  return state?.currentProject?.id || null
-}
-
+/**
+ * Node pool store with complete state management
+ * No external Store dependencies, self-contained
+ */
 export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
   // Initial state
   cardsMap: new Map(),
@@ -38,17 +35,84 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
     return get().cardsMap.get(id)
   },
 
+  // Set cards from API or initial load
   setCards: (cards: NodeCard[]) => {
     const cardsMap = new Map(cards.map(card => [card.id, card]))
     set({ cardsMap })
   },
 
+  // Load node pool data for current project
+  loadNodePool: async (projectId: number) => {
+    set({ isLoading: true, error: null })
+    try {
+      const cards = await api.getNodePool(projectId)
+      const folders = await api.getNodePoolFolders(projectId)
+      
+      set({
+        cardsMap: new Map(cards.map(card => [card.id, card])),
+        foldersMap: new Map(folders.map(folder => [folder.id, folder])),
+        isLoading: false
+      })
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : '加载节点池失败'
+      set({ error: errorMessage, isLoading: false })
+    }
+  },
+
+  // Add card to node pool
+  addCard: async (projectId: number, data: Omit<NodeCard, 'id' | 'createdAt' | 'useCount'>) => {
+    // Generate temp ID for optimistic update
+    const tempId = -Date.now()
+    
+    // Create temp card object
+    const tempCard: NodeCard = {
+      id: tempId,
+      ...data,
+      projectId,
+      createdAt: new Date().toISOString(),
+      useCount: 0
+    }
+    
+    // Optimistic update
+    set((state) => {
+      const newCardsMap = new Map(state.cardsMap)
+      newCardsMap.set(tempId, tempCard)
+      return { cardsMap: newCardsMap }
+    })
+
+    try {
+      // Call API to create card
+      const created = await api.addToNodePool(projectId, data)
+
+      // Replace temp card with real card
+      set((state) => {
+        const newCardsMap = new Map(state.cardsMap)
+        newCardsMap.delete(tempId)
+        newCardsMap.set(created.id, created)
+        return { cardsMap: newCardsMap }
+      })
+
+      return created
+    } catch (error) {
+      // Rollback on error
+      set((state) => {
+        const newCardsMap = new Map(state.cardsMap)
+        newCardsMap.delete(tempId)
+        return { cardsMap: newCardsMap }
+      })
+      
+      const errorMessage = error instanceof Error ? error.message : '添加到节点池失败'
+      set({ error: errorMessage })
+      throw error
+    }
+  },
+
   updateCard: async (id: number, data: Partial<NodeCard>) => {
-    // 获取原始卡片数据用于回滚
+    // Get original card data for rollback
     const originalCard = get().cardsMap.get(id)
     if (!originalCard) return
     
-    // 立即更新本地状态（乐观更新）
+    // Optimistic update
     set((state) => {
       const newCardsMap = new Map(state.cardsMap)
       const updatedCard = { ...originalCard, ...data }
@@ -57,40 +121,54 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
     })
 
     try {
-      // 后台执行API请求
-      await api.updateNodeCard(id, data)
+      // Call API to update card
+      const updated = await api.updateNodeCard(id, data)
+      
+      // Update with real data from API
+      set((state) => {
+        const newCardsMap = new Map(state.cardsMap)
+        newCardsMap.set(id, updated)
+        return { cardsMap: newCardsMap }
+      })
     } catch (error) {
-      // API失败：回滚本地状态
+      // Rollback on error
       set((state) => {
         const newCardsMap = new Map(state.cardsMap)
         newCardsMap.set(id, originalCard)
         return { cardsMap: newCardsMap }
       })
       
-      // 显示错误信息
       const errorMessage = error instanceof Error ? error.message : '更新卡片失败'
       set({ error: errorMessage })
     }
   },
 
   removeCard: async (id: number) => {
-    const state = get()
+    // Get original card for rollback
+    const originalCard = get().cardsMap.get(id)
+    if (!originalCard) return
     
-    // 保存原始状态用于回滚
-    const originalCardsMap = new Map(state.cardsMap)
-    
+    // Optimistic update
+    set((state) => {
+      const newCardsMap = new Map(state.cardsMap)
+      newCardsMap.delete(id)
+      return { cardsMap: newCardsMap }
+    })
+
     try {
-      // 调用useProjectsStore的removeFromNodePool函数，确保两个store的数据一致
-      await (await import('@/store/useProjectsStore')).useProjectsStore.getState().removeFromNodePool(id)
+      // Call API to remove card
+      await api.removeFromNodePool(id)
       
-      // 更新当前store的状态
+      // Update useProjectsStore to keep consistency
+      useProjectsStore.getState().loadNodePool(originalCard.projectId)
+    } catch (error) {
+      // Rollback on error
       set((state) => {
         const newCardsMap = new Map(state.cardsMap)
-        newCardsMap.delete(id)
+        newCardsMap.set(id, originalCard)
         return { cardsMap: newCardsMap }
       })
-    } catch (error) {
-      // API失败：保持当前store状态不变
+      
       const errorMessage = error instanceof Error ? error.message : '移除卡片失败'
       set({ error: errorMessage })
     }
@@ -99,7 +177,7 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
   reorderCards: async (updates: Array<{ id: number; sortOrder: number }>) => {
     const state = get()
 
-    // Optimistic update - update local state first
+    // Optimistic update
     const newCardsMap = new Map(state.cardsMap)
 
     updates.forEach(({ id, sortOrder }) => {
@@ -112,7 +190,7 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
     set({ cardsMap: newCardsMap })
 
     try {
-      // Then sync with server
+      // Sync with server
       await Promise.all(
         updates.map(({ id, sortOrder }) =>
           api.updateNodeCard(id, { sortOrder })
@@ -138,11 +216,12 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
     set({ foldersMap })
   },
 
+  // Add folder with optimistic update
   addFolder: async (folder: Omit<NodePoolFolder, 'id' | 'createdAt'>) => {
-    // 生成临时ID
+    // Generate temp ID
     const tempId = -Date.now()
     
-    // 创建临时文件夹对象
+    // Create temp folder object
     const tempFolder = {
       id: tempId,
       ...folder,
@@ -151,7 +230,7 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
       children: []
     }
     
-    // 乐观更新：立即添加到本地状态
+    // Optimistic update
     set((state) => {
       const newFoldersMap = new Map(state.foldersMap)
       newFoldersMap.set(tempId, tempFolder)
@@ -159,21 +238,23 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
     })
 
     try {
-      // 后台执行API请求
-      const projectId = folder.projectId
-      const created = await api.createNodePoolFolder(projectId, folder)
+      // Call API to create folder
+      const created = await api.createNodePoolFolder(folder.projectId, folder)
 
-      // 用真实数据替换临时文件夹
+      // Replace temp folder with real data
       set((state) => {
         const newFoldersMap = new Map(state.foldersMap)
         newFoldersMap.delete(tempId)
-        newFoldersMap.set(created.id, { ...created, children: [] }) // children computed separately
+        newFoldersMap.set(created.id, { ...created, children: [] })
         return { foldersMap: newFoldersMap }
       })
 
+      // Update useProjectsStore
+      useProjectsStore.getState().loadNodePoolFolders(folder.projectId)
+      
       return created
     } catch (error) {
-      // API失败：从本地状态移除临时文件夹
+      // Rollback on error
       set((state) => {
         const newFoldersMap = new Map(state.foldersMap)
         newFoldersMap.delete(tempId)
@@ -194,9 +275,15 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
 
       set((state) => {
         const newFoldersMap = new Map(state.foldersMap)
-        newFoldersMap.set(id, { ...updated, children: [] }) // children computed separately
+        newFoldersMap.set(id, { ...updated, children: [] })
         return { foldersMap: newFoldersMap, isLoading: false }
       })
+      
+      // Update useProjectsStore if project ID is available
+      const folder = get().foldersMap.get(id)
+      if (folder) {
+        useProjectsStore.getState().loadNodePoolFolders(folder.projectId)
+      }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : '更新文件夹失败'
       set({ error: errorMessage, isLoading: false })
@@ -204,12 +291,14 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
   },
 
   removeFolder: async (id: number) => {
-    const state = get()
+    // Get original folder for rollback and project ID
+    const originalFolder = get().foldersMap.get(id)
+    if (!originalFolder) return
     
-    // 保存原始状态用于回滚
-    const originalFoldersMap = new Map(state.foldersMap)
+    // Save original state for rollback
+    const originalFoldersMap = new Map(get().foldersMap)
     
-    // 乐观更新：立即从本地状态移除文件夹
+    // Optimistic update
     set((state) => {
       const newFoldersMap = new Map(state.foldersMap)
       newFoldersMap.delete(id)
@@ -217,15 +306,15 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
     })
 
     try {
-      // 后台执行API请求
+      // Call API to remove folder
       await api.deleteNodePoolFolder(id)
-    } catch (error) {
-      // API失败：回滚到原始状态
-      set((state) => {
-        return { foldersMap: originalFoldersMap }
-      })
       
-      // 显示错误信息
+      // Update useProjectsStore
+      useProjectsStore.getState().loadNodePoolFolders(originalFolder.projectId)
+    } catch (error) {
+      // Rollback on error
+      set({ foldersMap: originalFoldersMap })
+      
       const errorMessage = error instanceof Error ? error.message : '移除文件夹失败'
       set({ error: errorMessage })
     }
@@ -247,11 +336,18 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
     set({ foldersMap: newFoldersMap })
 
     try {
+      // Sync with server
       await Promise.all(
         updates.map(({ id, sortOrder }) =>
           api.updateNodePoolFolder(id, { sortOrder })
         )
       )
+      
+      // Update useProjectsStore if needed
+      const firstFolder = get().foldersMap.get(updates[0]?.id)
+      if (firstFolder) {
+        useProjectsStore.getState().loadNodePoolFolders(firstFolder.projectId)
+      }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : '重新排序文件夹失败'
       set({ error: errorMessage })
@@ -288,6 +384,7 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
     set({ error: null })
   },
 
+  // Reset store to initial state
   reset: () => {
     set({
       cardsMap: new Map(),

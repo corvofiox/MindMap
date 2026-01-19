@@ -42,6 +42,8 @@ export interface NodePoolStore {
   // Card actions
   getCard: (id: number) => NodeCard | undefined
   setCards: (cards: NodeCard[]) => void
+  loadNodePool: (projectId: number) => Promise<void>
+  addCard: (projectId: number, data: Omit<NodeCard, 'id' | 'createdAt' | 'useCount'>) => Promise<NodeCard>
   updateCard: (id: number, data: Partial<NodeCard>) => Promise<void>
   removeCard: (id: number) => Promise<void>
   reorderCards: (updates: Array<{ id: number; sortOrder: number }>) => Promise<void>
