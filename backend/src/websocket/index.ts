@@ -4,6 +4,34 @@ import * as Y from 'yjs'
 import { db } from '../database/connection.js'
 import { canvases, projects } from '../database/schema.js'
 import { eq } from 'drizzle-orm'
+import { getValidatedEnv } from '../utils/env.js'
+
+// WebSocket connection rate limiting
+const wsConnectionRates = new Map<string, { count: number; resetTime: number }>()
+const WS_MAX_CONNECTIONS_PER_MINUTE = 10
+const WS_WINDOW_MS = 60 * 1000 // 1 minute
+
+function checkWsRateLimit(ip: string): boolean {
+  const now = Date.now()
+  const rateData = wsConnectionRates.get(ip)
+
+  if (!rateData || now > rateData.resetTime) {
+    // Reset or create new rate limit entry
+    wsConnectionRates.set(ip, {
+      count: 1,
+      resetTime: now + WS_WINDOW_MS,
+    })
+    return true
+  }
+
+  if (rateData.count >= WS_MAX_CONNECTIONS_PER_MINUTE) {
+    console.warn(`WebSocket rate limit exceeded for IP: ${ip}`)
+    return false
+  }
+
+  rateData.count++
+  return true
+}
 
 interface WebSocketWithUserData extends WebSocket {
   userId?: number | null
@@ -30,6 +58,16 @@ export function setupWebSocket(wss: WebSocketServer) {
 
   // Periodic cleanup
   setInterval(() => {
+    const now = Date.now()
+
+    // Clean up rate limit entries
+    for (const [ip, rateData] of wsConnectionRates.entries()) {
+      if (now > rateData.resetTime) {
+        wsConnectionRates.delete(ip)
+      }
+    }
+
+    // Clean up canvas rooms
     for (const [canvasId, room] of canvasRooms.entries()) {
       if (room.clients.size === 0) {
         // Save document before cleanup
@@ -42,9 +80,16 @@ export function setupWebSocket(wss: WebSocketServer) {
 }
 
 async function handleConnection(ws: WebSocketWithUserData, req: any) {
+  const clientIp = req.socket.remoteAddress || req.headers['x-forwarded-for'] as string || 'unknown'
+
+  // Check rate limit for WebSocket connections
+  if (!checkWsRateLimit(clientIp)) {
+    ws.close(1008, 'Too many connection attempts. Please try again later.')
+    return
+  }
+
   const url = new URL(req.url || '', `http://${req.headers.host}`)
   const canvasIdParam = url.searchParams.get('canvasId')
-  const token = url.searchParams.get('token')
 
   if (!canvasIdParam) {
     ws.close(1008, 'Missing canvasId')
@@ -53,15 +98,20 @@ async function handleConnection(ws: WebSocketWithUserData, req: any) {
 
   const canvasId = parseInt(canvasIdParam)
 
+  // Verify token from Authorization header
+  const authHeader = req.headers.authorization?.replace('Bearer ', '')
+  if (!authHeader) {
+    ws.close(1008, 'Missing authentication header')
+    return
+  }
+
   // Verify token and get user ID
   let userId: number | null = null
-  if (token) {
+  if (authHeader) {
     try {
       const jwt = (await import('jsonwebtoken')).default
-      const decoded = jwt.verify(
-        token,
-        process.env.JWT_SECRET || 'your-secret-key'
-      ) as { userId: number }
+      const env = getValidatedEnv()
+      const decoded = jwt.verify(authHeader, env.JWT_SECRET) as { userId: number }
       userId = decoded.userId
     } catch (error) {
       ws.close(1008, 'Invalid token')
@@ -95,7 +145,7 @@ async function handleConnection(ws: WebSocketWithUserData, req: any) {
     return
   }
 
-  const projectOwnerId = (project as any).owner_id || project.ownerId
+  const projectOwnerId = project.ownerId ?? project.ownerId
 
   if (projectOwnerId !== userId) {
     ws.close(1008, 'Access denied')

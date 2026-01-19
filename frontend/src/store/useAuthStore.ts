@@ -52,6 +52,14 @@ export const useAuthStore = create<AuthState>()(
             // 更新 apiClient 实例的 token
             api.apiClient.setToken(token)
             await api.getProfile()
+
+            // 获取 CSRF token
+            try {
+              await api.apiClient.getCsrfTokenFromServer()
+            } catch (csrfError) {
+              console.error('Failed to fetch CSRF token:', csrfError)
+            }
+
             set({ token, isAuthenticated: true })
             return true
           } catch {
@@ -70,6 +78,14 @@ export const useAuthStore = create<AuthState>()(
             localStorage.setItem('mindmap_token', response.token)
             // 更新 apiClient 实例的 token
             api.apiClient.setToken(response.token)
+
+            // 获取 CSRF token
+            try {
+              await api.apiClient.getCsrfTokenFromServer()
+            } catch (csrfError) {
+              console.error('Failed to fetch CSRF token:', csrfError)
+            }
+
             set({
               user: response.user,
               token: response.token,
@@ -97,6 +113,14 @@ export const useAuthStore = create<AuthState>()(
             localStorage.setItem('mindmap_token', response.token)
             // 更新 apiClient 实例的 token
             api.apiClient.setToken(response.token)
+
+            // 获取 CSRF token
+            try {
+              await api.apiClient.getCsrfTokenFromServer()
+            } catch (csrfError) {
+              console.error('Failed to fetch CSRF token:', csrfError)
+            }
+
             set({
               user: response.user,
               token: response.token,

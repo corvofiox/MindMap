@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken'
 import { db } from '../database/connection.js'
 import { users } from '../database/schema.js'
 import { eq } from 'drizzle-orm'
+import { getValidatedEnv } from '../utils/env.js'
 
 export interface AuthRequest extends Request {
   user?: {
@@ -21,7 +22,8 @@ export async function authenticate(req: AuthRequest, res: Response, next: NextFu
       return res.status(401).json({ success: false, error: '未提供令牌' })
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key') as {
+    const env = getValidatedEnv()
+    const decoded = jwt.verify(token, env.JWT_SECRET) as {
       userId: number
     }
 

@@ -14,15 +14,11 @@ data/
 *.md
 uploads/
 *.log
-.DS_Store
-Thumbs.db
-*.tsbuildinfo
-frontend/dist/
-backend/dist/
-
-# Docker
-.dockerignore
-*.dockerfile
-docker-compose.override.yml
-.docker/
-docker-compose.override.*.yml
+# Windows device files
+nul
+con
+prn
+aux
+clock$
+com1-com9
+lpt1-lpt9

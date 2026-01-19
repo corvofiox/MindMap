@@ -8,14 +8,14 @@ export function CommandPalette() {
   const [selectedIndex, setSelectedIndex] = useState(0)
 
   const commands = [
-    { id: 'new-canvas', label: 'New Canvas', shortcut: 'Ctrl+N', action: () => {} },
-    { id: 'save', label: 'Save', shortcut: 'Ctrl+S', action: () => {} },
-    { id: 'export', label: 'Export', shortcut: 'Ctrl+E', action: () => {} },
-    { id: 'settings', label: 'Settings', shortcut: 'Ctrl+,', action: () => {} },
-    { id: 'toggle-grid', label: 'Toggle Grid', shortcut: 'G', action: () => {} },
-    { id: 'zoom-in', label: 'Zoom In', shortcut: 'Ctrl++', action: () => {} },
-    { id: 'zoom-out', label: 'Zoom Out', shortcut: 'Ctrl+-', action: () => {} },
-    { id: 'reset-view', label: 'Reset View', shortcut: 'Ctrl+0', action: () => {} },
+    { id: 'new-canvas', label: 'New Canvas', shortcut: 'Ctrl+N', action: () => { } },
+    { id: 'save', label: 'Save', shortcut: 'Ctrl+S', action: () => { } },
+    { id: 'export', label: 'Export', shortcut: 'Ctrl+E', action: () => { } },
+    { id: 'settings', label: 'Settings', shortcut: 'Ctrl+,', action: () => { } },
+    { id: 'toggle-grid', label: 'Toggle Grid', shortcut: 'G', action: () => { } },
+    { id: 'zoom-in', label: 'Zoom In', shortcut: 'Ctrl++', action: () => { } },
+    { id: 'zoom-out', label: 'Zoom Out', shortcut: 'Ctrl+-', action: () => { } },
+    { id: 'reset-view', label: 'Reset View', shortcut: 'Ctrl+0', action: () => { } },
   ]
 
   const filteredCommands = commands.filter((cmd) =>
@@ -54,7 +54,7 @@ export function CommandPalette() {
 
   return (
     <div
-      className="fixed inset-0 bg-black/50 flex items-start justify-center pt-[20vh] z-50"
+      className="fixed inset-0 bg-black/50 flex items-start justify-center pt-[20vh] z-[110]"
       onClick={() => setCommandPaletteOpen(false)}
     >
       <div

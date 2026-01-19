@@ -45,7 +45,7 @@ export function DropdownMenu({ trigger, items, align = 'end' }: DropdownMenuProp
       {isOpen && (
         <div
           className={clsx(
-            'absolute top-full mt-1 w-56 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1 z-50',
+            'absolute top-full mt-1 w-56 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1 z-[100]',
             align === 'end' ? 'right-0' : 'left-0'
           )}
         >

@@ -143,15 +143,11 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
 
       await removeCard(card.id)
 
-      // Reload data
-      const updatedCards = useProjectsStore.getState().nodePool
-      setCards(updatedCards)
-
       addToast({ type: 'success', title: '节点已取出', message: '卡片已从池中取出到画布' })
     } catch (error) {
       addToast({ type: 'error', title: '使用节点失败', message: '无法解析节点数据' })
     }
-  }, [addNode, removeCard, setCards, addToast])
+  }, [addNode, removeCard, addToast])
 
   // Handle remove card
   const handleRemoveCard = useCallback(async (id: number) => {

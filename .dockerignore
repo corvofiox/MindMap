@@ -1,0 +1,42 @@
+# Node.js dependencies
+node_modules/
+
+# Build outputs
+dist/
+build/
+*.tsbuildinfo
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+logs/
+
+# Database files
+*.db
+*.sqlite
+
+# File uploads
+uploads/
+
+# IDE
+.vscode/
+.idea/
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Package manager (keep package-lock.json for build consistency)
+yarn.lock
+pnpm-lock.yaml
+
+# Docker
+.dockerignore
+
+# Documentation
+*.md

@@ -10,6 +10,7 @@ import { Trash2, FileText, Image as ImageIcon } from 'lucide-react'
 import { clsx } from 'clsx'
 import type { NodeCard } from '@/types'
 import type { NodeCardItemProps } from '../types/node-pool'
+import { containsHTML, safeHTML } from '@/utils/sanitizeHTML'
 
 /**
  * Node card item component with drag and drop support
@@ -206,7 +207,11 @@ export const NodeCardItem = memo(function NodeCardItem({
                 />
               ) : (
                 <h4 className="text-sm font-medium text-gray-800 dark:text-white truncate">
-                  {card.name}
+                  {containsHTML(card.name) ? (
+                    <span dangerouslySetInnerHTML={{ __html: safeHTML(card.name) }} />
+                  ) : (
+                    card.name
+                  )}
                 </h4>
               )}
               {card.description && !isEditing && (
@@ -251,7 +256,11 @@ export const NodeCardItem = memo(function NodeCardItem({
             >
               <div className="flex items-start justify-between mb-3">
                 <h3 className="text-sm font-semibold text-gray-800 dark:text-white truncate flex-1">
-                  {contentData.title}
+                  {containsHTML(contentData.title) ? (
+                    <span dangerouslySetInnerHTML={{ __html: safeHTML(contentData.title) }} />
+                  ) : (
+                    contentData.title
+                  )}
                 </h3>
                 <button
                   onClick={(e) => {
@@ -278,8 +287,12 @@ export const NodeCardItem = memo(function NodeCardItem({
               )}
               
               {contentData.content && (
-                <div className="text-sm text-gray-600 dark:text-gray-400 whitespace-pre-wrap break-words max-h-48 overflow-y-auto">
-                  {contentData.content}
+                <div className="text-sm text-gray-600 dark:text-gray-400 break-words max-h-48 overflow-y-auto prose prose-sm dark:prose-invert max-w-none">
+                  {containsHTML(contentData.content) ? (
+                    <div dangerouslySetInnerHTML={{ __html: safeHTML(contentData.content) }} />
+                  ) : (
+                    <div className="whitespace-pre-wrap">{contentData.content}</div>
+                  )}
                 </div>
               )}
               

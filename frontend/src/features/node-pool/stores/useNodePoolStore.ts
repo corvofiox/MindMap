@@ -79,23 +79,18 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
     // 保存原始状态用于回滚
     const originalCardsMap = new Map(state.cardsMap)
     
-    // 乐观更新：立即从本地状态移除卡片
-    set((state) => {
-      const newCardsMap = new Map(state.cardsMap)
-      newCardsMap.delete(id)
-      return { cardsMap: newCardsMap }
-    })
-
     try {
-      // 后台执行API请求
-      await api.removeFromNodePool(id)
-    } catch (error) {
-      // API失败：回滚到原始状态
-      set((state) => {
-        return { cardsMap: originalCardsMap }
-      })
+      // 调用useProjectsStore的removeFromNodePool函数，确保两个store的数据一致
+      await (await import('@/store/useProjectsStore')).useProjectsStore.getState().removeFromNodePool(id)
       
-      // 显示错误信息
+      // 更新当前store的状态
+      set((state) => {
+        const newCardsMap = new Map(state.cardsMap)
+        newCardsMap.delete(id)
+        return { cardsMap: newCardsMap }
+      })
+    } catch (error) {
+      // API失败：保持当前store状态不变
       const errorMessage = error instanceof Error ? error.message : '移除卡片失败'
       set({ error: errorMessage })
     }

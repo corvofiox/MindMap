@@ -26,7 +26,7 @@ export function SearchPanel() {
 
   return (
     <div
-      className="fixed inset-0 bg-black/50 flex items-start justify-center pt-[15vh] z-50"
+      className="fixed inset-0 bg-black/50 flex items-start justify-center pt-[15vh] z-[110]"
       onClick={() => setSearchOpen(false)}
     >
       <div

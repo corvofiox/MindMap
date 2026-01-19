@@ -67,6 +67,21 @@ export class ApiClient {
     return this.token
   }
 
+  // 获取CSRF token（从服务器）
+  async getCsrfTokenFromServer(): Promise<{ token: string }> {
+    const response = await fetch(`${this.baseUrl}/api/csrf-token`, {
+      method: 'GET',
+      credentials: 'include',
+    })
+
+    if (!response.ok) {
+      throw new Error('Failed to get CSRF token')
+    }
+
+    const data = await response.json()
+    return data
+  }
+
   // 显示错误提示
   private showErrorToast(message: string): void {
     const addErrorToast = useUIStore.getState().addErrorToast
@@ -84,12 +99,30 @@ export class ApiClient {
       headers['Authorization'] = `Bearer ${this.token}`
     }
 
+    // 添加CSRF token（从cookie中读取）
+    const csrfToken = this.getCsrfToken()
+    if (csrfToken) {
+      headers['x-csrf-token'] = csrfToken
+    }
+
     // 添加Content-Type（FormData不需要）
     if (contentType && contentType !== 'multipart/form-data') {
       headers['Content-Type'] = contentType
     }
 
     return headers
+  }
+
+  // 从cookie中获取CSRF token
+  private getCsrfToken(): string | null {
+    const cookies = document.cookie.split(';')
+    for (const cookie of cookies) {
+      const [name, value] = cookie.trim().split('=')
+      if (name === 'x-csrf-token') {
+        return decodeURIComponent(value)
+      }
+    }
+    return null
   }
 
   // 解析响应
@@ -122,6 +155,22 @@ export class ApiClient {
     return errorMessage
   }
 
+  // 重试请求（用于CSRF token过期）
+  private async retryWithNewCsrfToken<T>(
+    endpoint: string,
+    options: RequestInit
+  ): Promise<T> {
+    try {
+      // 获取新的 CSRF token
+      await this.getCsrfTokenFromServer()
+
+      // 重试原始请求
+      return this.request<T>(endpoint, options)
+    } catch (error) {
+      throw new Error(this.handleError(error, '重试请求失败'))
+    }
+  }
+
   // 通用请求方法
   private async request<T>(
     endpoint: string,
@@ -145,6 +194,15 @@ export class ApiClient {
 
       // 检查响应状态
       if (!response.ok) {
+        // 检查是否是CSRF错误（403 Forbidden）
+        if (response.status === 403) {
+          const errorData = await this.parseResponse<any>(response)
+          if (errorData && errorData.error && errorData.error.includes('CSRF')) {
+            // 尝试使用新的CSRF token重试
+            return this.retryWithNewCsrfToken<T>(endpoint, options)
+          }
+        }
+
         // 尝试解析服务器返回的错误信息
         let errorMessage: string
         try {

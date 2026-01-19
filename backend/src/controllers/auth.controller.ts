@@ -5,11 +5,13 @@ import { db, scheduleSave } from '../database/connection.js'
 import { users } from '../database/schema.js'
 import { eq } from 'drizzle-orm'
 import { asyncHandler } from '../middleware/error.middleware.js'
+import { getValidatedEnv } from '../utils/env.js'
+import { authLimiter } from '../middleware/rateLimit.middleware.js'
 
 export const authRouter = Router()
 
 // Register
-authRouter.post('/register', asyncHandler(async (req, res) => {
+authRouter.post('/register', authLimiter(), asyncHandler(async (req, res) => {
   const { email, password, nickname } = req.body
 
   // Validate input
@@ -50,13 +52,14 @@ authRouter.post('/register', asyncHandler(async (req, res) => {
   const newUser = result[0]
 
   // Generate token
-  const token = (jwt as any).sign(
+  const env = getValidatedEnv()
+  const token = jwt.sign(
     { userId: newUser.id },
-    process.env.JWT_SECRET || 'your-secret-key',
-    { 
-      expiresIn: process.env.JWT_EXPIRES_IN || '7d',
-      algorithm: 'HS256'
-    }
+    env.JWT_SECRET,
+    {
+      expiresIn: env.JWT_EXPIRES_IN || '7d',
+      algorithm: 'HS256',
+    } as any
   )
 
   // Save database immediately
@@ -79,7 +82,7 @@ authRouter.post('/register', asyncHandler(async (req, res) => {
 }))
 
 // Login
-authRouter.post('/login', asyncHandler(async (req, res) => {
+authRouter.post('/login', authLimiter(), asyncHandler(async (req, res) => {
   const { email, password } = req.body
 
   // Find user
@@ -107,13 +110,14 @@ authRouter.post('/login', asyncHandler(async (req, res) => {
   }
 
   // Generate token
-  const token = (jwt as any).sign(
+  const env = getValidatedEnv()
+  const token = jwt.sign(
     { userId: user.id },
-    process.env.JWT_SECRET || 'your-secret-key',
-    { 
-      expiresIn: process.env.JWT_EXPIRES_IN || '7d',
-      algorithm: 'HS256'
-    }
+    env.JWT_SECRET,
+    {
+      expiresIn: env.JWT_EXPIRES_IN || '7d',
+      algorithm: 'HS256',
+    } as any
   )
 
   res.json({
@@ -141,7 +145,7 @@ authRouter.post('/logout', asyncHandler(async (req, res) => {
 }))
 
 // Refresh token
-authRouter.post('/refresh', asyncHandler(async (req, res) => {
+authRouter.post('/refresh', authLimiter(), asyncHandler(async (req, res) => {
   const token = req.headers.authorization?.replace('Bearer ', '')
 
   if (!token) {
@@ -152,9 +156,8 @@ authRouter.post('/refresh', asyncHandler(async (req, res) => {
   }
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key') as {
-      userId: number
-    }
+    const env = getValidatedEnv()
+    const decoded = jwt.verify(token, env.JWT_SECRET!) as { userId: number }
 
     const usersList = await db
       .select()
@@ -169,14 +172,14 @@ authRouter.post('/refresh', asyncHandler(async (req, res) => {
       })
     }
 
-    const newToken = (jwt as any).sign(
-    { userId: user.id },
-    process.env.JWT_SECRET || 'your-secret-key',
-    { 
-      expiresIn: process.env.JWT_EXPIRES_IN || '7d',
-      algorithm: 'HS256'
-    }
-  )
+    const newToken = jwt.sign(
+      { userId: user.id },
+      env.JWT_SECRET,
+      {
+        expiresIn: env.JWT_EXPIRES_IN || '7d',
+        algorithm: 'HS256',
+      } as any
+    )
 
     res.json({
       success: true,
@@ -193,7 +196,7 @@ authRouter.post('/refresh', asyncHandler(async (req, res) => {
       },
     })
   } catch (error) {
-    return res.status(401).json({
+    res.status(401).json({
       success: false,
       error: '无效的令牌',
     })

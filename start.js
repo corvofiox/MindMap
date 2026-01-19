@@ -46,29 +46,79 @@ function logWarning(message) {
   log(`⚠ ${message}`, 'yellow');
 }
 
+/**
+ * 检测是否在 Docker 环境中运行
+ * 检查多个标志以确保可靠性
+ */
 function isDockerEnvironment() {
-  return fs.existsSync('/.dockerenv') || process.env.DOCKER_CONTAINER === 'true';
+  // 检查环境变量（最可靠）
+  if (process.env.DOCKER_CONTAINER === 'true') {
+    return true;
+  }
+
+  // 检查 /.dockerenv 文件（Docker 创建的标志文件）
+  if (fs.existsSync('/.dockerenv')) {
+    return true;
+  }
+
+  // 检查 /proc/1/cgroup（在 Linux 上检查是否在容器中）
+  try {
+    const cgroup = fs.readFileSync('/proc/1/cgroup', 'utf-8');
+    if (cgroup.includes('docker') || cgroup.includes('kubepods')) {
+      return true;
+    }
+  } catch (e) {
+    // Windows 或非 Linux 系统忽略此检查
+  }
+
+  return false;
 }
 
+/**
+ * 检测是否在 Windows 平台
+ */
 function isWindows() {
   return process.platform === 'win32';
 }
 
+/**
+ * 检测是否在生产模式
+ */
 function isProduction() {
   return process.env.NODE_ENV === 'production';
 }
 
+/**
+ * 获取适合当前平台的 npm 命令
+ * 注意：在 Windows 上必须使用 npm.cmd 扩展名，且需要通过 shell 执行
+ */
 function getNpmCommand() {
   return isWindows() ? 'npm.cmd' : 'npm';
 }
 
+/**
+ * 获取适合当前平台的 Node 命令
+ */
+function getNodeCommand() {
+  return 'node';
+}
+
+/**
+ * 执行命令并继承 stdio（用于交互式命令）
+ * 注意：在 Windows 上执行 .cmd 文件必须使用 shell
+ */
 async function executeCommand(command, args, options = {}) {
   return new Promise((resolve, reject) => {
+    const cwd = options.cwd || __dirname;
+    const env = { ...process.env, ...options.env };
+
+    logStep('EXEC', `Running: ${command} ${args.join(' ')}`);
+
     const child = spawn(command, args, {
       stdio: 'inherit',
-      shell: true,
-      cwd: options.cwd || __dirname,
-      env: { ...process.env, ...options.env },
+      shell: isWindows(), // Windows 需要 shell 来执行 .cmd 文件
+      cwd,
+      env,
     });
 
     child.on('close', (code) => {
@@ -80,27 +130,33 @@ async function executeCommand(command, args, options = {}) {
     });
 
     child.on('error', (error) => {
-      reject(error);
+      reject(new Error(`Failed to start command: ${error.message}`));
     });
   });
 }
 
+/**
+ * 执行命令并捕获输出
+ * 注意：在 Windows 上执行 .cmd 文件必须使用 shell
+ */
 async function executeCommandWithOutput(command, args, options = {}) {
   return new Promise((resolve, reject) => {
+    const cwd = options.cwd || __dirname;
+    const env = { ...process.env, ...options.env };
     let output = '';
     let errorOutput = '';
 
     const child = spawn(command, args, {
-      shell: true,
-      cwd: options.cwd || __dirname,
-      env: { ...process.env, ...options.env },
+      shell: isWindows(), // Windows 需要 shell 来执行 .cmd 文件
+      cwd,
+      env,
     });
 
-    child.stdout.on('data', (data) => {
+    child.stdout?.on('data', (data) => {
       output += data.toString();
     });
 
-    child.stderr.on('data', (data) => {
+    child.stderr?.on('data', (data) => {
       errorOutput += data.toString();
     });
 
@@ -108,12 +164,12 @@ async function executeCommandWithOutput(command, args, options = {}) {
       if (code === 0) {
         resolve(output);
       } else {
-        reject(new Error(`Command failed with exit code ${code}: ${errorOutput}`));
+        reject(new Error(`Command failed with exit code ${code}: ${errorOutput || output}`));
       }
     });
 
     child.on('error', (error) => {
-      reject(error);
+      reject(new Error(`Failed to start command: ${error.message}`));
     });
   });
 }
@@ -242,6 +298,10 @@ async function setupEnvironmentFiles() {
   logSuccess('Environment files setup completed');
 }
 
+/**
+ * 初始化数据库
+ * 在生产环境和开发环境都需要初始化数据库
+ */
 async function initializeDatabase() {
   logSection('Initializing Database');
 
@@ -255,14 +315,30 @@ async function initializeDatabase() {
 
   if (dbExists) {
     logStep('CHECK', 'Database file already exists');
-    logStep('SKIP', 'Database initialization skipped');
+
+    // 在生产环境下，即使数据库存在也检查 schema 是否需要更新
+    if (isProduction() || isDockerEnvironment()) {
+      logStep('INFO', 'Checking database schema...');
+      try {
+        await executeCommand(getNpmCommand(), ['run', 'db:push'], { cwd: backendDir });
+        logSuccess('Database schema verified');
+      } catch (error) {
+        logWarning(`Database schema check failed: ${error.message}`);
+      }
+    } else {
+      logStep('SKIP', 'Database initialization skipped');
+    }
+
     return;
   }
 
   logStep('INIT', 'Initializing database...');
 
   try {
-    await executeCommand('npm', ['run', 'db:init'], { cwd: backendDir });
+    // 先生成迁移
+    await executeCommand(getNpmCommand(), ['run', 'db:generate'], { cwd: backendDir });
+    // 推送 schema 到数据库
+    await executeCommand(getNpmCommand(), ['run', 'db:push'], { cwd: backendDir });
     logSuccess('Database initialized successfully');
   } catch (error) {
     logError(`Failed to initialize database: ${error.message}`);
@@ -270,49 +346,88 @@ async function initializeDatabase() {
   }
 }
 
+/**
+ * 启动后端服务
+ * 开发模式：使用 npm run dev（tsx watch）
+ * 生产模式：直接运行编译后的 Node.js 代码
+ */
 async function startBackend() {
   logSection('Starting Backend');
 
   const backendDir = path.join(__dirname, 'backend');
 
   try {
+    let command, args;
+
     if (isProduction() || isDockerEnvironment()) {
       logStep('START', 'Starting backend in production mode...');
-      const backendProcess = spawn('node', ['dist/index.js'], {
-        cwd: backendDir,
-        stdio: 'inherit',
-        shell: true,
-        env: process.env,
-      });
 
-      backendProcess.on('error', (error) => {
-        logError(`Backend process error: ${error.message}`);
-        throw error;
-      });
+      // 检查编译后的文件是否存在
+      const distPath = path.join(backendDir, 'dist', 'index.js');
+      if (!fs.existsSync(distPath)) {
+        logError('Backend dist/index.js not found. Please build the backend first.');
+        logStep('HINT', 'Run: npm run build:backend');
+        throw new Error('Backend build not found');
+      }
 
-      return backendProcess;
+      command = getNodeCommand();
+      args = ['dist/index.js'];
     } else {
       logStep('START', 'Starting backend in development mode...');
-      const backendProcess = spawn(getNpmCommand(), ['run', 'dev'], {
-        cwd: backendDir,
-        stdio: 'inherit',
-        shell: true,
-        env: process.env,
-      });
-
-      backendProcess.on('error', (error) => {
-        logError(`Backend process error: ${error.message}`);
-        throw error;
-      });
-
-      return backendProcess;
+      command = getNpmCommand();
+      args = ['run', 'dev'];
     }
+
+    const backendProcess = spawn(command, args, {
+      cwd: backendDir,
+      stdio: 'inherit',
+      shell: isWindows(), // Windows 需要 shell 来执行 .cmd 文件
+      env: {
+        ...process.env,
+        // 确保在生产模式下设置正确的环境变量
+        NODE_ENV: isProduction() || isDockerEnvironment() ? 'production' : 'development',
+      },
+    });
+
+    backendProcess.on('error', (error) => {
+      logError(`Backend process error: ${error.message}`);
+      throw error;
+    });
+
+    // 等待一小段时间确保进程启动成功
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        // 5秒后认为进程启动成功（因为可能没有立即输出）
+        resolve();
+      }, 5000);
+
+      backendProcess.once('error', (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      });
+
+      // 如果进程立即退出，说明启动失败
+      backendProcess.once('exit', (code, signal) => {
+        if (code !== null && code !== 0) {
+          clearTimeout(timeout);
+          reject(new Error(`Backend process exited with code ${code}`));
+        }
+      });
+    });
+
+    logSuccess(`Backend started (PID: ${backendProcess.pid})`);
+    return backendProcess;
   } catch (error) {
     logError(`Failed to start backend: ${error.message}`);
     throw error;
   }
 }
 
+/**
+ * 启动前端服务
+ * 开发模式：使用 Vite 开发服务器
+ * 生产模式：不启动（由后端静态服务）
+ */
 async function startFrontend() {
   logSection('Starting Frontend');
 
@@ -320,15 +435,16 @@ async function startFrontend() {
 
   try {
     if (isProduction() || isDockerEnvironment()) {
-      logStep('CHECK', 'Frontend should be served statically in production');
-      logStep('INFO', 'Frontend build is handled by the backend');
+      logStep('CHECK', 'Frontend is served statically by backend in production');
+      logStep('INFO', 'To rebuild frontend, run: npm run build:frontend');
       return null;
     } else {
       logStep('START', 'Starting frontend in development mode...');
+
       const frontendProcess = spawn(getNpmCommand(), ['run', 'dev'], {
         cwd: frontendDir,
         stdio: 'inherit',
-        shell: true,
+        shell: isWindows(), // Windows 需要 shell 来执行 .cmd 文件
         env: process.env,
       });
 
@@ -337,6 +453,26 @@ async function startFrontend() {
         throw error;
       });
 
+      // 等待一小段时间确保进程启动成功
+      await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          resolve();
+        }, 5000);
+
+        frontendProcess.once('error', (error) => {
+          clearTimeout(timeout);
+          reject(error);
+        });
+
+        frontendProcess.once('exit', (code, signal) => {
+          if (code !== null && code !== 0) {
+            clearTimeout(timeout);
+            reject(new Error(`Frontend process exited with code ${code}`));
+          }
+        });
+      });
+
+      logSuccess(`Frontend started (PID: ${frontendProcess.pid})`);
       return frontendProcess;
     }
   } catch (error) {
@@ -345,14 +481,30 @@ async function startFrontend() {
   }
 }
 
+/**
+ * 构建前端
+ */
 async function buildFrontend() {
   logSection('Building Frontend');
 
   const frontendDir = path.join(__dirname, 'frontend');
 
   try {
-    logStep('BUILD', 'Building frontend...');
-    await executeCommand('npm', ['run', 'build'], { cwd: frontendDir });
+    logStep('CHECK', 'Checking frontend dependencies...');
+    if (!checkNodeModulesExists(frontendDir)) {
+      logWarning('Frontend dependencies not found. Installing...');
+      await executeCommand(getNpmCommand(), ['install'], { cwd: frontendDir });
+    }
+
+    logStep('BUILD', 'Building frontend with TypeScript and Vite...');
+    await executeCommand(getNpmCommand(), ['run', 'build'], { cwd: frontendDir });
+
+    // 验证构建产物
+    const distPath = path.join(frontendDir, 'dist');
+    if (!fs.existsSync(distPath)) {
+      throw new Error('Frontend dist directory not found after build');
+    }
+
     logSuccess('Frontend built successfully');
   } catch (error) {
     logError(`Failed to build frontend: ${error.message}`);
@@ -360,14 +512,30 @@ async function buildFrontend() {
   }
 }
 
+/**
+ * 构建后端
+ */
 async function buildBackend() {
   logSection('Building Backend');
 
   const backendDir = path.join(__dirname, 'backend');
 
   try {
-    logStep('BUILD', 'Building backend...');
+    logStep('CHECK', 'Checking backend dependencies...');
+    if (!checkNodeModulesExists(backendDir)) {
+      logWarning('Backend dependencies not found. Installing...');
+      await executeCommand(getNpmCommand(), ['install'], { cwd: backendDir });
+    }
+
+    logStep('BUILD', 'Building backend with TypeScript...');
     await executeCommand(getNpmCommand(), ['run', 'build'], { cwd: backendDir });
+
+    // 验证构建产物
+    const distPath = path.join(backendDir, 'dist', 'index.js');
+    if (!fs.existsSync(distPath)) {
+      throw new Error('Backend dist/index.js not found after build');
+    }
+
     logSuccess('Backend built successfully');
   } catch (error) {
     logError(`Failed to build backend: ${error.message}`);
@@ -375,6 +543,10 @@ async function buildBackend() {
   }
 }
 
+/**
+ * 生产环境设置流程
+ * 安装依赖 → 设置环境 → 初始化数据库 → 构建 → 启动
+ */
 async function runProductionSetup() {
   logSection('Production Setup');
 
@@ -387,6 +559,10 @@ async function runProductionSetup() {
   logSuccess('Production setup completed');
 }
 
+/**
+ * 开发环境设置流程
+ * 安装依赖 → 设置环境 → 初始化数据库 → 启动
+ */
 async function runDevelopmentSetup() {
   logSection('Development Setup');
 
@@ -431,59 +607,168 @@ async function startServers() {
   }
 }
 
-function handleShutdown(processes) {
-  const shutdown = async (signal) => {
-    logSection(`Received ${signal}, shutting down...`);
-
-    processes.forEach(p => {
-      logStep('STOP', `Stopping ${p.name}...`);
-      p.process.kill(signal);
-    });
-
-    setTimeout(() => {
-      processes.forEach(p => {
-        if (!p.process.killed) {
-          p.process.kill('SIGKILL');
-        }
-      });
-      process.exit(0);
-    }, 5000);
-  };
-
-  process.on('SIGINT', () => shutdown('SIGINT'));
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
+/**
+ * 获取适合当前平台的信号
+ * Windows 不支持 SIGTERM，使用 SIGINT 代替
+ */
+function getShutdownSignal() {
+  if (isWindows()) {
+    return 'SIGINT';
+  }
+  return 'SIGTERM';
 }
 
+/**
+ * 处理进程关闭
+ * 确保所有子进程都被正确关闭
+ */
+function handleShutdown(processes) {
+  const isShuttingDown = { value: false };
+
+  const shutdown = async (signal) => {
+    if (isShuttingDown.value) {
+      logWarning('Shutdown already in progress, ignoring signal');
+      return;
+    }
+
+    isShuttingDown.value = true;
+    logSection(`Received ${signal}, shutting down...`);
+
+    const shutdownPromises = processes.map(async (p) => {
+      return new Promise((resolve) => {
+        try {
+          logStep('STOP', `Stopping ${p.name} (PID: ${p.process.pid})...`);
+
+          // 在 Windows 上使用不同的信号
+          const killSignal = isWindows() ? 'SIGINT' : signal;
+
+          // 发送关闭信号
+          p.process.kill(killSignal);
+
+          // 设置超时，强制杀死未响应的进程
+          const timeout = setTimeout(() => {
+            if (!p.process.killed) {
+              logWarning(`Force killing ${p.name} (PID: ${p.process.pid})...`);
+              p.process.kill('SIGKILL');
+            }
+            resolve();
+          }, 5000);
+
+          // 监听进程退出
+          p.process.once('exit', () => {
+            clearTimeout(timeout);
+            logSuccess(`${p.name} stopped`);
+            resolve();
+          });
+        } catch (error) {
+          // 进程可能已经退出
+          logWarning(`Error stopping ${p.name}: ${error.message}`);
+          resolve();
+        }
+      });
+    });
+
+    // 等待所有进程关闭
+    await Promise.all(shutdownPromises);
+
+    logSuccess('All processes stopped');
+    process.exit(0);
+  };
+
+  // Windows 和 Unix 系统的信号处理
+  if (isWindows()) {
+    // Windows 只支持 SIGINT（Ctrl+C）
+    process.on('SIGINT', () => shutdown('SIGINT'));
+
+    // 处理 Windows 的 exit 事件（例如窗口关闭）
+    process.on('exit', () => {
+      if (!isShuttingDown.value) {
+        logWarning('Process exiting without proper shutdown');
+      }
+    });
+  } else {
+    // Unix 系统支持多个信号
+    process.on('SIGINT', () => shutdown('SIGINT'));
+    process.on('SIGTERM', () => shutdown('SIGTERM'));
+
+    // 处理 SIGHUP（终端关闭）
+    process.on('SIGHUP', () => shutdown('SIGHUP'));
+  }
+
+  // 处理未捕获的异常
+  process.on('uncaughtException', (error) => {
+    logError(`Uncaught Exception: ${error.message}`);
+    console.error(error);
+    shutdown('SIGTERM');
+  });
+
+  // 处理未处理的 Promise 拒绝
+  process.on('unhandledRejection', (reason, promise) => {
+    logError(`Unhandled Rejection at: ${promise}`);
+    console.error(reason);
+    shutdown('SIGTERM');
+  });
+}
+
+/**
+ * 打印帮助信息
+ */
 function printUsage() {
+  const environmentInfo = `
+ Environment Information:
+   Docker:        ${isDockerEnvironment() ? 'Yes' : 'No'}
+   Production:    ${isProduction() ? 'Yes' : 'No'}
+   Platform:      ${process.platform}
+   Node Version:  ${process.version}
+`;
+
   console.log(`
-Usage: node start.js [options]
+╔════════════════════════════════════════════════════════════╗
+║           MindMap Application - Startup Script            ║
+╚════════════════════════════════════════════════════════════╝
 
-Options:
-  --install-only       Install dependencies only
-  --env-only           Setup environment files only
-  --db-only            Initialize database only
-  --build-only         Build frontend and backend only
-  --start-only         Start servers only (skip setup)
-  --production         Run in production mode
-  --help, -h           Show this help message
+ Usage:
+   node start.js [options]
 
-Examples:
-  node start.js                    Full setup and start (development)
-  node start.js --production       Production setup and start
-  node start.js --install-only     Install dependencies only
-  node start.js --start-only       Start servers without setup
-  node start.js --build-only       Build only (for production)
+ Options:
+   --install-only       Install dependencies only
+   --env-only           Setup environment files only
+   --db-only            Initialize database only
+   --build-only         Build frontend and backend only (production)
+   --start-only         Start servers only (skip setup)
+   --production         Run in production mode
+   --help, -h           Show this help message
+
+ Examples:
+   node start.js                    Full setup and start (development)
+   node start.js --production       Production setup and start
+   node start.js --install-only     Install dependencies only
+   node start.js --start-only       Start servers without setup
+   node start.js --build-only       Build only (for production)
+
+ Notes:
+   - Docker environment is automatically detected
+   - Production mode builds both frontend and backend
+   - Use --start-only to skip setup steps
+   - Database is initialized automatically if not exists
+
+${environmentInfo}
 `);
 }
 
+/**
+ * 主函数
+ */
 async function main() {
   const args = process.argv.slice(2);
 
+  // 处理帮助命令
   if (args.includes('--help') || args.includes('-h')) {
     printUsage();
     process.exit(0);
   }
 
+  // 解析参数
   const installOnly = args.includes('--install-only');
   const envOnly = args.includes('--env-only');
   const dbOnly = args.includes('--db-only');
@@ -491,45 +776,67 @@ async function main() {
   const startOnly = args.includes('--start-only');
   const productionMode = args.includes('--production') || isProduction();
 
+  // 确定运行环境
+  const isDocker = isDockerEnvironment();
+  const environment = isDocker ? 'Docker' : (productionMode ? 'Production' : 'Development');
+
+  // 打印启动信息
   console.log('\n' + '='.repeat(60));
   log('MindMap Application Starter', 'magenta');
   console.log('='.repeat(60));
-  log(`Environment: ${isDockerEnvironment() ? 'Docker' : (productionMode ? 'Production' : 'Development')}`, 'cyan');
+  log(`Environment: ${environment}`, 'cyan');
   log(`Platform: ${process.platform}`, 'cyan');
+  log(`Node Version: ${process.version}`, 'cyan');
+  log(`Working Directory: ${process.cwd()}`, 'cyan');
   console.log('='.repeat(60) + '\n');
 
   try {
+    // 执行单独的操作
     if (installOnly) {
       await installDependencies();
+      logSuccess('Dependencies installed. Run with --start-only to start servers.');
       process.exit(0);
     }
 
     if (envOnly) {
       await setupEnvironmentFiles();
+      logSuccess('Environment files configured. Run with --start-only to start servers.');
       process.exit(0);
     }
 
     if (dbOnly) {
       await initializeDatabase();
+      logSuccess('Database initialized. Run with --start-only to start servers.');
       process.exit(0);
     }
 
     if (buildOnly) {
       await runProductionSetup();
+      logSuccess('Build completed. Run with --start-only to start servers.');
       process.exit(0);
     }
 
+    // 仅启动服务（跳过设置）
     if (startOnly) {
+      // 在生产模式下，需要确保数据库已初始化
+      if (isDocker || productionMode) {
+        logStep('CHECK', 'Ensuring database is initialized...');
+        await initializeDatabase();
+      }
+
       const processes = await startServers();
       handleShutdown(processes);
       return;
     }
 
-    if (productionMode || isDockerEnvironment()) {
+    // 完整的启动流程
+    if (isDocker || productionMode) {
+      // Docker 或生产环境：完整设置 + 启动
       await runProductionSetup();
       const processes = await startServers();
       handleShutdown(processes);
     } else {
+      // 开发环境：基础设置 + 启动
       await runDevelopmentSetup();
       const processes = await startServers();
       handleShutdown(processes);
@@ -538,8 +845,16 @@ async function main() {
   } catch (error) {
     logError(`Fatal error: ${error.message}`);
     console.error(error);
+
+    // 打印堆栈跟踪以便调试
+    if (error.stack) {
+      console.error('\nStack trace:');
+      console.error(error.stack);
+    }
+
     process.exit(1);
   }
 }
 
+// 启动主函数
 main();
