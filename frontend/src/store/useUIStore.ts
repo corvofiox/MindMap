@@ -1,14 +1,16 @@
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
+import { persist, createJSONStorage } from 'zustand/middleware'
 import { nanoid } from 'nanoid'
 import type { Theme, Tool, DragMode, NodeCard, Toast } from '@/types'
 import { STORAGE_KEYS } from '@/constants'
 import { getToastConfig } from '@/config/messageConfig'
+import { setupTheme, applyTheme, initThemeListener } from '@/utils/themeManager'
 
 interface UIState {
   // Theme
   theme: Theme
   setTheme: (theme: Theme) => void
+  initializeTheme: () => void
 
   // Sidebar
   sidebarOpen: boolean
@@ -115,7 +117,14 @@ export const useUIStore = create<UIState>()(
       return {
         // Theme
         theme: 'system',
-        setTheme: (theme) => set({ theme }),
+        setTheme: (theme) => {
+          set({ theme })
+          applyTheme(theme)
+        },
+        initializeTheme: () => {
+          const currentTheme = get().theme
+          setupTheme(currentTheme)
+        },
 
         // Sidebar
         sidebarOpen: true,
@@ -255,6 +264,7 @@ export const useUIStore = create<UIState>()(
     },
     {
       name: STORAGE_KEYS.SETTINGS,
+      storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({
         theme: state.theme,
         sidebarOpen: state.sidebarOpen,
@@ -263,6 +273,12 @@ export const useUIStore = create<UIState>()(
         gridVisible: state.gridVisible,
         minimapVisible: state.minimapVisible,
       }),
+      onRehydrateStorage: () => (state) => {
+        if (state) {
+          applyTheme(state.theme)
+          initThemeListener()
+        }
+      },
     }
   )
 )

@@ -623,7 +623,7 @@ export function Sidebar({ open }: SidebarProps) {
                     />
                   ))
               ) : (
-                <div className="text-center text-sm text-gray-400 px-4 py-4">
+                <div className="text-center text-sm text-gray-400 dark:text-gray-500 px-4 py-4">
                   根目录 (拖拽画布到此处移出文件夹)
                 </div>
               )}

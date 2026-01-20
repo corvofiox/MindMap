@@ -900,7 +900,6 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
             overflow: 'hidden',
             display: 'flex',
             flexDirection: 'column',
-            // Simplify shadow during dragging for better performance
             boxShadow: isSelected
               ? '0 4px 12px rgba(0, 0, 0, 0.15)'
               : isDragging || groupDragOffset
@@ -1096,7 +1095,6 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
                     ref={contentRef}
                     contentEditable
                     suppressContentEditableWarning
-                    className=""
                     style={{
                       color: '#4b5563',
                       minHeight: '60px',

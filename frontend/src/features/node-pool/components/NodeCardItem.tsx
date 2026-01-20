@@ -227,7 +227,7 @@ export const NodeCardItem = memo(function NodeCardItem({
                   onClick={(e) => e.stopPropagation()}
                 />
               ) : (
-                <h4 className="text-sm font-medium text-gray-800 dark:text-white truncate">
+                <h4 className="text-sm font-medium text-gray-800 truncate">
                   <SearchHighlighter text={card.name} query={searchQuery} />
                 </h4>
               )}

@@ -412,7 +412,7 @@ const toolSeparators = [1, 2]
 
       {/* 域编辑模式提示 */}
       {currentTool === 'domain' && (
-        <div className="absolute top-14 left-1/2 transform -translate-x-1/2 bg-blue-500 text-white px-4 py-2 rounded-lg shadow-lg z-20">
+        <div className="absolute top-14 left-1/2 transform -translate-x-1/2 bg-blue-500 dark:bg-blue-600 text-white px-4 py-2 rounded-lg shadow-lg z-20">
           域编辑模式 - 拖拽创建域，点击选中编辑
         </div>
       )}

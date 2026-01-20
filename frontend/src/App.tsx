@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { useEffect } from 'react'
 import { useAuthStore } from './store/useAuthStore'
+import { useUIStore } from './store/useUIStore'
 import { MainLayout } from './components/layout/MainLayout'
 import { LoginPage } from './pages/LoginPage'
 import { RegisterPage } from './pages/RegisterPage'
@@ -16,10 +17,15 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
 function App() {
   const { isAuthenticated, validateToken } = useAuthStore()
+  const { initializeTheme } = useUIStore()
 
   useEffect(() => {
     validateToken()
   }, [validateToken])
+
+  useEffect(() => {
+    initializeTheme()
+  }, [initializeTheme])
 
   return (
     <>
