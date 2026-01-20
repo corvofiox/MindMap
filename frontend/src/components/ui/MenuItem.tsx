@@ -1,5 +1,6 @@
 import { ReactNode } from 'react'
 import clsx from 'clsx'
+import { Z_INDEX } from '@/constants'
 
 interface MenuItemProps {
   icon?: ReactNode
@@ -72,7 +73,8 @@ export function Menu({
 
   return (
     <div
-      className="fixed z-[80] bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1 min-w-[160px] menu-container"
+      className="fixed bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1 min-w-[160px] menu-container"
+      style={{ zIndex: Z_INDEX.CONTEXT_MENU }}
       onClick={handleClickOutside}
     >
       <div className={className}>{children}</div>

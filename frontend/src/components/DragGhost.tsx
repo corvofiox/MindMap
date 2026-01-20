@@ -1,6 +1,7 @@
 import { useEffect, useCallback, useState, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useUIStore } from '@/store/useUIStore'
+import { Z_INDEX } from '@/constants'
 
 export function DragGhost() {
   const { dragGhostCard, dragGhostPosition, setDragGhost } = useUIStore()
@@ -122,11 +123,12 @@ export function DragGhost() {
   return createPortal(
     <>
       <div
-        className="fixed pointer-events-none z-[9999]"
+        className="fixed pointer-events-none"
         style={{
           left: displayPosition.x,
           top: displayPosition.y,
           transform: 'translate(-50%, -50%)',
+          zIndex: Z_INDEX.DRAG_GHOST,
         }}
       >
         <div
@@ -192,8 +194,8 @@ export function DragGhost() {
         </div>
       </div>
       <div
-        className="fixed inset-0 bg-blue-500/3 pointer-events-none z-[9998]"
-        style={{ cursor: 'crosshair' }}
+        className="fixed inset-0 bg-blue-500/3 pointer-events-none"
+        style={{ cursor: 'crosshair', zIndex: Z_INDEX.DRAG_GHOST - 1 }}
       />
     </>,
     document.body

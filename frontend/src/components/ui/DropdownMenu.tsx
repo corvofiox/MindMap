@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { Check } from 'lucide-react'
 import clsx from 'clsx'
+import { Z_INDEX } from '@/constants'
 
 interface DropdownMenuProps {
   trigger: React.ReactNode
@@ -45,9 +46,10 @@ export function DropdownMenu({ trigger, items, align = 'end' }: DropdownMenuProp
       {isOpen && (
         <div
           className={clsx(
-            'absolute top-full mt-1 w-56 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1 z-[100]',
+            'absolute top-full mt-1 w-56 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1',
             align === 'end' ? 'right-0' : 'left-0'
           )}
+          style={{ zIndex: Z_INDEX.DROPDOWN_MENU }}
         >
           {items.map((item, index) => {
             if (item.divider) {

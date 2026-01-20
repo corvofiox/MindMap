@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { useCanvasStore } from '@/store/useCanvasStore'
 import { useUIStore } from '@/store/useUIStore'
 import { snapToGrid } from '@/utils/canvas'
-import { CANVAS_DEFAULTS } from '@/constants'
+import { CANVAS_DEFAULTS, Z_INDEX } from '@/constants'
 import { loadApiModule } from '@/utils/moduleLoader'
 import type { Node } from '@/types'
 
@@ -777,6 +777,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
                 left: 6,
                 width: 16,
                 height: 16,
+                zIndex: Z_INDEX.NODE,
               }}
               onMouseDown={(e) => {
                 e.stopPropagation()
@@ -803,6 +804,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
                 right: 6,
                 width: 16,
                 height: 16,
+                zIndex: Z_INDEX.NODE,
               }}
               onMouseDown={(e) => {
                 e.stopPropagation()
@@ -829,6 +831,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
                 left: 6,
                 width: 16,
                 height: 16,
+                zIndex: Z_INDEX.NODE,
               }}
               onMouseDown={(e) => {
                 e.stopPropagation()
@@ -855,6 +858,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
                 right: 6,
                 width: 16,
                 height: 16,
+                zIndex: Z_INDEX.NODE,
               }}
               onMouseDown={(e) => {
                 e.stopPropagation()

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useUIStore } from '@/store/useUIStore'
 import { Search, X } from 'lucide-react'
+import { Z_INDEX } from '@/constants'
 
 export function SearchPanel() {
   const { searchOpen, setSearchOpen } = useUIStore()
@@ -26,7 +27,8 @@ export function SearchPanel() {
 
   return (
     <div
-      className="fixed inset-0 bg-black/50 flex items-start justify-center pt-[15vh] z-[110]"
+      className="fixed inset-0 bg-black/50 flex items-start justify-center pt-[15vh]"
+      style={{ zIndex: Z_INDEX.SEARCH_PANEL }}
       onClick={() => setSearchOpen(false)}
     >
       <div

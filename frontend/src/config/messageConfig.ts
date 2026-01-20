@@ -1,4 +1,5 @@
 // 消息系统配置
+import { Z_INDEX } from '@/constants'
 
 // Toast 配置
 export interface ToastConfig {
@@ -55,13 +56,13 @@ export const messageConfig: MessageConfig = {
     }
   },
   dialog: {
-    defaultZIndex: 110,
+    defaultZIndex: Z_INDEX.DIALOG,
     defaultShowCloseButton: true,
     defaultCloseOnEscape: true,
     defaultCloseOnOutsideClick: true
   },
   contextMenu: {
-    defaultZIndex: 80,
+    defaultZIndex: Z_INDEX.CONTEXT_MENU,
     enableKeyboardNavigation: true
   }
 }

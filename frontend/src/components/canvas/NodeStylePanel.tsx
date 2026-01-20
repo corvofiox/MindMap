@@ -1,7 +1,7 @@
 import { useRef, useEffect, useState } from 'react'
 import { useCanvasStore } from '@/store/useCanvasStore'
 import { useUIStore } from '@/store/useUIStore'
-import { NODE_COLORS, BORDER_COLORS } from '@/constants'
+import { NODE_COLORS, BORDER_COLORS, Z_INDEX } from '@/constants'
 
 export function NodeStylePanel() {
   const { nodes, updateNode, selectedIds } = useCanvasStore()
@@ -66,7 +66,7 @@ export function NodeStylePanel() {
   }
 
   return (
-    <div className="fixed right-0 top-0 h-full w-80 bg-white dark:bg-gray-800 shadow-xl border-l border-gray-200 dark:border-gray-700 z-[80] flex flex-col">
+    <div className="fixed right-0 top-0 h-full w-80 bg-white dark:bg-gray-800 shadow-xl border-l border-gray-200 dark:border-gray-700 flex flex-col" style={{ zIndex: Z_INDEX.STYLE_PANEL }}>
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700">
         <h2 className="text-lg font-semibold text-gray-900 dark:text-white">

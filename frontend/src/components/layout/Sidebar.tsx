@@ -5,6 +5,7 @@ import { useProjectsStore } from '@/store/useProjectsStore'
 import { useUIStore } from '@/store/useUIStore'
 import clsx from 'clsx'
 import { createPortal } from 'react-dom'
+import { Z_INDEX } from '@/constants'
 
 interface SidebarProps {
   open: boolean
@@ -310,7 +311,7 @@ export function Sidebar({ open }: SidebarProps) {
     <>
       {/* Loading overlay - Fixed position to cover screen */}
       {isLoading && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-gray-100/50 dark:bg-gray-900/50 backdrop-blur-sm transition-opacity duration-300">
+        <div className="fixed inset-0 flex items-center justify-center bg-gray-100/50 dark:bg-gray-900/50 backdrop-blur-sm transition-opacity duration-300" style={{ zIndex: Z_INDEX.DIALOG }}>
           <div className="text-center bg-white dark:bg-gray-800 p-6 rounded-xl shadow-xl border border-gray-200 dark:border-gray-700">
             <div className="inline-block animate-spin rounded-full h-10 w-10 border-4 border-gray-300 border-t-blue-500 mb-3" />
             <p className="text-sm font-medium text-gray-600 dark:text-gray-400">{loadingMessage || '正在处理...'}</p>
@@ -434,7 +435,7 @@ export function Sidebar({ open }: SidebarProps) {
 
                             {/* 下拉菜单 */}
                             {showProjectMenu === project.id && createPortal(
-                              <div className="fixed w-32 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1 z-[100]">
+                              <div className="fixed w-32 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1" style={{ zIndex: Z_INDEX.SIDEBAR_SUBMENU }}>
                                 <button
                                   onClick={(e) => {
                                     e.stopPropagation()
@@ -932,10 +933,11 @@ function FolderItem({
           {contextMenu && createPortal(
             <div
               ref={contextMenuRef}
-              className="fixed bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1 z-[100] min-w-[120px]"
+              className="fixed bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1 min-w-[120px]"
               style={{
                 left: contextMenu.x,
-                top: contextMenu.y
+                top: contextMenu.y,
+                zIndex: Z_INDEX.CONTEXT_MENU,
               }}
             >
               <button
@@ -1196,10 +1198,11 @@ function CanvasItem({
           {showContextMenu && createPortal(
             <div
               ref={contextMenuRef}
-              className="fixed bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1 z-[100] min-w-[160px]"
+              className="fixed bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1 min-w-[160px]"
               style={{
                 left: contextMenuPosition.x,
-                top: contextMenuPosition.y
+                top: contextMenuPosition.y,
+                zIndex: Z_INDEX.CONTEXT_MENU,
               }}
               onContextMenu={(e) => e.preventDefault()}
             >

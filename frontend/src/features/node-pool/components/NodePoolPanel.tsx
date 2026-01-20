@@ -31,6 +31,7 @@ import { NodeCardItem } from './NodeCardItem'
 import { FolderContextMenu } from './FolderContextMenu'
 import { NodeCardContextMenu } from './NodeCardContextMenu'
 import { ContextMenuErrorBoundary } from './ContextMenuErrorBoundary'
+import { Z_INDEX } from '@/constants'
 import type { NodePoolSortOption, NodePoolSortOrder, Node } from '@/types'
 import type { NodeCard, NodePoolFolder } from '../types/node-pool'
 
@@ -507,7 +508,11 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
   }, [filteredCardsByFolder, handleToggleFolder, handleFolderContextMenu, handleCardContextMenu, previewCardId, handleFolderDrop, handleStartFolderEdit, handleSaveFolderName, handleCancelFolderEdit, editingFolderId, handleUseCard, handleRemoveCard, handleSaveCardName, editingCardId, searchQuery])
 
   return (
-    <aside data-node-pool="true" className={`w-72 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 flex flex-col transition-all duration-200 fixed right-0 top-14 h-[calc(100vh-3.5rem)] z-[70] ${open ? 'transform translate-x-0' : 'transform translate-x-full'}`}>
+    <aside
+      data-node-pool="true"
+      className={`w-72 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 flex flex-col transition-all duration-200 fixed right-0 top-14 h-[calc(100vh-3.5rem)] ${open ? 'transform translate-x-0' : 'transform translate-x-full'}`}
+      style={{ zIndex: Z_INDEX.NODE_POOL_PANEL }}
+    >
       {/* Header */}
       <div className="h-12 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-4 flex-shrink-0">
         <h2 className="font-semibold text-gray-800 dark:text-white">节点池</h2>

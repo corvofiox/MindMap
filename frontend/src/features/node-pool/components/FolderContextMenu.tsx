@@ -7,6 +7,7 @@ import {
 import { useNodePoolStore } from '../stores/useNodePoolStore'
 import { useUIStore } from '@/store/useUIStore'
 import { useContextMenu, MenuItem, MenuDivider } from '../hooks/useContextMenu'
+import { Z_INDEX } from '@/constants'
 import type { NodePoolFolder } from '@/types'
 
 interface FolderContextMenuProps {
@@ -59,17 +60,18 @@ export function FolderContextMenu({ folder, position, onClose, onRename }: Folde
 
   return createPortal(
     <>
-      <div className="fixed inset-0 z-[75]" onClick={onClose} />
+      <div className="fixed inset-0" style={{ zIndex: Z_INDEX.NODE_POOL_CONTEXT_MASK }} onClick={onClose} />
 
       <div
         ref={menuRef}
-        className="fixed z-[80] bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1 min-w-[120px]"
+        className="fixed bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1 min-w-[120px]"
         style={{
           left: finalPosition.x,
           top: finalPosition.y,
           opacity: isPositioned ? 1 : 0,
           pointerEvents: isPositioned ? 'auto' : 'none',
           transition: 'opacity 0.1s ease-out',
+          zIndex: Z_INDEX.CONTEXT_MENU,
         }}
       >
         <MenuItem

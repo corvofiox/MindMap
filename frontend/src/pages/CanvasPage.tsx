@@ -18,7 +18,7 @@ import { DomainStylePanel } from '@/components/canvas/DomainStylePanel'
 import { ContextMenuWrapper } from '@/components/ContextMenuWrapper'
 import { RichTextToolbar } from '@/components/canvas/RichTextToolbar'
 import { ConnectionLine } from '@/components/canvas/ConnectionLine'
-import { CONNECTION_DEFAULTS } from '@/constants'
+import { CONNECTION_DEFAULTS, Z_INDEX } from '@/constants'
 import { generateId, colorToHex, hexToRgba } from '@/utils/canvas'
 import { saveToCache, loadFromCache } from '@/utils/nodeCache'
 import { saveCanvasNodesData, loadCanvasNodesData } from '@/services/api'
@@ -49,7 +49,7 @@ const ENDPOINT_HIT_AREA_STYLE = {
   height: 24,
   cursor: 'crosshair',
   pointerEvents: 'all',
-  zIndex: 10,
+  zIndex: Z_INDEX.BEND_POINT,
 } as const
 
 const ENDPOINT_VISIBLE_CIRCLE_STYLE = {
@@ -2063,7 +2063,6 @@ export function CanvasPage() {
           borderColor: '#9ca3af',
           borderWidth: 1,
           titleVisible: true,
-          zIndex: domains.size,
         }
         addDomain(newDomain)
         // 自动切换回选择工具，避免连续创建
@@ -2931,7 +2930,7 @@ export function CanvasPage() {
         }}
       >
         {isLoadingCanvas && (
-          <div className="absolute inset-0 z-[100] flex items-center justify-center bg-gray-100/50 dark:bg-gray-900/50 backdrop-blur-sm transition-opacity duration-300">
+          <div className="absolute inset-0 flex items-center justify-center bg-gray-100/50 dark:bg-gray-900/50 backdrop-blur-sm transition-opacity duration-300" style={{ zIndex: Z_INDEX.DIALOG }}>
             <div className="text-center bg-white dark:bg-gray-800 p-6 rounded-xl shadow-xl border border-gray-200 dark:border-gray-700">
               <div className="inline-block animate-spin rounded-full h-10 w-10 border-4 border-gray-300 border-t-blue-500 mb-3"></div>
               <p className="text-sm font-medium text-gray-600 dark:text-gray-400">正在同步画布数据...</p>
@@ -3694,7 +3693,7 @@ export function CanvasPage() {
                           height: (isHovered ? 28 : 24),
                           cursor: 'move',
                           pointerEvents: 'all',
-                          zIndex: 100,
+                          zIndex: Z_INDEX.BEND_POINT,
                           transition: 'all 0.15s ease',
                         }}
                         onMouseEnter={() => {
@@ -3778,12 +3777,13 @@ export function CanvasPage() {
           {/* Box selection rectangle - rendered on top of everything */}
           {isBoxSelecting && (
             <div
-              className="absolute border-2 border-blue-500 bg-blue-500 bg-opacity-10 pointer-events-none z-10"
+              className="absolute border-2 border-blue-500 bg-blue-500 bg-opacity-10 pointer-events-none"
               style={{
                 left: Math.min(boxSelectionStart.x, boxSelectionEnd.x),
                 top: Math.min(boxSelectionStart.y, boxSelectionEnd.y),
                 width: Math.abs(boxSelectionEnd.x - boxSelectionStart.x),
                 height: Math.abs(boxSelectionEnd.y - boxSelectionStart.y),
+                zIndex: Z_INDEX.NODE,
               }}
             />
           )}
@@ -3791,12 +3791,13 @@ export function CanvasPage() {
           {/* Domain creation rectangle - box selection style */}
           {isCreatingDomain && (
             <div
-              className="absolute border-2 border-dashed border-blue-500 bg-blue-500 bg-opacity-10 pointer-events-none z-10"
+              className="absolute border-2 border-dashed border-blue-500 bg-blue-500 bg-opacity-10 pointer-events-none"
               style={{
                 left: Math.min(domainBoxStart.x, domainBoxEnd.x),
                 top: Math.min(domainBoxStart.y, domainBoxEnd.y),
                 width: Math.abs(domainBoxEnd.x - domainBoxStart.x),
                 height: Math.abs(domainBoxEnd.y - domainBoxStart.y),
+                zIndex: Z_INDEX.NODE,
               }}
             />
           )}
@@ -4112,7 +4113,7 @@ export function CanvasPage() {
 
       {/* Connection Label Edit Dialog */}
       {editingConnectionLabel && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center" style={{ zIndex: Z_INDEX.DIALOG }}>
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl p-6 w-80">
             <h3 className="text-lg font-medium mb-4 text-gray-900 dark:text-white">
               编辑说明文字

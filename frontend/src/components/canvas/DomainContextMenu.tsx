@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { Trash2, Type, Settings2 } from 'lucide-react'
 import { useCanvasStore } from '@/store/useCanvasStore'
 import { useUIStore } from '@/store/useUIStore'
+import { Z_INDEX } from '@/constants'
 
 interface DomainContextMenuProps {
   domainId: string
@@ -122,14 +123,15 @@ export function DomainContextMenu({ domainId, position, onClose }: DomainContext
 
   return createPortal(
     <>
-      <div className="fixed inset-0 z-40" onClick={onClose} />
+      <div className="fixed inset-0" style={{ zIndex: Z_INDEX.CONTEXT_MENU }} onClick={onClose} />
 
       <div
         ref={menuRef}
-        className="fixed z-[80] bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg py-1 min-w-40"
+        className="fixed bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg py-1 min-w-40"
         style={{
           left: adjustedPosition.x,
           top: adjustedPosition.y,
+          zIndex: Z_INDEX.CONTEXT_MENU,
         }}
       >
         <div className="space-y-0.5">

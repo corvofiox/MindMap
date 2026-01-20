@@ -1,7 +1,7 @@
 import { Plus, Minus, Maximize2 } from 'lucide-react'
 import { useCanvasStore } from '@/store/useCanvasStore'
 import { useUIStore } from '@/store/useUIStore'
-import { CANVAS_DEFAULTS } from '@/constants'
+import { CANVAS_DEFAULTS, Z_INDEX } from '@/constants'
 
 export function ZoomControls() {
   const { zoom, setZoom, setPan } = useCanvasStore()
@@ -21,7 +21,10 @@ export function ZoomControls() {
   }
 
   return (
-    <div className={`absolute bottom-4 flex items-center gap-1 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 p-1 z-[60] ${nodePoolOpen ? 'right-[18.25rem]' : 'right-4'}`}>
+    <div
+      className={`absolute bottom-4 flex items-center gap-1 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 p-1 ${nodePoolOpen ? 'right-[18.25rem]' : 'right-4'}`}
+      style={{ zIndex: Z_INDEX.ZOOM_CONTROLS }}
+    >
       <button
         onClick={handleZoomOut}
         className="p-2 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400"

@@ -22,7 +22,7 @@ import { useUIStore } from '@/store/useUIStore'
 import { useProjectsStore } from '@/store/useProjectsStore'
 import { useNodePoolStore } from '@/features/node-pool/stores/useNodePoolStore'
 import { uploadImage } from '@/services/api'
-import { NODE_COLORS, BORDER_COLORS } from '@/constants'
+import { NODE_COLORS, BORDER_COLORS, Z_INDEX } from '@/constants'
 
 interface NodeContextMenuProps {
   nodeId: string
@@ -356,17 +356,18 @@ export function NodeContextMenu({ nodeId, position, onClose }: NodeContextMenuPr
   return (
     createPortal(
       <>
-        <div className="fixed inset-0 z-40" onClick={onClose} />
+        <div className="fixed inset-0" style={{ zIndex: Z_INDEX.CONTEXT_MENU }} onClick={onClose} />
 
         <div
           ref={menuRef}
-          className="fixed z-[80] w-60 bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 py-2 px-2 animate-in fade-in zoom-in-95 duration-150"
+          className="fixed w-60 bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 py-2 px-2 animate-in fade-in zoom-in-95 duration-150"
           style={{
             left: finalPosition.x,
             top: finalPosition.y,
             opacity: isPositioned ? 1 : 0,
             pointerEvents: isPositioned ? 'auto' : 'none',
             transition: 'opacity 0.1s ease-out',
+            zIndex: Z_INDEX.CONTEXT_MENU,
           }}
         >
           {/* Edit Actions */}

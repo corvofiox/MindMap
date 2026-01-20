@@ -4,6 +4,7 @@ import { X, User, Key, Trash2, Camera, Loader2 } from 'lucide-react'
 import { useUIStore } from '@/store/useUIStore'
 import { useAuthStore } from '@/store/useAuthStore'
 import { changePassword, deleteAccount, uploadImage } from '@/services/api'
+import { Z_INDEX } from '@/constants'
 
 interface Tab {
   id: 'profile' | 'security' | 'danger'
@@ -170,7 +171,8 @@ export function AccountSettingsDialog() {
 
   return (
     <div
-      className="fixed inset-0 bg-black/50 flex items-center justify-center z-[110]"
+      className="fixed inset-0 bg-black/50 flex items-center justify-center"
+      style={{ zIndex: Z_INDEX.DIALOG }}
       onClick={() => setAccountSettingsOpen(false)}
     >
       <div

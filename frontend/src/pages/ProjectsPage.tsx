@@ -5,6 +5,7 @@ import { useProjectsStore } from '@/store/useProjectsStore'
 import { useUIStore } from '@/store/useUIStore'
 import { useAuthStore } from '@/store/useAuthStore'
 import { Project } from '@/types'
+import { Z_INDEX } from '@/constants'
 
 interface EditState {
   id: number | null
@@ -120,7 +121,7 @@ export function ProjectsPage() {
     <div className="h-full bg-gray-50 dark:bg-gray-900 flex flex-col">
       {/* Loading overlay */}
       {isLoading && (
-        <div className="absolute inset-0 z-[100] flex items-center justify-center bg-gray-100/50 dark:bg-gray-900/50 backdrop-blur-sm transition-opacity duration-300">
+        <div className="absolute inset-0 flex items-center justify-center bg-gray-100/50 dark:bg-gray-900/50 backdrop-blur-sm transition-opacity duration-300" style={{ zIndex: Z_INDEX.DIALOG }}>
           <div className="text-center bg-white dark:bg-gray-800 p-6 rounded-xl shadow-xl border border-gray-200 dark:border-gray-700">
             <div className="inline-block animate-spin rounded-full h-10 w-10 border-4 border-gray-300 border-t-blue-500 mb-3"></div>
             <p className="text-sm font-medium text-gray-600 dark:text-gray-400">{loadingMessage || '正在处理...'}</p>

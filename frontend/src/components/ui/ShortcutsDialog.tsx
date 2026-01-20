@@ -1,6 +1,7 @@
 import { useUIStore } from '@/store/useUIStore'
 import { X, Keyboard } from 'lucide-react'
 import { SHORTCUTS, SHORTCUT_CATEGORIES } from '@/constants/shortcuts'
+import { Z_INDEX } from '@/constants'
 
 export function ShortcutsDialog() {
   const { shortcutsOpen, setShortcutsOpen } = useUIStore()
@@ -9,7 +10,8 @@ export function ShortcutsDialog() {
 
   return (
     <div
-      className="fixed inset-0 bg-black/50 flex items-center justify-center z-[110]"
+      className="fixed inset-0 bg-black/50 flex items-center justify-center"
+      style={{ zIndex: Z_INDEX.DIALOG }}
       onClick={() => setShortcutsOpen(false)}
     >
       <div

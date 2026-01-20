@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { Z_INDEX } from '@/constants'
 import type { Node, NodeGroup, Domain } from '@/types'
 
 interface CanvasMinimapProps {
@@ -280,7 +281,7 @@ export function CanvasMinimap({
         right: '16px',
         width: `${minimapSize.width + 8}px`,
         height: `${minimapSize.height + 8}px`,
-        zIndex: 50,
+        zIndex: Z_INDEX.ZOOM_CONTROLS,
       }}
       onMouseDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}

@@ -118,7 +118,6 @@ export interface Domain {
   titleColor?: string
   titleFontSize?: number
   titleScale?: number
-  zIndex?: number
 }
 
 // Connection types

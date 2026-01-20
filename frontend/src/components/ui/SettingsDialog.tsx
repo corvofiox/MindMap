@@ -1,5 +1,6 @@
 import { useUIStore } from '@/store/useUIStore'
 import { X, Settings2 } from 'lucide-react'
+import { Z_INDEX } from '@/constants'
 
 export function SettingsDialog() {
   const { settingsOpen, setSettingsOpen, theme, setTheme, dragMode, setDragMode, gridVisible, setGridVisible } = useUIStore()
@@ -8,7 +9,8 @@ export function SettingsDialog() {
 
   return (
     <div
-      className="fixed inset-0 bg-black/50 flex items-center justify-center z-[110]"
+      className="fixed inset-0 bg-black/50 flex items-center justify-center"
+      style={{ zIndex: Z_INDEX.DIALOG }}
       onClick={() => setSettingsOpen(false)}
     >
       <div

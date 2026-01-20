@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useUIStore } from '@/store/useUIStore'
 import { Search } from 'lucide-react'
+import { Z_INDEX } from '@/constants'
 
 export function CommandPalette() {
   const { commandPaletteOpen, setCommandPaletteOpen } = useUIStore()
@@ -54,7 +55,8 @@ export function CommandPalette() {
 
   return (
     <div
-      className="fixed inset-0 bg-black/50 flex items-start justify-center pt-[20vh] z-[110]"
+      className="fixed inset-0 bg-black/50 flex items-start justify-center pt-[20vh]"
+      style={{ zIndex: Z_INDEX.COMMAND_PALETTE }}
       onClick={() => setCommandPaletteOpen(false)}
     >
       <div

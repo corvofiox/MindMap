@@ -1,6 +1,7 @@
 import { useEffect, ReactNode } from 'react'
 import { X } from 'lucide-react'
 import clsx from 'clsx'
+import { Z_INDEX } from '@/constants'
 
 interface DialogProps {
   open: boolean
@@ -22,7 +23,7 @@ export function Dialog({
   title,
   children,
   footer,
-  zIndex = 110,
+  zIndex = Z_INDEX.DIALOG,
   className = '',
   contentClassName = '',
   showCloseButton = true,

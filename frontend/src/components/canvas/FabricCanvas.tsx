@@ -1,7 +1,7 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
 import { useCanvasStore } from '@/store/useCanvasStore'
 import { useUIStore } from '@/store/useUIStore'
-import { CANVAS_DEFAULTS, NODE_DEFAULTS, DOMAIN_DEFAULTS } from '@/constants'
+import { CANVAS_DEFAULTS, NODE_DEFAULTS, DOMAIN_DEFAULTS, Z_INDEX } from '@/constants'
 import { screenToCanvas, generateId, clamp } from '@/utils/canvas'
 import { createFabricNode, createFabricGroup, createFabricDomain, createFabricConnection, updateFabricDomainsEditable, snapToGridFabric } from '@/utils/fabric'
 
@@ -291,7 +291,6 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
           borderColor: DOMAIN_DEFAULTS.BORDER_COLOR,
           borderWidth: DOMAIN_DEFAULTS.BORDER_WIDTH,
           titleVisible: true,
-          zIndex: domains.size,
         }
         addDomain(newDomain)
 

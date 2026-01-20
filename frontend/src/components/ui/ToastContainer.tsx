@@ -2,12 +2,13 @@ import { useUIStore } from '@/store/useUIStore'
 import { X, CheckCircle, AlertCircle, AlertTriangle, Info } from 'lucide-react'
 import { useEffect } from 'react'
 import clsx from 'clsx'
+import { Z_INDEX } from '@/constants'
 
 export function ToastContainer() {
   const { toasts, removeToast } = useUIStore()
 
   return (
-    <div className="fixed bottom-4 right-4 z-[120] flex flex-col gap-2">
+    <div className="fixed bottom-4 right-4 flex flex-col gap-2" style={{ zIndex: Z_INDEX.TOAST }}>
       {toasts.map((toast) => (
         <Toast key={toast.id} toast={toast} onRemove={() => removeToast(toast.id)} />
       ))}

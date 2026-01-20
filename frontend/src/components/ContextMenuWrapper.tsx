@@ -1,4 +1,5 @@
 import React, { useRef, useEffect, useState } from 'react'
+import { Z_INDEX } from '@/constants'
 
 interface ContextMenuWrapperProps {
   x: number
@@ -70,10 +71,11 @@ export const ContextMenuWrapper: React.FC<ContextMenuWrapperProps> = ({
     <>
       <div
         ref={menuRef}
-        className="fixed bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg py-1 z-[80] min-w-40"
+        className="fixed bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg py-1 min-w-40"
         style={{
           left: position.left,
           top: position.top,
+          zIndex: Z_INDEX.CONTEXT_MENU,
         }}
       >
         {children}

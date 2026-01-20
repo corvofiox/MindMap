@@ -11,6 +11,7 @@ import { clsx } from 'clsx'
 import type { NodeCard } from '@/types'
 import type { NodeCardItemProps } from '../types/node-pool'
 import { containsHTML, safeHTML } from '@/utils/sanitizeHTML'
+import { Z_INDEX } from '@/constants'
 
 function SearchHighlighter({ text, query }: { text: string; query: string }) {
   if (!query.trim() || !text.toLowerCase().includes(query.toLowerCase())) {
@@ -259,11 +260,12 @@ export const NodeCardItem = memo(function NodeCardItem({
         {/* Preview tooltip */}
         {showPreview && (
           <div
-            className="fixed z-[80] pointer-events-auto"
+            className="fixed pointer-events-auto"
             style={{
               right: '288px',
               top: previewPosition.top,
-              transform: 'translateY(-50%)'
+              transform: 'translateY(-50%)',
+              zIndex: Z_INDEX.CONTEXT_MENU,
             }}
           >
             <div 

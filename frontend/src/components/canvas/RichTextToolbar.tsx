@@ -1,5 +1,6 @@
 import { Bold, Italic, Underline, Strikethrough, Palette, X } from 'lucide-react'
 import { useState, useCallback, useRef, useEffect } from 'react'
+import { Z_INDEX } from '@/constants'
 
 interface RichTextToolbarProps {
   visible: boolean
@@ -48,11 +49,12 @@ export function RichTextToolbar({ visible, position, onCommand, onClose, onFocus
     <div
       ref={toolbarRef}
       data-rich-text-toolbar="true"
-      className="fixed bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl z-[1000] flex items-center gap-1 p-1"
+      className="fixed bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl flex items-center gap-1 p-1"
       style={{
         left: position.x,
         top: position.y,
         transform: 'translateX(-50%)',
+        zIndex: Z_INDEX.RICH_TEXT_TOOLBAR,
       }}
       onMouseDown={(e) => {
         e.stopPropagation()
@@ -116,6 +118,7 @@ export function RichTextToolbar({ visible, position, onCommand, onClose, onFocus
         {showColorDropdown && (
           <div
             className="absolute bottom-full left-0 mb-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl p-3 min-w-[160px]"
+            style={{ zIndex: Z_INDEX.RICH_TEXT_POPOVER }}
             onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}
           >
