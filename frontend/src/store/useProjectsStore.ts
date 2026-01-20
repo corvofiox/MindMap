@@ -2,7 +2,6 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { Project, Canvas, Folder, NodeCard, NodePoolFolder, NodePoolSortOption, NodePoolSortOrder } from '@/types'
 import * as api from '@/services/api'
-import { loadUIStore } from '@/utils/moduleLoader'
 
 interface ProjectsState {
   projects: Project[]
@@ -71,10 +70,7 @@ export const useProjectsStore = create<ProjectsState>()(
           error: errorMessage,
           isLoading: false,
         })
-        // Show error toast to user
-        loadUIStore().then(({ useUIStore }) => {
-          useUIStore.getState().addErrorToast(errorMessage, '操作失败')
-        })
+        throw new Error(errorMessage)
       }
 
       return {

@@ -681,6 +681,8 @@ export function CanvasPage() {
     setCurrentTool,
     toggleGrid,
     setSelectedType,
+    isLoading,
+    setLoading,
     connectionType,
     connectionDirection,
     connectionStyle,
@@ -804,6 +806,8 @@ export function CanvasPage() {
       setCanvasId(id)
 
       try {
+        setLoading(true)
+
         // 如果是临时ID，不尝试从数据库加载数据
         if (id < 0) {
           // 清空画布，准备一个新的画布
@@ -855,6 +859,8 @@ export function CanvasPage() {
         } else {
           clearCanvas()
         }
+      } finally {
+        setLoading(false)
       }
     }
 
@@ -2887,6 +2893,16 @@ export function CanvasPage() {
 
   return (
     <div className="h-full flex flex-col bg-gray-100 dark:bg-gray-900">
+      {/* Loading overlay for canvas switching */}
+      {isLoading && (
+        <div className="fixed inset-0 flex items-center justify-center bg-gray-100/50 dark:bg-gray-900/50 backdrop-blur-sm z-[9999]">
+          <div className="text-center bg-white dark:bg-gray-800 p-6 rounded-xl shadow-xl border border-gray-200 dark:border-gray-700">
+            <div className="inline-block animate-spin rounded-full h-10 w-10 border-4 border-gray-300 border-t-blue-500 mb-3" />
+            <p className="text-sm font-medium text-gray-600 dark:text-gray-400">正在加载画布...</p>
+          </div>
+        </div>
+      )}
+
       {/* Canvas Toolbar */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
         <CanvasToolbar onSave={handleManualSave} />

@@ -98,10 +98,6 @@ export const useAuthStore = create<AuthState>()(
               error: errorMessage,
               isLoading: false,
             })
-            // Show error toast to user
-            loadUIStore().then(({ useUIStore }) => {
-              useUIStore.getState().addErrorToast(errorMessage, '登录失败')
-            })
             throw error
           }
         },
@@ -187,10 +183,6 @@ export const useAuthStore = create<AuthState>()(
           try {
             const updatedUser = await api.updateProfile(data)
             set({ user: updatedUser, isLoading: false })
-            // Show success toast
-            loadUIStore().then(({ useUIStore }) => {
-              useUIStore.getState().addSuccessToast('个人资料已更新', '更新成功')
-            })
           } catch (error) {
             handleError(error, '更新个人资料失败')
           }
