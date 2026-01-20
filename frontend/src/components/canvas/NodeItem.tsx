@@ -92,6 +92,8 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
   const isEditingContent = editingField === 'content'
 
   useEffect(() => {
+    if (editingField !== null) return
+
     if (!isDragging && !isResizing) {
       const shouldSync = !lastSyncedNodeRef.current ||
         lastSyncedNodeRef.current.x !== node.x ||
@@ -105,7 +107,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
         lastSyncedNodeRef.current = { x: node.x, y: node.y, width: node.width, height: node.height }
       }
     }
-  }, [node.x, node.y, node.width, node.height, isDragging, isResizing])
+  }, [node.x, node.y, node.width, node.height, isDragging, isResizing, editingField])
 
   // 将文本转换为安全HTML（转义HTML标签，保留换行）
   const textToSafeHtml = useCallback((text: string): string => {
@@ -129,6 +131,49 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
     }
   }, [])
 
+  // 将 HTML 转换为纯文本（提取换行符）
+  const htmlToText = useCallback((html: string): string => {
+    if (!html) return ''
+
+    // 创建临时元素解析 HTML
+    const temp = document.createElement('div')
+    temp.innerHTML = html
+
+    // 处理 <br> 标签为换行
+    const brs = temp.querySelectorAll('br')
+    brs.forEach(br => {
+      br.replaceWith('\n')
+    })
+
+    // 处理 <p> 和 <div> 标签为换行
+    const paragraphs = temp.querySelectorAll('p, div')
+    paragraphs.forEach(p => {
+      const prevText = p.previousSibling?.nodeType === Node.TEXT_NODE ? p.previousSibling.textContent : ''
+      if (prevText && !prevText.endsWith('\n') && prevText.length > 0) {
+        p.before('\n')
+      }
+      const text = p.textContent || ''
+      if (text && !text.endsWith('\n')) {
+        p.after('\n')
+      }
+    })
+
+    // 获取文本并清理
+    let text = temp.textContent || ''
+
+    // 清理 HTML 实体
+    text = text
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#x27;/g, "'")
+      .replace(/&apos;/g, "'")
+
+    return text
+  }, [])
+
   // 进入编辑模式时初始化内容
   useEffect(() => {
     if (editingField === 'title') {
@@ -136,9 +181,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
       document.body.classList.add('allow-text-selection')
       setTimeout(() => {
         if (titleRef.current) {
-          if (!titleRef.current.innerHTML) {
-            titleRef.current.innerHTML = textToSafeHtml(editingTitleRef.current)
-          }
+          titleRef.current.innerHTML = textToSafeHtml(editingTitleRef.current)
           titleRef.current.focus()
           const range = document.createRange()
           const selection = window.getSelection()
@@ -158,9 +201,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
       document.body.classList.add('allow-text-selection')
       setTimeout(() => {
         if (contentRef.current) {
-          if (!contentRef.current.innerHTML) {
-            contentRef.current.innerHTML = textToSafeHtml(editingContentRef.current)
-          }
+          contentRef.current.innerHTML = textToSafeHtml(editingContentRef.current)
           contentRef.current.focus()
           const range = document.createRange()
           const selection = window.getSelection()
@@ -298,51 +339,51 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
     temp.innerHTML = ''
     cleanedNodes.forEach(node => temp.appendChild(node))
 
-    // 清理多余的空白和空标签
+    // 简化换行处理
     let result = temp.innerHTML
 
     // 移除空的 span 标签
     result = result.replace(/<span[^>]*>\s*<\/span>/g, '')
 
-    // 清理连续的空 div/p 标签
-    result = result.replace(/(<div[^>]*>\s*<\/div>\s*){2,}/g, '<div><br></div>')
-    result = result.replace(/(<p[^>]*>\s*<\/p>\s*){2,}/g, '<p><br></p>')
+    // 规范化：所有块级换行元素统一为 <br>
+    result = result
+      .replace(/<(?:div|p)[^>]*>/gi, '')
+      .replace(/<\/(?:div|p)>/gi, '')
 
-    // 确保换行标签正确，保留所有合法的div和p标签，即使它们内部没有<br>
-    result = result.replace(/<div[^>]*>/g, '<div>')
-    result = result.replace(/<p[^>]*>/g, '<p>')
+    // 确保非空内容有换行标记
+    if (result && !result.includes('<br')) {
+      result = result
+    }
 
-    // 确保每个空的div和p标签内有<br>，以保持换行效果
-    result = result.replace(/<div>\s*<\/div>/g, '<div><br></div>')
-    result = result.replace(/<p>\s*<\/p>/g, '<p><br></p>')
-
-    // 将连续的<br>标签转换为div或p标签，确保在编辑和非编辑模式下都能正确显示
-    result = result.replace(/(<br>\s*){2,}/g, '<div><br></div>')
-
-    return result
+    return result || '<br>'
   }, [])
 
-  // 保存标题
+  // 保存标题 - 纯文本处理，移除所有换行
   const saveTitle = useCallback(() => {
     if (titleRef.current && isEditingTitle) {
-      const title = cleanHtmlContent(titleRef.current.innerHTML)
+      const temp = document.createElement('div')
+      temp.innerHTML = titleRef.current.innerHTML
+      const text = temp.textContent || ''
+      const title = text.replace(/\n/g, '').trim()
+      
       if (title !== editingTitleRef.current) {
         updateNode(node.id, { title })
         editingTitleRef.current = title
       }
     }
-  }, [isEditingTitle, node.id, updateNode, cleanHtmlContent])
+  }, [isEditingTitle, node.id, updateNode])
 
-  // 保存内容
+  // 保存内容 - 保留完整换行和空格结构
   const saveContent = useCallback(() => {
     if (contentRef.current && isEditingContent) {
-      const content = cleanHtmlContent(contentRef.current.innerHTML)
+      const cleanedHtml = cleanHtmlContent(contentRef.current.innerHTML)
+      const content = htmlToText(cleanedHtml)
       if (content !== editingContentRef.current) {
         updateNode(node.id, { content })
         editingContentRef.current = content
       }
     }
-  }, [isEditingContent, node.id, updateNode, cleanHtmlContent])
+  }, [isEditingContent, node.id, updateNode, cleanHtmlContent, htmlToText])
 
   // Handle node selection
   const handleMouseDown = useCallback(
@@ -608,12 +649,14 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
         }
         setEditingField(null)
       } else if (e.key === 'Enter') {
-        if (e.shiftKey) {
-          // Shift + Enter 允许在该处换行，不退出编辑
+        // Shift+Enter 或 Ctrl+Enter/Meta+Enter：换行不退出
+        if (e.shiftKey || e.ctrlKey || e.metaKey) {
+          e.preventDefault()
+          document.execCommand('insertLineBreak', false, undefined)
           return
         }
         e.preventDefault()
-        // 纯 Enter 结束编辑并保存
+        // 纯 Enter：结束编辑并保存
         if (field === 'title') {
           saveTitle()
         } else {
@@ -625,7 +668,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
     [isComposing, saveTitle, saveContent]
   )
 
-  // Handle paste - 保留格式但清理不安全的 HTML
+  // Handle paste - 统一处理 HTML 和纯文本，保留换行格式
   const handlePaste = useCallback((e: React.ClipboardEvent) => {
     e.preventDefault()
 
@@ -633,35 +676,27 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
     const htmlData = e.clipboardData.getData('text/html')
     const textData = e.clipboardData.getData('text/plain')
 
-    if (htmlData) {
-      // 如果有 HTML 数据，使用 cleanHtmlContent 清理后插入
-      const cleanedHtml = cleanHtmlContent(htmlData)
+    const selection = window.getSelection()
+    if (!selection || selection.rangeCount === 0) return
 
-      // 创建临时 div 来解析 HTML
+    const range = selection.getRangeAt(0)
+
+    // 优先使用纯文本，统一转换为 HTML 格式
+    const text = textData || (htmlData ? htmlToText(htmlData) : '')
+    if (text) {
+      const html = textToSafeHtml(text)
       const temp = document.createElement('div')
-      temp.innerHTML = cleanedHtml
+      temp.innerHTML = html
 
-      // 将清理后的 HTML 插入到当前位置
-      const selection = window.getSelection()
-      if (selection && selection.rangeCount > 0) {
-        const range = selection.getRangeAt(0)
-        range.deleteContents()
-
-        // 插入清理后的内容
-        Array.from(temp.childNodes).forEach(node => {
-          range.insertNode(node.cloneNode(true))
-        })
-
-        // 移动光标到插入内容的末尾
-        range.collapse(false)
-        selection.removeAllRanges()
-        selection.addRange(range)
-      }
-    } else if (textData) {
-      // 如果只有纯文本，插入纯文本
-      document.execCommand('insertText', false, textData)
+      range.deleteContents()
+      Array.from(temp.childNodes).forEach(node => {
+        range.insertNode(node.cloneNode(true))
+      })
+      range.collapse(false)
+      selection.removeAllRanges()
+      selection.addRange(range)
     }
-  }, [cleanHtmlContent])
+  }, [htmlToText, textToSafeHtml])
 
   // 失焦时保存
   const handleBlur = useCallback((field: 'title' | 'content', e?: React.FocusEvent) => {
@@ -884,7 +919,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
         <div
           ref={nodeRef}
           data-node-id={node.id}
-          className={`node-item absolute border rounded-xl shadow-sm ${isDragging ? 'node-dragging' : node.locked ? 'cursor-not-allowed' : editingField !== null ? 'cursor-text' : 'cursor-move'
+          className={`node-item absolute shadow-sm ${isDragging ? 'node-dragging' : node.locked ? 'cursor-not-allowed' : editingField !== null ? 'cursor-text' : 'cursor-move'
             } ${isDragging ? 'shadow-2xl scale-[1.01]' : ''} ${isHovered && !isSelected && !node.locked ? 'shadow-md' : ''
             } ${isDragging || isResizing || groupDragOffset ? '' : 'transition-all duration-200'}`}
           style={{
@@ -894,10 +929,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
             width: localSize.width,
             height: localSize.height,
             backgroundColor: node.color,
-            borderColor: isSelected ? '#3b82f6' : node.borderColor,
-            borderWidth: node.borderWidth,
-            borderRadius: node.borderRadius,
-            overflow: 'hidden',
+            overflow: 'visible',
             display: 'flex',
             flexDirection: 'column',
             boxShadow: isSelected
@@ -905,6 +937,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
               : isDragging || groupDragOffset
                 ? '0 4px 12px rgba(0, 0, 0, 0.1)'
                 : '0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04)',
+            zIndex: Z_INDEX.NODE,
           }}
           onMouseDown={handleMouseDown}
           onClick={(e) => {

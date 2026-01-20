@@ -162,9 +162,6 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
         title: '',
         content: '',
         color: NODE_DEFAULTS.COLOR,
-        borderColor: NODE_DEFAULTS.BORDER_COLOR,
-        borderWidth: NODE_DEFAULTS.BORDER_WIDTH,
-        borderRadius: NODE_DEFAULTS.BORDER_RADIUS,
         fontSize: NODE_DEFAULTS.FONT_SIZE,
         textAlign: NODE_DEFAULTS.TEXT_ALIGN,
         collapsed: false,
@@ -288,8 +285,6 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
           width,
           height,
           backgroundColor: DOMAIN_DEFAULTS.BACKGROUND_COLOR,
-          borderColor: DOMAIN_DEFAULTS.BORDER_COLOR,
-          borderWidth: DOMAIN_DEFAULTS.BORDER_WIDTH,
           titleVisible: true,
         }
         addDomain(newDomain)

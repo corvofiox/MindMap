@@ -378,18 +378,6 @@ const toolSeparators = [1, 2]
                       key={type.id}
                       onClick={() => {
                         setConnectionType(type.id)
-                        // Update all selected connections to this type and reset bend points
-                        selectedIds.forEach(id => {
-                          const connection = connections.get(id)
-                          if (connection && connection.type !== type.id) {
-                            // Clear bend points when switching to non-orthogonal and non-curve type
-                            if (type.id !== 'orthogonal' && type.id !== 'curve') {
-                              updateConnection(id, { type: type.id, bendPoints: undefined })
-                            } else {
-                              updateConnection(id, { type: type.id })
-                            }
-                          }
-                        })
                       }}
                       className={`
                         px-2 py-1 rounded-lg text-xs font-medium transition-colors shrink-0

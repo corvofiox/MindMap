@@ -22,7 +22,7 @@ import { useUIStore } from '@/store/useUIStore'
 import { useProjectsStore } from '@/store/useProjectsStore'
 import { useNodePoolStore } from '@/features/node-pool/stores/useNodePoolStore'
 import { uploadImage } from '@/services/api'
-import { NODE_COLORS, BORDER_COLORS, Z_INDEX } from '@/constants'
+import { NODE_COLORS, Z_INDEX } from '@/constants'
 
 interface NodeContextMenuProps {
   nodeId: string
@@ -300,10 +300,6 @@ export function NodeContextMenu({ nodeId, position, onClose }: NodeContextMenuPr
     updateNode(nodeId, { color })
   }
 
-  const handleBorderColorChange = (color: string) => {
-    updateNode(nodeId, { borderColor: color })
-  }
-
   const handleEditStyle = () => {
     setSelectedNodeIds([nodeId])
     setSelectedType('node')
@@ -484,28 +480,6 @@ export function NodeContextMenu({ nodeId, position, onClose }: NodeContextMenuPr
                     </div>
                   </div>
                 )}
-
-                {/* Border Colors */}
-                <div>
-                  <div className="px-1 pb-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">
-                    边框颜色
-                  </div>
-                  <div className="grid grid-cols-8 gap-1.5">
-                    {BORDER_COLORS.map((color) => (
-                      <button
-                        key={color}
-                        className="relative w-6 h-6 rounded-md border-2 hover:scale-110 hover:shadow-md transition-all duration-150"
-                        style={{ borderColor: color, backgroundColor: 'transparent' }}
-                        onClick={() => handleBorderColorChange(color)}
-                        title={color}
-                      >
-                        {node.borderColor === color && (
-                          <Check className="absolute inset-0 m-auto w-3.5 h-3.5 drop-shadow-md" strokeWidth={3} style={{ color }} />
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                </div>
               </div>
             )}
           </div>

@@ -83,8 +83,6 @@ export const GROUP_DEFAULTS = {
 // Domain defaults
 export const DOMAIN_DEFAULTS = {
   BACKGROUND_COLOR: 'rgba(156, 163, 175, 0.2)',
-  BORDER_COLOR: '#9ca3af',
-  BORDER_WIDTH: 1,
 } as const
 
 // Connection defaults
@@ -120,8 +118,6 @@ export const BORDER_COLORS = [
   '#f87171',
   '#a78bfa',
 ] as const
-
-// Keyboard shortcuts
 export const SHORTCUTS = {
   // Canvas
   CANVAS_ZOOM_IN: 'Ctrl+=',

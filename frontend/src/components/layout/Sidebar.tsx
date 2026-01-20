@@ -157,7 +157,7 @@ export function Sidebar({ open }: SidebarProps) {
         return
       }
       // 乐观更新：立即更新UI状态
-      moveCanvasToFolder(draggedCanvasId, folderId)
+      moveCanvasToFolder(draggedCanvasId, folderId, true)
     }
     setDraggedCanvasId(null)
     setDragOverFolderId(null)
@@ -176,7 +176,7 @@ export function Sidebar({ open }: SidebarProps) {
         return
       }
       // 乐观更新：立即更新UI状态
-      moveCanvasToFolder(draggedCanvasId, null)
+      moveCanvasToFolder(draggedCanvasId, null, true)
     }
     setDraggedCanvasId(null)
     setDragOverFolderId(null)
@@ -207,7 +207,7 @@ export function Sidebar({ open }: SidebarProps) {
           return
         }
         // 乐观更新：立即更新UI状态
-        moveCanvasToFolder(draggedCanvasId, null)
+        moveCanvasToFolder(draggedCanvasId, null, true)
       }
     }
 
@@ -1037,7 +1037,7 @@ function CanvasItem({
     }
 
     try {
-      await updateCanvas(canvas.id, { name: editName.trim() })
+      await updateCanvas(canvas.id, { name: editName.trim() }, true)
       addToast({ type: 'success', title: '已重命名', message: '画布名称已更新' })
     } catch (error) {
       addToast({ type: 'error', title: '重命名失败', message: error instanceof Error ? error.message : '未知错误' })

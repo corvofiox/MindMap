@@ -83,8 +83,6 @@ export interface Domain {
   width: number
   height: number
   backgroundColor: string
-  borderColor: string
-  borderWidth: number
   titleVisible: boolean
 }
 

@@ -513,7 +513,6 @@ export function CanvasPage() {
   const [containerReady, setContainerReady] = useState(false)
   const lastSaveTimeRef = useRef<number>(0)
 
-  const [isLoadingCanvas, setIsLoadingCanvas] = useState(false)
   const dragStartRef = useRef({ x: 0, y: 0 })
   const groupContextMenuStartRef = useRef({ x: 0, y: 0 })
   const domainContextMenuStartRef = useRef({ x: 0, y: 0 })
@@ -621,6 +620,9 @@ export function CanvasPage() {
   const [richTextToolbarVisible, setRichTextToolbarVisible] = useState(false)
   const [richTextToolbarPosition, setRichTextToolbarPosition] = useState({ x: 0, y: 0 })
 
+  // Save/restore selection for rich text editing
+  const savedSelectionRef = useRef<Range | null>(null)
+
   // Helper to close all context menus
   const closeAllContextMenus = useCallback(() => {
     setContextMenu(null)
@@ -679,6 +681,7 @@ export function CanvasPage() {
     setCurrentTool,
     toggleGrid,
     setSelectedType,
+    connectionType,
     connectionDirection,
     connectionStyle,
     closeStylePanel,
@@ -797,9 +800,6 @@ export function CanvasPage() {
     lastSaveTimeRef.current = 0
 
     const loadFromDatabase = async () => {
-      // Set loading state
-      setIsLoadingCanvas(true)
-
       // Update store canvasId so thumbnail generation works correctly
       setCanvasId(id)
 
@@ -809,7 +809,6 @@ export function CanvasPage() {
           // 清空画布，准备一个新的画布
           clearCanvas()
           setDirty(false)
-          setIsLoadingCanvas(false)
           return
         }
 
@@ -856,8 +855,6 @@ export function CanvasPage() {
         } else {
           clearCanvas()
         }
-      } finally {
-        setIsLoadingCanvas(false)
       }
     }
 
@@ -871,8 +868,8 @@ export function CanvasPage() {
 
   // Center camera on content when canvas data is loaded (only on first load)
   useEffect(() => {
-    // Only proceed if not loading
-    if (!canvasId || isLoadingCanvas) return
+    // Only proceed if canvas is ready
+    if (!canvasId) return
 
     const id = parseInt(canvasId)
     if (isNaN(id)) return
@@ -938,7 +935,7 @@ export function CanvasPage() {
     }, 100)
 
     return () => clearTimeout(timer)
-  }, [canvasId, isLoadingCanvas, containerReady, containerSize.width, containerSize.height, setPan, zoom])
+  }, [canvasId, containerReady, containerSize.width, containerSize.height, setPan, zoom])
 
   const generateThumbnail = useCallback(async (canvasId: number) => {
     if (!containerRef.current) {
@@ -980,7 +977,7 @@ export function CanvasPage() {
       if (allElements.length === 0) {
         const thumbnailDataUrl = thumbnailCanvas.toDataURL('image/jpeg', THUMBNAIL.QUALITY)
         try {
-          await updateCanvasInStore(canvasId, { thumbnail: thumbnailDataUrl })
+          await updateCanvasInStore(canvasId, { thumbnail: thumbnailDataUrl }, true)
         } catch (error) {
           // Silently fail for thumbnail generation errors
         }
@@ -1151,7 +1148,7 @@ export function CanvasPage() {
         const thumbnailDataUrl = thumbnailCanvas.toDataURL('image/jpeg', THUMBNAIL.QUALITY)
 
         try {
-          await updateCanvasInStore(canvasId, { thumbnail: thumbnailDataUrl })
+          await updateCanvasInStore(canvasId, { thumbnail: thumbnailDataUrl }, true)
         } catch (error) {
           // Silently fail for thumbnail generation errors
         }
@@ -1415,7 +1412,7 @@ export function CanvasPage() {
       window.removeEventListener('resize', updateSize)
       resizeObserver.disconnect()
     }
-  }, [isLoadingCanvas])
+  }, [])
 
   // Update container size when sidebar state changes
   useEffect(() => {
@@ -2254,7 +2251,7 @@ export function CanvasPage() {
             toNodeId: snappedPort.nodeId,
             fromPort: connectionStartPort,
             toPort: snappedPort.port,
-            type: 'straight',
+            type: connectionType,
             style: connectionStyle,
             color: CONNECTION_DEFAULTS.COLOR,
             width: CONNECTION_DEFAULTS.WIDTH,
@@ -2302,7 +2299,7 @@ export function CanvasPage() {
                 toNodeId: nodeId,
                 fromPort: connectionStartPort,
                 toPort: toPort,
-                type: 'straight',
+                type: connectionType,
                 style: connectionStyle,
                 color: CONNECTION_DEFAULTS.COLOR,
                 width: CONNECTION_DEFAULTS.WIDTH,
@@ -2423,7 +2420,7 @@ export function CanvasPage() {
         justFinishedBendPointDraggingRef.current = false
       }, 0)
     }
-  }, [isDragging, isDraggingGroup, isCreatingGroup, groupStartPos, groupEndPos, groupDragStart, groupInitialPositions, initialGroupNodeIds, groupDragInitialGroupPos, draggingGroupId, groupDragOffset, nodes, groups, updateGroup, addGroup, isCreatingConnection, connectionStartNodeId, connectionStartPort, isDraggingConnectionEndpoint, draggingConnectionId, draggingEndpoint, connections, panX, panY, zoom, containerRef, updateConnection, findBestPort, snappedPort, addConnection, removeConnection, isBoxSelecting, boxSelectionStart, boxSelectionEnd, addToSelection, isCreatingDomain, domainBoxStart, domainBoxEnd, domains, addDomain, isDraggingBendPoint, draggingBendPointId, setSelectedIds, setSelectedType])
+  }, [isDragging, isDraggingGroup, isCreatingGroup, groupStartPos, groupEndPos, groupDragStart, groupInitialPositions, initialGroupNodeIds, groupDragInitialGroupPos, draggingGroupId, groupDragOffset, nodes, groups, updateGroup, addGroup, isCreatingConnection, connectionStartNodeId, connectionStartPort, isDraggingConnectionEndpoint, draggingConnectionId, draggingEndpoint, connections, panX, panY, zoom, containerRef, updateConnection, findBestPort, snappedPort, addConnection, removeConnection, isBoxSelecting, boxSelectionStart, boxSelectionEnd, addToSelection, isCreatingDomain, domainBoxStart, domainBoxEnd, domains, addDomain, isDraggingBendPoint, draggingBendPointId, setSelectedIds, setSelectedType, connectionType])
 
   // Handle connection click
   const handleConnectionClick = useCallback((e: React.MouseEvent, connectionId: string) => {
@@ -2562,9 +2559,6 @@ export function CanvasPage() {
         title: '新节点',
         content: '',
         color: '#ffffff',
-        borderColor: '#e5e7eb',
-        borderWidth: 1,
-        borderRadius: 8,
         fontSize: 14,
         textAlign: 'left' as const,
         collapsed: false,
@@ -2586,9 +2580,6 @@ export function CanvasPage() {
         title: '图片节点',
         content: '',
         color: '#ffffff',
-        borderColor: '#e5e7eb',
-        borderWidth: 1,
-        borderRadius: 8,
         fontSize: 14,
         textAlign: 'left' as const,
         collapsed: false,
@@ -2929,14 +2920,6 @@ export function CanvasPage() {
           userSelect: isDragging || currentTool === 'pan' ? 'none' : undefined,
         }}
       >
-        {isLoadingCanvas && (
-          <div className="absolute inset-0 flex items-center justify-center bg-gray-100/50 dark:bg-gray-900/50 backdrop-blur-sm transition-opacity duration-300" style={{ zIndex: Z_INDEX.DIALOG }}>
-            <div className="text-center bg-white dark:bg-gray-800 p-6 rounded-xl shadow-xl border border-gray-200 dark:border-gray-700">
-              <div className="inline-block animate-spin rounded-full h-10 w-10 border-4 border-gray-300 border-t-blue-500 mb-3"></div>
-              <p className="text-sm font-medium text-gray-600 dark:text-gray-400">正在同步画布数据...</p>
-            </div>
-          </div>
-        )}
         <CanvasGrid zoom={zoom} panX={panX} panY={panY} />
 
         {containerReady && minimapVisible && (
@@ -3022,6 +3005,7 @@ export function CanvasPage() {
                 width: domain.width,
                 height: domain.height,
                 backgroundColor: domain.backgroundColor,
+                zIndex: Z_INDEX.DOMAIN,
               }}
             >
               {domain.titleVisible && domain.name && (
@@ -3055,9 +3039,10 @@ export function CanvasPage() {
                   width: group.width,
                   height: group.height,
                   backgroundColor: group.backgroundColor,
-                  borderColor: group.borderColor,
+                  borderColor: group.backgroundColor,
                   borderWidth: group.borderWidth,
                   borderRadius: group.borderRadius,
+                  zIndex: Z_INDEX.GROUP,
                 }}
                 onMouseDown={(e) => {
                   if (e.button === 2) {
@@ -3205,6 +3190,7 @@ export function CanvasPage() {
                   style={{
                     left: -4,
                     top: -4,
+                    zIndex: Z_INDEX.GROUP,
                   }}
                   onMouseDown={(e) => {
                     e.stopPropagation()
@@ -3246,6 +3232,7 @@ export function CanvasPage() {
                   style={{
                     right: -4,
                     top: -4,
+                    zIndex: Z_INDEX.GROUP,
                   }}
                   onMouseDown={(e) => {
                     e.stopPropagation()
@@ -3278,6 +3265,7 @@ export function CanvasPage() {
                   style={{
                     left: -4,
                     bottom: -4,
+                    zIndex: Z_INDEX.GROUP,
                   }}
                   onMouseDown={(e) => {
                     e.stopPropagation()
@@ -3310,6 +3298,7 @@ export function CanvasPage() {
                   style={{
                     right: -4,
                     bottom: -4,
+                    zIndex: Z_INDEX.GROUP,
                   }}
                   onMouseDown={(e) => {
                     e.stopPropagation()
@@ -3355,7 +3344,7 @@ export function CanvasPage() {
           {/* Render connections */}
           <svg
             className="absolute inset-0"
-            style={{ overflow: 'visible', pointerEvents: 'none' }}
+            style={{ overflow: 'visible', zIndex: Z_INDEX.CONNECTION }}
           >
             <defs>
               {/* Connection shadow filter */}
@@ -3842,39 +3831,18 @@ export function CanvasPage() {
             <input
               type="color"
               className="sr-only"
-              value={(() => {
-                const group = groups.get(contextMenu.groupId)
-                return group ? colorToHex(group.borderColor) : '#3b82f6'
-              })()}
-              onChange={(e) => {
-                updateGroup(contextMenu.groupId, { borderColor: e.target.value })
-                setContextMenu(null)
-              }}
-            />
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01" />
-            </svg>
-            更改边框颜色
-          </label>
-          <label className="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 cursor-pointer">
-            <input
-              type="color"
-              className="sr-only"
-              value={(() => {
+              defaultValue={(() => {
                 const group = groups.get(contextMenu.groupId)
                 return group ? colorToHex(group.backgroundColor) : '#3b82f6'
               })()}
-              onChange={(e) => {
+              onInput={(e) => {
                 const group = groups.get(contextMenu.groupId)
                 if (group) {
-                  // Extract alpha from current background color
                   const alphaMatch = group.backgroundColor.match(/rgba?\(\d+,\s*\d+,\s*\d+,\s*([\d.]+)\)/)
                   const alpha = alphaMatch ? parseFloat(alphaMatch[1]) : 0.1
-                  // Convert hex to rgba with preserved alpha
-                  const newColor = hexToRgba(e.target.value, alpha)
+                  const newColor = hexToRgba(e.currentTarget.value, alpha)
                   updateGroup(contextMenu.groupId, { backgroundColor: newColor })
                 }
-                setContextMenu(null)
               }}
             />
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -4176,7 +4144,22 @@ export function CanvasPage() {
         visible={richTextToolbarVisible}
         position={richTextToolbarPosition}
         onCommand={(command, value) => {
-          // 只处理未被移除的命令
+          if (editingId) {
+            const nodeElement = document.querySelector(`[data-node-id="${editingId}"]`)
+            if (nodeElement) {
+              const contentEditable = nodeElement.querySelector('[contenteditable="true"]') as HTMLElement
+              if (contentEditable) {
+                contentEditable.focus()
+                if (savedSelectionRef.current) {
+                  const selection = window.getSelection()
+                  if (selection) {
+                    selection.removeAllRanges()
+                    selection.addRange(savedSelectionRef.current)
+                  }
+                }
+              }
+            }
+          }
           if (!['fontSize', 'justifyLeft', 'justifyCenter', 'justifyRight'].includes(command)) {
             document.execCommand(command, false, value)
           }
@@ -4186,9 +4169,13 @@ export function CanvasPage() {
           if (editingId) {
             const nodeElement = document.querySelector(`[data-node-id="${editingId}"]`)
             if (nodeElement) {
-              const contentEditable = nodeElement.querySelector('[contenteditable="true"]')
+              const contentEditable = nodeElement.querySelector('[contenteditable="true"]') as HTMLElement
               if (contentEditable) {
-                (contentEditable as HTMLElement).focus()
+                const selection = window.getSelection()
+                if (selection && selection.rangeCount > 0) {
+                  savedSelectionRef.current = selection.getRangeAt(0).cloneRange()
+                }
+                contentEditable.focus()
               }
             }
           }

@@ -1,7 +1,7 @@
 import { useRef, useEffect, useState } from 'react'
 import { useCanvasStore } from '@/store/useCanvasStore'
 import { useUIStore } from '@/store/useUIStore'
-import { NODE_COLORS, BORDER_COLORS, Z_INDEX } from '@/constants'
+import { NODE_COLORS, Z_INDEX } from '@/constants'
 
 export function NodeStylePanel() {
   const { nodes, updateNode, selectedIds } = useCanvasStore()
@@ -119,38 +119,6 @@ export function NodeStylePanel() {
               type="color"
               value={firstNode.color}
               onChange={(e) => handleUpdate({ color: e.target.value })}
-              className="w-10 h-10 rounded cursor-pointer"
-            />
-            <span className="text-xs text-gray-500 dark:text-gray-400">
-              自定义颜色
-            </span>
-          </div>
-        </div>
-
-        {/* Border Color */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-            边框颜色
-          </label>
-          <div className="grid grid-cols-7 gap-2">
-            {BORDER_COLORS.map((color) => (
-              <button
-                key={color}
-                className={`w-10 h-10 rounded-lg border-2 transition-all ${
-                  firstNode.borderColor === color
-                    ? 'border-blue-500 scale-110'
-                    : 'border-gray-300 dark:border-gray-600 hover:scale-105'
-                }`}
-                style={{ backgroundColor: color }}
-                onClick={() => handleUpdate({ borderColor: color })}
-              />
-            ))}
-          </div>
-          <div className="mt-2 flex items-center gap-2">
-            <input
-              type="color"
-              value={firstNode.borderColor}
-              onChange={(e) => handleUpdate({ borderColor: e.target.value })}
               className="w-10 h-10 rounded cursor-pointer"
             />
             <span className="text-xs text-gray-500 dark:text-gray-400">

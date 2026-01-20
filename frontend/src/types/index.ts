@@ -73,9 +73,6 @@ export interface Node {
   title: string       // 节点标题
   content: string     // 节点文本内容
   color: string
-  borderColor: string
-  borderWidth: number
-  borderRadius: number
   fontSize: number
   textAlign: 'left' | 'center' | 'right'
   collapsed: boolean
@@ -112,8 +109,6 @@ export interface Domain {
   width: number
   height: number
   backgroundColor: string
-  borderColor: string
-  borderWidth: number
   titleVisible: boolean
   titleColor?: string
   titleFontSize?: number
