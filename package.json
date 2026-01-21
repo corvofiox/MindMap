@@ -45,6 +45,7 @@
   },
   "devDependencies": {
     "concurrently": "^8.2.2",
+    "drizzle-kit": "^0.31.8",
     "husky": "^8.0.3",
     "lint-staged": "^15.2.0"
   },
