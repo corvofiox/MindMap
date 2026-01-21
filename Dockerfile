@@ -4,7 +4,7 @@
 # Debian 使用 glibc，Sharp 预编译二进制可以直接使用，无需重新编译
 ARG NODE_VERSION=20-bookworm-slim
 
-FROM node:${NODE_VERSION} as builder
+FROM node:${NODE_VERSION} AS builder
 
 WORKDIR /app
 
