@@ -25,10 +25,10 @@ const { doubleCsrfProtection, generateCsrfToken } = doubleCsrf({
   },
   cookieName: 'x-csrf-token',
   cookieOptions: {
-    secure: process.env.NODE_ENV === 'production',
+    secure: false,
     sameSite: 'strict',
     httpOnly: false,
-    maxAge: 604800 // 7 days
+    maxAge: 604800
   },
   size: 64,
   ignoredMethods: ['GET', 'HEAD', 'OPTIONS']
