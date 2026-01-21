@@ -5,8 +5,6 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
-import glob from 'glob';
-const { globSync } = glob;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -568,7 +566,6 @@ async function cleanBuild() {
 
   const frontendDist = path.join(__dirname, 'frontend', 'dist');
   const backendDist = path.join(__dirname, 'backend', 'dist');
-  const backendTsbuildinfo = path.join(__dirname, 'backend', '*.tsbuildinfo');
 
   let cleaned = false;
 
