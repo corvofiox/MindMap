@@ -219,15 +219,15 @@ async function initializeDatabase() {
       logStep('INFO', 'Checking database schema...');
       
       if (!fs.existsSync(dbFile)) {
-        logWarning('Database file not found, cannot verify schema');
-      } else {
-        try {
-          await executeCommand(getNpmCommand(), ['run', 'db:init'], { cwd: backendDir });
-          logSuccess('Database schema verified');
-        } catch (error) {
-          logWarning(`Database schema check failed: ${error.message}`);
+          logWarning('Database file not found, cannot verify schema');
+        } else {
+          try {
+            await executeCommand(getNpmCommand(), ['run', 'db:init'], { cwd: backendDir });
+            logSuccess('Database schema verified');
+          } catch (error) {
+            logWarning(`Database schema check failed: ${error.message}`);
+          }
         }
-      }
     } else {
       logStep('SKIP', 'Database initialization skipped');
     }

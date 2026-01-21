@@ -39,8 +39,7 @@ RUN cd backend && npm run build && \
     cd ../frontend && npm run build
 
 # 清理开发依赖，仅保留生产依赖
-RUN npm prune --omit=dev && \
-    npm install --workspaces --omit=dev
+RUN npm install --workspaces --omit=dev
 
 # 生产镜像
 FROM node:${NODE_VERSION}
@@ -58,9 +57,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # 从 builder 阶段复制构建产物
 COPY --from=builder /app/package.json /app/package-lock.json* /app/start.js ./
 COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/backend/package.json ./backend/package.json
+COPY --from=builder /app/frontend/package.json ./frontend/package.json
+COPY --from=builder /app/backend/node_modules ./backend/node_modules
+COPY --from=builder /app/frontend/node_modules ./frontend/node_modules
 COPY --from=builder /app/shared ./shared
 COPY --from=builder /app/backend/dist ./backend/dist
 COPY --from=builder /app/frontend/dist ./frontend/dist
+COPY --from=builder /app/backend/.env ./backend/.env
 
 # 复制后端源代码（用于运行时访问）
 COPY --from=builder /app/backend/src ./backend/src
