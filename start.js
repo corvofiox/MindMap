@@ -5,6 +5,8 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
+import glob from 'glob';
+const { globSync } = glob;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -223,18 +225,38 @@ function checkNodeModulesExists(dir) {
   return fs.existsSync(path.join(dir, 'node_modules'));
 }
 
-async function installDependencies() {
+async function installDependencies(options = {}) {
   logSection('Installing Dependencies');
 
-  const dirs = ['.', 'backend', 'frontend'];
+  const { force = false, clean = false } = options;
+  const dirs = ['.', 'shared', 'backend', 'frontend'];
 
   for (const dir of dirs) {
     const dirPath = path.join(__dirname, dir);
     const nodeModulesPath = path.join(dirPath, 'node_modules');
+    const packageLockPath = path.join(dirPath, 'package-lock.json');
 
-    if (checkNodeModulesExists(dirPath)) {
+    // 检查是否需要安装
+    const nodeModulesExists = checkNodeModulesExists(dirPath);
+    if (!force && nodeModulesExists) {
       logStep('SKIP', `Dependencies already installed in ${dir || 'root'}`);
       continue;
+    }
+
+    // 如果需要清理，先删除 node_modules 和 package-lock.json
+    if (clean && (nodeModulesExists || fs.existsSync(packageLockPath))) {
+      logStep('CLEAN', `Cleaning dependencies in ${dir || 'root'}...`);
+      try {
+        if (fs.existsSync(nodeModulesPath)) {
+          fs.rmSync(nodeModulesPath, { recursive: true, force: true });
+        }
+        if (fs.existsSync(packageLockPath)) {
+          fs.rmSync(packageLockPath);
+        }
+        logSuccess(`Cleaned dependencies in ${dir || 'root'}`);
+      } catch (error) {
+        logWarning(`Failed to clean dependencies in ${dir || 'root'}: ${error.message}`);
+      }
     }
 
     logStep('INSTALL', `Installing dependencies in ${dir || 'root'}...`);
@@ -539,6 +561,63 @@ async function buildBackend() {
 }
 
 /**
+ * 清理构建产物
+ */
+async function cleanBuild() {
+  logSection('Cleaning Build Artifacts');
+
+  const frontendDist = path.join(__dirname, 'frontend', 'dist');
+  const backendDist = path.join(__dirname, 'backend', 'dist');
+  const backendTsbuildinfo = path.join(__dirname, 'backend', '*.tsbuildinfo');
+
+  let cleaned = false;
+
+  // 清理前端构建产物
+  if (fs.existsSync(frontendDist)) {
+    try {
+      fs.rmSync(frontendDist, { recursive: true, force: true });
+      logSuccess('Cleaned frontend dist directory');
+      cleaned = true;
+    } catch (error) {
+      logWarning(`Failed to clean frontend dist: ${error.message}`);
+    }
+  }
+
+  // 清理后端构建产物
+  if (fs.existsSync(backendDist)) {
+    try {
+      fs.rmSync(backendDist, { recursive: true, force: true });
+      logSuccess('Cleaned backend dist directory');
+      cleaned = true;
+    } catch (error) {
+      logWarning(`Failed to clean backend dist: ${error.message}`);
+    }
+  }
+
+  // 清理 TypeScript 构建缓存
+  const backendDir = path.join(__dirname, 'backend');
+  const tsbuildinfoFiles = fs.readdirSync(backendDir)
+    .filter(file => file.endsWith('.tsbuildinfo'))
+    .map(file => path.join(backendDir, file));
+
+  if (tsbuildinfoFiles.length > 0) {
+    try {
+      tsbuildinfoFiles.forEach(file => fs.rmSync(file));
+      logSuccess('Cleaned TypeScript build cache');
+      cleaned = true;
+    } catch (error) {
+      logWarning(`Failed to clean TypeScript build cache: ${error.message}`);
+    }
+  }
+
+  if (!cleaned) {
+    logStep('INFO', 'No build artifacts to clean');
+  } else {
+    logSuccess('Build artifacts cleaned successfully');
+  }
+}
+
+/**
  * 生产环境设置流程
  * 安装依赖 → 设置环境 → 初始化数据库 → 构建 → 启动
  */
@@ -731,6 +810,10 @@ function printUsage() {
    --db-only            Initialize database only
    --build-only         Build frontend and backend only (production)
    --start-only         Start servers only (skip setup)
+   --full-start         Full setup and start (install + env + db + build + start)
+   --reinstall          Force reinstall dependencies
+   --clean-install      Clean and reinstall dependencies
+   --clean-build        Clean build artifacts only
    --production         Run in production mode
    --help, -h           Show this help message
 
@@ -740,12 +823,17 @@ function printUsage() {
    node start.js --install-only     Install dependencies only
    node start.js --start-only       Start servers without setup
    node start.js --build-only       Build only (for production)
+   node start.js --full-start       Complete setup and launch
+   node start.js --reinstall        Force reinstall all dependencies
+   node start.js --clean-install    Clean and reinstall dependencies
+   node start.js --clean-build      Clean build artifacts
 
  Notes:
    - Docker environment is automatically detected
    - Production mode builds both frontend and backend
    - Use --start-only to skip setup steps
    - Database is initialized automatically if not exists
+   - --full-start includes all setup steps and starts servers
 
 ${environmentInfo}
 `);
@@ -769,6 +857,10 @@ async function main() {
   const dbOnly = args.includes('--db-only');
   const buildOnly = args.includes('--build-only');
   const startOnly = args.includes('--start-only');
+  const fullStart = args.includes('--full-start');
+  const reinstall = args.includes('--reinstall');
+  const cleanInstall = args.includes('--clean-install');
+  const shouldCleanBuild = args.includes('--clean-build');
   const productionMode = args.includes('--production') || isProduction();
 
   // 确定运行环境
@@ -786,6 +878,27 @@ async function main() {
   console.log('='.repeat(60) + '\n');
 
   try {
+    // 处理清理构建产物
+    if (shouldCleanBuild) {
+      await cleanBuild();
+      logSuccess('Build artifacts cleaned. Run with --build-only to rebuild.');
+      process.exit(0);
+    }
+
+    // 处理重新安装依赖
+    if (reinstall) {
+      await installDependencies({ force: true });
+      logSuccess('Dependencies reinstalled. Run with --start-only to start servers.');
+      process.exit(0);
+    }
+
+    // 处理清理后重新安装依赖
+    if (cleanInstall) {
+      await installDependencies({ clean: true });
+      logSuccess('Dependencies reinstalled cleanly. Run with --start-only to start servers.');
+      process.exit(0);
+    }
+
     // 执行单独的操作
     if (installOnly) {
       await installDependencies();
@@ -811,8 +924,32 @@ async function main() {
       process.exit(0);
     }
 
+    // 一键启动：完整流程
+    if (fullStart) {
+      logSection('Full Start - Complete Setup and Launch');
+
+      // 安装依赖（强制重新安装以确保最新）
+      await installDependencies({ force: true });
+
+      // 设置环境变量
+      await setupEnvironmentFiles();
+
+      // 初始化数据库
+      await initializeDatabase();
+
+      // 清理并重新构建
+      await cleanBuild();
+      await buildFrontend();
+      await buildBackend();
+
+      // 启动服务
+      const processes = await startServers();
+      handleShutdown(processes);
+      return;
+    }
+
     // 仅启动服务（跳过设置）
-    if (startOnly) {
+    if (startOnly || fullStart) {
       // 在生产模式下，需要确保数据库已初始化
       if (isDocker || productionMode) {
         logStep('CHECK', 'Ensuring database is initialized...');
