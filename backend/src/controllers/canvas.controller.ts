@@ -11,7 +11,13 @@ export const canvasRouter = Router()
 
 // Get canvas by ID (more specific route must come first)
 canvasRouter.get('/detail/:id', authenticate, asyncHandler(async (req: AuthRequest, res) => {
-  const canvasId = parseInt(req.params.id)
+  const canvasId = parseInt(req.params.id, 10)
+  if (isNaN(canvasId)) {
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid canvas ID format',
+    })
+  }
 
   const canvas = await db.query.canvases.findFirst({
     where: eq(canvases.id, canvasId),
@@ -34,7 +40,13 @@ canvasRouter.get('/detail/:id', authenticate, asyncHandler(async (req: AuthReque
 
 // Get canvases for project (more generic route must come after)
 canvasRouter.get('/:projectId', authenticate, asyncHandler(async (req: AuthRequest, res) => {
-  const projectId = parseInt(req.params.projectId)
+  const projectId = parseInt(req.params.projectId, 10)
+  if (isNaN(projectId)) {
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid project ID format',
+    })
+  }
 
   const project = await db.query.projects.findFirst({
     where: eq(projects.id, projectId),
@@ -71,7 +83,14 @@ canvasRouter.get('/:projectId', authenticate, asyncHandler(async (req: AuthReque
 
 // Create canvas
 canvasRouter.post('/:projectId', authenticate, asyncHandler(async (req: AuthRequest, res) => {
-  const projectId = parseInt(req.params.projectId)
+  const projectId = parseInt(req.params.projectId, 10)
+  if (isNaN(projectId)) {
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid project ID format',
+    })
+  }
+
   const { name, folderId } = req.body
 
   const project = await db.query.projects.findFirst({
@@ -115,7 +134,14 @@ canvasRouter.post('/:projectId', authenticate, asyncHandler(async (req: AuthRequ
 
 // Update canvas
 canvasRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, res) => {
-  const canvasId = parseInt(req.params.id)
+  const canvasId = parseInt(req.params.id, 10)
+  if (isNaN(canvasId)) {
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid canvas ID format',
+    })
+  }
+
   const { name, yjsData, previewText, thumbnail, folderId, sortOrder } = req.body
 
   log('PUT canvas - Start', { canvasId, userId: req.user!.id, body: { name, yjsData: typeof yjsData, previewText, thumbnail, folderId, sortOrder } })
@@ -213,7 +239,13 @@ canvasRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, res
 
 // Delete canvas
 canvasRouter.delete('/:id', authenticate, asyncHandler(async (req: AuthRequest, res) => {
-  const canvasId = parseInt(req.params.id)
+  const canvasId = parseInt(req.params.id, 10)
+  if (isNaN(canvasId)) {
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid canvas ID format',
+    })
+  }
 
   log('DELETE canvas - Start', { canvasId, userId: req.user!.id })
 
@@ -281,7 +313,13 @@ canvasRouter.delete('/:id', authenticate, asyncHandler(async (req: AuthRequest, 
 
 // Save canvas nodes data via POST (for sendBeacon support during page unload)
 canvasRouter.post('/:id/data', authenticate, asyncHandler(async (req: AuthRequest, res) => {
-  const canvasId = parseInt(req.params.id)
+  const canvasId = parseInt(req.params.id, 10)
+  if (isNaN(canvasId)) {
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid canvas ID format',
+    })
+  }
 
   const canvas = await db.query.canvases.findFirst({
     where: eq(canvases.id, canvasId),
@@ -345,7 +383,13 @@ canvasRouter.get(
   '/:projectId/folders',
   authenticate,
   asyncHandler(async (req: AuthRequest, res) => {
-    const projectId = parseInt(req.params.projectId)
+    const projectId = parseInt(req.params.projectId, 10)
+    if (isNaN(projectId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid project ID format',
+      })
+    }
 
     const project = await db.query.projects.findFirst({
       where: eq(projects.id, projectId),
@@ -384,7 +428,14 @@ canvasRouter.post(
   '/:projectId/folders',
   authenticate,
   asyncHandler(async (req: AuthRequest, res) => {
-    const projectId = parseInt(req.params.projectId)
+    const projectId = parseInt(req.params.projectId, 10)
+    if (isNaN(projectId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid project ID format',
+      })
+    }
+
     const { name, parentId } = req.body
 
     const project = await db.query.projects.findFirst({
@@ -432,7 +483,14 @@ canvasRouter.put(
   '/folders/:id',
   authenticate,
   asyncHandler(async (req: AuthRequest, res) => {
-    const folderId = parseInt(req.params.id)
+    const folderId = parseInt(req.params.id, 10)
+    if (isNaN(folderId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid folder ID format',
+      })
+    }
+
     const { name } = req.body
 
     const folder = await db.query.folders.findFirst({
@@ -493,7 +551,13 @@ canvasRouter.delete(
   '/folders/:id',
   authenticate,
   asyncHandler(async (req: AuthRequest, res) => {
-    const folderId = parseInt(req.params.id)
+    const folderId = parseInt(req.params.id, 10)
+    if (isNaN(folderId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid folder ID format',
+      })
+    }
 
     const folder = await db.query.folders.findFirst({
       where: eq(folders.id, folderId),

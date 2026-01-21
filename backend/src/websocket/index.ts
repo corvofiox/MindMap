@@ -5,6 +5,7 @@ import { db } from '../database/connection.js'
 import { canvases, projects } from '../database/schema.js'
 import { eq } from 'drizzle-orm'
 import { getValidatedEnv } from '../utils/env.js'
+import { logError } from '../utils/logger.js'
 
 // WebSocket connection rate limiting
 const wsConnectionRates = new Map<string, { count: number; resetTime: number }>()
@@ -96,7 +97,11 @@ async function handleConnection(ws: WebSocketWithUserData, req: any) {
     return
   }
 
-  const canvasId = parseInt(canvasIdParam)
+  const canvasId = parseInt(canvasIdParam, 10)
+  if (isNaN(canvasId)) {
+    ws.close(1008, 'Invalid canvas ID format')
+    return
+  }
 
   // Verify token from Authorization header
   const authHeader = req.headers.authorization?.replace('Bearer ', '')
@@ -167,6 +172,11 @@ async function handleConnection(ws: WebSocketWithUserData, req: any) {
         const data = Buffer.from(base64Data, 'base64')
         Y.applyUpdate(doc, new Uint8Array(data))
       } catch (error) {
+        logError('Failed to load Yjs document from database', {
+          canvasId,
+          error: error instanceof Error ? error.message : String(error),
+          stack: error instanceof Error ? error.stack : undefined,
+        })
         // If loading fails, create empty document
       }
     }
@@ -203,8 +213,13 @@ async function handleConnection(ws: WebSocketWithUserData, req: any) {
     room!.clients.delete(ws)
   })
 
-  ws.on('error', (_) => {
-    // Silent error handling
+  ws.on('error', (error) => {
+    logError('WebSocket connection error', {
+      userId: ws.userId,
+      canvasId: ws.canvasId,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    })
   })
 }
 
@@ -245,7 +260,12 @@ function handleMessage(ws: WebSocketWithUserData, room: CanvasRoom, data: Buffer
         // Unknown message type - ignore
     }
   } catch (error) {
-    // Error handling - silent fail
+    logError('WebSocket message handling error', {
+      userId: ws.userId,
+      canvasId: ws.canvasId,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    })
   }
 }
 
@@ -325,12 +345,22 @@ function handleSyncMessage(
         // Broadcast to other clients
         broadcastUpdate(room, ws, update)
       } catch (error) {
-        // Failed to apply update - silent fail
+        logError('Failed to apply Yjs update', {
+          userId: ws.userId,
+          canvasId: ws.canvasId,
+          error: error instanceof Error ? error.message : String(error),
+          stack: error instanceof Error ? error.stack : undefined,
+        })
       }
     }
 
   } catch (error) {
-    // Error handling SYNC message - silent fail
+    logError('WebSocket SYNC message handling error', {
+      userId: ws.userId,
+      canvasId: ws.canvasId,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    })
   }
 }
 
@@ -382,6 +412,11 @@ async function saveCanvasDocument(canvasId: number, doc: Y.Doc) {
       })
       .where(eq(canvases.id, canvasId))
   } catch (error) {
-    // Silent fail for save errors
+    logError('Failed to save canvas document', {
+      canvasId,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    })
+    // TODO: Consider implementing retry logic or notifying user about save failure
   }
 }

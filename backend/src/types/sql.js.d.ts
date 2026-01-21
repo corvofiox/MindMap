@@ -1,8 +1,8 @@
 declare module 'sql.js' {
   export interface SqlDatabase {
     export(): Uint8Array
-    run(sql: string, params?: any[]): any
-    exec(sql: string): any[]
+    run(sql: string, params?: unknown[]): unknown
+    exec(sql: string): unknown[]
     close(): void
   }
 

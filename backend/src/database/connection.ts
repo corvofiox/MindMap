@@ -17,8 +17,8 @@ try {
 
 const dbPath = process.env.DB_FILE || path.join(dataDir, 'mindmap.db')
 
-let sqlite: any = null
-let dbInstance: any = null
+let sqlite: unknown = null
+let dbInstance: unknown = null
 
 export async function getSqlite() {
   if (!sqlite) {
@@ -31,17 +31,17 @@ export async function getSqlite() {
       console.log('Database file not found, creating new one:', dbPath)
       dbData = null
     }
-    sqlite = new SQL.Database(dbData)
+    sqlite = new SQL.Database(dbData) as any
   }
-  return sqlite
+  return sqlite as any
 }
 
 export async function getDb() {
   if (!dbInstance) {
     const sqlite = await getSqlite()
-    dbInstance = drizzle(sqlite, { schema })
+    dbInstance = drizzle(sqlite as any, { schema })
   }
-  return dbInstance
+  return dbInstance as any
 }
 
 export const db = await getDb()

@@ -26,7 +26,14 @@ projectRouter.get('/', authenticate, asyncHandler(async (req: AuthRequest, res) 
 
 // Get project by ID
 projectRouter.get('/:id', authenticate, asyncHandler(async (req: AuthRequest, res) => {
-  const projectId = parseInt(req.params.id)
+  const projectId = parseInt(req.params.id, 10)
+  if (isNaN(projectId)) {
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid project ID format',
+    })
+  }
+
   const project = await db.query.projects.findFirst({
     where: eq(projects.id, projectId),
   })
@@ -74,7 +81,14 @@ projectRouter.post('/', authenticate, asyncHandler(async (req: AuthRequest, res)
 
 // Update project
 projectRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, res) => {
-  const projectId = parseInt(req.params.id)
+  const projectId = parseInt(req.params.id, 10)
+  if (isNaN(projectId)) {
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid project ID format',
+    })
+  }
+
   const { name, description, thumbnail } = req.body
 
   // Check ownership
@@ -115,7 +129,13 @@ projectRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, re
 
 // Delete project
 projectRouter.delete('/:id', authenticate, asyncHandler(async (req: AuthRequest, res) => {
-  const projectId = parseInt(req.params.id)
+  const projectId = parseInt(req.params.id, 10)
+  if (isNaN(projectId)) {
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid project ID format',
+    })
+  }
 
   // Check ownership
   const project = await db.query.projects.findFirst({
@@ -154,7 +174,14 @@ projectRouter.post(
   '/:id/members',
   authenticate,
   asyncHandler(async (req: AuthRequest, res) => {
-    const projectId = parseInt(req.params.id)
+    const projectId = parseInt(req.params.id, 10)
+    if (isNaN(projectId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid project ID format',
+      })
+    }
+
     const { userId, role } = req.body
 
     // Check ownership
@@ -194,8 +221,20 @@ projectRouter.delete(
   '/:id/members/:userId',
   authenticate,
   asyncHandler(async (req: AuthRequest, res) => {
-    const projectId = parseInt(req.params.id)
-    const userId = parseInt(req.params.userId)
+    const projectId = parseInt(req.params.id, 10)
+    const userId = parseInt(req.params.userId, 10)
+    if (isNaN(projectId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid project ID format',
+      })
+    }
+    if (isNaN(userId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid user ID format',
+      })
+    }
 
     // Check ownership
     const project = await db.query.projects.findFirst({
@@ -234,7 +273,13 @@ projectRouter.get(
   '/:id/node-pool',
   authenticate,
   asyncHandler(async (req: AuthRequest, res) => {
-    const projectId = parseInt(req.params.id)
+    const projectId = parseInt(req.params.id, 10)
+    if (isNaN(projectId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid project ID format',
+      })
+    }
 
     // Verify project exists and user has access
     const project = await db.query.projects.findFirst({
@@ -268,7 +313,14 @@ projectRouter.post(
   '/:id/node-pool',
   authenticate,
   asyncHandler(async (req: AuthRequest, res) => {
-    const projectId = parseInt(req.params.id)
+    const projectId = parseInt(req.params.id, 10)
+    if (isNaN(projectId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid project ID format',
+      })
+    }
+
     const { name, content, type, color, tags, image_url } = req.body
 
     // Verify project exists
@@ -314,7 +366,13 @@ projectRouter.delete(
   '/node-pool/:nodeId',
   authenticate,
   asyncHandler(async (req: AuthRequest, res) => {
-    const nodeId = parseInt(req.params.nodeId)
+    const nodeId = parseInt(req.params.nodeId, 10)
+    if (isNaN(nodeId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid node ID format',
+      })
+    }
 
     // Verify node exists
     const node = await db.query.nodeCards.findFirst({
@@ -344,7 +402,14 @@ projectRouter.put(
   '/node-pool/:id',
   authenticate,
   asyncHandler(async (req: AuthRequest, res) => {
-    const nodeId = parseInt(req.params.id)
+    const nodeId = parseInt(req.params.id, 10)
+    if (isNaN(nodeId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid node ID format',
+      })
+    }
+
     const { name, description, folderId, sortOrder } = req.body
 
     // Verify node exists
@@ -389,7 +454,13 @@ projectRouter.post(
   '/node-pool/:id/increment-use',
   authenticate,
   asyncHandler(async (req: AuthRequest, res) => {
-    const nodeId = parseInt(req.params.id)
+    const nodeId = parseInt(req.params.id, 10)
+    if (isNaN(nodeId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid node ID format',
+      })
+    }
 
     // Verify node exists
     const node = await db.query.nodeCards.findFirst({
@@ -429,7 +500,13 @@ projectRouter.get(
   '/:id/node-pool-folders',
   authenticate,
   asyncHandler(async (req: AuthRequest, res) => {
-    const projectId = parseInt(req.params.id)
+    const projectId = parseInt(req.params.id, 10)
+    if (isNaN(projectId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid project ID format',
+      })
+    }
 
     // Verify project exists
     const project = await db.query.projects.findFirst({
@@ -462,7 +539,14 @@ projectRouter.post(
   '/:id/node-pool-folders',
   authenticate,
   asyncHandler(async (req: AuthRequest, res) => {
-    const projectId = parseInt(req.params.id)
+    const projectId = parseInt(req.params.id, 10)
+    if (isNaN(projectId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid project ID format',
+      })
+    }
+
     const { name, parentId, sortOrder, collapsed } = req.body
 
     // Verify project exists
@@ -506,7 +590,14 @@ projectRouter.put(
   '/node-pool-folders/:id',
   authenticate,
   asyncHandler(async (req: AuthRequest, res) => {
-    const folderId = parseInt(req.params.id)
+    const folderId = parseInt(req.params.id, 10)
+    if (isNaN(folderId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid folder ID format',
+      })
+    }
+
     const { name, parentId, sortOrder, collapsed } = req.body
 
     // Verify folder exists
@@ -550,7 +641,13 @@ projectRouter.delete(
   '/node-pool-folders/:id',
   authenticate,
   asyncHandler(async (req: AuthRequest, res) => {
-    const folderId = parseInt(req.params.id)
+    const folderId = parseInt(req.params.id, 10)
+    if (isNaN(folderId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid folder ID format',
+      })
+    }
 
     // Verify folder exists
     const folder = await db.query.nodePoolFolders.findFirst({
