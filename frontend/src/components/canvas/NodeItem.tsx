@@ -378,9 +378,11 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
     if (contentRef.current && isEditingContent) {
       const cleanedHtml = cleanHtmlContent(contentRef.current.innerHTML)
       const content = htmlToText(cleanedHtml)
-      if (content !== editingContentRef.current) {
-        updateNode(node.id, { content })
-        editingContentRef.current = content
+      // 如果内容只有空白字符（换行、空格等），视为空字符串
+      const trimmedContent = content.replace(/[\n\s]+/g, '').trim() ? content : ''
+      if (trimmedContent !== editingContentRef.current) {
+        updateNode(node.id, { content: trimmedContent })
+        editingContentRef.current = trimmedContent
       }
     }
   }, [isEditingContent, node.id, updateNode, cleanHtmlContent, htmlToText])
@@ -604,6 +606,9 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
 
         setEditingField(field)
         setEditingId(node.id)
+        window.dispatchEvent(new CustomEvent('nodeEditingFieldChange', {
+          detail: { field }
+        }))
       }
     },
     [node.locked, node.title, isEditingTitle, isEditingContent, saveTitle, saveContent]
@@ -648,6 +653,9 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
           saveContent()
         }
         setEditingField(null)
+        window.dispatchEvent(new CustomEvent('nodeEditingFieldChange', {
+          detail: { field: null }
+        }))
       } else if (e.key === 'Enter') {
         // Shift+Enter 或 Ctrl+Enter/Meta+Enter：换行不退出
         if (e.shiftKey || e.ctrlKey || e.metaKey) {
@@ -663,6 +671,9 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
           saveContent()
         }
         setEditingField(null)
+        window.dispatchEvent(new CustomEvent('nodeEditingFieldChange', {
+          detail: { field: null }
+        }))
       }
     },
     [isComposing, saveTitle, saveContent]
@@ -724,6 +735,9 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
 
     setEditingField(null)
     setEditingId(null)
+    window.dispatchEvent(new CustomEvent('nodeEditingFieldChange', {
+      detail: { field: null }
+    }))
   }, [isEditingTitle, isEditingContent, saveTitle, saveContent, setEditingId])
 
   // Handle context menu
@@ -780,6 +794,9 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
         saveContent()
       }
       setEditingField(null)
+      window.dispatchEvent(new CustomEvent('nodeEditingFieldChange', {
+        detail: { field: null }
+      }))
     }
   }, [globalEditingId, node.id, editingField, saveTitle, saveContent])
 
@@ -972,13 +989,13 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
               className="w-full h-full flex items-center justify-center px-3 text-sm truncate"
               style={{
                 fontSize: node.fontSize + 2,
-                textAlign: node.textAlign,
+                textAlign: node.titleAlign || node.textAlign,
                 color: '#1f2937',
                 fontWeight: '600',
               }}
               title={node.title?.replace(/<[^>]*>/g, '') || node.content?.replace(/<[^>]*>/g, '')}
             >
-              {node.title?.replace(/<[^>]*>/g, '') || node.content?.replace(/<[^>]*>/g, '') || '空白节点'}
+              {node.title?.replace(/<[^>]*>/g, '') || node.content?.replace(/<[^>]*>/g, '') || (node.type === 'image' ? '双击添加描述' : '双击添加标题')}
             </div>
           ) : node.type === 'image' ? (
             // Image Type Logic
@@ -1000,7 +1017,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
                       caretColor: '#111827',
                       outline: 'none',
                       fontSize: `${node.fontSize + 2}px`,
-                      textAlign: node.textAlign,
+                      textAlign: node.titleAlign || node.textAlign,
                     }}
                     onInput={handleInputChange}
                     onKeyDown={(e) => handleKeyDown(e, 'title')}
@@ -1016,9 +1033,12 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
                     style={{
                       color: '#111827',
                       minHeight: '24px',
+                      fontSize: `${node.fontSize + 2}px`,
+                      textAlign: node.titleAlign || node.textAlign,
+                      whiteSpace: 'pre-wrap',
                     }}
                     onDoubleClick={(e) => handleDoubleClick(e, 'title')}
-                    dangerouslySetInnerHTML={{ __html: node.title || '图片节点' }}
+                    dangerouslySetInnerHTML={{ __html: node.title || '' }}
                   />
                 )}
               </div>
@@ -1094,7 +1114,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
                       caretColor: '#111827',
                       outline: 'none',
                       fontSize: `${node.fontSize + 2}px`,
-                      textAlign: node.textAlign,
+                      textAlign: node.titleAlign || node.textAlign,
                       whiteSpace: 'pre-wrap',
                     }}
                     onInput={handleInputChange}
@@ -1112,11 +1132,11 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
                       color: '#111827',
                       minHeight: '24px',
                       fontSize: `${node.fontSize + 2}px`,
-                      textAlign: node.textAlign,
+                      textAlign: node.titleAlign || node.textAlign,
                       whiteSpace: 'pre-wrap',
                     }}
                     onDoubleClick={(e) => handleDoubleClick(e, 'title')}
-                    dangerouslySetInnerHTML={{ __html: node.title || '点击添加标题' }}
+                    dangerouslySetInnerHTML={{ __html: node.title || '' }}
                   />
                 )}
               </div>
@@ -1134,7 +1154,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
                       caretColor: '#4b5563',
                       outline: 'none',
                       fontSize: `${node.fontSize}px`,
-                      textAlign: node.textAlign,
+                      textAlign: node.contentAlign || node.textAlign,
                       wordBreak: 'break-word',
                       lineHeight: '1.6',
                       whiteSpace: 'pre-wrap',
@@ -1156,7 +1176,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
                       lineHeight: '1.6',
                       whiteSpace: 'pre-wrap',
                       fontSize: `${node.fontSize}px`,
-                      textAlign: node.textAlign,
+                      textAlign: node.contentAlign || node.textAlign,
                     }}
                     onDoubleClick={(e) => handleDoubleClick(e, 'content')}
                     dangerouslySetInnerHTML={{ __html: node.content || '双击添加内容' }}

@@ -74,7 +74,9 @@ export interface Node {
   content: string     // 节点文本内容
   color: string
   fontSize: number
-  textAlign: 'left' | 'center' | 'right'
+  textAlign: 'left' | 'center' | 'right'  // 统一对齐（向后兼容）
+  titleAlign?: 'left' | 'center' | 'right'  // 标题对齐
+  contentAlign?: 'left' | 'center' | 'right'  // 内容对齐
   collapsed: boolean
   locked: boolean
   expandedHeight?: number  // 保存展开时的高度

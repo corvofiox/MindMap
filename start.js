@@ -256,11 +256,6 @@ async function setupEnvironmentFiles() {
 
   const envConfigs = [
     {
-      name: 'Root',
-      examplePath: path.join(__dirname, '.env.example'),
-      targetPath: path.join(__dirname, '.env'),
-    },
-    {
       name: 'Backend',
       examplePath: path.join(__dirname, 'backend', '.env.example'),
       targetPath: path.join(__dirname, 'backend', '.env'),

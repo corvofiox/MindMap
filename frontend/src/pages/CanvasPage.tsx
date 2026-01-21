@@ -619,6 +619,7 @@ export function CanvasPage() {
   // Rich text toolbar state
   const [richTextToolbarVisible, setRichTextToolbarVisible] = useState(false)
   const [richTextToolbarPosition, setRichTextToolbarPosition] = useState({ x: 0, y: 0 })
+  const [editingField, setEditingField] = useState<'title' | 'content' | null>(null)
 
   // Save/restore selection for rich text editing
   const savedSelectionRef = useRef<Range | null>(null)
@@ -1580,6 +1581,19 @@ export function CanvasPage() {
     }
   }, [nodes, panX, panY, zoom])
 
+  // Handle node editing field change from NodeItem
+  useEffect(() => {
+    const handleNodeEditingFieldChange = (e: Event) => {
+      const customEvent = e as CustomEvent<{ field: 'title' | 'content' | null }>
+      setEditingField(customEvent.detail.field)
+    }
+
+    window.addEventListener('nodeEditingFieldChange', handleNodeEditingFieldChange)
+    return () => {
+      window.removeEventListener('nodeEditingFieldChange', handleNodeEditingFieldChange)
+    }
+  }, [])
+
   // Handle mouse down for drag panning and connection creation
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     const rect = containerRef.current?.getBoundingClientRect()
@@ -1762,7 +1776,7 @@ export function CanvasPage() {
       }
       return
     }
-  }, [isSpacePressed, currentTool, panX, panY, zoom, setSelectedIds, editingId, setEditingId])
+  }, [isSpacePressed, currentTool, panX, panY, zoom, setSelectedIds, editingId, setEditingId, editingField])
 
   // Handle mouse move for drag panning and connection creation
   const handleMouseMove = useCallback(async (e: React.MouseEvent) => {
@@ -2824,7 +2838,7 @@ export function CanvasPage() {
 
   // Show/hide rich text toolbar based on editing state
   useEffect(() => {
-    if (editingId && containerRef.current) {
+    if (editingId && editingField === 'content' && containerRef.current) {
       const node = nodes.get(editingId)
       if (node) {
         const rect = containerRef.current.getBoundingClientRect()
@@ -2839,7 +2853,7 @@ export function CanvasPage() {
     } else {
       setRichTextToolbarVisible(false)
     }
-  }, [editingId, nodes, zoom, panX, panY])
+  }, [editingId, editingField, nodes, zoom, panX, panY])
 
   // 验证画布ID有效性
   const validCanvasId = canvasId ? parseInt(canvasId) : null

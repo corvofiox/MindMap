@@ -172,7 +172,7 @@ export const useUIStore = create<UIState>()(
         setConnectionStyle: (style) => set({ connectionStyle: style }),
 
         // Connection Type
-        connectionType: 'curve',
+        connectionType: 'straight',
         setConnectionType: (type) => set({ connectionType: type }),
 
         // Context Menu

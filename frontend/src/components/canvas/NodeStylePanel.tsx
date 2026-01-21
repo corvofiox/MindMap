@@ -127,35 +127,67 @@ export function NodeStylePanel() {
           </div>
         </div>
 
-        {/* Text Alignment */}
+        {/* Title Alignment */}
         <div>
           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-            文字对齐
+            标题对齐
           </label>
           <div className="flex gap-2">
             <button
-              className={`flex-1 py-2 px-3 rounded-lg border border-gray-300 dark:border-gray-600 transition-colors ${firstNode.textAlign === 'left' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400' : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'}`}
-              onClick={() => handleUpdate({ textAlign: 'left' })}
+              className={`flex-1 py-2 px-3 rounded-lg border border-gray-300 dark:border-gray-600 transition-colors ${(firstNode.titleAlign || firstNode.textAlign) === 'left' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400' : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'}`}
+              onClick={() => handleUpdate({ titleAlign: 'left' })}
               title="左对齐"
             >
               左对齐
             </button>
             <button
-              className={`flex-1 py-2 px-3 rounded-lg border border-gray-300 dark:border-gray-600 transition-colors ${firstNode.textAlign === 'center' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400' : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'}`}
-              onClick={() => handleUpdate({ textAlign: 'center' })}
+              className={`flex-1 py-2 px-3 rounded-lg border border-gray-300 dark:border-gray-600 transition-colors ${(firstNode.titleAlign || firstNode.textAlign) === 'center' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400' : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'}`}
+              onClick={() => handleUpdate({ titleAlign: 'center' })}
               title="居中对齐"
             >
               居中
             </button>
             <button
-              className={`flex-1 py-2 px-3 rounded-lg border border-gray-300 dark:border-gray-600 transition-colors ${firstNode.textAlign === 'right' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400' : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'}`}
-              onClick={() => handleUpdate({ textAlign: 'right' })}
+              className={`flex-1 py-2 px-3 rounded-lg border border-gray-300 dark:border-gray-600 transition-colors ${(firstNode.titleAlign || firstNode.textAlign) === 'right' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400' : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'}`}
+              onClick={() => handleUpdate({ titleAlign: 'right' })}
               title="右对齐"
             >
               右对齐
             </button>
           </div>
         </div>
+
+        {/* Content Alignment - Only for text nodes */}
+        {firstNode.type !== 'image' && (
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              内容对齐
+            </label>
+            <div className="flex gap-2">
+              <button
+                className={`flex-1 py-2 px-3 rounded-lg border border-gray-300 dark:border-gray-600 transition-colors ${(firstNode.contentAlign || firstNode.textAlign) === 'left' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400' : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'}`}
+                onClick={() => handleUpdate({ contentAlign: 'left' })}
+                title="左对齐"
+              >
+                左对齐
+              </button>
+              <button
+                className={`flex-1 py-2 px-3 rounded-lg border border-gray-300 dark:border-gray-600 transition-colors ${(firstNode.contentAlign || firstNode.textAlign) === 'center' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400' : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'}`}
+                onClick={() => handleUpdate({ contentAlign: 'center' })}
+                title="居中对齐"
+              >
+                居中
+              </button>
+              <button
+                className={`flex-1 py-2 px-3 rounded-lg border border-gray-300 dark:border-gray-600 transition-colors ${(firstNode.contentAlign || firstNode.textAlign) === 'right' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400' : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'}`}
+                onClick={() => handleUpdate({ contentAlign: 'right' })}
+                title="右对齐"
+              >
+                右对齐
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Font Size */}
         <div>
