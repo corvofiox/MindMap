@@ -3,6 +3,7 @@ import { persist } from 'zustand/middleware'
 import type { User, LoginCredentials, RegisterData } from '@/types'
 import * as api from '@/services/api'
 import { loadUIStore } from '@/utils/moduleLoader'
+import { clearAllStorage } from '@/utils/clearStorage'
 
 interface AuthState {
   user: User | null
@@ -74,7 +75,13 @@ export const useAuthStore = create<AuthState>()(
         login: async (credentials) => {
           set({ isLoading: true, error: null })
           try {
+            const oldToken = localStorage.getItem('mindmap_token')
             const response = await api.login(credentials)
+
+            if (oldToken && oldToken !== response.token) {
+              clearAllStorage()
+            }
+
             localStorage.setItem('mindmap_token', response.token)
             // 更新 apiClient 实例的 token
             api.apiClient.setToken(response.token)
@@ -105,7 +112,13 @@ export const useAuthStore = create<AuthState>()(
         register: async (data) => {
           set({ isLoading: true, error: null })
           try {
+            const oldToken = localStorage.getItem('mindmap_token')
             const response = await api.register(data)
+
+            if (oldToken && oldToken !== response.token) {
+              clearAllStorage()
+            }
+
             localStorage.setItem('mindmap_token', response.token)
             // 更新 apiClient 实例的 token
             api.apiClient.setToken(response.token)
