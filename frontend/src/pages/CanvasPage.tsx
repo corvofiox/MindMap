@@ -2597,7 +2597,7 @@ export function CanvasPage() {
         y: snappedY - nodeHeight / 2,
         width: nodeWidth,
         height: nodeHeight,
-        title: '图片节点',
+        title: '',
         content: '',
         color: '#ffffff',
         fontSize: 14,
