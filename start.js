@@ -314,11 +314,91 @@ async function setupEnvironmentFiles() {
 }
 
 /**
+ * 检查关键依赖是否正确安装
+ * @param {boolean} autoFix - 是否自动修复缺失的依赖
+ * @returns {Promise<boolean>} - 返回 true 表示所有依赖都正常，false 表示存在问题
+ */
+async function checkDependenciesHealth(autoFix = false) {
+  logSection('Checking Dependencies Health');
+
+  const backendDir = path.join(__dirname, 'backend');
+  const criticalModules = [
+    'drizzle-orm',
+    'drizzle-kit',
+    'drizzle-orm/pg-core',
+  ];
+
+  let allHealthy = true;
+
+  for (const moduleName of criticalModules) {
+    try {
+      // 尝试动态导入模块
+      await import(moduleName);
+      logStep('OK', `${moduleName} is available`);
+    } catch (error) {
+      allHealthy = false;
+      logWarning(`${moduleName} is missing or not accessible`);
+
+      if (autoFix) {
+        logStep('FIX', `Attempting to fix ${moduleName}...`);
+        try {
+          // 尝试重新安装 backend 依赖
+          await executeCommand(getNpmCommand(), ['install'], { cwd: backendDir });
+          logSuccess(`Reinstalled dependencies for ${moduleName}`);
+
+          // 再次检查
+          try {
+            await import(moduleName);
+            logSuccess(`${moduleName} is now available`);
+            allHealthy = true;
+          } catch {
+            logError(`Failed to fix ${moduleName}`);
+          }
+        } catch (fixError) {
+          logError(`Failed to reinstall dependencies: ${fixError.message}`);
+        }
+      }
+    }
+  }
+
+  if (allHealthy) {
+    logSuccess('All critical dependencies are healthy');
+  } else {
+    logWarning('Some dependencies are missing');
+  }
+
+  return allHealthy;
+}
+
+/**
  * 初始化数据库
  * 在生产环境和开发环境都需要初始化数据库
  */
 async function initializeDatabase() {
   logSection('Initializing Database');
+
+  // 先检查依赖是否健康
+  logStep('CHECK', 'Verifying dependencies before database initialization...');
+  const depsHealthy = await checkDependenciesHealth(true);
+
+  if (!depsHealthy) {
+    logWarning('Dependencies are not healthy, attempting to fix...');
+    const backendDir = path.join(__dirname, 'backend');
+    try {
+      await executeCommand(getNpmCommand(), ['install'], { cwd: backendDir });
+      logSuccess('Dependencies reinstalled');
+
+      // 再次检查
+      const recheck = await checkDependenciesHealth(false);
+      if (!recheck) {
+        throw new Error('Failed to fix dependencies');
+      }
+    } catch (error) {
+      logError(`Failed to fix dependencies: ${error.message}`);
+      logStep('HINT', 'Please run "npm install" in the backend directory manually');
+      throw error;
+    }
+  }
 
   const backendDir = path.join(__dirname, 'backend');
   const dataDir = path.join(backendDir, 'data');
@@ -811,6 +891,7 @@ function printUsage() {
    --reinstall          Force reinstall dependencies
    --clean-install      Clean and reinstall dependencies
    --clean-build        Clean build artifacts only
+   --fix-deps           Fix dependency issues (reinstall and verify)
    --production         Run in production mode
    --help, -h           Show this help message
 
@@ -824,6 +905,7 @@ function printUsage() {
    node start.js --reinstall        Force reinstall all dependencies
    node start.js --clean-install    Clean and reinstall dependencies
    node start.js --clean-build      Clean build artifacts
+   node start.js --fix-deps         Fix dependency issues
 
  Notes:
    - Docker environment is automatically detected
@@ -831,6 +913,7 @@ function printUsage() {
    - Use --start-only to skip setup steps
    - Database is initialized automatically if not exists
    - --full-start includes all setup steps and starts servers
+   - --fix-deps is useful when you encounter module not found errors
 
 ${environmentInfo}
 `);
@@ -858,6 +941,7 @@ async function main() {
   const reinstall = args.includes('--reinstall');
   const cleanInstall = args.includes('--clean-install');
   const shouldCleanBuild = args.includes('--clean-build');
+  const fixDeps = args.includes('--fix-deps');
   const productionMode = args.includes('--production') || isProduction();
 
   // 确定运行环境
@@ -893,6 +977,29 @@ async function main() {
     if (cleanInstall) {
       await installDependencies({ clean: true });
       logSuccess('Dependencies reinstalled cleanly. Run with --start-only to start servers.');
+      process.exit(0);
+    }
+
+    // 处理修复依赖
+    if (fixDeps) {
+      logSection('Fixing Dependencies');
+
+      // 先安装所有依赖
+      await installDependencies({ force: true });
+
+      // 再检查并修复关键依赖
+      const backendDir = path.join(__dirname, 'backend');
+      logStep('FIX', 'Checking and fixing backend dependencies...');
+      await executeCommand(getNpmCommand(), ['install'], { cwd: backendDir });
+
+      const healthy = await checkDependenciesHealth(false);
+      if (healthy) {
+        logSuccess('All dependencies are now healthy');
+      } else {
+        logWarning('Some dependencies may still have issues');
+        logStep('HINT', 'Try running "npm install" in the backend directory manually');
+      }
+
       process.exit(0);
     }
 
