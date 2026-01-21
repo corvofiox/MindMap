@@ -1,8 +1,24 @@
 {
   "name": "mindmap-frontend",
   "version": "1.0.0",
+  "description": "MindMap Frontend Application",
   "private": true,
   "type": "module",
+  "author": "corvofiox",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/corvofiox/MindMap.git",
+    "directory": "frontend"
+  },
+  "keywords": [
+    "frontend",
+    "react",
+    "typescript",
+    "vite",
+    "tailwindcss",
+    "radix-ui"
+  ],
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
@@ -54,5 +70,21 @@
     "typescript": "^5.3.3",
     "vite": "^5.0.8",
     "vitest": "^4.0.17"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=9.0.0"
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
   }
 }
