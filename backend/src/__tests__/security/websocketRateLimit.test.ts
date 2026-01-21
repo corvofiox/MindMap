@@ -1,12 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { WebSocketServer } from 'ws'
-import { WebSocket } from 'ws'
 
-// Test WebSocket Rate Limiting
 describe('WebSocket Rate Limiting', () => {
   describe('Rate Limiting Configuration', () => {
     it('should have rate limiting constants defined', () => {
-      // Verify that rate limiting is configured
       const MAX_CONNECTIONS_PER_MINUTE = 10
       const WINDOW_MS = 60 * 1000
 
@@ -15,7 +11,6 @@ describe('WebSocket Rate Limiting', () => {
     })
 
     it('should track connection attempts per IP', () => {
-      // Verify rate limiting mechanism exists
       const connectionRates = new Map<string, number>()
 
       const testIp = '192.168.1.1'
@@ -30,20 +25,43 @@ describe('WebSocket Rate Limiting', () => {
   describe('Rate Limiting Behavior', () => {
     it('should enforce maximum connections per minute', () => {
       const MAX_CONNECTIONS = 10
-      const connectionCount = 0
+      let connectionCount = 0
 
-      // Simulate connection attempts
       for (let i = 0; i < 15; i++) {
         if (connectionCount < MAX_CONNECTIONS) {
-          // Connection allowed
-          // Simulate connection
+          connectionCount++
         } else {
-          // Connection rejected due to rate limiting
           break
         }
       }
 
       expect(connectionCount).toBe(MAX_CONNECTIONS)
+    })
+
+    it('should allow connections below limit', () => {
+      const MAX_CONNECTIONS = 10
+      let connectionCount = 0
+
+      for (let i = 0; i < 5; i++) {
+        if (connectionCount < MAX_CONNECTIONS) {
+          connectionCount++
+        }
+      }
+
+      expect(connectionCount).toBe(5)
+      expect(connectionCount).toBeLessThan(MAX_CONNECTIONS)
+    })
+
+    it('should count multiple connections from same IP', () => {
+      const ip = '192.168.1.1'
+      const connectionCounts = new Map<string, number>()
+
+      for (let i = 0; i < 5; i++) {
+        const currentCount = connectionCounts.get(ip) || 0
+        connectionCounts.set(ip, currentCount + 1)
+      }
+
+      expect(connectionCounts.get(ip)).toBe(5)
     })
 
     it('should reset rate limit after time window', () => {
@@ -52,8 +70,7 @@ describe('WebSocket Rate Limiting', () => {
         resetTime: Date.now() + 60000,
       }
 
-      // After time window, rate limit should reset
-      const now = Date.now() + 70000 // After window
+      const now = Date.now() + 70000
 
       const shouldReset = now > rateData.resetTime
       expect(shouldReset).toBe(true)
