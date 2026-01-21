@@ -9,24 +9,7 @@ services:
     ports:
       - "8001:3000"  # API 服务器
       - "3001:3001"  # WebSocket 服务器
-    environment:
-      - NODE_ENV=production
-      - DOCKER_CONTAINER=true
-      - PORT=3000
-      - WS_PORT=3001
-      - DB_FILE=data/mindmap.db
-      - LOG_FILE=data/app.log
-      - ALLOWED_ORIGINS=*
-      # 生产环境必须设置这些密钥（示例值，实际部署时应该使用更强的密钥）
-      - JWT_SECRET=${JWT_SECRET:-change-this-to-a-strong-random-secret-in-production}
-      - CSRF_SECRET=${CSRF_SECRET:-change-this-to-a-strong-random-secret-in-production}
     volumes:
       # 持久化数据库数据
       - ./data:/app/backend/data
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s

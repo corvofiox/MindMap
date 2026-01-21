@@ -191,6 +191,10 @@ async function setupEnvironmentFiles() {
       const jwtSecret = generateJWTSecret();
       updateEnvFile(config.targetPath, 'JWT_SECRET', jwtSecret);
       logSuccess(`Generated and set JWT_SECRET for ${config.name}`);
+      
+      const csrfSecret = generateJWTSecret();
+      updateEnvFile(config.targetPath, 'CSRF_SECRET', csrfSecret);
+      logSuccess(`Generated and set CSRF_SECRET for ${config.name}`);
     }
   }
 

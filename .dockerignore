@@ -35,8 +35,36 @@ Thumbs.db
 yarn.lock
 pnpm-lock.yaml
 
-# Docker
-.dockerignore
+# Test files and configurations
+**/__tests__/
+**/test/
+**/*.test.ts
+**/*.test.tsx
+**/*.test.js
+**/*.test.jsx
+vitest.config.ts
 
-# Documentation
+# Development tools and configurations
+.eslintrc.json
+.prettierrc.json
+postcss.config.js
+tailwind.config.js
+
+# Documentation (keep README.md and LICENSE.md)
 *.md
+!README.md
+!LICENSE.md
+
+# Temporary files
+*.tmp
+*.temp
+.tmp/
+.temp/
+
+# Cache directories
+.cache/
+.eslintcache
+
+# Coverage reports
+coverage/
+*.lcov
