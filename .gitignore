@@ -1,19 +1,42 @@
+# IDE and editor files
 .claude/
 .trae/
 .vscode/
 .idea/
-node_modules/
-logs/
-data/
-.env*
-!.env.example
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
 *.md
-uploads/
-*.log
+*.swp
+*.swo
+*~
+
+# Dependency directories
+node_modules/
+backend/node_modules/
+frontend/node_modules/
+
+# Build output
+backend/dist/
+frontend/dist/
+
+# Environment variables
+backend/.env
+frontend/.env
+
+# Database files
+backend/data/
+
+# Logs
+logs/
+backend/logs/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
 # Windows device files
 nul
 con
@@ -22,7 +45,3 @@ aux
 clock$
 com1-com9
 lpt1-lpt9
-# Build output directories
-dist/
-backend/dist/
-frontend/dist/
