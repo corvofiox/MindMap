@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars */
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 
 describe('Canvas Store Tests', () => {

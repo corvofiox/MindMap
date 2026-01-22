@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars */
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 
 describe('API Client Tests', () => {
@@ -345,7 +346,7 @@ describe('API Client Tests', () => {
 
   describe('Request Methods', () => {
     it('should support GET requests', () => {
-      const makeGetRequest = async (endpoint: string) => {
+      const makeGetRequest = (endpoint: string) => {
         return {
           method: 'GET',
           endpoint,
@@ -354,7 +355,7 @@ describe('API Client Tests', () => {
 
       const request = makeGetRequest('/api/users')
 
-      expect(request).resolves.toHaveProperty('method', 'GET')
+      expect(request).toHaveProperty('method', 'GET')
     })
 
     it('should support POST requests with JSON body', () => {

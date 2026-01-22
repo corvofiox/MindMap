@@ -1,8 +1,10 @@
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import request from 'supertest'
-import express from 'express'
+import express, { type RequestHandler } from 'express'
 import jwt from 'jsonwebtoken'
 import cors from 'cors'
+import cookieParser from 'cookie-parser'
 
 const createMockApp = () => {
   const app = express()
@@ -333,7 +335,7 @@ describe('Middleware Tests', () => {
     it('should handle async errors', async () => {
       const app = createMockApp()
 
-      const asyncHandler = (fn: Function) => (req: any, res: any, next: any) => {
+      const asyncHandler = (fn: RequestHandler) => (req: any, res: any, next: any) => {
         Promise.resolve(fn(req, res, next)).catch(next)
       }
 
@@ -558,7 +560,6 @@ describe('Middleware Tests', () => {
   describe('Cookie Parsing', () => {
     it('should parse cookies correctly', () => {
       const app = createMockApp()
-      const cookieParser = require('cookie-parser')
       app.use(cookieParser())
 
       app.get('/api/cookies', (req, res) => {
@@ -577,7 +578,6 @@ describe('Middleware Tests', () => {
 
     it('should handle CSRF token cookie', () => {
       const app = createMockApp()
-      const cookieParser = require('cookie-parser')
       app.use(cookieParser())
 
       app.get('/api/csrf', (req, res) => {

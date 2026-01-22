@@ -2,6 +2,7 @@ import initSqlJs from 'sql.js'
 import path, { join } from 'path'
 import { fileURLToPath } from 'url'
 import * as fs from 'fs'
+import { log, logError } from '../utils/logger.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -16,8 +17,8 @@ export async function runMigrations(sqlite: any) {
   try {
     // Check if users table exists, if not create all tables
     const usersTable = sqlite.exec("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
-    if (!usersTable || usersTable.length === 0 || usersTable[0].values.length === 0) {
-      console.log('Creating database tables...')
+     if (!usersTable || usersTable.length === 0 || usersTable[0].values.length === 0) {
+      log('Creating database tables')
 
       // Create users table
       sqlite.run(`
@@ -179,8 +180,8 @@ export async function runMigrations(sqlite: any) {
         )
       `)
 
-      console.log('All database tables created successfully')
-    }
+      log('All database tables created successfully')
+     }
 
     // Add new columns to node_cards table if they don't exist
     const tableInfo = sqlite.exec('PRAGMA table_info(node_cards)')
@@ -205,12 +206,12 @@ export async function runMigrations(sqlite: any) {
       // Add sort_order column
       if (!columns.includes('sort_order')) {
         sqlite.run('ALTER TABLE node_cards ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0')
-      }
-    }
+     }
+     }
 
-    console.log('Migrations completed successfully')
+     log('Migrations completed successfully')
   } catch (error: any) {
-    console.error('Error running migrations:', error.message)
+    logError('Error running migrations', error.message)
     throw error
   }
 }
@@ -226,7 +227,7 @@ export async function runMigration() {
     const dbFile = fs.readFileSync(dbPath)
     dbData = new Uint8Array(dbFile)
   } catch {
-    console.error('Database file not found at:', dbPath)
+    logError('Database file not found at:', dbPath)
     process.exit(1)
   }
 

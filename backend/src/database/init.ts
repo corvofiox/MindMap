@@ -3,6 +3,7 @@ import { runMigrations } from './migration.js'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import * as fs from 'fs/promises'
+import { log, logError } from '../utils/logger.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -24,20 +25,24 @@ async function initDatabase() {
     const sqlite = await getSqlite()
 
     // Run migrations
-    console.log('Running database migrations...')
+    if (process.env.NODE_ENV === 'development') {
+      log('Running database migrations...')
+    }
     await runMigrations(sqlite)
 
     // Save database
-    console.log('Saving database...')
+    if (process.env.NODE_ENV === 'development') {
+      log('Saving database...')
+    }
     const data = sqlite.export()
     const buffer = Buffer.from(data)
     await fs.writeFile(dbPath, buffer)
 
-    console.log('Database initialized successfully!')
+    log('Database initialized successfully')
 
     return
   } catch (error) {
-    console.error('Failed to initialize database:', error)
+    logError('Failed to initialize database', error)
     throw error
   }
 }

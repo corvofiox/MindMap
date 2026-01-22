@@ -4,6 +4,7 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import * as schema from './schema.js'
 import * as fs from 'fs/promises'
+import { log, logError } from '../utils/logger.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -17,9 +18,11 @@ try {
 
 const dbPath = process.env.DB_FILE || path.join(dataDir, 'mindmap.db')
 
-let sqlite: unknown = null
-let dbInstance: unknown = null
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let sqlite: any = null
+let dbInstance: any = null
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function getSqlite() {
   if (!sqlite) {
     const SQL = await initSqlJs() as any
@@ -28,20 +31,23 @@ export async function getSqlite() {
       const dbFile = await fs.readFile(dbPath)
       dbData = new Uint8Array(dbFile)
     } catch (error) {
-      console.log('Database file not found, creating new one:', dbPath)
+      if (process.env.NODE_ENV === 'development') {
+        log('Database file not found, creating new one:', dbPath)
+      }
       dbData = null
     }
-    sqlite = new SQL.Database(dbData) as any
+    sqlite = new SQL.Database(dbData)
   }
-  return sqlite as any
+  return sqlite
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function getDb() {
   if (!dbInstance) {
-    const sqlite = await getSqlite()
-    dbInstance = drizzle(sqlite as any, { schema })
+    const sqliteDb = await getSqlite()
+    dbInstance = drizzle(sqliteDb as any, { schema })
   }
-  return dbInstance as any
+  return dbInstance
 }
 
 export const db = await getDb()
@@ -58,7 +64,7 @@ async function saveToDisk() {
     await fs.writeFile(dbPath, buffer)
     lastSaveTime = Date.now()
   } catch (error) {
-    console.error('Failed to save database:', error)
+    logError('Failed to save database', error)
   }
 }
 

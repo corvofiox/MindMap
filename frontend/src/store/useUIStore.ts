@@ -112,7 +112,7 @@ export const useUIStore = create<UIState>()(
   persist(
     (set, get) => {
       const createToggle = (key: keyof UIState) => () =>
-        set((state: any) => ({ [key]: !state[key] }))
+        set((state: UIState) => ({ [key]: !state[key as keyof UIState] }))
 
       return {
         // Theme
@@ -143,7 +143,7 @@ export const useUIStore = create<UIState>()(
         dragMode: 'free',
         setDragMode: (mode) => set({ dragMode: mode }),
         toggleDragMode: () =>
-          set((state: any) => ({ dragMode: state.dragMode === 'free' ? 'grid' : 'free' })),
+          set((state: UIState) => ({ dragMode: state.dragMode === 'free' ? 'grid' : 'free' })),
 
         gridVisible: true,
         setGridVisible: (visible) => set({ gridVisible: visible }),

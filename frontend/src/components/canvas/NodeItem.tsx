@@ -351,8 +351,8 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
       .replace(/<\/(?:div|p)>/gi, '')
 
     // 确保非空内容有换行标记
-    if (result && !result.includes('<br')) {
-      result = result
+    if (result && !result.includes('<br>')) {
+      result = result + '<br>'
     }
 
     return result || '<br>'

@@ -3,6 +3,7 @@ import multer from 'multer'
 import { v4 as uuidv4 } from 'uuid'
 import type { Request, Response } from 'express'
 import sharp from 'sharp'
+import { log } from '../utils/logger.js'
 
 const router = Router()
 
@@ -28,42 +29,61 @@ const upload = multer({
 
 // Upload endpoint
 router.post('/', upload.single('image'), async (req: Request, res: Response) => {
-    try {
-        console.log('[UPLOAD] Request received')
-        console.log('[UPLOAD] File:', req.file ? 'found' : 'NOT FOUND')
+  try {
+    if (process.env.NODE_ENV === 'development') {
+      log('Upload request received', {
+        filename: req.file?.originalname,
+        mimetype: req.file?.mimetype,
+      })
+    }
 
-        if (!req.file) {
-            console.log('[UPLOAD] ERROR: No file in request')
-            return res.status(400).json({
-                success: false,
-                error: '未上传任何文件'
-            })
-        }
+    if (!req.file) {
+      log('Upload error: No file in request')
+      return res.status(400).json({
+        success: false,
+        error: '未上传任何文件'
+      })
+    }
 
-        console.log('[UPLOAD] File details:', {
-            originalname: req.file.originalname,
-            mimetype: req.file.mimetype,
-            size: req.file.size
-        })
+    if (process.env.NODE_ENV === 'development') {
+      log('Upload file details', {
+        originalname: req.file.originalname,
+        mimetype: req.file.mimetype,
+        size: req.file.size
+      })
+    }
 
         // Generate unique filename
         const uniqueName = `${uuidv4()}${req.file.originalname.split('.').pop() ? '.' + req.file.originalname.split('.').pop() : ''}`
 
-        console.log('[UPLOAD] Starting sharp processing...')
-        // Compress the image using sharp (lossy compression with balanced quality)
+        if (process.env.NODE_ENV === 'development') {
+          log('Upload starting sharp processing')
+        }
+        // Compress image using sharp (lossy compression with balanced quality)
         const compressedBuffer = await sharp(req.file.buffer)
             .withMetadata() // Preserve metadata
             .png({ quality: 80, compressionLevel: 9 }) // Lossy PNG compression with 80% quality
             .jpeg({ quality: 80, progressive: true, optimizeScans: true }) // Lossy JPEG compression with 80% quality
             .toBuffer()
 
-        console.log('[UPLOAD] Sharp processing complete, size:', compressedBuffer.length)
+        if (process.env.NODE_ENV === 'development') {
+          log('Upload sharp processing complete', {
+            originalSize: req.file.size,
+            compressedSize: compressedBuffer.length,
+          })
+        }
 
         // Convert to Base64
         const base64Image = compressedBuffer.toString('base64')
         const dataUrl = `data:${req.file.mimetype};base64,${base64Image}`
 
-        console.log('[UPLOAD] Upload successful')
+        if (process.env.NODE_ENV === 'development') {
+          log('Upload successful', {
+            filename: uniqueName,
+            size: compressedBuffer.length,
+          })
+        }
+
         res.json({
             success: true,
             data: {
@@ -75,11 +95,12 @@ router.post('/', upload.single('image'), async (req: Request, res: Response) => 
             }
         })
     } catch (error) {
-        console.error('[UPLOAD] ERROR:', error)
         if (error instanceof Error) {
-            console.error('[UPLOAD] Error name:', error.name)
-            console.error('[UPLOAD] Error message:', error.message)
-            console.error('[UPLOAD] Error stack:', error.stack)
+          log('Upload error', {
+            name: error.name,
+            message: error.message,
+            stack: error.stack,
+          })
         }
         res.status(500).json({
             success: false,

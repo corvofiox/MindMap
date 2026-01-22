@@ -168,8 +168,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     if (!node) return
 
     const originalValues = Object.keys(updates).reduce((acc, key) => {
-      return { ...acc, [key]: (node as any)[key] }
-    }, {})
+      return { ...acc, [key]: (node as Node)[key as keyof Node] }
+    }, {} as Record<string, unknown>)
 
     get().executeCommand({
       type: 'updateNode',
@@ -214,7 +214,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     if (!node) return
 
     const removedConnections: Connection[] = []
-    for (const [_, conn] of state.connections) {
+    for (const [, conn] of state.connections) {
       if (conn.fromNodeId === id || conn.toNodeId === id) {
         removedConnections.push(conn)
       }
@@ -288,8 +288,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     }
 
     const originalValues = Object.keys(updates).reduce((acc, key) => {
-      return { ...acc, [key]: (group as any)[key] }
-    }, {})
+      return { ...acc, [key]: (group as NodeGroup)[key as keyof NodeGroup] }
+    }, {} as Record<string, unknown>)
 
     get().executeCommand({
       type: 'updateGroup',
@@ -380,8 +380,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     if (!domain) return
 
     const originalValues = Object.keys(updates).reduce((acc, key) => {
-      return { ...acc, [key]: (domain as any)[key] }
-    }, {})
+      return { ...acc, [key]: (domain as Domain)[key as keyof Domain] }
+    }, {} as Record<string, unknown>)
 
     get().executeCommand({
       type: 'updateDomain',
@@ -457,8 +457,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     if (!connection) return
 
     const originalValues = Object.keys(updates).reduce((acc, key) => {
-      return { ...acc, [key]: (connection as any)[key] }
-    }, {})
+      return { ...acc, [key]: (connection as Connection)[key as keyof Connection] }
+    }, {} as Record<string, unknown>)
 
     get().executeCommand({
       type: 'updateConnection',

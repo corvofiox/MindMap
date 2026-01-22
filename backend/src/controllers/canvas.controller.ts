@@ -9,6 +9,17 @@ import { log } from '../utils/logger.js'
 
 export const canvasRouter = Router()
 
+// Helper function to safely get property from Drizzle result (handles both snake_case and camelCase)
+function getProperty<T>(obj: any, ...keys: string[]): T | undefined {
+  for (const key of keys) {
+    const value = obj[key]
+    if (value !== undefined) {
+      return value
+    }
+  }
+  return undefined
+}
+
 // Get canvas by ID (more specific route must come first)
 canvasRouter.get('/detail/:id', authenticate, asyncHandler(async (req: AuthRequest, res) => {
   const canvasId = parseInt(req.params.id, 10)
@@ -59,7 +70,7 @@ canvasRouter.get('/:projectId', authenticate, asyncHandler(async (req: AuthReque
     })
   }
 
-  const projectOwnerId = (project as any).owner_id || project.ownerId
+  const projectOwnerId = getProperty(project, 'owner_id', 'ownerId') || project.ownerId
 
   if (projectOwnerId !== req.user!.id) {
     return res.status(403).json({
@@ -104,7 +115,7 @@ canvasRouter.post('/:projectId', authenticate, asyncHandler(async (req: AuthRequ
     })
   }
 
-  const projectOwnerId = (project as any).owner_id || project.ownerId
+  const projectOwnerId = getProperty(project, 'owner_id', 'ownerId') || project.ownerId
 
   if (projectOwnerId !== req.user!.id) {
     return res.status(403).json({
@@ -162,7 +173,7 @@ canvasRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, res
     }
 
     // 使用原始列名 project_id（Drizzle ORM 返回原始列名）
-    const canvasProjectId = (canvas as any).project_id || canvas.projectId
+    const canvasProjectId = getProperty(canvas, 'project_id', 'projectId') || canvas.projectId
 
     const project = await db.query.projects.findFirst({
       where: eq(projects.id, canvasProjectId),
@@ -178,7 +189,7 @@ canvasRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, res
       })
     }
 
-    const projectOwnerId = (project as any).owner_id || project.ownerId
+    const projectOwnerId = getProperty(project, 'owner_id', 'ownerId') || project.ownerId
 
     if (projectOwnerId !== req.user!.id) {
       log('PUT canvas - Access denied', { canvasId, projectOwnerId, userId: req.user!.id })
@@ -262,7 +273,7 @@ canvasRouter.delete('/:id', authenticate, asyncHandler(async (req: AuthRequest, 
   }
 
   // 使用原始列名 project_id（Drizzle ORM 返回原始列名）
-  const canvasProjectId = (canvas as any).project_id || canvas.projectId
+  const canvasProjectId = getProperty(canvas, 'project_id', 'projectId') || canvas.projectId
 
   log('DELETE canvas - Canvas found', { canvasId, projectId: canvasProjectId, canvas: JSON.stringify(canvas) })
 
@@ -283,7 +294,7 @@ canvasRouter.delete('/:id', authenticate, asyncHandler(async (req: AuthRequest, 
       })
     }
 
-    const projectOwnerId = (project as any).owner_id || project.ownerId
+    const projectOwnerId = getProperty(project, 'owner_id', 'ownerId') || project.ownerId
 
     log('DELETE canvas - Checking ownership', { canvasId, projectOwnerId, userId: req.user!.id })
 
@@ -333,7 +344,7 @@ canvasRouter.post('/:id/data', authenticate, asyncHandler(async (req: AuthReques
   }
 
   // 使用原始列名 project_id（Drizzle ORM 返回原始列名）
-  const canvasProjectId = (canvas as any).project_id || canvas.projectId
+  const canvasProjectId = getProperty(canvas, 'project_id', 'projectId') || canvas.projectId
 
   const project = await db.query.projects.findFirst({
     where: eq(projects.id, canvasProjectId),
@@ -346,7 +357,7 @@ canvasRouter.post('/:id/data', authenticate, asyncHandler(async (req: AuthReques
     })
   }
 
-  const projectOwnerId = (project as any).owner_id || project.ownerId
+  const projectOwnerId = getProperty(project, 'owner_id', 'ownerId') || project.ownerId
 
   if (projectOwnerId !== req.user!.id) {
     return res.status(403).json({
@@ -402,7 +413,7 @@ canvasRouter.get(
       })
     }
 
-    const projectOwnerId = (project as any).owner_id || project.ownerId
+    const projectOwnerId = getProperty(project, 'owner_id', 'ownerId') || project.ownerId
 
     if (projectOwnerId !== req.user!.id) {
       return res.status(403).json({
@@ -449,7 +460,7 @@ canvasRouter.post(
       })
     }
 
-    const projectOwnerId = (project as any).owner_id || project.ownerId
+    const projectOwnerId = getProperty(project, 'owner_id', 'ownerId') || project.ownerId
 
     if (projectOwnerId !== req.user!.id) {
       return res.status(403).json({
@@ -505,7 +516,7 @@ canvasRouter.put(
     }
 
     // Use original column name project_id (Drizzle ORM returns original column names)
-    const folderProjectId = (folder as any).project_id || folder.projectId
+    const folderProjectId = getProperty(folder, 'project_id', 'projectId') || folder.projectId
 
     const project = await db.query.projects.findFirst({
       where: eq(projects.id, folderProjectId),
@@ -518,7 +529,7 @@ canvasRouter.put(
       })
     }
 
-    const projectOwnerId = (project as any).owner_id || project.ownerId
+    const projectOwnerId = getProperty(project, 'owner_id', 'ownerId') || project.ownerId
 
     if (projectOwnerId !== req.user!.id) {
       return res.status(403).json({
@@ -571,7 +582,7 @@ canvasRouter.delete(
     }
 
     // Use original column name project_id (Drizzle ORM returns original column names)
-    const folderProjectId = (folder as any).project_id || folder.projectId
+    const folderProjectId = getProperty(folder, 'project_id', 'projectId') || folder.projectId
 
     const project = await db.query.projects.findFirst({
       where: eq(projects.id, folderProjectId),
@@ -584,7 +595,7 @@ canvasRouter.delete(
       })
     }
 
-    const projectOwnerId = (project as any).owner_id || project.ownerId
+    const projectOwnerId = getProperty(project, 'owner_id', 'ownerId') || project.ownerId
 
     if (projectOwnerId !== req.user!.id) {
       return res.status(403).json({

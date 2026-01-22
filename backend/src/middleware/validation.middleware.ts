@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express'
 import { z } from 'zod'
 
-export function validateBody<T>(schema: z.ZodSchema<T>) {
+export function validateBody(schema: z.ZodSchema) {
   return async (req: Request, res: Response, next: NextFunction) => {
     try {
       req.body = await schema.parseAsync(req.body)
@@ -19,10 +19,10 @@ export function validateBody<T>(schema: z.ZodSchema<T>) {
   }
 }
 
-export function validateQuery<T>(schema: z.ZodSchema<T>) {
+export function validateQuery(schema: z.ZodSchema) {
   return async (req: Request, res: Response, next: NextFunction) => {
     try {
-      req.query = await schema.parseAsync(req.query) as any
+      req.query = await schema.parseAsync(req.query)
       next()
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -37,10 +37,10 @@ export function validateQuery<T>(schema: z.ZodSchema<T>) {
   }
 }
 
-export function validateParams<T>(schema: z.ZodSchema<T>) {
+export function validateParams(schema: z.ZodSchema) {
   return async (req: Request, res: Response, next: NextFunction) => {
     try {
-      req.params = await schema.parseAsync(req.params) as any
+      req.params = await schema.parseAsync(req.params)
       next()
     } catch (error) {
       if (error instanceof z.ZodError) {

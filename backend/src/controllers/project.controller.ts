@@ -96,7 +96,7 @@ projectRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, re
     where: eq(projects.id, projectId),
   })
 
-  const projectOwnerId = (project as any).owner_id || project.ownerId
+  const projectOwnerId = getProperty(project, owner_id, ownerId) || project.ownerId
 
   if (!project || projectOwnerId !== req.user!.id) {
     return res.status(403).json({
@@ -150,7 +150,7 @@ projectRouter.delete('/:id', authenticate, asyncHandler(async (req: AuthRequest,
   }
 
   // 使用原始列名 owner_id（Drizzle ORM 返回原始列名）
-  const projectOwnerId = (project as any).owner_id || project.ownerId
+  const projectOwnerId = getProperty(project, owner_id, ownerId) || project.ownerId
 
   if (projectOwnerId !== req.user!.id) {
     return res.status(403).json({
@@ -189,7 +189,7 @@ projectRouter.post(
       where: eq(projects.id, projectId),
     })
 
-    const projectOwnerId = (project as any).owner_id || project.ownerId
+    const projectOwnerId = getProperty(project, owner_id, ownerId) || project.ownerId
 
     if (!project || projectOwnerId !== req.user!.id) {
       return res.status(403).json({
@@ -241,7 +241,7 @@ projectRouter.delete(
       where: eq(projects.id, projectId),
     })
 
-    const projectOwnerId = (project as any).owner_id || project.ownerId
+    const projectOwnerId = getProperty(project, owner_id, ownerId) || project.ownerId
 
     if (!project || projectOwnerId !== req.user!.id) {
       return res.status(403).json({
