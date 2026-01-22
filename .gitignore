@@ -17,6 +17,11 @@ frontend/node_modules/
 backend/dist/
 frontend/dist/
 
+# Test coverage reports
+coverage/
+frontend/coverage/
+backend/coverage/
+
 # Environment variables
 backend/.env
 frontend/.env
