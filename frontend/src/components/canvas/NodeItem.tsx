@@ -984,19 +984,43 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
         >
           {/* Node content */}
           {node.collapsed ? (
-            // 折叠状态 - 只显示标题
-            <div
-              className="w-full h-full flex items-center justify-center px-3 text-sm truncate"
-              style={{
-                fontSize: node.fontSize + 2,
-                textAlign: node.titleAlign || node.textAlign,
-                color: '#1f2937',
-                fontWeight: '600',
-              }}
-              title={node.title?.replace(/<[^>]*>/g, '') || node.content?.replace(/<[^>]*>/g, '')}
-            >
-              {node.title?.replace(/<[^>]*>/g, '') || node.content?.replace(/<[^>]*>/g, '') || (node.type === 'image' ? '双击添加描述' : '双击添加标题')}
-            </div>
+            // 折叠状态 - 只显示标题，支持编辑
+            isEditingTitle ? (
+              <div
+                ref={titleRef}
+                contentEditable
+                suppressContentEditableWarning
+                className="w-full h-full flex items-center px-3 text-sm truncate font-semibold"
+                style={{
+                  fontSize: node.fontSize + 2,
+                  textAlign: node.titleAlign || node.textAlign,
+                  color: '#1f2937',
+                  caretColor: '#1f2937',
+                  outline: 'none',
+                }}
+                onInput={handleInputChange}
+                onKeyDown={(e) => handleKeyDown(e, 'title')}
+                onCompositionStart={handleCompositionStart}
+                onCompositionEnd={handleCompositionEnd}
+                onPaste={handlePaste}
+                onBlur={(e) => handleBlur('title', e)}
+                onMouseDown={(e) => e.stopPropagation()}
+              />
+            ) : (
+              <div
+                className="w-full h-full flex items-center px-3 text-sm truncate cursor-text"
+                style={{
+                  fontSize: node.fontSize + 2,
+                  textAlign: node.titleAlign || node.textAlign,
+                  color: '#1f2937',
+                  fontWeight: '600',
+                }}
+                onDoubleClick={(e) => handleDoubleClick(e, 'title')}
+                title={node.title?.replace(/<[^>]*>/g, '') || node.content?.replace(/<[^>]*>/g, '')}
+              >
+                {node.title?.replace(/<[^>]*>/g, '') || node.content?.replace(/<[^>]*>/g, '') || '双击添加标题'}
+              </div>
+            )
           ) : node.type === 'image' ? (
             // Image Type Logic
             <div className="w-full h-full flex flex-col">
