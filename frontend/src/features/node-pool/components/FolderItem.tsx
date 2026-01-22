@@ -71,13 +71,6 @@ export const FolderItem = memo(function FolderItem({
     }
   }
 
-  const handleStartEdit = (e: React.MouseEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    setEditName(folder.name)
-    onStartEdit?.(folder)
-  }
-
   const handleSaveEdit = async () => {
     if (!editName.trim()) {
       return

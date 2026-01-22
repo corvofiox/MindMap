@@ -8,7 +8,6 @@
 import { useState, useCallback, memo, useRef, useEffect } from 'react'
 import { Trash2, FileText, Image as ImageIcon } from 'lucide-react'
 import { clsx } from 'clsx'
-import type { NodeCard } from '@/types'
 import type { NodeCardItemProps } from '../types/node-pool'
 import { containsHTML, safeHTML } from '@/utils/sanitizeHTML'
 import { Z_INDEX } from '@/constants'
@@ -40,7 +39,7 @@ export const NodeCardItem = memo(function NodeCardItem({
   isDragging,
   isDragOver,
   dragOverPosition,
-  onUse,
+  onUse: _onUse,
   onRemove,
   onSaveName,
   onContextMenu,

@@ -1,8 +1,7 @@
-import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
+import { useEffect, useState, useRef, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useCanvasStore } from '@/store/useCanvasStore'
 import { useProjectsStore } from '@/store/useProjectsStore'
-import { useAuthStore } from '@/store/useAuthStore'
 import { useUIStore } from '@/store/useUIStore'
 import { useNodePoolStore } from '@/features/node-pool/stores/useNodePoolStore'
 import { CanvasToolbar } from '@/components/canvas/CanvasToolbar'
@@ -112,24 +111,6 @@ function findBestPort(node: Node, mouseX: number, mouseY: number): 'top' | 'righ
   if (degrees >= 45 && degrees < 135) return 'bottom'
   if (degrees >= 135 || degrees < -135) return 'left'
   return 'top'
-}
-
-// Helper function to calculate orthogonal path with bend points
-function getOrthogonalPath(
-  fromX: number, fromY: number,
-  toX: number, toY: number,
-  bendPoints: { x: number; y: number }[]
-): { x: number; y: number }[] {
-  return [
-    { x: fromX, y: fromY },
-    ...bendPoints,
-    { x: toX, y: toY }
-  ]
-}
-
-// Helper function to convert points to SVG path string
-function pointsToPath(points: { x: number; y: number }[]): string {
-  return points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ')
 }
 
 // Helper function to calculate optimal bend point position

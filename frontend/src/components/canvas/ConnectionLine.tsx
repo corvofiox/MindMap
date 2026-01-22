@@ -263,7 +263,7 @@ export function ConnectionLine({
       )
     }
     return null
-  }, [conn.id, conn.type, conn.color, conn.width, conn.style, conn.arrowType, conn.bendPoints, fromX, fromY, toX, toY, disableTransition, onClick, onContextMenu, onDoubleClick])
+    }, [conn.id, conn.type, conn.color, conn.width, conn.style, conn.arrowType, conn.bendPoints, fromX, fromY, toX, toY, disableTransition, onClick, onContextMenu, onDoubleClick])
 
   return element
 }

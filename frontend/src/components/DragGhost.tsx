@@ -93,7 +93,7 @@ export function DragGhost() {
     return () => {
       cleanup()
     }
-  }, [dragGhostCard, handleMouseMove, handleClick, handleContextMenu, handleEscape, cleanup])
+  }, [dragGhostCard, dragGhostPosition, handleMouseMove, handleClick, handleContextMenu, handleEscape, cleanup])
 
   if (!dragGhostCard || !isActive || !position) return null
 

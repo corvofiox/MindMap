@@ -5,7 +5,7 @@
  * Handles position adjustment, click outside detection, and keyboard navigation.
  */
 
-import React, { useState, useEffect, useRef, useCallback } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 
 interface UseContextMenuOptions {
   initialPosition: { x: number; y: number }

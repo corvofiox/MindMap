@@ -42,7 +42,7 @@ export function useNodePoolSort(options: UseNodePoolSortOptions = {}): UseNodePo
     }
 
     return grouped
-  }, [enabled, cardsMap, foldersMap, sortBy, sortOrder])
+  }, [enabled, sortBy, sortOrder])
 
   // Get sorted root folders
   const sortedRootFolders = useMemo((): NodePoolFolder[] => {
@@ -148,7 +148,7 @@ function sortCards(cards: NodeCard[], sortBy: NodePoolSortOption, sortOrder: Nod
  * Hook to get the folder tree structure
  */
 export function useFolderTree() {
-  const { foldersMap } = useNodePoolStore()
+  useNodePoolStore() // Keep store subscription for reactivity
 
   const folderTree = useMemo(() => {
     const buildTree = (parentId: number | null): (NodePoolFolder & { children: NodePoolFolder[] })[] => {
@@ -160,7 +160,7 @@ export function useFolderTree() {
     }
 
     return buildTree(null)
-  }, [foldersMap])
+  }, [])
 
   return folderTree
 }

@@ -1,4 +1,4 @@
- import { MousePointer2, Square, Layers, Link, Grid3x3, Undo, Redo, Trash2, ArrowRight, ArrowLeftRight, Minus, Group, Save, Download, Check, Map, Layout, Image as ImageIcon, MinusCircle, MoreHorizontal } from 'lucide-react'
+ import { MousePointer2, Square, Layers, Link, Grid3x3, Undo, Redo, Trash2, ArrowRight, ArrowLeftRight, Minus, Group, Save, Download, Check, Map, Layout, Image as ImageIcon } from 'lucide-react'
   import { useCanvasStore } from '@/store/useCanvasStore'
   import { useUIStore } from '@/store/useUIStore'
   import type { Tool } from '@/types'
@@ -19,9 +19,9 @@ const tools: { id: Tool; icon: typeof MousePointer2; label: string; shortcut: st
 
 const toolSeparators = [1, 2]
 
-  export function CanvasToolbar({ onSave }: CanvasToolbarProps) {
-    const { currentTool, gridVisible, dragMode, minimapVisible, setCurrentTool, toggleGrid, toggleDragMode, toggleMinimap, connectionDirection, setConnectionDirection, connectionStyle, setConnectionStyle, connectionType, setConnectionType, addToast } = useUIStore()
-    const { selectedIds, removeNode, removeConnection, removeGroup, removeDomain, nodes, connections, undo, redo, history, groups, domains, addGroup, updateConnection } = useCanvasStore()
+export function CanvasToolbar({ onSave }: CanvasToolbarProps) {
+  const { currentTool, gridVisible, dragMode, minimapVisible, setCurrentTool, toggleGrid, toggleDragMode, toggleMinimap, connectionDirection, setConnectionDirection, connectionStyle, setConnectionStyle, connectionType, setConnectionType, addToast } = useUIStore()
+  const { selectedIds, removeNode, removeConnection, removeGroup, removeDomain, nodes, undo, redo, history, groups, domains, addGroup } = useCanvasStore()
 
     const [isSaving, setIsSaving] = useState(false)
     const [saveSuccess, setSaveSuccess] = useState(false)

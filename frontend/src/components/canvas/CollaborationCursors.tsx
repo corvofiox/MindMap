@@ -55,7 +55,7 @@ export function CollaborationCursors({ cursors, zoom, panX, panY }: Collaboratio
 
 interface RemoteSelectionProps {
   selections: Map<number, AwarenessState>
-  nodes: Map<string, any>
+  nodes: Map<string, { x: number; y: number; width: number; height: number }>
   zoom: number
   panX: number
   panY: number

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
 import { useCanvasStore } from '@/store/useCanvasStore'
 import { useUIStore } from '@/store/useUIStore'
-import { CANVAS_DEFAULTS, NODE_DEFAULTS, DOMAIN_DEFAULTS, Z_INDEX } from '@/constants'
+import { CANVAS_DEFAULTS, NODE_DEFAULTS, DOMAIN_DEFAULTS } from '@/constants'
 import { screenToCanvas, generateId, clamp } from '@/utils/canvas'
 import { createFabricNode, createFabricGroup, createFabricDomain, createFabricConnection, updateFabricDomainsEditable, snapToGridFabric } from '@/utils/fabric'
 
@@ -13,13 +13,13 @@ interface FabricCanvasProps {
 
 export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null)
-  const canvasRef = useRef<any>(null)
+  const canvasRef = useRef<fabric.Canvas | null>(null)
   const mouseButtonRef = useRef<number | null>(null)
 
   // Domain creation state
   const [isCreatingDomain, setIsCreatingDomain] = useState(false)
   const [domainStartPos, setDomainStartPos] = useState({ x: 0, y: 0 })
-  const [domainPreviewRect, setDomainPreviewRect] = useState<any>(null)
+  const [domainPreviewRect, setDomainPreviewRect] = useState<fabric.Rect | null>(null)
 
   const {
     nodes,
@@ -43,8 +43,8 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
   const { currentTool, domainEditMode, setDomainEditMode } = useUIStore()
 
   // Selection handlers
-  const handleSelectionChanged = useCallback((e: any) => {
-    const selected = e.selected?.map((obj: any) => obj.data?.id).filter(Boolean) || []
+  const handleSelectionChanged = useCallback((e: { selected?: fabric.Object[] }) => {
+    const selected = e.selected?.map((obj) => obj.data?.id).filter(Boolean) || []
     setSelectedIds(selected)
   }, [setSelectedIds])
 
@@ -354,7 +354,7 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
     return () => {
       canvas.dispose()
     }
-  }, [canvasId])
+  }, [canvasId, handleSelectionChanged, handleSelectionCleared, handleObjectMoved, handleObjectScaling, handleMouseWheel, handleMouseDown, handleMouseUp, handleMouseMove, handleDoubleClick])
 
   // Load canvas data from store
   const loadCanvasData = useCallback(() => {

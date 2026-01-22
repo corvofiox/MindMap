@@ -24,7 +24,7 @@ import { clsx } from 'clsx'
 import { useProjectsStore } from '@/store/useProjectsStore'
 import { useUIStore } from '@/store/useUIStore'
 import { useCanvasStore } from '@/store/useCanvasStore'
-import { useNodePoolStore, selectCardsByFolder } from '../stores/useNodePoolStore'
+import { useNodePoolStore } from '../stores/useNodePoolStore'
 import { useNodePoolSort, useFolderTree } from '../hooks/useNodePoolSort'
 import { FolderItem } from './FolderItem'
 import { NodeCardItem } from './NodeCardItem'
@@ -34,29 +34,6 @@ import { ContextMenuErrorBoundary } from './ContextMenuErrorBoundary'
 import { Z_INDEX } from '@/constants'
 import type { NodePoolSortOption, NodePoolSortOrder, Node } from '@/types'
 import type { NodeCard, NodePoolFolder } from '../types/node-pool'
-
-interface NodePoolPanelProps {
-  open: boolean
-}
-
-function SearchHighlighter({ text, query }: { text: string; query: string }) {
-  if (!query.trim() || !text.toLowerCase().includes(query.toLowerCase())) {
-    return <span>{text}</span>
-  }
-
-  const parts = text.split(new RegExp(`(${query})`, 'gi'))
-  return (
-    <span>
-      {parts.map((part, index) =>
-        part.toLowerCase() === query.toLowerCase() ? (
-          <span key={index} className="bg-yellow-200 dark:bg-yellow-800 font-semibold">{part}</span>
-        ) : (
-          <span key={index}>{part}</span>
-        )
-      )}
-    </span>
-  )
-}
 
 /**
  * Main node pool panel component
@@ -94,7 +71,7 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
   const [isDragOverFolder, setIsDragOverFolder] = useState(false)
 
   // Sort functionality
-  const { sortedRootFolders, sortedCardsByFolder, handleReorder } = useNodePoolSort({ sortBy, sortOrder })
+  useNodePoolSort({ sortBy, sortOrder })
   const folderTree = useFolderTree()
 
   // Load node pool data when project changes
