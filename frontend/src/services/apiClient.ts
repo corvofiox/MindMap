@@ -300,7 +300,6 @@ export class ApiClient {
   async put<T>(endpoint: string, data?: any, contentType?: string): Promise<T> {
     const options: RequestInit = {
       method: 'PUT',
-      headers: contentType ? { 'Content-Type': contentType } : {}
     }
 
     // 添加请求体

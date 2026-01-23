@@ -1,10 +1,15 @@
 import { create } from 'zustand'
 import { persist, createJSONStorage } from 'zustand/middleware'
 import { nanoid } from 'nanoid'
-import type { Theme, Tool, DragMode, NodeCard, Toast } from '@/types'
-import { STORAGE_KEYS } from '@/constants'
+import type { Theme, Tool, DragMode, NodeCard, Toast, NodeDefaults } from '@/types'
+import { STORAGE_KEYS, DEFAULT_NODE_DEFAULTS } from '@/constants'
 import { getToastConfig } from '@/config/messageConfig'
 import { setupTheme, applyTheme, initThemeListener } from '@/utils/themeManager'
+import { getNodeDefaults, updateNodeDefaults } from '@/services/api'
+
+const getDefaultNodeDefaults = (): NodeDefaults => DEFAULT_NODE_DEFAULTS
+
+export { getDefaultNodeDefaults }
 
 interface UIState {
   // Theme
@@ -96,7 +101,7 @@ interface UIState {
   isLoading: boolean
   setLoading: (loading: boolean) => void
 
-  // Style Panel
+// Style Panel
   stylePanelOpen: boolean
   selectedType: 'node' | 'connection' | 'domain' | null
   selectedNodeIds: string[]
@@ -104,6 +109,15 @@ interface UIState {
   closeStylePanel: () => void
   setSelectedType: (type: 'node' | 'connection' | 'domain' | null) => void
   setSelectedNodeIds: (ids: string[]) => void
+
+  // Node Defaults
+  nodeDefaultsOpen: boolean
+  setNodeDefaultsOpen: (open: boolean) => void
+  nodeDefaults: NodeDefaults
+  setNodeDefaults: (defaults: NodeDefaults) => void
+  loadNodeDefaults: () => Promise<void>
+  saveNodeDefaults: () => Promise<void>
+  resetNodeDefaults: () => void
 }
 
 
@@ -252,7 +266,7 @@ export const useUIStore = create<UIState>()(
         selectedNodeIds: [],
         openStylePanel: () => set({ stylePanelOpen: true }),
         closeStylePanel: () => set({ stylePanelOpen: false }),
-        setSelectedType: (type) => {
+setSelectedType: (type) => {
           const state = get()
           if (state.stylePanelOpen && state.selectedType !== type) {
             set({ stylePanelOpen: false })
@@ -260,6 +274,46 @@ export const useUIStore = create<UIState>()(
           set({ selectedType: type })
         },
         setSelectedNodeIds: (ids) => set({ selectedNodeIds: ids }),
+
+        // Node Defaults
+        nodeDefaultsOpen: false,
+        setNodeDefaultsOpen: (open) => set({ nodeDefaultsOpen: open }),
+        nodeDefaults: getDefaultNodeDefaults(),
+        setNodeDefaults: (defaults) => set({ nodeDefaults: defaults }),
+        loadNodeDefaults: async () => {
+          try {
+            // 确保 apiClient token 已更新
+            const authStore = await import('@/store/useAuthStore').then(m => m.useAuthStore)
+            const token = authStore.getState().token
+            if (!token) {
+              console.warn('未获取到认证令牌，无法加载节点默认配置')
+              return
+            }
+            
+            // 直接使用 apiClient 实例，确保使用最新的 token
+            const apiModule = await import('@/services/api')
+            const defaults = await apiModule.getNodeDefaults()
+            
+            if (defaults && defaults.textNode && defaults.imageNode) {
+              set({ nodeDefaults: defaults })
+            } else {
+              console.warn('获取到的节点默认配置不完整，使用本地默认值')
+            }
+          } catch (error) {
+            console.error('加载节点默认配置失败:', error)
+            // 显示更友好的错误提示
+            get().addErrorToast('加载节点默认配置失败，将使用本地默认值', '提示')
+          }
+        },
+        saveNodeDefaults: async () => {
+          const { nodeDefaults } = get()
+          try {
+            await updateNodeDefaults(nodeDefaults)
+          } catch (error) {
+            get().addErrorToast('保存节点默认配置失败')
+          }
+        },
+        resetNodeDefaults: () => set({ nodeDefaults: getDefaultNodeDefaults() }),
       }
     },
     {
@@ -272,11 +326,14 @@ export const useUIStore = create<UIState>()(
         dragMode: state.dragMode,
         gridVisible: state.gridVisible,
         minimapVisible: state.minimapVisible,
+        // nodeDefaults 不持久化，始终从服务器获取当前用户的配置
       }),
       onRehydrateStorage: () => (state) => {
         if (state) {
           applyTheme(state.theme)
           initThemeListener()
+          // 不在这里调用 loadNodeDefaults，因为可能 token 还没准备好
+          // 改为在 App.tsx 中，validateToken 成功后调用
         }
       },
     }

@@ -7,7 +7,7 @@ import './index.css'
 ReactDOM.createRoot(document.getElementById('root')!).render(
   // Temporarily disabled StrictMode to debug node positioning issue
   // <React.StrictMode>
-    <BrowserRouter future={{ v7_relativeSplatPath: true }}>
+    <BrowserRouter future={{ v7_relativeSplatPath: true, v7_startTransition: true }}>
       <App />
     </BrowserRouter>
   // </React.StrictMode>,

@@ -7,6 +7,7 @@ import { SettingsDialog } from '../ui/SettingsDialog'
 import { AccountSettingsDialog } from '../ui/AccountSettingsDialog'
 import { ShortcutsDialog } from '../ui/ShortcutsDialog'
 import { SearchPanel } from '../ui/SearchPanel'
+import { NodeDefaultsDialog } from '../ui/NodeDefaultsDialog'
 import { useUIStore } from '@/store/useUIStore'
 import { useAuthStore } from '@/store/useAuthStore'
 
@@ -40,6 +41,7 @@ export function MainLayout() {
       <SettingsDialog />
       <AccountSettingsDialog />
       <ShortcutsDialog />
+      <NodeDefaultsDialog />
       <SearchPanel />
     </div>
   )

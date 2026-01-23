@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import type { User, LoginCredentials, RegisterData } from '@/types'
+import type { User, LoginCredentials, RegisterData, NodeDefaults } from '@/types'
 import * as api from '@/services/api'
 import { loadUIStore } from '@/utils/moduleLoader'
 import { clearAllStorage } from '@/utils/clearStorage'
@@ -82,9 +82,9 @@ export const useAuthStore = create<AuthState>()(
               clearAllStorage()
             }
 
-            localStorage.setItem('mindmap_token', response.token)
             // 更新 apiClient 实例的 token
             api.apiClient.setToken(response.token)
+            localStorage.setItem('mindmap_token', response.token)
 
             // 获取 CSRF token
             try {
@@ -99,6 +99,33 @@ export const useAuthStore = create<AuthState>()(
               isAuthenticated: true,
               isLoading: false,
             })
+
+            // 重置并加载 UI Store 的节点默认配置
+            // 使用异步加载，确保 apiClient token 已完全更新
+            const uiModule = await loadUIStore() as { 
+              getDefaultNodeDefaults: () => NodeDefaults; 
+              useUIStore: {
+                getState: () => {
+                  setState: (state: Partial<{ nodeDefaults: NodeDefaults; nodeDefaultsOpen: boolean }>) => void;
+                  loadNodeDefaults: () => Promise<void>;
+                };
+              } 
+            }
+            
+            // 获取 store 实例
+            const uiStore = uiModule.useUIStore.getState();
+            
+            // 更新节点默认配置
+            uiStore.setState({
+              nodeDefaults: uiModule.getDefaultNodeDefaults(),
+            })
+            
+            // 延迟执行，确保所有状态已更新
+            setTimeout(() => {
+              uiStore.loadNodeDefaults().catch(err => {
+                console.error('Failed to load node defaults after login:', err)
+              })
+            }, 100)
           } catch (error) {
             const errorMessage = error instanceof Error ? error.message : '登录失败'
             set({
@@ -150,6 +177,21 @@ export const useAuthStore = create<AuthState>()(
             localStorage.removeItem('mindmap_token')
             // 更新 apiClient 实例的 token
             api.apiClient.setToken(null)
+            // 重置 UI Store 的节点默认配置
+            const uiModuleLogout = await loadUIStore() as { 
+              getDefaultNodeDefaults: () => NodeDefaults; 
+              useUIStore: {
+                getState: () => {
+                  setState: (state: Partial<{ nodeDefaults: NodeDefaults; nodeDefaultsOpen: boolean }>) => void;
+                  loadNodeDefaults: () => Promise<void>;
+                };
+              } 
+            }
+            const uiStoreLogout = uiModuleLogout.useUIStore.getState();
+            uiStoreLogout.setState({
+              nodeDefaults: uiModuleLogout.getDefaultNodeDefaults(),
+              nodeDefaultsOpen: false,
+            })
             set({
               user: null,
               token: null,

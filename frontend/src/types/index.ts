@@ -72,10 +72,11 @@ export interface Node {
   height: number
   title: string       // 节点标题
   content: string     // 节点文本内容
-  color: string
+  color?: string
   fontSize: number
   textAlign: 'left' | 'center' | 'right'  // 统一对齐（向后兼容）
   titleAlign?: 'left' | 'center' | 'right'  // 标题对齐
+  collapsedTitleAlign?: 'left' | 'center' | 'right'  // 折叠状态标题对齐
   contentAlign?: 'left' | 'center' | 'right'  // 内容对齐
   collapsed: boolean
   locked: boolean
@@ -292,4 +293,27 @@ export interface SearchResult {
   title: string
   preview: string
   score: number
+}
+
+export interface TextNodeDefaults {
+  width: number
+  height: number
+  color: string
+  fontSize: number
+  titleAlign: 'left' | 'center' | 'right'
+  collapsedTitleAlign: 'left' | 'center' | 'right'
+  contentAlign: 'left' | 'center' | 'right'
+}
+
+export interface ImageNodeDefaults {
+  width: number
+  height: number
+  fontSize: number
+  titleAlign: 'left' | 'center' | 'right'
+  collapsedTitleAlign: 'left' | 'center' | 'right'
+}
+
+export type NodeDefaults = {
+  textNode: TextNodeDefaults
+  imageNode: ImageNodeDefaults
 }

@@ -118,6 +118,26 @@ export const BORDER_COLORS = [
   '#f87171',
   '#a78bfa',
 ] as const
+
+export const DEFAULT_NODE_DEFAULTS = {
+  textNode: {
+    width: 200,
+    height: 120,
+    color: '#ffffff',
+    fontSize: 14,
+    titleAlign: 'left' as const,
+    collapsedTitleAlign: 'left' as const,
+    contentAlign: 'left' as const,
+  },
+  imageNode: {
+    width: 200,
+    height: 150,
+    fontSize: 14,
+    titleAlign: 'left' as const,
+    collapsedTitleAlign: 'left' as const,
+  },
+} as const
+
 export const SHORTCUTS = {
   // Canvas
   CANVAS_ZOOM_IN: 'Ctrl+=',

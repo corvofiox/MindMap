@@ -36,6 +36,13 @@ import type { NodePoolSortOption, NodePoolSortOrder, Node } from '@/types'
 import type { NodeCard, NodePoolFolder } from '../types/node-pool'
 
 /**
+ * NodePoolPanel component props
+ */
+interface NodePoolPanelProps {
+  open: boolean;
+}
+
+/**
  * Main node pool panel component
  */
 export function NodePoolPanel({ open }: NodePoolPanelProps) {

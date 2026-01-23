@@ -671,6 +671,7 @@ export function CanvasPage() {
     closeStylePanel,
     openStylePanel,
     addToast,
+    nodeDefaults,
   } = useUIStore()
 
   // Refs to store latest values for global event listeners
@@ -2549,19 +2550,20 @@ export function CanvasPage() {
     const snappedY = dragMode === 'grid' ? Math.round(y / 20) * 20 : y
 
     if (currentTool === 'node') {
-      const nodeWidth = 200
-      const nodeHeight = 120
       const newNode = {
         id: generateId('node'),
-        x: snappedX - nodeWidth / 2,
-        y: snappedY - nodeHeight / 2,
-        width: nodeWidth,
-        height: nodeHeight,
+        x: snappedX - nodeDefaults.textNode.width / 2,
+        y: snappedY - nodeDefaults.textNode.height / 2,
+        width: nodeDefaults.textNode.width,
+        height: nodeDefaults.textNode.height,
         title: '新节点',
         content: '',
-        color: '#ffffff',
-        fontSize: 14,
-        textAlign: 'left' as const,
+        color: nodeDefaults.textNode.color,
+        fontSize: nodeDefaults.textNode.fontSize,
+        textAlign: nodeDefaults.textNode.contentAlign,
+        titleAlign: nodeDefaults.textNode.titleAlign,
+        contentAlign: nodeDefaults.textNode.contentAlign,
+        collapsedTitleAlign: nodeDefaults.textNode.collapsedTitleAlign,
         collapsed: false,
         locked: false,
       }
@@ -2570,19 +2572,18 @@ export function CanvasPage() {
 
       setCurrentTool('select')
     } else if (currentTool === 'image') {
-      const nodeWidth = 200
-      const nodeHeight = 150
       const newNode: Node = {
         id: generateId('node'),
-        x: snappedX - nodeWidth / 2,
-        y: snappedY - nodeHeight / 2,
-        width: nodeWidth,
-        height: nodeHeight,
+        x: snappedX - nodeDefaults.imageNode.width / 2,
+        y: snappedY - nodeDefaults.imageNode.height / 2,
+        width: nodeDefaults.imageNode.width,
+        height: nodeDefaults.imageNode.height,
         title: '',
         content: '',
-        color: '#ffffff',
-        fontSize: 14,
-        textAlign: 'left' as const,
+        fontSize: nodeDefaults.imageNode.fontSize,
+        textAlign: nodeDefaults.imageNode.titleAlign,
+        titleAlign: nodeDefaults.imageNode.titleAlign,
+        collapsedTitleAlign: nodeDefaults.imageNode.collapsedTitleAlign,
         collapsed: false,
         locked: false,
         type: 'image',
@@ -2592,7 +2593,7 @@ export function CanvasPage() {
 
       setCurrentTool('select')
     }
-  }, [isEditingConnectionEndpoint, editingConnectionId, editingEndpoint, connections, updateConnection, nodes, panX, panY, zoom, containerRef, currentTool, isDragging, setSelectedIds, dragMode, addNode, setCurrentTool, findBestPort, stylePanelOpen, closeStylePanel])
+  }, [isEditingConnectionEndpoint, editingConnectionId, editingEndpoint, connections, updateConnection, nodes, panX, panY, zoom, containerRef, currentTool, isDragging, setSelectedIds, dragMode, addNode, setCurrentTool, findBestPort, stylePanelOpen, closeStylePanel, nodeDefaults])
 
   // Handle mouse wheel for zooming and panning
   const handleWheel = (e: React.WheelEvent) => {

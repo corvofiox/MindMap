@@ -12,6 +12,7 @@ import type {
   NodeGroup,
   Domain,
   Connection,
+  NodeDefaults,
 } from '@/types'
 import { API_ENDPOINTS } from '@/constants'
 import { apiClient } from './apiClient'
@@ -282,4 +283,13 @@ export async function updateNodePoolFolder(id: number, data: Partial<NodePoolFol
 
 export async function deleteNodePoolFolder(id: number): Promise<void> {
   return await apiClient.delete<void>(`/api/projects/node-pool-folders/${id}`)
+}
+
+// User Settings API
+export async function getNodeDefaults(): Promise<NodeDefaults> {
+  return await apiClient.get<NodeDefaults>('/api/users/settings/node-defaults')
+}
+
+export async function updateNodeDefaults(data: NodeDefaults): Promise<NodeDefaults> {
+  return await apiClient.put<NodeDefaults>('/api/users/settings/node-defaults', data)
 }

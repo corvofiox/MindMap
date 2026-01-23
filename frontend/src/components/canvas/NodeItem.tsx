@@ -225,6 +225,20 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
     }
   }, [editingField, node.title, node.content, textToSafeHtml])
 
+  const getTitleAlign = useCallback((node: Node, isCollapsed: boolean) => {
+    if (isCollapsed) {
+      const align = node.collapsedTitleAlign || node.titleAlign || node.textAlign
+      return {
+        textAlign: align,
+        justifyContent: align === 'left' ? 'flex-start' :
+                        align === 'center' ? 'center' : 'flex-end'
+      }
+    }
+    return {
+      textAlign: node.titleAlign || node.textAlign,
+      justifyContent: undefined
+    }
+  }, [])
 
   // 清理 HTML 内容，保留基本的文字格式标签
   const cleanHtmlContent = useCallback((html: string): string => {
@@ -597,6 +611,11 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
           field = node.title && node.title.trim() !== '' ? 'content' : 'title'
         }
 
+        // 对于图片节点，只允许编辑title，不允许编辑content
+        if (node.type === 'image' && field === 'content') {
+          return
+        }
+
         // Save current editing content before switching fields
         if (isEditingTitle) {
           saveTitle()
@@ -611,7 +630,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
         }))
       }
     },
-    [node.locked, node.title, isEditingTitle, isEditingContent, saveTitle, saveContent]
+    [node.locked, node.title, node.type, isEditingTitle, isEditingContent, saveTitle, saveContent]
   )
 
   // 中文输入法开始
@@ -945,7 +964,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
             top: 16,
             width: localSize.width,
             height: localSize.height,
-            backgroundColor: node.color,
+            backgroundColor: node.type === 'image' ? '#ffffff' : node.color,
             overflow: 'visible',
             display: 'flex',
             flexDirection: 'column',
@@ -977,7 +996,14 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
               e.stopPropagation()
             }
           }}
-          onDoubleClick={(e) => handleDoubleClick(e)}
+          onDoubleClick={(e) => {
+            // 对于图片节点，根元素双击只允许编辑title
+            if (node.type === 'image') {
+              handleDoubleClick(e, 'title')
+            } else {
+              handleDoubleClick(e)
+            }
+          }}
           onContextMenu={handleContextMenu}
           onMouseEnter={() => setIsHovered(true)}
           onMouseLeave={() => setIsHovered(false)}
@@ -993,7 +1019,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
                 className="w-full h-full flex items-center px-3 text-sm truncate font-semibold"
                 style={{
                   fontSize: node.fontSize + 2,
-                  textAlign: node.titleAlign || node.textAlign,
+                  ...getTitleAlign(node, true),
                   color: '#1f2937',
                   caretColor: '#1f2937',
                   outline: 'none',
@@ -1011,7 +1037,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
                 className="w-full h-full flex items-center px-3 text-sm truncate cursor-text"
                 style={{
                   fontSize: node.fontSize + 2,
-                  textAlign: node.titleAlign || node.textAlign,
+                  ...getTitleAlign(node, true),
                   color: '#1f2937',
                   fontWeight: '600',
                 }}
@@ -1026,7 +1052,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
             <div className="w-full h-full flex flex-col">
               {/* Title Area */}
               <div
-                className="flex-shrink-0 px-4 py-2.5 border-b border-gray-100 dark:border-gray-700/50"
+                className="flex-shrink-0 px-4 py-2.5 border-b border-gray-100 dark:border-gray-700/50 bg-white dark:bg-gray-800"
                 style={{ minHeight: '36px' }}
               >
                 {isEditingTitle ? (

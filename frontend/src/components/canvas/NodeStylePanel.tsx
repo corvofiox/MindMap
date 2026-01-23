@@ -94,38 +94,40 @@ export function NodeStylePanel() {
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-4 space-y-6">
-        {/* Background Color */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-            背景颜色
-          </label>
-          <div className="grid grid-cols-7 gap-2">
-            {NODE_COLORS.map((color) => (
-              <button
-                key={color}
-                className={`w-10 h-10 rounded-lg border-2 transition-all ${
-                  firstNode.color === color
-                    ? 'border-blue-500 scale-110'
-                    : 'border-gray-300 dark:border-gray-600 hover:scale-105'
-                }`}
-                style={{ backgroundColor: color }}
-                onClick={() => handleUpdate({ color })}
+        {/* Background Color - Only for non-image nodes */}
+        {firstNode.type !== 'image' && (
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              背景颜色
+            </label>
+            <div className="grid grid-cols-7 gap-2">
+              {NODE_COLORS.map((color) => (
+                <button
+                  key={color}
+                  className={`w-10 h-10 rounded-lg border-2 transition-all ${
+                    firstNode.color === color
+                      ? 'border-blue-500 scale-110'
+                      : 'border-gray-300 dark:border-gray-600 hover:scale-105'
+                  }`}
+                  style={{ backgroundColor: color }}
+                  onClick={() => handleUpdate({ color })}
+                />
+              ))}
+            </div>
+            {/* Custom color input */}
+            <div className="mt-2 flex items-center gap-2">
+              <input
+                type="color"
+                value={firstNode.color || '#ffffff'}
+                onChange={(e) => handleUpdate({ color: e.target.value })}
+                className="w-10 h-10 rounded cursor-pointer"
               />
-            ))}
+              <span className="text-xs text-gray-500 dark:text-gray-400">
+                自定义颜色
+              </span>
+            </div>
           </div>
-          {/* Custom color input */}
-          <div className="mt-2 flex items-center gap-2">
-            <input
-              type="color"
-              value={firstNode.color}
-              onChange={(e) => handleUpdate({ color: e.target.value })}
-              className="w-10 h-10 rounded cursor-pointer"
-            />
-            <span className="text-xs text-gray-500 dark:text-gray-400">
-              自定义颜色
-            </span>
-          </div>
-        </div>
+        )}
 
         {/* Title Alignment */}
         <div>
@@ -150,6 +152,36 @@ export function NodeStylePanel() {
             <button
               className={`flex-1 py-2 px-3 rounded-lg border border-gray-300 dark:border-gray-600 transition-colors ${(firstNode.titleAlign || firstNode.textAlign) === 'right' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400' : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'}`}
               onClick={() => handleUpdate({ titleAlign: 'right' })}
+              title="右对齐"
+            >
+              右对齐
+            </button>
+          </div>
+        </div>
+
+        {/* Collapsed Title Alignment */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+            折叠状态标题对齐
+          </label>
+          <div className="flex gap-2">
+            <button
+              className={`flex-1 py-2 px-3 rounded-lg border border-gray-300 dark:border-gray-600 transition-colors ${(firstNode.collapsedTitleAlign || firstNode.titleAlign || firstNode.textAlign) === 'left' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400' : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'}`}
+              onClick={() => handleUpdate({ collapsedTitleAlign: 'left' })}
+              title="左对齐"
+            >
+              左对齐
+            </button>
+            <button
+              className={`flex-1 py-2 px-3 rounded-lg border border-gray-300 dark:border-gray-600 transition-colors ${(firstNode.collapsedTitleAlign || firstNode.titleAlign || firstNode.textAlign) === 'center' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400' : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'}`}
+              onClick={() => handleUpdate({ collapsedTitleAlign: 'center' })}
+              title="居中对齐"
+            >
+              居中
+            </button>
+            <button
+              className={`flex-1 py-2 px-3 rounded-lg border border-gray-300 dark:border-gray-600 transition-colors ${(firstNode.collapsedTitleAlign || firstNode.titleAlign || firstNode.textAlign) === 'right' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400' : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'}`}
+              onClick={() => handleUpdate({ collapsedTitleAlign: 'right' })}
               title="右对齐"
             >
               右对齐

@@ -23,8 +23,21 @@ export async function authenticate(req: AuthRequest, res: Response, next: NextFu
     }
 
     const env = getValidatedEnv()
-    const decoded = jwt.verify(token, env.JWT_SECRET) as {
-      userId: number
+    let decoded
+    
+    try {
+      decoded = jwt.verify(token, env.JWT_SECRET) as {
+        userId: number
+      }
+    } catch (jwtError) {
+      if (jwtError instanceof jwt.TokenExpiredError) {
+        return res.status(401).json({ success: false, error: '令牌已过期' })
+      } else if (jwtError instanceof jwt.JsonWebTokenError) {
+        return res.status(401).json({ success: false, error: '无效的令牌签名' })
+      } else {
+        console.error('JWT verification error:', jwtError)
+        return res.status(401).json({ success: false, error: '令牌格式错误' })
+      }
     }
 
     const user = await db.query.users.findFirst({
@@ -32,7 +45,7 @@ export async function authenticate(req: AuthRequest, res: Response, next: NextFu
     })
 
     if (!user) {
-      return res.status(401).json({ success: false, error: '无效的令牌' })
+      return res.status(401).json({ success: false, error: '用户不存在，令牌无效' })
     }
 
     req.user = {
@@ -44,7 +57,8 @@ export async function authenticate(req: AuthRequest, res: Response, next: NextFu
 
     next()
   } catch (error) {
-    return res.status(401).json({ success: false, error: '无效的令牌' })
+    console.error('Authentication error:', error)
+    return res.status(401).json({ success: false, error: '认证失败，请重新登录' })
   }
 }
 

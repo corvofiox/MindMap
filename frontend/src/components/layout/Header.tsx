@@ -79,6 +79,7 @@ export function Header() {
           }
           items={[
             { label: '应用设置', action: () => useUIStore.getState().setSettingsOpen(true) },
+            { label: '节点设置', action: () => useUIStore.getState().setNodeDefaultsOpen(true) },
             { label: '快捷键', action: () => useUIStore.getState().setShortcutsOpen(true) },
           ]}
         />

@@ -40,7 +40,7 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
     setHoveredId,
   } = useCanvasStore()
 
-  const { currentTool, domainEditMode, setDomainEditMode } = useUIStore()
+  const { currentTool, domainEditMode, setDomainEditMode, nodeDefaults } = useUIStore()
 
   // Selection handlers
   const handleSelectionChanged = useCallback((e: { selected?: fabric.Object[] }) => {
@@ -157,13 +157,15 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
         id: generateId('node'),
         x,
         y,
-        width: NODE_DEFAULTS.WIDTH,
-        height: NODE_DEFAULTS.HEIGHT,
+        width: nodeDefaults?.textNode?.width ?? 200,
+        height: nodeDefaults?.textNode?.height ?? 120,
         title: '',
         content: '',
-        color: NODE_DEFAULTS.COLOR,
-        fontSize: NODE_DEFAULTS.FONT_SIZE,
-        textAlign: NODE_DEFAULTS.TEXT_ALIGN,
+        color: nodeDefaults?.textNode?.color ?? '#ffffff',
+        fontSize: nodeDefaults?.textNode?.fontSize ?? 14,
+        textAlign: nodeDefaults?.textNode?.contentAlign ?? 'center',
+        titleAlign: nodeDefaults?.textNode?.titleAlign ?? 'left',
+        collapsedTitleAlign: nodeDefaults?.textNode?.collapsedTitleAlign ?? 'left',
         collapsed: false,
         locked: false,
       }

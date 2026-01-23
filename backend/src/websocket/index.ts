@@ -9,7 +9,7 @@ import { logError } from '../utils/logger.js'
 
 // WebSocket connection rate limiting
 const wsConnectionRates = new Map<string, { count: number; resetTime: number }>()
-const WS_MAX_CONNECTIONS_PER_MINUTE = 10
+const WS_MAX_CONNECTIONS_PER_MINUTE = 100 // Relaxed for development: 100 connections per minute
 const WS_WINDOW_MS = 60 * 1000 // 1 minute
 
 function checkWsRateLimit(ip: string): boolean {

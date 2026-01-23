@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import bcrypt from 'bcrypt'
 import { db, scheduleSave } from '../database/connection.js'
-import { users, projects, projectMembers, groupMembers, nodeCards, files, canvases, folders, canvasRecycleBin, nodePoolFolders } from '../database/schema.js'
+import { users, projects, projectMembers, groupMembers, nodeCards, files, canvases, folders, canvasRecycleBin, nodePoolFolders, settings } from '../database/schema.js'
 import { eq, and } from 'drizzle-orm'
 import { authenticate, type AuthRequest } from '../middleware/auth.middleware.js'
 import { asyncHandler } from '../middleware/error.middleware.js'
@@ -275,5 +275,90 @@ userRouter.delete('/account', authenticate, asyncHandler(async (req: AuthRequest
   res.json({
     success: true,
     data: { message: 'Account deleted successfully' },
+  })
+}))
+
+const DEFAULT_NODE_DEFAULTS = {
+  textNode: {
+    width: 200,
+    height: 120,
+    color: '#ffffff',
+    fontSize: 14,
+    titleAlign: 'left',
+    contentAlign: 'left',
+  },
+  imageNode: {
+    width: 200,
+    height: 150,
+    fontSize: 14,
+    titleAlign: 'left',
+  },
+}
+
+// Get node defaults
+userRouter.get('/settings/node-defaults', authenticate, asyncHandler(async (req: AuthRequest, res) => {
+  const userId = req.user!.id
+
+  const result = await db
+    .select()
+    .from(settings)
+    .where(and(eq(settings.userId, userId), eq(settings.key, 'node_defaults')))
+
+  const nodeDefaults = { ...DEFAULT_NODE_DEFAULTS }
+
+  if (result.length > 0 && result[0].value) {
+    try {
+      const parsed = JSON.parse(result[0].value)
+      if (parsed.textNode) nodeDefaults.textNode = { ...DEFAULT_NODE_DEFAULTS.textNode, ...parsed.textNode }
+      if (parsed.imageNode) nodeDefaults.imageNode = { ...DEFAULT_NODE_DEFAULTS.imageNode, ...parsed.imageNode }
+    } catch (e) {
+      console.warn('Failed to parse node defaults:', e)
+    }
+  }
+
+  res.json({
+    success: true,
+    data: nodeDefaults,
+  })
+}))
+
+// Update node defaults
+userRouter.put('/settings/node-defaults', authenticate, asyncHandler(async (req: AuthRequest, res) => {
+  const userId = req.user!.id
+  const { textNode, imageNode } = req.body
+
+  if (!textNode || !imageNode) {
+    return res.status(400).json({
+      success: false,
+      error: 'textNode and imageNode are required',
+    })
+  }
+
+  const value = JSON.stringify({ textNode, imageNode })
+
+  const existing = await db
+    .select()
+    .from(settings)
+    .where(and(eq(settings.userId, userId), eq(settings.key, 'node_defaults')))
+
+  if (existing.length > 0) {
+    await db
+      .update(settings)
+      .set({ value })
+      .where(eq(settings.id, existing[0].id))
+  } else {
+    await db.insert(settings).values({
+      userId,
+      key: 'node_defaults',
+      value,
+      category: 'node',
+    })
+  }
+
+  scheduleSave()
+
+  res.json({
+    success: true,
+    data: { textNode, imageNode },
   })
 }))

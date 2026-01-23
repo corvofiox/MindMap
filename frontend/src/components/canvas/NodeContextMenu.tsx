@@ -144,7 +144,7 @@ export function NodeContextMenu({ nodeId, position, onClose }: NodeContextMenuPr
       name: node.title || node.content || '未命名',
       content: JSON.stringify(node),
       type: node.type || 'text',
-      color: node.color,
+      color: node.type === 'image' ? undefined : node.color,
       tags: null,
       createdBy: 1,
       sortOrder: 0,
@@ -442,23 +442,22 @@ export function NodeContextMenu({ nodeId, position, onClose }: NodeContextMenuPr
 
           <MenuDivider />
 
-          {/* Colors */}
-          <div ref={colorSectionRef}>
-            <button
-              className="w-full px-3 py-2.5 text-left flex items-center gap-3 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 transition-all duration-150 group"
-              onClick={() => setColorSectionOpen(!colorSectionOpen)}
-            >
-              <Palette className="w-4 h-4 text-gray-500 dark:text-gray-400" />
-              <span className="flex-1 text-sm font-medium">颜色设置</span>
-              <ChevronRight
-                className={`w-4 h-4 text-gray-400 transition-transform duration-150 ${colorSectionOpen ? 'rotate-90' : ''}`}
-              />
-            </button>
+          {node.type !== 'image' && (
+            <div ref={colorSectionRef}>
+              <button
+                className="w-full px-3 py-2.5 text-left flex items-center gap-3 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 transition-all duration-150 group"
+                onClick={() => setColorSectionOpen(!colorSectionOpen)}
+              >
+                <Palette className="w-4 h-4 text-gray-500 dark:text-gray-400" />
+                <span className="flex-1 text-sm font-medium">颜色设置</span>
+                <ChevronRight
+                  className={`w-4 h-4 text-gray-400 transition-transform duration-150 ${colorSectionOpen ? 'rotate-90' : ''}`}
+                />
+              </button>
 
-            {colorSectionOpen && (
-              <div className="mt-2 space-y-3 animate-in slide-in-from-top-2 duration-150">
-                {/* Background Colors */}
-                {node.type !== 'image' && (
+              {colorSectionOpen && (
+                <div className="mt-2 space-y-3 animate-in slide-in-from-top-2 duration-150">
+                  {/* Background Colors */}
                   <div>
                     <div className="px-1 pb-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">
                       背景颜色
@@ -479,10 +478,10 @@ export function NodeContextMenu({ nodeId, position, onClose }: NodeContextMenuPr
                       ))}
                     </div>
                   </div>
-                )}
-              </div>
-            )}
-          </div>
+                </div>
+              )}
+            </div>
+          )}
 
           <MenuDivider />
 

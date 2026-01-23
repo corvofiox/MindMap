@@ -5,16 +5,16 @@ import rateLimit from 'express-rate-limit'
  * Adjust these values based on your application's needs
  */
 const RATE_LIMIT_CONFIG = {
-  // General API rate limit: 100 requests per 15 minutes
+  // General API rate limit: 1000 requests per 15 minutes (relaxed for development)
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100,
+  max: 1000,
 
-  // Auth endpoints (login, register): Stricter limits
+  // Auth endpoints (login, register): Stricter limits (relaxed for development)
   authWindowMs: 15 * 60 * 1000, // 15 minutes
-  authMax: 5, // 5 attempts per 15 minutes
+  authMax: 100, // 100 attempts per 15 minutes (relaxed for development)
 
-  // WebSocket connections: Limit connections per IP
-  wsMax: 10,
+  // WebSocket connections: Limit connections per IP (relaxed for development)
+  wsMax: 100,
   wsWindowMs: 60 * 1000, // 1 minute
 } as const
 

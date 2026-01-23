@@ -163,6 +163,22 @@ vi.mock('@/constants', () => ({
     TOAST: 120,
     DRAG_GHOST: 1000,
   },
+  DEFAULT_NODE_DEFAULTS: {
+    textNode: {
+      width: 200,
+      height: 120,
+      color: '#ffffff',
+      fontSize: 14,
+      titleAlign: 'left',
+      contentAlign: 'left',
+    },
+    imageNode: {
+      width: 200,
+      height: 150,
+      fontSize: 14,
+      titleAlign: 'left',
+    },
+  },
 }))
 
 // Mock Fabric.js global object

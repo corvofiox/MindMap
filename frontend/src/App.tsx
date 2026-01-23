@@ -17,11 +17,19 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
 function App() {
   const { isAuthenticated, validateToken } = useAuthStore()
-  const { initializeTheme } = useUIStore()
+  const { initializeTheme, loadNodeDefaults } = useUIStore()
 
+  // 初始化时验证 token，并在成功后加载节点默认配置
   useEffect(() => {
-    validateToken()
-  }, [validateToken])
+    const init = async () => {
+      const isValid = await validateToken()
+      // 只有在 token 验证成功后才加载节点默认配置
+      if (isValid) {
+        loadNodeDefaults()
+      }
+    }
+    init()
+  }, [validateToken, loadNodeDefaults])
 
   useEffect(() => {
     initializeTheme()
