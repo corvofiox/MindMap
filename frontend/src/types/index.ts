@@ -157,6 +157,10 @@ export interface NodeCard {
   description?: string | null
   thumbnail?: string | null
   sortOrder: number
+  // Internal unique identifier for drag operations (not persisted)
+  _uniqueId?: string
+  // Internal deletion flag for temporary cards (not persisted)
+  _markedForDeletion?: boolean
 }
 
 // Node Pool Folder types

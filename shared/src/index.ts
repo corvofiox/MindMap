@@ -1,4 +1,5 @@
 // Shared types between frontend and backend
+export * from './constants'
 
 export interface APIResponse<T = any> {
   success: boolean
@@ -122,3 +123,6 @@ export interface AwarenessState {
   selection?: string[]
   isEditing?: string
 }
+
+// Re-export constants
+export * from './constants'

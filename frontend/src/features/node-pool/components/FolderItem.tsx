@@ -84,7 +84,9 @@ export const FolderItem = memo(function FolderItem({
     try {
       await onSaveEdit?.(folder.id, editName.trim())
     } catch (error) {
-      console.error('Failed to save folder name:', error)
+      import('@/utils/logger').then(({ logger }) => {
+        logger.error('Failed to save folder name', error)
+      })
     }
   }
 

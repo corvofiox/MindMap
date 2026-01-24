@@ -5,6 +5,8 @@ import { users, projects, projectMembers, groupMembers, nodeCards, files, canvas
 import { eq, and } from 'drizzle-orm'
 import { authenticate, type AuthRequest } from '../middleware/auth.middleware.js'
 import { asyncHandler } from '../middleware/error.middleware.js'
+import { logError } from '../utils/logger.js'
+import { SHARED_NODE_DEFAULTS, NODE_DEFAULTS_VALIDATION } from '@shared/constants'
 
 export const userRouter = Router()
 
@@ -278,23 +280,6 @@ userRouter.delete('/account', authenticate, asyncHandler(async (req: AuthRequest
   })
 }))
 
-const DEFAULT_NODE_DEFAULTS = {
-  textNode: {
-    width: 200,
-    height: 120,
-    color: '#ffffff',
-    fontSize: 14,
-    titleAlign: 'left',
-    contentAlign: 'left',
-  },
-  imageNode: {
-    width: 200,
-    height: 150,
-    fontSize: 14,
-    titleAlign: 'left',
-  },
-}
-
 // Get node defaults
 userRouter.get('/settings/node-defaults', authenticate, asyncHandler(async (req: AuthRequest, res) => {
   const userId = req.user!.id
@@ -304,15 +289,15 @@ userRouter.get('/settings/node-defaults', authenticate, asyncHandler(async (req:
     .from(settings)
     .where(and(eq(settings.userId, userId), eq(settings.key, 'node_defaults')))
 
-  const nodeDefaults = { ...DEFAULT_NODE_DEFAULTS }
+  const nodeDefaults = { ...SHARED_NODE_DEFAULTS }
 
   if (result.length > 0 && result[0].value) {
     try {
       const parsed = JSON.parse(result[0].value)
-      if (parsed.textNode) nodeDefaults.textNode = { ...DEFAULT_NODE_DEFAULTS.textNode, ...parsed.textNode }
-      if (parsed.imageNode) nodeDefaults.imageNode = { ...DEFAULT_NODE_DEFAULTS.imageNode, ...parsed.imageNode }
+      if (parsed.textNode) nodeDefaults.textNode = { ...SHARED_NODE_DEFAULTS.textNode, ...parsed.textNode }
+      if (parsed.imageNode) nodeDefaults.imageNode = { ...SHARED_NODE_DEFAULTS.imageNode, ...parsed.imageNode }
     } catch (e) {
-      console.warn('Failed to parse node defaults:', e)
+      logError('Failed to parse node defaults', e)
     }
   }
 
@@ -331,6 +316,68 @@ userRouter.put('/settings/node-defaults', authenticate, asyncHandler(async (req:
     return res.status(400).json({
       success: false,
       error: 'textNode and imageNode are required',
+    })
+  }
+
+  const validation = NODE_DEFAULTS_VALIDATION
+
+  if (
+    textNode.width < validation.textNode.minWidth ||
+    textNode.width > validation.textNode.maxWidth
+  ) {
+    return res.status(400).json({
+      success: false,
+      error: `textNode width must be between ${validation.textNode.minWidth} and ${validation.textNode.maxWidth}`,
+    })
+  }
+
+  if (
+    textNode.height < validation.textNode.minHeight ||
+    textNode.height > validation.textNode.maxHeight
+  ) {
+    return res.status(400).json({
+      success: false,
+      error: `textNode height must be between ${validation.textNode.minHeight} and ${validation.textNode.maxHeight}`,
+    })
+  }
+
+  if (
+    textNode.fontSize < validation.textNode.minFontSize ||
+    textNode.fontSize > validation.textNode.maxFontSize
+  ) {
+    return res.status(400).json({
+      success: false,
+      error: `textNode fontSize must be between ${validation.textNode.minFontSize} and ${validation.textNode.maxFontSize}`,
+    })
+  }
+
+  if (
+    imageNode.width < validation.imageNode.minWidth ||
+    imageNode.width > validation.imageNode.maxWidth
+  ) {
+    return res.status(400).json({
+      success: false,
+      error: `imageNode width must be between ${validation.imageNode.minWidth} and ${validation.imageNode.maxWidth}`,
+    })
+  }
+
+  if (
+    imageNode.height < validation.imageNode.minHeight ||
+    imageNode.height > validation.imageNode.maxHeight
+  ) {
+    return res.status(400).json({
+      success: false,
+      error: `imageNode height must be between ${validation.imageNode.minHeight} and ${validation.imageNode.maxHeight}`,
+    })
+  }
+
+  if (
+    imageNode.fontSize < validation.imageNode.minFontSize ||
+    imageNode.fontSize > validation.imageNode.maxFontSize
+  ) {
+    return res.status(400).json({
+      success: false,
+      error: `imageNode fontSize must be between ${validation.imageNode.minFontSize} and ${validation.imageNode.maxFontSize}`,
     })
   }
 

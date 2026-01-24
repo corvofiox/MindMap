@@ -210,7 +210,7 @@ export const useProjectsStore = create<ProjectsState>()(
         createCanvas: async (projectId, data) => {
           // 生成临时ID
           const tempId = -Date.now()
-          
+
           // 创建临时画布对象，添加tempId字段用于跟踪
           const tempCanvas: Canvas = {
             id: tempId,
@@ -224,34 +224,34 @@ export const useProjectsStore = create<ProjectsState>()(
             folderId: data.folderId || null,
             thumbnail: null
           }
-          
+
           // 乐观更新：立即添加到本地状态
           set((state) => ({
             canvases: [...state.canvases, tempCanvas],
           }))
-          
+
           try {
             // 后台执行API请求
             const canvas = await api.createCanvas(projectId, data)
-            
+
             // 用真实数据替换临时画布，并保留tempId字段用于跟踪
             const updatedCanvas = {
               ...canvas,
               tempId: tempId
             }
-            
+
             // 用真实数据替换临时画布
             set((state) => ({
               canvases: state.canvases.map(c => c.id === tempId ? updatedCanvas : c),
             }))
-            
+
             return updatedCanvas
           } catch (error) {
             // API失败：从本地状态移除临时画布
             set((state) => ({
               canvases: state.canvases.filter(c => c.id !== tempId),
             }))
-            
+
             handleError(error, '创建画布失败')
             return null
           }
@@ -275,15 +275,15 @@ export const useProjectsStore = create<ProjectsState>()(
 
         deleteCanvas: async (id) => {
           const state = get()
-          
+
           // 保存原始状态用于回滚
           const originalCanvases = state.canvases
-          
+
           // 乐观更新：立即从本地状态移除画布
           set((state) => ({
             canvases: state.canvases.filter((c) => c.id !== id),
           }))
-          
+
           try {
             // 后台执行API请求
             await api.deleteCanvas(id)
@@ -292,7 +292,7 @@ export const useProjectsStore = create<ProjectsState>()(
             set((state) => ({
               canvases: originalCanvases,
             }))
-            
+
             handleError(error, '删除画布失败')
           }
         },
@@ -327,7 +327,7 @@ export const useProjectsStore = create<ProjectsState>()(
         createFolder: async (projectId, data) => {
           // 生成临时ID
           const tempId = -Date.now()
-          
+
           // 创建临时文件夹对象
           const tempFolder = {
             id: tempId,
@@ -338,16 +338,16 @@ export const useProjectsStore = create<ProjectsState>()(
             parentId: data.parentId || null,
             children: []
           }
-          
+
           // 乐观更新：立即添加到本地状态
           set((state) => ({
             folders: [...state.folders, tempFolder],
           }))
-          
+
           try {
             // 后台执行API请求
             const folder = await api.createFolder(projectId, data)
-            
+
             // 用真实数据替换临时文件夹
             set((state) => ({
               folders: state.folders.map(f => f.id === tempId ? folder : f),
@@ -357,7 +357,7 @@ export const useProjectsStore = create<ProjectsState>()(
             set((state) => ({
               folders: state.folders.filter(f => f.id !== tempId),
             }))
-            
+
             handleError(error, '创建文件夹失败')
           }
         },
@@ -378,7 +378,7 @@ export const useProjectsStore = create<ProjectsState>()(
 
         deleteFolder: async (id) => {
           const state = get()
-          
+
           // 收集所有要删除的文件夹ID（包括子文件夹）
           const folderIdsToDelete = new Set<number>()
           const queue: number[] = [id]
@@ -393,17 +393,17 @@ export const useProjectsStore = create<ProjectsState>()(
               queue.push(child.id)
             }
           }
-          
+
           // 保存原始状态用于回滚
           const originalFolders = state.folders
           const originalCanvases = state.canvases
-          
+
           // 乐观更新：立即从本地状态移除文件夹和相关画布
           set((state) => ({
             folders: state.folders.filter((f) => !folderIdsToDelete.has(f.id)),
             canvases: state.canvases.filter((c) => !folderIdsToDelete.has(c.folderId ?? null)),
           }))
-          
+
           try {
             // 后台执行API请求
             await api.deleteFolder(id)
@@ -413,7 +413,7 @@ export const useProjectsStore = create<ProjectsState>()(
               folders: originalFolders,
               canvases: originalCanvases,
             }))
-            
+
             handleError(error, '删除文件夹失败')
           }
         },
@@ -421,7 +421,7 @@ export const useProjectsStore = create<ProjectsState>()(
         addToNodePool: async (projectId, data) => {
           // 生成临时ID
           const tempId = -Date.now()
-          
+
           // 创建临时节点卡片对象
           const tempCard = {
             id: tempId,
@@ -430,28 +430,28 @@ export const useProjectsStore = create<ProjectsState>()(
             createdAt: new Date().toISOString(),
             useCount: 0
           }
-          
+
           // 乐观更新：立即添加到本地状态
           set((state) => ({
             nodePool: [...state.nodePool, tempCard],
           }))
-          
+
           try {
             // 后台执行API请求
             const card = await api.addToNodePool(projectId, data)
-            
+
             // 用真实数据替换临时卡片
             set((state) => ({
               nodePool: state.nodePool.map(c => c.id === tempId ? card : c),
             }))
-            
+
             return card
           } catch (error) {
             // API失败：从本地状态移除临时卡片
             set((state) => ({
               nodePool: state.nodePool.filter(c => c.id !== tempId),
             }))
-            
+
             handleError(error, '添加到节点池失败')
             throw error
           }
@@ -459,15 +459,15 @@ export const useProjectsStore = create<ProjectsState>()(
 
         removeFromNodePool: async (id) => {
           const state = get()
-          
+
           // 保存原始状态用于回滚
           const originalNodePool = state.nodePool
-          
+
           // 乐观更新：立即从本地状态移除节点卡片
           set((state) => ({
             nodePool: state.nodePool.filter((c) => c.id !== id),
           }))
-          
+
           try {
             // 后台执行API请求
             await api.removeFromNodePool(id)
@@ -476,7 +476,7 @@ export const useProjectsStore = create<ProjectsState>()(
             set((state) => ({
               nodePool: originalNodePool,
             }))
-            
+
             handleError(error, '从节点池移除失败')
           }
         },

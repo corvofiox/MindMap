@@ -20,6 +20,7 @@ import {
 import { useCanvasStore } from '@/store/useCanvasStore'
 import { useUIStore } from '@/store/useUIStore'
 import { useProjectsStore } from '@/store/useProjectsStore'
+import { useAuthStore } from '@/store/useAuthStore'
 import { useNodePoolStore } from '@/features/node-pool/stores/useNodePoolStore'
 import { uploadImage } from '@/services/api'
 import { NODE_COLORS, Z_INDEX } from '@/constants'
@@ -34,7 +35,8 @@ export function NodeContextMenu({ nodeId, position, onClose }: NodeContextMenuPr
   const { nodes, updateNode, removeNode, duplicateNode } = useCanvasStore()
   const { openStylePanel, setSelectedNodeIds, setSelectedType, addToast } = useUIStore()
   const { currentProject } = useProjectsStore()
-  const { setCards, cardsMap, addCard } = useNodePoolStore()
+  const { user } = useAuthStore()
+  const { addCard } = useNodePoolStore()
 
   const menuRef = useRef<HTMLDivElement>(null)
   const colorSectionRef = useRef<HTMLDivElement>(null)
@@ -146,20 +148,19 @@ export function NodeContextMenu({ nodeId, position, onClose }: NodeContextMenuPr
       type: node.type || 'text',
       color: node.type === 'image' ? undefined : node.color,
       tags: null,
-      createdBy: 1,
+      createdBy: user?.id || 1,
       sortOrder: 0,
+      thumbnail: node.type === 'image' ? node.imageUrl : undefined,
     }
 
-    addCard(currentProject.id, cardData)
-      .then((card) => {
-        setCards([...cardsMap.values(), card])
-        addToast({ type: 'success', title: '已添加到节点池', message: '节点已添加到节点池' })
-      })
-      .catch((error) => {
-        addToast({ type: 'error', title: '添加失败', message: error instanceof Error ? error.message : '未知错误' })
-      })
-
     onClose()
+
+    try {
+      await addCard(currentProject.id, cardData)
+      addToast({ type: 'success', title: '已添加到节点池', message: '节点已添加到节点池' })
+    } catch (error) {
+      addToast({ type: 'error', title: '添加失败', message: error instanceof Error ? error.message : '未知错误' })
+    }
   }
 
   const handleReplaceImage = async () => {

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useUIStore } from '@/store/useUIStore'
 import { NODE_COLORS, Z_INDEX, DEFAULT_NODE_DEFAULTS } from '@/constants'
+import { NODE_DEFAULTS_VALIDATION } from '@shared/constants'
 import type { NodeDefaults, TextNodeDefaults, ImageNodeDefaults } from '@/types'
 import { X, Loader2 } from 'lucide-react'
 
@@ -37,7 +38,7 @@ export function NodeDefaultsDialog() {
   const handleSave = async () => {
     // 先更新本地状态和关闭对话框
     setIsSaving(true)
-    setNodeDefaults(tempDefaults as unknown as Parameters<typeof setNodeDefaults>[0])
+    setNodeDefaults(tempDefaults)
     setNodeDefaultsOpen(false)
 
     // 后台异步保存
@@ -58,6 +59,14 @@ export function NodeDefaultsDialog() {
 
   const currentDefaults = activeTab === 'text' ? tempDefaults.textNode : tempDefaults.imageNode
   const handleUpdate = activeTab === 'text' ? handleUpdateText : handleUpdateImage
+
+  const validateAndParseInt = (value: string, min: number, max: number): number => {
+    const parsed = parseInt(value, 10)
+    if (isNaN(parsed)) {
+      return min
+    }
+    return Math.max(min, Math.min(max, parsed))
+  }
 
   return (
     <div
@@ -266,7 +275,17 @@ export function NodeDefaultsDialog() {
                 min="10"
                 max="36"
                 value={currentDefaults.fontSize}
-                onChange={(e) => handleUpdate({ fontSize: parseInt(e.target.value) })}
+                onChange={(e) => handleUpdate({
+                  fontSize: validateAndParseInt(
+                    e.target.value,
+                    activeTab === 'text'
+                      ? NODE_DEFAULTS_VALIDATION.textNode.minFontSize
+                      : NODE_DEFAULTS_VALIDATION.imageNode.minFontSize,
+                    activeTab === 'text'
+                      ? NODE_DEFAULTS_VALIDATION.textNode.maxFontSize
+                      : NODE_DEFAULTS_VALIDATION.imageNode.maxFontSize
+                  )
+                })}
                 className="flex-1"
               />
               <span className="text-sm font-medium text-gray-700 dark:text-gray-300 w-12 text-center">
@@ -287,7 +306,17 @@ export function NodeDefaultsDialog() {
                   min="100"
                   max="1000"
                   value={currentDefaults.width}
-                  onChange={(e) => handleUpdate({ width: parseInt(e.target.value) || 100 })}
+                  onChange={(e) => handleUpdate({
+                    width: validateAndParseInt(
+                      e.target.value,
+                      activeTab === 'text'
+                        ? NODE_DEFAULTS_VALIDATION.textNode.minWidth
+                        : NODE_DEFAULTS_VALIDATION.imageNode.minWidth,
+                      activeTab === 'text'
+                        ? NODE_DEFAULTS_VALIDATION.textNode.maxWidth
+                        : NODE_DEFAULTS_VALIDATION.imageNode.maxWidth
+                    )
+                  })}
                   className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                 />
               </div>
@@ -298,7 +327,17 @@ export function NodeDefaultsDialog() {
                   min="60"
                   max="1000"
                   value={currentDefaults.height}
-                  onChange={(e) => handleUpdate({ height: parseInt(e.target.value) || 60 })}
+                  onChange={(e) => handleUpdate({
+                    height: validateAndParseInt(
+                      e.target.value,
+                      activeTab === 'text'
+                        ? NODE_DEFAULTS_VALIDATION.textNode.minHeight
+                        : NODE_DEFAULTS_VALIDATION.imageNode.minHeight,
+                      activeTab === 'text'
+                        ? NODE_DEFAULTS_VALIDATION.textNode.maxHeight
+                        : NODE_DEFAULTS_VALIDATION.imageNode.maxHeight
+                    )
+                  })}
                   className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                 />
               </div>

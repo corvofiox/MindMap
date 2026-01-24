@@ -6,6 +6,12 @@ const STORAGE_KEYS = {
   CANVAS_CACHE_PREFIX: 'mindmap_canvas_cache_',
 } as const
 
+function logWarning(message: string) {
+  if (import.meta.env.DEV) {
+    console.warn(`[WARN] ${message}`)
+  }
+}
+
 export function clearAllStorage(): void {
   if (typeof window === 'undefined') return
 
@@ -24,7 +30,7 @@ export function clearAllStorage(): void {
       }
     }
   } catch {
-    console.warn('Failed to clear localStorage')
+    logWarning('Failed to clear localStorage')
   }
 }
 
@@ -36,7 +42,7 @@ export function clearAuthStorage(): void {
     window.localStorage.removeItem(STORAGE_KEYS.AUTH)
     window.localStorage.removeItem(STORAGE_KEYS.PROJECTS)
   } catch {
-    console.warn('Failed to clear auth storage')
+    logWarning('Failed to clear auth storage')
   }
 }
 
@@ -52,6 +58,6 @@ export function clearCanvasCache(): void {
       }
     }
   } catch {
-    console.warn('Failed to clear canvas cache')
+    logWarning('Failed to clear canvas cache')
   }
 }

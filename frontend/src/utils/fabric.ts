@@ -1,12 +1,13 @@
 import type { Node, NodeGroup, Domain, Connection } from '@/types'
 import { NODE_DEFAULTS, GROUP_DEFAULTS } from '@/constants'
+import { logger } from './logger'
 
 // Get fabric from global scope with type safety
 const fabric = (globalThis as unknown as { fabric?: any }).fabric
 
 // Ensure fabric is loaded
 if (!fabric) {
-  console.error('Fabric.js is not loaded')
+  logger.error('Fabric.js is not loaded')
 }
 
 /**

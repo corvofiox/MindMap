@@ -6,6 +6,7 @@ import { STORAGE_KEYS, DEFAULT_NODE_DEFAULTS } from '@/constants'
 import { getToastConfig } from '@/config/messageConfig'
 import { setupTheme, applyTheme, initThemeListener } from '@/utils/themeManager'
 import { getNodeDefaults, updateNodeDefaults } from '@/services/api'
+import { logger } from '@/utils/logger'
 
 const getDefaultNodeDefaults = (): NodeDefaults => DEFAULT_NODE_DEFAULTS
 
@@ -286,21 +287,21 @@ setSelectedType: (type) => {
             const authStore = await import('@/store/useAuthStore').then(m => m.useAuthStore)
             const token = authStore.getState().token
             if (!token) {
-              console.warn('未获取到认证令牌，无法加载节点默认配置')
+              logger.warn('未获取到认证令牌，无法加载节点默认配置')
               return
             }
-            
+
             // 直接使用 apiClient 实例，确保使用最新的 token
             const apiModule = await import('@/services/api')
             const defaults = await apiModule.getNodeDefaults()
-            
+
             if (defaults && defaults.textNode && defaults.imageNode) {
               set({ nodeDefaults: defaults })
             } else {
-              console.warn('获取到的节点默认配置不完整，使用本地默认值')
+              logger.warn('获取到的节点默认配置不完整，使用本地默认值')
             }
           } catch (error) {
-            console.error('加载节点默认配置失败:', error)
+            logger.error('加载节点默认配置失败', error)
             // 显示更友好的错误提示
             get().addErrorToast('加载节点默认配置失败，将使用本地默认值', '提示')
           }

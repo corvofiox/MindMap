@@ -711,9 +711,15 @@ export function CanvasPage() {
           y: canvasCenterY - (nodeData.height || 120) / 2,
         }
         addNode(newNode)
-        addToast({ type: 'success', title: '复制成功', message: '节点已复制到画布中央' })
+
+        // Remove from pool after adding to canvas (Move operation)
+        // Using direct store access to avoid adding dependency to useEffect
+        const { removeCard } = useNodePoolStore.getState()
+        removeCard(card.id)
+
+        addToast({ type: 'success', title: '移动成功', message: '节点已移动到画布' })
       } catch (error) {
-        addToast({ type: 'error', title: '复制失败', message: '无法解析节点数据' })
+        addToast({ type: 'error', title: '移动失败', message: '无法解析节点数据' })
       }
     }
 
@@ -1147,7 +1153,9 @@ export function CanvasPage() {
       }
     } catch (error) {
       // Log thumbnail generation errors for debugging
-      console.error('Thumbnail generation error:', error)
+      import('@/utils/logger').then(({ logger }) => {
+        logger.error('Thumbnail generation error', error)
+      })
     }
   }, [])
 
@@ -2644,7 +2652,7 @@ export function CanvasPage() {
     if (!cardData || !containerRef.current) return
 
     try {
-      const card = JSON.parse(cardData) as NodeCard
+      const draggedCard = JSON.parse(cardData) as NodeCard & { _uniqueId?: string }
       const rect = containerRef.current.getBoundingClientRect()
 
       // Calculate drop position in canvas coordinates
@@ -2653,26 +2661,46 @@ export function CanvasPage() {
       const canvasX = (mouseX - panX) / zoom
       const canvasY = (mouseY - panY) / zoom
 
-      // Parse node data from card content
-      const nodeData = JSON.parse(card.content)
-      const newNode = {
-        ...nodeData,
-        id: `${nodeData.id}-pool-${Date.now()}`,
-        x: canvasX - (nodeData.width || 200) / 2,
-        y: canvasY - (nodeData.height || 120) / 2,
-      }
-      addNode(newNode)
+      // 使用唯一标识符从节点池中查找对应的卡片
+      const { useCard: poolUseCard, cardsMap } = useNodePoolStore.getState()
 
-      // Remove from both stores immediately as it's "consumed"
-      const { removeFromNodePool } = useProjectsStore.getState()
-      const { removeCard } = useNodePoolStore.getState()
-      await Promise.all([
-        removeFromNodePool(card.id),
-        removeCard(card.id)
-      ])
+      // 通过唯一标识符查找真实的卡片
+      let realCard: NodeCard | undefined
+      if (draggedCard._uniqueId) {
+        // 使用唯一标识符查找
+        for (const [id, card] of cardsMap) {
+          const cardUniqueId = `card-${card.id}-${card.createdAt}`
+          if (cardUniqueId === draggedCard._uniqueId) {
+            realCard = card
+            break
+          }
+        }
+      }
+
+      // 如果找不到，使用原始ID（向后兼容）
+      if (!realCard) {
+        realCard = cardsMap.get(draggedCard.id)
+      }
+
+      if (!realCard) {
+        addToast({ type: 'error', title: '节点未找到', message: '无法在节点池中找到对应的卡片' })
+        return
+      }
+
+      // 使用找到的真实卡片
+      await poolUseCard(realCard, (nodeData) => {
+        const newNode = {
+          ...nodeData,
+          id: `${nodeData.id}-pool-${Date.now()}`,
+          x: canvasX - (nodeData.width || 200) / 2,
+          y: canvasY - (nodeData.height || 120) / 2,
+        }
+        addNode(newNode)
+      })
+
       addToast({ type: 'success', title: '节点已取出', message: '卡片已从池中取出到画布' })
     } catch (error) {
-      // Error handled by toast
+      addToast({ type: 'error', title: '使用节点失败', message: error instanceof Error ? error.message : '未知错误' })
     }
   }
 

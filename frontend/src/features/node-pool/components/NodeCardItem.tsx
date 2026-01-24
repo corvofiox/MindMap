@@ -20,13 +20,15 @@ function SearchHighlighter({ text, query }: { text: string; query: string }) {
   const parts = text.split(new RegExp(`(${query})`, 'gi'))
   return (
     <span>
-      {parts.map((part, index) =>
-        part.toLowerCase() === query.toLowerCase() ? (
-          <span key={index} className="bg-yellow-200 dark:bg-yellow-800 font-semibold rounded px-0.5">{containsHTML(part) ? <span dangerouslySetInnerHTML={{ __html: safeHTML(part) }} /> : part}</span>
+      {parts.map((part, index) => {
+        const isMatch = part.toLowerCase() === query.toLowerCase()
+        const uniqueKey = `${index}-${isMatch ? 'match' : 'text'}`
+        return isMatch ? (
+          <span key={uniqueKey} className="bg-yellow-200 dark:bg-yellow-800 font-semibold rounded px-0.5">{containsHTML(part) ? <span dangerouslySetInnerHTML={{ __html: safeHTML(part) }} /> : part}</span>
         ) : (
-          <span key={index}>{containsHTML(part) ? <span dangerouslySetInnerHTML={{ __html: safeHTML(part) }} /> : part}</span>
+          <span key={uniqueKey}>{containsHTML(part) ? <span dangerouslySetInnerHTML={{ __html: safeHTML(part) }} /> : part}</span>
         )
-      )}
+      })}
     </span>
   )
 }
@@ -47,6 +49,10 @@ export const NodeCardItem = memo(function NodeCardItem({
   onTogglePreview,
   searchQuery = '',
 }: NodeCardItemProps & { searchQuery?: string }) {
+  if ((card as any)._markedForDeletion) {
+    return null
+  }
+
   const [isEditing, setIsEditing] = useState(false)
   const [editName, setEditName] = useState(card.name)
   const [previewPosition, setPreviewPosition] = useState({ top: 0 })
@@ -84,10 +90,10 @@ export const NodeCardItem = memo(function NodeCardItem({
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     if (!mouseDownPos.current) return
-    
+
     const dx = Math.abs(e.clientX - mouseDownPos.current.x)
     const dy = Math.abs(e.clientY - mouseDownPos.current.y)
-    
+
     if (dx > 5 || dy > 5) {
       hasMoved.current = true
     }
@@ -158,18 +164,18 @@ export const NodeCardItem = memo(function NodeCardItem({
     try {
       const nodeData = JSON.parse(card.content)
       return {
-        type: nodeData.type || 'text',
+        type: nodeData.type || card.type || 'text',
         title: nodeData.title || card.name,
         content: nodeData.content || '',
-        imageUrl: nodeData.imageUrl || null,
+        imageUrl: card.thumbnail || nodeData.imageUrl || null,
         color: nodeData.color || card.color,
       }
     } catch {
       return {
-        type: 'text',
+        type: card.type || 'text',
         title: card.name,
         content: card.content,
-        imageUrl: null,
+        imageUrl: card.thumbnail || null,
         color: card.color,
       }
     }
@@ -267,7 +273,7 @@ export const NodeCardItem = memo(function NodeCardItem({
               zIndex: Z_INDEX.CONTEXT_MENU,
             }}
           >
-            <div 
+            <div
               className="bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-gray-200 dark:border-gray-700 p-4 w-80"
               onClick={(e) => e.stopPropagation()}
             >
@@ -287,22 +293,22 @@ export const NodeCardItem = memo(function NodeCardItem({
                   className="ml-2 p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M18 6 6 18"/>
-                    <path d="m6 6 12 12"/>
+                    <path d="M18 6 6 18" />
+                    <path d="m6 6 12 12" />
                   </svg>
                 </button>
               </div>
-              
+
               {contentData.imageUrl && (
                 <div className="mb-3 rounded-lg overflow-hidden bg-gray-100 dark:bg-gray-900">
-                  <img 
-                    src={contentData.imageUrl} 
+                  <img
+                    src={contentData.imageUrl}
                     alt={contentData.title}
                     className="w-full max-h-64 object-contain"
                   />
                 </div>
               )}
-              
+
               {contentData.content && (
                 <div className="text-sm text-gray-600 dark:text-gray-400 break-words max-h-48 overflow-y-auto prose prose-sm dark:prose-invert max-w-none">
                   {containsHTML(contentData.content) ? (
@@ -312,7 +318,7 @@ export const NodeCardItem = memo(function NodeCardItem({
                   )}
                 </div>
               )}
-              
+
               <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700 flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
                 <span>类型: {contentData.type}</span>
                 <span>添加于 {new Date(card.createdAt).toLocaleDateString()}</span>

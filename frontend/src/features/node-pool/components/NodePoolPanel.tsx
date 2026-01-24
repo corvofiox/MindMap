@@ -10,7 +10,7 @@
  * - Optimized performance with Map lookups
  */
 
-import { useState, useCallback, useMemo, useEffect } from 'react'
+import { useState, useCallback, useMemo, useEffect, Fragment } from 'react'
 import {
   Plus,
   Search,
@@ -23,6 +23,7 @@ import {
 import { clsx } from 'clsx'
 import { useProjectsStore } from '@/store/useProjectsStore'
 import { useUIStore } from '@/store/useUIStore'
+import { useAuthStore } from '@/store/useAuthStore'
 import { useCanvasStore } from '@/store/useCanvasStore'
 import { useNodePoolStore } from '../stores/useNodePoolStore'
 import { useNodePoolSort, useFolderTree } from '../hooks/useNodePoolSort'
@@ -47,21 +48,15 @@ interface NodePoolPanelProps {
  */
 export function NodePoolPanel({ open }: NodePoolPanelProps) {
   const { currentProject } = useProjectsStore()
+  const { user } = useAuthStore()
   const { selectedIds, addNode } = useCanvasStore()
   const { addToast, setDragGhost } = useUIStore()
 
-  // Node pool store
-  const {
-    cardsMap,
-    foldersMap,
-    updateCard,
-    updateFolder,
-    removeCard,
-    toggleFolderCollapsed,
-    addFolder,
-    addCard,
-    loadNodePool,
-  } = useNodePoolStore()
+  // Node pool store - 使用selector确保响应式更新
+  const cardsMap = useNodePoolStore(state => state.cardsMap)
+  const foldersMap = useNodePoolStore(state => state.foldersMap)
+  const pendingCardIds = useNodePoolStore(state => state.pendingCardIds)
+  const { updateCard, updateFolder, removeCard, toggleFolderCollapsed, addFolder, addCard, loadNodePool } = useNodePoolStore()
 
   // Local state
   const [searchQuery, setSearchQuery] = useState('')
@@ -108,8 +103,9 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
         type: node.type || 'text',
         color: node.color,
         tags: null,
-        createdBy: 1,
+        createdBy: user?.id || 1,
         sortOrder: 0,
+        thumbnail: node.type === 'image' ? (node as any).imageUrl : undefined,
       })
 
       addToast({ type: 'success', title: '已添加到节点池', message: '节点已添加到节点池' })
@@ -121,22 +117,17 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
   // Handle use card from pool
   const handleUseCard = useCallback(async (card: NodeCard) => {
     try {
-      const nodeData = JSON.parse(card.content)
-      const newNode = {
-        ...nodeData,
-        id: `${nodeData.id}-pool-${Date.now()}`,
-        x: nodeData.x + 50,
-        y: nodeData.y + 50,
-      }
-      addNode(newNode)
+      const { useCard: poolUseCard } = useNodePoolStore.getState()
 
-      await removeCard(card.id)
+      await poolUseCard(card, (node) => {
+        addNode(node)
+      })
 
       addToast({ type: 'success', title: '节点已取出', message: '卡片已从池中取出到画布' })
     } catch (error) {
-      addToast({ type: 'error', title: '使用节点失败', message: '无法解析节点数据' })
+      addToast({ type: 'error', title: '使用节点失败', message: error instanceof Error ? error.message : '未知错误' })
     }
-  }, [addNode, removeCard, addToast])
+  }, [addNode, addToast])
 
   // Handle remove card
   const handleRemoveCard = useCallback(async (id: number) => {
@@ -266,7 +257,10 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
 
   // Handle move card to folder
   const handleMoveCardToFolder = useCallback((card: NodeCard, folderId: number | null) => {
-    // 使用乐观更新，立即返回
+    const currentCardsMap = useNodePoolStore.getState().cardsMap
+    if (!currentCardsMap.has(card.id)) {
+      return
+    }
     updateCard(card.id, { folderId })
   }, [updateCard])
 
@@ -274,10 +268,10 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
   const handleFolderDrop = useCallback((e: React.DragEvent, folder: NodePoolFolder) => {
     e.preventDefault()
     e.stopPropagation()
-    
+
     const cardData = e.dataTransfer.getData('application/nodepool-card')
     const canvasNodeData = e.dataTransfer.getData('application/canvas-node')
-    
+
     if (cardData) {
       const card = JSON.parse(cardData) as NodeCard
       handleMoveCardToFolder(card, folder.id)
@@ -291,26 +285,27 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
         type: node.type || 'text',
         color: node.color,
         tags: null,
-        createdBy: 1,
+        createdBy: user?.id || 1,
         sortOrder: 0,
         folderId: folder.id,
+        thumbnail: node.type === 'image' ? (node as any).imageUrl : undefined,
       }).then(() => {
         addToast({ type: 'success', title: '已添加到节点池', message: '节点已添加到节点池' })
       }).catch(error => {
         addToast({ type: 'error', title: '添加失败', message: error instanceof Error ? error.message : '未知错误' })
       })
     }
-  }, [handleMoveCardToFolder, addToast, currentProject, addCard])
+  }, [handleMoveCardToFolder, addToast, currentProject, addCard, user])
 
   // Handle drop on root (move to root folder)
   const handleRootDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault()
     e.stopPropagation()
-    
+
     setIsRootDragOver(false)
     const cardData = e.dataTransfer.getData('application/nodepool-card')
     const canvasNodeData = e.dataTransfer.getData('application/canvas-node')
-    
+
     if (cardData) {
       const card = JSON.parse(cardData) as NodeCard
       handleMoveCardToFolder(card, null)
@@ -324,16 +319,17 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
         type: node.type || 'text',
         color: node.color,
         tags: null,
-        createdBy: 1,
+        createdBy: user?.id || 1,
         sortOrder: 0,
         folderId: null,
+        thumbnail: node.type === 'image' ? (node as any).imageUrl : undefined,
       }).then(() => {
         addToast({ type: 'success', title: '已添加到节点池', message: '节点已添加到节点池' })
       }).catch(error => {
         addToast({ type: 'error', title: '添加失败', message: error instanceof Error ? error.message : '未知错误' })
       })
     }
-  }, [handleMoveCardToFolder, addToast, currentProject, addCard])
+  }, [handleMoveCardToFolder, addToast, currentProject, addCard, user])
 
   // Handle drag over root
   const handleRootDragOver = useCallback((e: React.DragEvent) => {
@@ -355,6 +351,9 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
     if (!searchQuery.trim()) {
       const result = new Map<number | null, NodeCard[]>()
       cardsMap.forEach((card) => {
+        if ((card as any)._markedForDeletion) return
+        // 只过滤临时卡片（负数id），真实卡片（正数id）不需要检查pendingCardIds
+        if (card.id < 0 && !pendingCardIds.has(card.id)) return
         const folderId = card.folderId || null
         if (!result.has(folderId)) {
           result.set(folderId, [])
@@ -368,6 +367,10 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
     const result = new Map<number | null, NodeCard[]>()
 
     cardsMap.forEach((card: NodeCard) => {
+      if ((card as any)._markedForDeletion) return
+      // 只过滤临时卡片（负数id），真实卡片（正数id）不需要检查pendingCardIds
+      if (card.id < 0 && !pendingCardIds.has(card.id)) return
+
       const name = card.name.toLowerCase()
       let content = ''
 
@@ -389,7 +392,7 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
     })
 
     return result
-  }, [cardsMap, searchQuery])
+  }, [cardsMap, pendingCardIds, searchQuery])
 
   // Get folders that have matching cards
   const filteredFolderIds = useMemo(() => {
@@ -639,7 +642,11 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
             )}
 
             {/* Render filtered folder tree */}
-            {filteredFolderTree.map((folder) => renderFolder(folder, 0))}
+            {filteredFolderTree.map((folder) => (
+              <Fragment key={folder.id}>
+                {renderFolder(folder, 0)}
+              </Fragment>
+            ))}
 
             {/* Root cards */}
             {filteredCardsByFolder.get(null)?.map((card) => (

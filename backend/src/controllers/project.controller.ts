@@ -320,7 +320,7 @@ projectRouter.post(
       })
     }
 
-    const { name, content, type, color, tags, image_url } = req.body
+    const { name, content, type, color, tags, image_url, thumbnail } = req.body
 
     // Verify project exists
     const project = await db.query.projects.findFirst({
@@ -343,7 +343,7 @@ projectRouter.post(
         type: type || 'text',
         color: color || '#ffffff',
         tags: tags || null,
-        thumbnail: image_url || null,
+        thumbnail: thumbnail || image_url || null,
         createdBy: req.user!.id,
       })
       .returning()
@@ -660,14 +660,19 @@ projectRouter.delete(
       })
     }
 
-    // Unlink nodes from this folder
-    await db
-      .update(nodeCards)
-      .set({ folderId: null })
-      .where(eq(nodeCards.folderId, folderId))
+    // Wrap in transaction for atomicity
+    await db.transaction(async (tx) => {
+      // Unlink nodes from this folder
+      await tx
+        .update(nodeCards)
+        .set({ folderId: null })
+        .where(eq(nodeCards.folderId, folderId))
 
-    // Delete folder
-    await db.delete(nodePoolFolders).where(eq(nodePoolFolders.id, folderId))
+      // Delete folder
+      await tx.delete(nodePoolFolders).where(eq(nodePoolFolders.id, folderId))
+    })
+
+    scheduleSave()
 
     res.json({
       success: true,

@@ -25,19 +25,61 @@ export interface DragState {
 }
 
 /**
- * Node Pool Store state
+ * Operation types for queue system
  */
-export interface NodePoolStore {
-  /** Map of cards for O(1) lookup */
-  cardsMap: Map<number, NodeCard>
-  /** Map of folders for O(1) lookup */
-  foldersMap: Map<number, NodePoolFolder>
-  /** Current drag state */
-  dragState: DragState
-  /** Loading state */
-  isLoading: boolean
-  /** Error message */
-  error: string | null
+export type OperationType = 'add' | 'remove' | 'update'
+
+/**
+ * Operation status tracking
+ */
+export type OperationStatus = 'pending' | 'processing' | 'completed' | 'failed'
+
+/**
+ * Operation interface for queue management
+ */
+export interface Operation {
+  id: string
+  type: OperationType
+  status: OperationStatus
+  cardId: number
+  realCardId: number | null
+  timestamp: number
+  retryCount: number
+  data?: Partial<NodeCard>
+}
+
+/**
+ * Temporary card for optimistic updates
+ */
+export interface TemporaryCard {
+  card: NodeCard
+  operationId: string
+  status: 'creating' | 'created' | 'deleting' | 'deleted'
+  realCardId: number | null
+}
+
+ /**
+  * Node Pool Store state
+  */
+ export interface NodePoolStore {
+   /** Map of cards for O(1) lookup */
+   cardsMap: Map<number, NodeCard>
+   /** Map of folders for O(1) lookup */
+   foldersMap: Map<number, NodePoolFolder>
+   /** Current drag state */
+   dragState: DragState
+   /** Loading state */
+   isLoading: boolean
+   /** Error message */
+   error: string | null
+   /** IDs of cards currently being added (pending) */
+   pendingCardIds: Set<number>
+   /** Operation queue for serializing async operations */
+   operationQueue: Map<string, Operation>
+   /** Temporary cards management for optimistic updates */
+   temporaryCards: Map<number, TemporaryCard>
+   /** IDs of operations currently being processed */
+   processingOperations: Set<string>
 
   // Card actions
   getCard: (id: number) => NodeCard | undefined
@@ -46,6 +88,7 @@ export interface NodePoolStore {
   addCard: (projectId: number, data: Omit<NodeCard, 'id' | 'createdAt' | 'useCount'>) => Promise<NodeCard>
   updateCard: (id: number, data: Partial<NodeCard>) => Promise<void>
   removeCard: (id: number) => Promise<void>
+  useCard: (card: NodeCard, addNodeToCanvas: (node: any) => void) => Promise<void>
   reorderCards: (updates: Array<{ id: number; sortOrder: number }>) => Promise<void>
 
   // Folder actions

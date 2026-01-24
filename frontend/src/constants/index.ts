@@ -1,3 +1,5 @@
+import { SHARED_NODE_DEFAULTS, type NodeDefaults } from '@shared/constants'
+
 // API endpoints
 export const API_ENDPOINTS = {
   // Auth
@@ -119,24 +121,9 @@ export const BORDER_COLORS = [
   '#a78bfa',
 ] as const
 
-export const DEFAULT_NODE_DEFAULTS = {
-  textNode: {
-    width: 200,
-    height: 120,
-    color: '#ffffff',
-    fontSize: 14,
-    titleAlign: 'left' as const,
-    collapsedTitleAlign: 'left' as const,
-    contentAlign: 'left' as const,
-  },
-  imageNode: {
-    width: 200,
-    height: 150,
-    fontSize: 14,
-    titleAlign: 'left' as const,
-    collapsedTitleAlign: 'left' as const,
-  },
-} as const
+// Re-export shared constants
+export const DEFAULT_NODE_DEFAULTS: NodeDefaults = SHARED_NODE_DEFAULTS
+export { type NodeDefaults as NodeDefaultsType } from '@shared/constants'
 
 export const SHORTCUTS = {
   // Canvas
