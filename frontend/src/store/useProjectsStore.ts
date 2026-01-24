@@ -401,7 +401,7 @@ export const useProjectsStore = create<ProjectsState>()(
           // 乐观更新：立即从本地状态移除文件夹和相关画布
           set((state) => ({
             folders: state.folders.filter((f) => !folderIdsToDelete.has(f.id)),
-            canvases: state.canvases.filter((c) => !folderIdsToDelete.has(c.folderId!)),
+            canvases: state.canvases.filter((c) => !folderIdsToDelete.has(c.folderId ?? null)),
           }))
           
           try {

@@ -98,11 +98,11 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
     const nodeId = selectedIds[0]
     const nodes = useCanvasStore.getState().nodes
     const node = nodes.get(nodeId)
-    if (!node) return
+    if (!node || !currentProject) return
 
     try {
-      await addCard(currentProject!.id, {
-        projectId: currentProject!.id,
+      await addCard(currentProject.id, {
+        projectId: currentProject.id,
         name: node.title || node.content || '未命名',
         content: JSON.stringify(node),
         type: node.type || 'text',
@@ -281,11 +281,11 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
     if (cardData) {
       const card = JSON.parse(cardData) as NodeCard
       handleMoveCardToFolder(card, folder.id)
-    } else if (canvasNodeData) {
+    } else if (canvasNodeData && currentProject) {
       // 添加新卡片到节点池
       const node = JSON.parse(canvasNodeData) as unknown as Node
-      addCard(currentProject!.id, {
-        projectId: currentProject!.id,
+      addCard(currentProject.id, {
+        projectId: currentProject.id,
         name: node.title || node.content || '未命名',
         content: JSON.stringify(node),
         type: node.type || 'text',
@@ -314,11 +314,11 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
     if (cardData) {
       const card = JSON.parse(cardData) as NodeCard
       handleMoveCardToFolder(card, null)
-    } else if (canvasNodeData) {
+    } else if (canvasNodeData && currentProject) {
       // 添加新卡片到节点池
       const node = JSON.parse(canvasNodeData) as unknown as Node
-      addCard(currentProject!.id, {
-        projectId: currentProject!.id,
+      addCard(currentProject.id, {
+        projectId: currentProject.id,
         name: node.title || node.content || '未命名',
         content: JSON.stringify(node),
         type: node.type || 'text',

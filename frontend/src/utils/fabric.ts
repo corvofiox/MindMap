@@ -1,14 +1,21 @@
 import type { Node, NodeGroup, Domain, Connection } from '@/types'
 import { NODE_DEFAULTS, GROUP_DEFAULTS } from '@/constants'
 
-const fabric = (globalThis as any).fabric
+// Get fabric from global scope with type safety
+const fabric = (globalThis as unknown as { fabric?: any }).fabric
+
+// Ensure fabric is loaded
+if (!fabric) {
+  console.error('Fabric.js is not loaded')
+}
 
 /**
  * Create a Fabric.js rect for a node
  */
-export function createFabricNode(node: Node): any {
-  const Rect = fabric.Rect
-  const rect = new Rect({
+export function createFabricNode(node: Node): any | null {
+  if (!fabric) return null
+  
+  const rect = new fabric.Rect({
     left: node.x,
     top: node.y,
     width: node.width,
@@ -23,8 +30,7 @@ export function createFabricNode(node: Node): any {
 
   // Add text if content exists
   if (node.content) {
-    const Text = fabric.Text
-    const text = new Text(node.content, {
+    const text = new fabric.Text(node.content, {
       fontSize: node.fontSize,
       fill: '#333',
       textAlign: node.textAlign,
@@ -36,8 +42,7 @@ export function createFabricNode(node: Node): any {
     })
 
     // Group rect and text
-    const Group = fabric.Group
-    const group = new Group([rect, text], {
+    const group = new fabric.Group([rect, text], {
       left: node.x,
       top: node.y,
       selectable: true,
@@ -56,9 +61,10 @@ export function createFabricNode(node: Node): any {
 /**
  * Create a Fabric.js group for node groups
  */
-export function createFabricGroup(group: NodeGroup): any {
-  const Rect = fabric.Rect
-  const border = new Rect({
+export function createFabricGroup(group: NodeGroup): any | null {
+  if (!fabric) return null
+  
+  const border = new fabric.Rect({
     left: group.x,
     top: group.y,
     width: group.width,
@@ -77,8 +83,7 @@ export function createFabricGroup(group: NodeGroup): any {
 
   // Add title text
   if (group.name) {
-    const Text = fabric.Text
-    const title = new Text(group.name, {
+    const title = new fabric.Text(group.name, {
       fontSize: 14,
       fontWeight: 'bold',
       fill: group.backgroundColor,
@@ -91,8 +96,7 @@ export function createFabricGroup(group: NodeGroup): any {
       },
     })
 
-    const Group = fabric.Group
-    return new Group([border, title], {
+    return new fabric.Group([border, title], {
       left: group.x,
       top: group.y,
       selectable: true,
@@ -109,9 +113,10 @@ export function createFabricGroup(group: NodeGroup): any {
 /**
  * Create a Fabric.js rect for a domain
  */
-export function createFabricDomain(domain: Domain, isEditable: boolean = false): any {
-  const Rect = fabric.Rect
-  const domainRect = new Rect({
+export function createFabricDomain(domain: Domain, isEditable: boolean = false): any | null {
+  if (!fabric) return null
+  
+  const domainRect = new fabric.Rect({
     left: domain.x,
     top: domain.y,
     width: domain.width,
@@ -131,11 +136,10 @@ export function createFabricDomain(domain: Domain, isEditable: boolean = false):
 
   // 添加标题文本
   if (domain.titleVisible && domain.name) {
-    const Text = fabric.Text
-    const titleText = new Text(domain.name, {
-      fontSize: domain.titleFontSize || 14,
+    const titleText = new fabric.Text(domain.name, {
+      fontSize: domain.titleFontSize ?? 14,
       fontWeight: 'bold',
-      fill: domain.titleColor || '#9ca3af',
+      fill: domain.titleColor ?? '#9ca3af',
       selectable: false,
       evented: false,
       left: 0,
@@ -146,8 +150,7 @@ export function createFabricDomain(domain: Domain, isEditable: boolean = false):
       },
     })
 
-    const Group = fabric.Group
-    return new Group([domainRect, titleText], {
+    return new fabric.Group([domainRect, titleText], {
       left: domain.x,
       top: domain.titleVisible ? domain.y - 20 : domain.y,
       selectable: isEditable,
@@ -168,6 +171,8 @@ export function createFabricDomain(domain: Domain, isEditable: boolean = false):
  * Create a Fabric.js line for a connection
  */
 export function createFabricConnection(connection: Connection, nodes: Map<string, Node>): any | null {
+  if (!fabric) return null
+  
   const fromNode = nodes.get(connection.fromNodeId)
   const toNode = nodes.get(connection.toNodeId)
 
@@ -184,8 +189,7 @@ export function createFabricConnection(connection: Connection, nodes: Map<string
 
   // For straight lines
   if (connection.type === 'straight') {
-    const Line = fabric.Line
-    const line = new Line([fromCenter.x, fromCenter.y, toCenter.x, toCenter.y], {
+    const line = new fabric.Line([fromCenter.x, fromCenter.y, toCenter.x, toCenter.y], {
       stroke: connection.color,
       strokeWidth: connection.width,
       selectable: false,
@@ -207,8 +211,7 @@ export function createFabricConnection(connection: Connection, nodes: Map<string
 
   // For curve and step connections, use Path
   const path = createConnectionPath(fromNode, toNode, connection)
-  const Path = fabric.Path
-  const fabricPath = new Path(path, {
+  const fabricPath = new fabric.Path(path, {
     stroke: connection.color,
     strokeWidth: connection.width,
     fill: '',
@@ -272,13 +275,13 @@ export function fabricObjectToNode(obj: any): Node | null {
 
   return {
     id: data.id,
-    x: obj.left || 0,
-    y: obj.top || 0,
-    width: obj.width || NODE_DEFAULTS.WIDTH,
-    height: obj.height || NODE_DEFAULTS.HEIGHT,
+    x: obj.left ?? 0,
+    y: obj.top ?? 0,
+    width: obj.width ?? NODE_DEFAULTS.WIDTH,
+    height: obj.height ?? NODE_DEFAULTS.HEIGHT,
     title: '',
     content: '',
-    color: obj.fill || NODE_DEFAULTS.COLOR,
+    color: obj.fill ?? NODE_DEFAULTS.COLOR,
     fontSize: NODE_DEFAULTS.FONT_SIZE,
     textAlign: NODE_DEFAULTS.TEXT_ALIGN,
     collapsed: false,
@@ -293,19 +296,19 @@ export function fabricObjectToGroup(obj: any): NodeGroup | null {
   const data = obj.data
   if (!data || data.type !== 'group') return null
 
-  const rect = obj.getObjects ? obj.getObjects()[0] : obj
+  const rect = (obj as any).getObjects ? (obj as any).getObjects()[0] : obj
 
   return {
     id: data.id,
     name: '',
-    x: obj.left || 0,
-    y: obj.top || 0,
-    width: obj.width || 200,
-    height: obj.height || 200,
-    borderColor: rect.stroke || GROUP_DEFAULTS.BORDER_COLOR,
-    backgroundColor: rect.fill || GROUP_DEFAULTS.BACKGROUND_COLOR,
-    borderWidth: rect.strokeWidth || GROUP_DEFAULTS.BORDER_WIDTH,
-    borderRadius: rect.rx || GROUP_DEFAULTS.BORDER_RADIUS,
+    x: obj.left ?? 0,
+    y: obj.top ?? 0,
+    width: obj.width ?? 200,
+    height: obj.height ?? 200,
+    borderColor: rect.stroke ?? GROUP_DEFAULTS.BORDER_COLOR,
+    backgroundColor: rect.fill ?? GROUP_DEFAULTS.BACKGROUND_COLOR,
+    borderWidth: rect.strokeWidth ?? GROUP_DEFAULTS.BORDER_WIDTH,
+    borderRadius: rect.rx ?? GROUP_DEFAULTS.BORDER_RADIUS,
     nodeIds: [],
     collapsed: false,
   }
@@ -318,7 +321,7 @@ export function getObjectsByType(
   canvas: any,
   type: string
 ): any[] {
-  return canvas.getObjects().filter((obj: any) => {
+  return canvas.getObjects().filter(obj => {
     const data = obj.data
     return data && data.type === type
   })
@@ -340,12 +343,13 @@ export function addGridBackground(
   dotSize: number = 1,
   color: string = 'rgba(0, 0, 0, 0.1)'
 ): void {
-  const Circle = fabric.Circle
+  if (!fabric) return
+  
   const gridObjects: any[] = []
 
-  for (let x = 0; x < (canvas.width || 0); x += gridSize) {
-    for (let y = 0; y < (canvas.height || 0); y += gridSize) {
-      const dot = new Circle({
+  for (let x = 0; x < (canvas.width ?? 0); x += gridSize) {
+    for (let y = 0; y < (canvas.height ?? 0); y += gridSize) {
+      const dot = new fabric.Circle({
         left: x,
         top: y,
         radius: dotSize,
@@ -366,7 +370,7 @@ export function addGridBackground(
  */
 export function updateFabricDomainsEditable(canvas: any, editable: boolean): void {
   const domains = getObjectsByType(canvas, 'domain')
-  domains.forEach((obj: any) => {
+  domains.forEach(obj => {
     obj.set({
       selectable: editable,
       evented: editable,
@@ -382,7 +386,10 @@ export function updateFabricDomainsEditable(canvas: any, editable: boolean): voi
  */
 export function getFabricDomain(canvas: any, domainId: string): any | null {
   const objects = canvas.getObjects()
-  return objects.find((obj: any) => obj.data?.id === domainId && obj.data?.type === 'domain') || null
+  return objects.find(obj => {
+    const data = obj.data
+    return data?.id === domainId && data?.type === 'domain'
+  }) || null
 }
 
 /**

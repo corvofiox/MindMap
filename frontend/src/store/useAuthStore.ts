@@ -218,6 +218,8 @@ export const useAuthStore = create<AuthState>()(
             // Show warning toast for token refresh failure
             loadUIStore().then(({ useUIStore }) => {
               useUIStore.getState().addWarningToast('会话已过期，请重新登录', '会话提醒')
+            }).catch(() => {
+              // Silent fail if UI store loading fails
             })
             localStorage.removeItem('mindmap_token')
             // 更新 apiClient 实例的 token
