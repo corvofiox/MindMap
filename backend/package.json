@@ -36,6 +36,7 @@
     "db:clean": "rm data/mindmap.db"
   },
   "dependencies": {
+    "tsx": "^4.7.0",
     "bcrypt": "^6.0.0",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
@@ -73,7 +74,6 @@
     "eslint": "^8.56.0",
     "node-gyp": "^10.0.0",
     "supertest": "^7.2.2",
-    "tsx": "^4.7.0",
     "typescript": "^5.3.3",
     "vitest": "^4.0.17"
   },
