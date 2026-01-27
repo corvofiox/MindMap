@@ -22,23 +22,56 @@ const dbPath = process.env.DB_FILE || path.join(dataDir, 'mindmap.db')
 let sqlite: any = null
 let dbInstance: any = null
 
+// Initialization lock to prevent concurrent initialization
+let initPromise: Promise<any> | null = null
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function getSqlite() {
-  if (!sqlite) {
-    const SQL = await initSqlJs() as any
-    let dbData: Uint8Array | null = null
-    try {
-      const dbFile = await fs.readFile(dbPath)
-      dbData = new Uint8Array(dbFile)
-    } catch (error) {
-      if (process.env.NODE_ENV === 'development') {
-        log('Database file not found, creating new one:', dbPath)
-      }
-      dbData = null
-    }
-    sqlite = new SQL.Database(dbData)
+  if (sqlite) {
+    return sqlite
   }
-  return sqlite
+
+  // Use initialization lock to prevent concurrent initialization
+  if (!initPromise) {
+    initPromise = (async () => {
+      try {
+        log('Initializing sql.js...')
+        
+        // Add timeout protection for sql.js initialization
+        const SQL = await Promise.race([
+          initSqlJs() as any,
+          new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('sql.js initialization timeout after 30 seconds')), 30000)
+          )
+        ]) as any
+        
+        log('sql.js initialized successfully')
+        
+        let dbData: Uint8Array | null = null
+        try {
+          const dbFile = await fs.readFile(dbPath)
+          dbData = new Uint8Array(dbFile)
+          log('Database file loaded:', dbPath)
+        } catch (error) {
+          if (process.env.NODE_ENV === 'development') {
+            log('Database file not found, creating new one:', dbPath)
+          }
+          dbData = null
+        }
+        
+        sqlite = new SQL.Database(dbData)
+        log('Database instance created')
+        
+        return sqlite
+      } catch (error) {
+        logError('Failed to initialize sqlite database', error)
+        initPromise = null
+        throw error
+      }
+    })()
+  }
+
+  return initPromise
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -50,7 +83,18 @@ export async function getDb() {
   return dbInstance
 }
 
-export const db = await getDb()
+// Export db as null initially, will be initialized by index.ts on startup
+// This prevents top-level await blocking
+export let db: any = null
+
+// Initialize db instance - call this on app startup
+export async function initializeDb() {
+  if (!db) {
+    db = await getDb()
+    log('Database initialized and ready for use')
+  }
+  return db
+}
 
 let saveTimeout: NodeJS.Timeout | null = null
 let lastSaveTime = Date.now()

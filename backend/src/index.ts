@@ -26,6 +26,7 @@ import { csrfProtectionMiddleware, getCsrfTokenRoute } from './middleware/csrf.m
 import { setupWebSocket } from './websocket/index.js'
 import { errorHandler } from './middleware/error.middleware.js'
 import { initDatabase } from './database/init.js'
+import { initializeDb } from './database/connection.js'
 import { getValidatedEnv } from './utils/env.js'
 
 const app = express()
@@ -84,6 +85,11 @@ async function start() {
     // Initialize database
     console.log('Initializing application...')
     await initDatabase()
+    
+    // Initialize db instance for controllers
+    console.log('Initializing database connection...')
+    await initializeDb()
+    
     console.log('Application initialization complete')
 
     // HTTP server - 监听0.0.0.0以允许外部访问

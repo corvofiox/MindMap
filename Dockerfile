@@ -31,8 +31,9 @@ COPY frontend ./frontend
 RUN npm install --include=dev && \
     npm install --workspaces --include=dev
 
-# 设置环境文件（会自动生成 JWT_SECRET）
-RUN node start.js --env-only
+# 注意：环境文件在容器启动时动态初始化，而不是在构建时
+# 这样每个容器实例可以有不同的 JWT_SECRET（通过环境变量注入）
+# 如果需要，可以在运行时使用: docker run -e JWT_SECRET=xxx ...
 
 # 构建前端和后端
 RUN cd backend && npm run build && \
@@ -62,18 +63,17 @@ COPY --from=builder /app/frontend/package.json ./frontend/package.json
 COPY --from=builder /app/backend/node_modules ./backend/node_modules
 COPY --from=builder /app/frontend/node_modules ./frontend/node_modules
 COPY --from=builder /app/shared ./shared
-COPY --from=builder /app/backend/dist ./backend/dist
+COPY --from=builder /app/backend/dist/backend/src ./backend/dist
 COPY --from=builder /app/frontend/dist ./frontend/dist
-COPY --from=builder /app/backend/.env ./backend/.env
+
+# 注意：不要复制 .env 文件，环境文件在容器启动时动态创建
+# 敏感信息（如 JWT_SECRET）应该通过环境变量注入
 
 # 复制后端源代码（用于运行时访问）
 COPY --from=builder /app/backend/src ./backend/src
 
 # 创建数据目录
 RUN mkdir -p /app/backend/data
-
-# 复制环境文件（如果需要）
-# 注意：生产环境应该通过环境变量注入，而不是直接复制 .env 文件
 
 EXPOSE 3000 3001
 
@@ -88,5 +88,8 @@ ENV ALLOWED_ORIGINS=*
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:3000/health || exit 1
 
-# 使用 start.js 启动，它会自动初始化数据库并启动服务
-CMD ["node", "start.js", "--start-only"]
+# 使用 start.js 启动，它会自动初始化数据库和环境文件
+# 环境文件和数据库在容器启动时动态创建（不是构建时）
+# 如果需要使用自定义密钥，可以设置环境变量：
+#   docker run -e JWT_SECRET=your-secret -e CSRF_SECRET=your-csrf-secret ...
+CMD ["node", "start.js"]
