@@ -7,9 +7,9 @@
 
 import { useMemo, useCallback } from 'react'
 import type { NodeCard, NodePoolFolder, NodePoolSortOption, NodePoolSortOrder } from '@/types'
-import { useNodePoolStore, selectCardsByFolder, selectFoldersByParent } from '../stores/useNodePoolStore'
-import type { ReorderOperation, UseNodePoolSortReturn, UseNodePoolSortOptions, NodePoolStore } from '../types/node-pool'
-import { calculateReorderByTarget } from '../utils/sort-calculator'
+import { useNodePoolStore, selectCardsByFolder, selectFoldersByParent } from '../stores/useNodePoolStore.js'
+import type { ReorderOperation, UseNodePoolSortReturn, UseNodePoolSortOptions, NodePoolStore } from '../types/node-pool.js'
+import { calculateReorderByTarget } from '../utils/sort-calculator.js'
 
 /**
  * Custom hook for node pool sorting functionality

@@ -1,5 +1,5 @@
 // Shared types between frontend and backend
-export * from './constants'
+export * from './constants.js'
 
 export interface APIResponse<T = any> {
   success: boolean
@@ -125,4 +125,4 @@ export interface AwarenessState {
 }
 
 // Re-export constants
-export * from './constants'
+export * from './constants.js'

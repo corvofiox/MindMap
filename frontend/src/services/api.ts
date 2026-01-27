@@ -15,7 +15,7 @@ import type {
   NodeDefaults,
 } from '@/types'
 import { API_ENDPOINTS } from '@/constants'
-import { apiClient } from './apiClient'
+import { apiClient } from './apiClient.js'
 
 // Export apiClient for use in auth store
 export { apiClient }

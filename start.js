@@ -158,59 +158,80 @@ function checkEnvFileExists(envPath) {
 async function setupEnvironmentFiles() {
   logSection('Module 1: Initialize Environment Files');
 
-  const envConfigs = [
-    {
-      name: 'Backend',
-      examplePath: path.join(__dirname, 'backend', '.env.example'),
-      targetPath: path.join(__dirname, 'backend', '.env'),
-    },
-    {
-      name: 'Frontend',
-      examplePath: path.join(__dirname, 'frontend', '.env.example'),
-      targetPath: path.join(__dirname, 'frontend', '.env'),
-    },
-  ];
+  const isDocker = isDockerEnvironment();
+  const isProd = isProduction();
+  const shouldGenerateSecrets = isDocker || !isProd;
 
   let envCreated = false;
-  const isDocker = isDockerEnvironment();
-  const shouldGenerateSecrets = isDocker || !isProduction();
 
-  for (const config of envConfigs) {
-    if (!fs.existsSync(config.examplePath)) {
-      logWarning(`Example file not found for ${config.name}: ${config.examplePath}`);
-      continue;
-    }
+  // Backend环境文件配置
+  // 在Docker/生产环境中，backend从 /app/backend/dist/backend/.env 加载
+  // 在开发环境中，从 /app/backend/.env 加载
+  const backendDistPath = path.join(__dirname, 'backend', 'dist', 'backend', '.env');
+  const backendDevPath = path.join(__dirname, 'backend', '.env');
+  const backendExamplePath = path.join(__dirname, 'backend', '.env.example');
+  const backendTargetPath = (isDocker || isProd) ? backendDistPath : backendDevPath;
 
-    const envExists = checkEnvFileExists(config.targetPath);
+  // Frontend环境文件配置
+  const frontendTargetPath = path.join(__dirname, 'frontend', '.env');
+  const frontendExamplePath = path.join(__dirname, 'frontend', '.env.example');
 
-    if (!envExists) {
-      logStep('CREATE', `Creating .env file for ${config.name}...`);
-      copyEnvFile(config.examplePath, config.targetPath);
-      logSuccess(`Created .env file for ${config.name}`);
+  // 处理Backend .env
+  if (fs.existsSync(backendExamplePath)) {
+    if (!fs.existsSync(backendTargetPath)) {
+      logStep('CREATE', `Creating .env file for Backend at ${backendTargetPath}...`);
+      ensureDirectoryExists(path.dirname(backendTargetPath));
+      copyEnvFile(backendExamplePath, backendTargetPath);
+      logSuccess(`Created .env file for Backend`);
       envCreated = true;
     } else {
-      logStep('SKIP', `.env file already exists for ${config.name} - skipping`);
+      logStep('SKIP', `Backend .env file already exists at ${backendTargetPath} - skipping`);
     }
 
-    if (config.name === 'Backend') {
-      if (process.env.JWT_SECRET) {
-        logStep('INFO', 'Using JWT_SECRET from environment variable');
-        updateEnvFile(config.targetPath, 'JWT_SECRET', process.env.JWT_SECRET);
-      } else if (shouldGenerateSecrets) {
-        const jwtSecret = generateJWTSecret();
-        updateEnvFile(config.targetPath, 'JWT_SECRET', jwtSecret);
-        logSuccess(`Generated and set JWT_SECRET for ${config.name}`);
-      }
+    // 更新Backend环境变量
+    if (process.env.JWT_SECRET) {
+      logStep('INFO', 'Using JWT_SECRET from environment variable');
+      updateEnvFile(backendTargetPath, 'JWT_SECRET', process.env.JWT_SECRET);
+    } else if (shouldGenerateSecrets) {
+      const jwtSecret = generateJWTSecret();
+      updateEnvFile(backendTargetPath, 'JWT_SECRET', jwtSecret);
+      logSuccess(`Generated and set JWT_SECRET for Backend`);
+    }
 
-      if (process.env.CSRF_SECRET) {
-        logStep('INFO', 'Using CSRF_SECRET from environment variable');
-        updateEnvFile(config.targetPath, 'CSRF_SECRET', process.env.CSRF_SECRET);
-      } else if (shouldGenerateSecrets) {
-        const csrfSecret = generateJWTSecret();
-        updateEnvFile(config.targetPath, 'CSRF_SECRET', csrfSecret);
-        logSuccess(`Generated and set CSRF_SECRET for ${config.name}`);
+    if (process.env.CSRF_SECRET) {
+      logStep('INFO', 'Using CSRF_SECRET from environment variable');
+      updateEnvFile(backendTargetPath, 'CSRF_SECRET', process.env.CSRF_SECRET);
+    } else if (shouldGenerateSecrets) {
+      const csrfSecret = generateJWTSecret();
+      updateEnvFile(backendTargetPath, 'CSRF_SECRET', csrfSecret);
+      logSuccess(`Generated and set CSRF_SECRET for Backend`);
+    }
+
+    // 在Docker/生产环境中，同时创建 /app/backend/.env 作为备份
+    if ((isDocker || isProd) && backendTargetPath !== backendDevPath) {
+      if (!fs.existsSync(backendDevPath)) {
+        ensureDirectoryExists(path.dirname(backendDevPath));
+        copyEnvFile(backendTargetPath, backendDevPath);
+        logStep('CREATE', `Also created backup .env at ${backendDevPath}`);
       }
     }
+  } else {
+    logWarning(`Backend .env.example not found: ${backendExamplePath}`);
+  }
+
+  // 处理Frontend .env
+  if (fs.existsSync(frontendExamplePath)) {
+    if (!fs.existsSync(frontendTargetPath)) {
+      logStep('CREATE', `Creating .env file for Frontend at ${frontendTargetPath}...`);
+      ensureDirectoryExists(path.dirname(frontendTargetPath));
+      copyEnvFile(frontendExamplePath, frontendTargetPath);
+      logSuccess(`Created .env file for Frontend`);
+      envCreated = true;
+    } else {
+      logStep('SKIP', `Frontend .env file already exists at ${frontendTargetPath} - skipping`);
+    }
+  } else {
+    logWarning(`Frontend .env.example not found: ${frontendExamplePath}`);
   }
 
   if (!envCreated) {

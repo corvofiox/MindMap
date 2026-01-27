@@ -1,6 +1,6 @@
 import type { Node, NodeGroup, Domain, Connection } from '@/types'
 import { NODE_DEFAULTS, GROUP_DEFAULTS } from '@/constants'
-import { logger } from './logger'
+import { logger } from './logger.js'
 
 // Get fabric from global scope with type safety
 const fabric = (globalThis as unknown as { fabric?: any }).fabric

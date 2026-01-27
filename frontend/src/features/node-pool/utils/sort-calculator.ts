@@ -5,7 +5,7 @@
  * Provides functions for reordering items within a list.
  */
 
-import type { ReorderOperation, ReorderResult, SortCalculateOptions } from '../types/node-pool'
+import type { ReorderOperation, ReorderResult, SortCalculateOptions } from '../types/node-pool.js'
 
 /**
  * Default options for sort calculations

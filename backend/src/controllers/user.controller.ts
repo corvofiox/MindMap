@@ -6,7 +6,7 @@ import { eq, and } from 'drizzle-orm'
 import { authenticate, type AuthRequest } from '../middleware/auth.middleware.js'
 import { asyncHandler } from '../middleware/error.middleware.js'
 import { logError } from '../utils/logger.js'
-import { SHARED_NODE_DEFAULTS, NODE_DEFAULTS_VALIDATION } from '@shared/constants'
+import { SHARED_NODE_DEFAULTS, NODE_DEFAULTS_VALIDATION } from 'mindmap-shared'
 
 export const userRouter = Router()
 

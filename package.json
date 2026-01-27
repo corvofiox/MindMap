@@ -29,7 +29,8 @@
     "start:frontend": "cd frontend && npm run dev",
     "install:all": "node start.js --install-only",
 
-    "build": "npm run build:frontend && npm run build:backend",
+    "build": "npm run build:shared && npm run build:frontend && npm run build:backend",
+    "build:shared": "cd shared && npm run build",
     "build:frontend": "cd frontend && npm run build",
     "build:backend": "cd backend && npm run build",
     "dev": "node start.js",

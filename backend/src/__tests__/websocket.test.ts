@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { WebSocketServer } from 'ws'
-import { setupWebSocket } from '../websocket/index'
+import { setupWebSocket } from '../websocket/index.js'
 
 // Mock database
 vi.mock('../database/connection', () => ({

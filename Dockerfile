@@ -24,6 +24,7 @@ COPY package.json package-lock.json* start.js ./
 
 # 复制源代码
 COPY shared ./shared
+COPY shared ./backend/shared
 COPY backend ./backend
 COPY frontend ./frontend
 
@@ -35,8 +36,9 @@ RUN npm install --include=dev && \
 # 这样每个容器实例可以有不同的 JWT_SECRET（通过环境变量注入）
 # 如果需要，可以在运行时使用: docker run -e JWT_SECRET=xxx ...
 
-# 构建前端和后端
-RUN cd backend && npm run build && \
+# 构建 shared、前端和后端
+RUN cd shared && npm run build && \
+    cd ../backend && npm run build && \
     cd ../frontend && npm run build
 
 # 清理开发依赖，仅保留生产依赖
@@ -60,16 +62,24 @@ COPY --from=builder /app/package.json /app/package-lock.json* /app/start.js ./
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/backend/package.json ./backend/package.json
 COPY --from=builder /app/frontend/package.json ./frontend/package.json
+COPY --from=builder /app/shared/package.json ./shared/package.json
 COPY --from=builder /app/backend/node_modules ./backend/node_modules
 COPY --from=builder /app/frontend/node_modules ./frontend/node_modules
+# 复制构建产物
 COPY --from=builder /app/backend/dist ./backend/dist
 COPY --from=builder /app/frontend/dist ./frontend/dist
+COPY --from=builder /app/shared ./shared
+
+# 复制 .env.example 文件（不复制 .env，环境文件在容器启动时动态创建）
+COPY --from=builder /app/backend/.env.example ./backend/.env.example
+COPY --from=builder /app/frontend/.env.example ./frontend/.env.example
+
+# Shared 模块已通过 npm 依赖方式处理，无需手动复制
 
 # 注意：不要复制 .env 文件，环境文件在容器启动时动态创建
 # 敏感信息（如 JWT_SECRET）应该通过环境变量注入
 
-# 创建数据目录
-RUN mkdir -p /app/backend/data
+
 
 EXPOSE 3000 3001
 
