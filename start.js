@@ -285,15 +285,27 @@ async function startBackend() {
     if (isProduction() || isDockerEnvironment()) {
       logStep('START', 'Starting backend in production mode...');
 
-      const distPath = path.join(backendDir, 'dist', 'index.js');
-      if (!fs.existsSync(distPath)) {
+      const possiblePaths = [
+        path.join(backendDir, 'dist', 'index.js'),
+        path.join(backendDir, 'dist', 'backend', 'src', 'index.js'),
+      ];
+
+      let distPath = null;
+      for (const p of possiblePaths) {
+        if (fs.existsSync(p)) {
+          distPath = p;
+          break;
+        }
+      }
+
+      if (!distPath) {
         logError('Backend dist/index.js not found. Please build the backend first.');
         logStep('HINT', 'Run: npm run build:backend');
         throw new Error('Backend build not found');
       }
 
       command = getNodeCommand();
-      args = ['dist/index.js'];
+      args = [path.relative(backendDir, distPath)];
     } else {
       logStep('START', 'Starting backend in development mode...');
       command = getNpmCommand();

@@ -1,0 +1,6 @@
+{
+  "resolveFullPaths": false,
+  "alias": {
+    "@shared": "../shared/src"
+  }
+}

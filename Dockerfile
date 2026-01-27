@@ -62,15 +62,11 @@ COPY --from=builder /app/backend/package.json ./backend/package.json
 COPY --from=builder /app/frontend/package.json ./frontend/package.json
 COPY --from=builder /app/backend/node_modules ./backend/node_modules
 COPY --from=builder /app/frontend/node_modules ./frontend/node_modules
-COPY --from=builder /app/shared ./shared
-COPY --from=builder /app/backend/dist/backend/src ./backend/dist
+COPY --from=builder /app/backend/dist ./backend/dist
 COPY --from=builder /app/frontend/dist ./frontend/dist
 
 # 注意：不要复制 .env 文件，环境文件在容器启动时动态创建
 # 敏感信息（如 JWT_SECRET）应该通过环境变量注入
-
-# 复制后端源代码（用于运行时访问）
-COPY --from=builder /app/backend/src ./backend/src
 
 # 创建数据目录
 RUN mkdir -p /app/backend/data
