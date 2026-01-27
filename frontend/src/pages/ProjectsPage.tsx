@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, FolderOpen, Trash2, Edit3, Save, X } from 'lucide-react'
+import { Plus, FolderOpen, Trash2, Edit3, Save, X, GitBranch, Users, Zap, ArrowUp } from 'lucide-react'
 import { useProjectsStore } from '@/store/useProjectsStore'
 import { useUIStore } from '@/store/useUIStore'
 import { useAuthStore } from '@/store/useAuthStore'
@@ -192,21 +192,50 @@ export function ProjectsPage() {
       {/* Projects Grid */}
       <div className="flex-1 overflow-y-auto p-8">
         {projects.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-center">
-            <FolderOpen className="w-16 h-16 text-gray-400 mb-4" />
-            <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">
+          <div className="flex flex-col items-center justify-center h-full text-center max-w-2xl mx-auto">
+            <div className="relative">
+              <div className="absolute inset-0 bg-blue-500/10 rounded-full blur-3xl" />
+              <div className="relative flex items-center justify-center w-24 h-24 mb-6">
+                <FolderOpen className="w-16 h-16 text-gray-400" />
+              </div>
+            </div>
+            <h3 className="text-2xl font-bold text-gray-900 dark:text-white mb-3">
               还没有项目
             </h3>
-            <p className="text-gray-600 dark:text-gray-400 mb-4">
-              创建您的第一个项目开始使用
+            <p className="text-gray-600 dark:text-gray-400 mb-8 text-base">
+              开始创建您的第一个思维导图项目
             </p>
-            <button
-              onClick={() => setShowNewProject(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors"
-            >
-              <Plus className="w-5 h-5" />
-              创建项目
-            </button>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8 w-full">
+              <div className="bg-white dark:bg-gray-800 rounded-xl p-5 border border-gray-200 dark:border-gray-700 shadow-sm hover:shadow-md transition-shadow">
+                <div className="w-10 h-10 rounded-lg bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center mb-3 mx-auto">
+                  <GitBranch className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+                </div>
+                <h4 className="font-semibold text-gray-900 dark:text-white mb-2 text-sm">思维导图</h4>
+                <p className="text-xs text-gray-500 dark:text-gray-400 leading-relaxed">可视化思维结构，快速理清复杂问题</p>
+              </div>
+
+              <div className="bg-white dark:bg-gray-800 rounded-xl p-5 border border-gray-200 dark:border-gray-700 shadow-sm hover:shadow-md transition-shadow">
+                <div className="w-10 h-10 rounded-lg bg-green-100 dark:bg-green-900/30 flex items-center justify-center mb-3 mx-auto">
+                  <Users className="w-5 h-5 text-green-600 dark:text-green-400" />
+                </div>
+                <h4 className="font-semibold text-gray-900 dark:text-white mb-2 text-sm">实时协作</h4>
+                <p className="text-xs text-gray-500 dark:text-gray-400 leading-relaxed">与团队成员同步编辑，提升工作效率</p>
+              </div>
+
+              <div className="bg-white dark:bg-gray-800 rounded-xl p-5 border border-gray-200 dark:border-gray-700 shadow-sm hover:shadow-md transition-shadow">
+                <div className="w-10 h-10 rounded-lg bg-purple-100 dark:bg-purple-900/30 flex items-center justify-center mb-3 mx-auto">
+                  <Zap className="w-5 h-5 text-purple-600 dark:text-purple-400" />
+                </div>
+                <h4 className="font-semibold text-gray-900 dark:text-white mb-2 text-sm">快速上手</h4>
+                <p className="text-xs text-gray-500 dark:text-gray-400 leading-relaxed">简单直观的界面，轻松创建导图</p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-800 px-4 py-3 rounded-lg border border-gray-200 dark:border-gray-700">
+              <ArrowUp className="w-4 h-4 text-blue-500 dark:text-blue-400 animate-bounce" />
+              <span>点击右上角的 <span className="font-semibold text-gray-700 dark:text-gray-300">"新建项目"</span> 按钮开始</span>
+            </div>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6 gap-4">

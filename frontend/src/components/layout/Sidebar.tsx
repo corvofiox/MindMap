@@ -345,13 +345,7 @@ export function Sidebar({ open }: SidebarProps) {
             {projects.length === 0 ? (
               <div className="text-center py-8">
                 <FolderKanban className="w-12 h-12 text-gray-400 mx-auto mb-3" />
-                <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">还没有项目</p>
-                <button
-                  onClick={() => navigate('/projects')}
-                  className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
-                >
-                  创建项目
-                </button>
+                <p className="text-sm text-gray-600 dark:text-gray-400">还没有项目</p>
               </div>
             ) : (
               <div className="space-y-2">

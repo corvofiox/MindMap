@@ -6,6 +6,17 @@ import { authenticate, type AuthRequest } from '../middleware/auth.middleware.js
 import { asyncHandler } from '../middleware/error.middleware.js'
 import { transformResponse, transformResponseArray } from '../utils/transformResponse.js'
 
+// Helper function to safely get property from Drizzle result (handles both snake_case and camelCase)
+function getProperty<T>(obj: any, ...keys: string[]): T | undefined {
+  for (const key of keys) {
+    const value = obj[key]
+    if (value !== undefined) {
+      return value
+    }
+  }
+  return undefined
+}
+
 export const projectRouter = Router()
 
 // Get all projects
@@ -96,7 +107,7 @@ projectRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, re
     where: eq(projects.id, projectId),
   })
 
-  const projectOwnerId = project.ownerId
+  const projectOwnerId = getProperty(project, 'owner_id', 'ownerId') || project.ownerId
 
   if (!project || projectOwnerId !== req.user!.id) {
     return res.status(403).json({
@@ -149,7 +160,7 @@ projectRouter.delete('/:id', authenticate, asyncHandler(async (req: AuthRequest,
     })
   }
 
-  const projectOwnerId = project.ownerId
+  const projectOwnerId = getProperty(project, 'owner_id', 'ownerId') || project.ownerId
 
   if (projectOwnerId !== req.user!.id) {
     return res.status(403).json({
@@ -188,7 +199,7 @@ projectRouter.post(
       where: eq(projects.id, projectId),
     })
 
-    const projectOwnerId = project.ownerId
+    const projectOwnerId = getProperty(project, 'owner_id', 'ownerId') || project.ownerId
 
     if (!project || projectOwnerId !== req.user!.id) {
       return res.status(403).json({
