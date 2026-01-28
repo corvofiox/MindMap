@@ -159,7 +159,9 @@ export function NodeContextMenu({ nodeId, position, onClose }: NodeContextMenuPr
 
     try {
       await addCard(currentProject.id, cardData)
-      addToast({ type: 'success', title: '已添加到节点池', message: '节点已添加到节点池' })
+      // 从画布中移除原始节点
+      removeNode(nodeId)
+      addToast({ type: 'success', title: '已添加到节点池', message: '节点已添加到节点池并从画布移除' })
     } catch (error) {
       addToast({ type: 'error', title: '添加失败', message: error instanceof Error ? error.message : '未知错误' })
     }

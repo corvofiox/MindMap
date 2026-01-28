@@ -28,13 +28,14 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
   const {
     updateNode,
     setSelectedIds,
+    removeNode,
     addToSelection,
     removeFromSelection,
     editingId: globalEditingId,
     setEditingId,
   } = useCanvasStore()
 
-  const { setSelectedType, currentTool } = useUIStore()
+  const { setSelectedType, currentTool, draggingNodeFromCanvas, isOverNodePool } = useUIStore()
 
   const [isDragging, setIsDragging] = useState(false)
   const [isResizing, setIsResizing] = useState(false)
@@ -514,6 +515,26 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
         window.dispatchEvent(new CustomEvent('nodeDragMove', {
           detail: { nodeId: node.id, x: newPos.x, y: newPos.y }
         }))
+
+        // 检测鼠标是否进入节点池区域
+        const nodePoolElement = document.querySelector('[data-node-pool]')
+        if (nodePoolElement) {
+          const rect = nodePoolElement.getBoundingClientRect()
+          const isOver = e.clientX >= rect.left && e.clientX <= rect.right &&
+                        e.clientY >= rect.top && e.clientY <= rect.bottom
+
+          const { setIsOverNodePool, setCanvasDragGhostPosition, isOverNodePool: currentIsOverNodePool } = useUIStore.getState()
+
+          if (isOver !== currentIsOverNodePool) {
+            setIsOverNodePool(isOver)
+          }
+
+          if (isOver) {
+            setCanvasDragGhostPosition({ x: e.clientX, y: e.clientY })
+          } else {
+            setCanvasDragGhostPosition(null)
+          }
+        }
       }
 
       if (isResizing) {
@@ -551,22 +572,40 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
       if (isDragging || isResizing) {
         // 拖动/调整大小时才更新全局状态
         if (isDragging) {
-          updateNode(node.id, {
-            x: localPosition.x,
-            y: localPosition.y,
-          })
-          // 设置标志，防止 useEffect 立即重置位置
-          justFinishedDragRef.current = true
-          // 更新 lastSyncedNodeRef 为新位置，防止被覆盖
-          lastSyncedNodeRef.current = { x: localPosition.x, y: localPosition.y, width: localSize.width, height: localSize.height }
-          // 延迟清除标志，允许 React 状态更新完成
-          setTimeout(() => {
-            justFinishedDragRef.current = false
-          }, 200)
-          // 触发自定义事件，通知 CanvasPage 结束拖动
-          window.dispatchEvent(new CustomEvent('nodeDragEnd', {
-            detail: { nodeId: node.id }
-          }))
+          // 检查是否在节点池区域释放
+          const { isOverNodePool, setDraggingNodeFromCanvas, setIsOverNodePool, setCanvasDragGhostPosition } = useUIStore.getState()
+
+          if (isOverNodePool) {
+            // 在节点池区域释放，触发添加到节点池的事件
+            window.dispatchEvent(new CustomEvent('nodeDragEnd', {
+              detail: { nodeId: node.id, droppedInNodePool: true }
+            }))
+            // 重置状态
+            setDraggingNodeFromCanvas(null)
+            setIsOverNodePool(false)
+            setCanvasDragGhostPosition(null)
+          } else {
+            // 正常释放，更新节点位置
+            updateNode(node.id, {
+              x: localPosition.x,
+              y: localPosition.y,
+            })
+            // 设置标志，防止 useEffect 立即重置位置
+            justFinishedDragRef.current = true
+            // 更新 lastSyncedNodeRef 为新位置，防止被覆盖
+            lastSyncedNodeRef.current = { x: localPosition.x, y: localPosition.y, width: localSize.width, height: localSize.height }
+            // 延迟清除标志，允许 React 状态更新完成
+            setTimeout(() => {
+              justFinishedDragRef.current = false
+            }, 200)
+            // 触发自定义事件，通知 CanvasPage 结束拖动
+            window.dispatchEvent(new CustomEvent('nodeDragEnd', {
+              detail: { nodeId: node.id, droppedInNodePool: false }
+            }))
+            // 重置拖拽状态
+            setDraggingNodeFromCanvas(null)
+            setCanvasDragGhostPosition(null)
+          }
         }
         if (isResizing) {
           updateNode(node.id, {
@@ -819,6 +858,9 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
     }
   }, [globalEditingId, node.id, editingField, saveTitle, saveContent])
 
+  // 检查当前节点是否正在被拖拽到节点池
+  const isBeingDraggedToPool = draggingNodeFromCanvas?.nodeId === node.id && isOverNodePool
+
   return (
     <>
       <style>{`
@@ -835,6 +877,9 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
           top: (groupDragOffset ? localPosition.y + groupDragOffset.y : localPosition.y) - 16,
           width: localSize.width + 32,
           height: localSize.height + 32,
+          opacity: isBeingDraggedToPool ? 0 : 1,
+          visibility: isBeingDraggedToPool ? 'hidden' : 'visible',
+          transition: 'opacity 0.2s ease',
         }}
       >
         {/* Resize handles - outside node container */}

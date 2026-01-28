@@ -82,34 +82,66 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
     }
   }, [currentProject, loadNodePool])
 
-  // Handle add selected node to pool
+  // Handle add selected nodes to pool
   const handleAddToPool = useCallback(async () => {
     if (selectedIds.length === 0) {
-      addToast({ type: 'warning', title: '未选择节点', message: '请选择一个节点添加到节点池' })
+      addToast({ type: 'warning', title: '未选择节点', message: '请选择至少一个节点添加到节点池' })
       return
     }
 
-    const nodeId = selectedIds[0]
+    if (!currentProject) return
+
     const nodes = useCanvasStore.getState().nodes
-    const node = nodes.get(nodeId)
-    if (!node || !currentProject) return
+    const { removeNode } = useCanvasStore.getState()
+    let successCount = 0
+    let failCount = 0
 
-    try {
-      await addCard(currentProject.id, {
-        projectId: currentProject.id,
-        name: node.title || node.content || '未命名',
-        content: JSON.stringify(node),
-        type: node.type || 'text',
-        color: node.color,
-        tags: null,
-        createdBy: user?.id || 1,
-        sortOrder: 0,
-        thumbnail: node.type === 'image' ? (node as any).imageUrl : undefined,
+    // 批量处理所有选中的节点
+    for (const nodeId of selectedIds) {
+      const node = nodes.get(nodeId)
+      if (!node) continue
+
+      try {
+        await addCard(currentProject.id, {
+          projectId: currentProject.id,
+          name: node.title || node.content || '未命名',
+          content: JSON.stringify(node),
+          type: node.type || 'text',
+          color: node.color,
+          tags: null,
+          createdBy: user?.id || 1,
+          sortOrder: 0,
+          thumbnail: node.type === 'image' ? (node as any).imageUrl : undefined,
+        })
+
+        // 从画布中移除原始节点
+        removeNode(nodeId)
+        successCount++
+      } catch (error) {
+        failCount++
+        console.error(`Failed to add node ${nodeId} to pool:`, error)
+      }
+    }
+
+    // 显示批量操作结果
+    if (successCount > 0 && failCount === 0) {
+      addToast({
+        type: 'success',
+        title: '批量添加成功',
+        message: `已成功将 ${successCount} 个节点添加到节点池并从画布移除`
       })
-
-      addToast({ type: 'success', title: '已添加到节点池', message: '节点已添加到节点池' })
-    } catch (error) {
-      addToast({ type: 'error', title: '添加失败', message: error instanceof Error ? error.message : '未知错误' })
+    } else if (successCount > 0 && failCount > 0) {
+      addToast({
+        type: 'warning',
+        title: '部分添加成功',
+        message: `成功添加 ${successCount} 个节点，${failCount} 个节点添加失败`
+      })
+    } else {
+      addToast({
+        type: 'error',
+        title: '添加失败',
+        message: '所有节点添加失败，请重试'
+      })
     }
   }, [selectedIds, currentProject, addToast, addCard])
 
@@ -344,6 +376,12 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
         addToast({ type: 'error', title: '解析失败', message: '节点数据格式错误' })
       }
     }
+
+    // 处理从画布拖拽节点到节点池
+    const { draggingNodeFromCanvas, setIsOverNodePool, setDraggingNodeFromCanvas, setCanvasDragGhostPosition } = useUIStore.getState()
+    if (draggingNodeFromCanvas) {
+      setIsOverNodePool(true)
+    }
   }, [handleMoveCardToFolder, addToast, currentProject, addCard, user])
 
   // Handle drag over root
@@ -353,12 +391,26 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
     if (!isDragOverFolder) {
       setIsRootDragOver(true)
     }
+
+    // 处理从画布拖拽节点到节点池
+    const { draggingNodeFromCanvas, setIsOverNodePool, setCanvasDragGhostPosition } = useUIStore.getState()
+    if (draggingNodeFromCanvas) {
+      setIsOverNodePool(true)
+      setCanvasDragGhostPosition({ x: e.clientX, y: e.clientY })
+    }
   }, [isDragOverFolder])
 
   // Handle drag leave root
   const handleRootDragLeave = useCallback((e: React.DragEvent) => {
     e.preventDefault()
     setIsRootDragOver(false)
+
+    // 处理从画布拖拽节点离开节点池
+    const { draggingNodeFromCanvas, setIsOverNodePool, setCanvasDragGhostPosition } = useUIStore.getState()
+    if (draggingNodeFromCanvas) {
+      setIsOverNodePool(false)
+      setCanvasDragGhostPosition(null)
+    }
   }, [])
 
   // Filter cards based on search - optimized with useMemo

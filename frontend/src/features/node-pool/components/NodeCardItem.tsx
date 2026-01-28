@@ -12,6 +12,9 @@ import type { NodeCardItemProps } from '../types/node-pool'
 import { containsHTML, safeHTML } from '@/utils/sanitizeHTML'
 import { Z_INDEX } from '@/constants'
 import { useNodePoolStore } from '../stores/useNodePoolStore'
+import { useUIStore } from '@/store/useUIStore'
+import { useProjectsStore } from '@/store/useProjectsStore'
+import { useCanvasStore } from '@/store/useCanvasStore'
 
 function SearchHighlighter({ text, query }: { text: string; query: string }) {
   if (!query.trim() || !text.toLowerCase().includes(query.toLowerCase())) {
@@ -39,7 +42,7 @@ function SearchHighlighter({ text, query }: { text: string; query: string }) {
  */
 export const NodeCardItem = memo(function NodeCardItem({
   card,
-  isDragging,
+  isDragging: isExternalDragging,
   isDragOver,
   dragOverPosition,
   onUse: _onUse,
@@ -56,6 +59,17 @@ export const NodeCardItem = memo(function NodeCardItem({
   const cardRef = useRef<HTMLDivElement>(null)
   const mouseDownPos = useRef<{ x: number; y: number } | null>(null)
   const hasMoved = useRef(false)
+
+  // 拖拽状态
+  const [isDragging, setIsDragging] = useState(false)
+  const isDraggingRef = useRef(false)
+  const dragStartRef = useRef<{ x: number; y: number } | null>(null)
+  const [dragSession, setDragSession] = useState(0) // 用于强制 useEffect 重新执行
+
+  // 同步 isDragging 到 ref
+  useEffect(() => {
+    isDraggingRef.current = isDragging
+  }, [isDragging])
 
   // 卡片可见性状态（用于管理删除标记）
   const [isVisible, setIsVisible] = useState(true)
@@ -108,54 +122,243 @@ export const NodeCardItem = memo(function NodeCardItem({
     }
   }, [handleSave, handleCancel])
 
+  // 处理鼠标按下 - 开始拖拽
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    mouseDownPos.current = { x: e.clientX, y: e.clientY }
-    hasMoved.current = false
-  }, [])
+    // 只处理左键
+    if (e.button !== 0) return
 
-  const handleMouseMove = useCallback((e: React.MouseEvent) => {
-    if (!mouseDownPos.current) return
+    // 如果正在编辑，不处理拖拽
+    if (isEditing) return
 
-    const dx = Math.abs(e.clientX - mouseDownPos.current.x)
-    const dy = Math.abs(e.clientY - mouseDownPos.current.y)
-
-    if (dx > 5 || dy > 5) {
-      hasMoved.current = true
-    }
-  }, [])
-
-  const handleCardClick = useCallback((e: React.MouseEvent) => {
-    if (isEditing || hasMoved.current) {
-      return
-    }
-
+    // 如果点击的是按钮、输入框或链接，不处理拖拽
     const target = e.target as HTMLElement
     if (target.closest('button') || target.closest('input') || target.closest('a')) {
       return
     }
 
-    if (cardRef.current) {
-      const rect = cardRef.current.getBoundingClientRect()
-      setPreviewPosition({ top: rect.top })
-    }
-
-    if (onTogglePreview) {
-      onTogglePreview(showPreview ? null : card.id)
-    }
-  }, [isEditing, showPreview, card.id, onTogglePreview])
-
-  const handleDragStart = useCallback((e: React.DragEvent) => {
-    if (showPreview && onTogglePreview) {
-      onTogglePreview(null)
-    }
-    e.dataTransfer.setData('application/nodepool-card', JSON.stringify(card))
-    e.dataTransfer.effectAllowed = 'copy'
-  }, [card, showPreview, onTogglePreview])
-
-  const handleDragEnd = useCallback(() => {
+    mouseDownPos.current = { x: e.clientX, y: e.clientY }
     hasMoved.current = false
-    mouseDownPos.current = null
-  }, [])
+    dragStartRef.current = { x: e.clientX, y: e.clientY }
+
+    // 设置拖拽状态
+    const { setDraggingCardFromPool } = useUIStore.getState()
+    setDraggingCardFromPool(card)
+
+    // 强制 useEffect 重新执行以添加事件监听器
+    setDragSession(prev => prev + 1)
+  }, [card, isEditing])
+
+  // 全局鼠标移动处理 - 检测拖拽和画布区域
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!dragStartRef.current) return
+
+      const dx = Math.abs(e.clientX - dragStartRef.current.x)
+      const dy = Math.abs(e.clientY - dragStartRef.current.y)
+
+      // 如果移动距离超过阈值，开始拖拽
+      if (!isDraggingRef.current && (dx > 5 || dy > 5)) {
+        setIsDragging(true)
+        isDraggingRef.current = true
+        hasMoved.current = true
+
+        // 关闭预览
+        if (showPreview && onTogglePreview) {
+          onTogglePreview(null)
+        }
+
+        // 触发全局拖拽开始事件，用于显示虚拟卡片
+        const dragStartEvent = new CustomEvent('nodePoolDragStart', {
+          detail: {
+            card: card,
+            clientX: e.clientX,
+            clientY: e.clientY,
+          },
+        })
+        document.dispatchEvent(dragStartEvent)
+      }
+
+      if (isDraggingRef.current) {
+        // 检测是否进入画布区域
+        const canvasElement = document.querySelector('[data-canvas-container]')
+
+        if (canvasElement) {
+          const rect = canvasElement.getBoundingClientRect()
+          const isOver = e.clientX >= rect.left && e.clientX <= rect.right &&
+                        e.clientY >= rect.top && e.clientY <= rect.bottom
+
+          const { setIsOverCanvas, setPoolDragGhostPosition, isOverCanvas } = useUIStore.getState()
+
+          if (isOver !== isOverCanvas) {
+            setIsOverCanvas(isOver)
+          }
+
+          if (isOver) {
+            setPoolDragGhostPosition({ x: e.clientX, y: e.clientY })
+          } else {
+            setPoolDragGhostPosition(null)
+          }
+        }
+      }
+    }
+
+    const handleMouseUp = async (e: MouseEvent) => {
+      if (!dragStartRef.current) return
+
+      if (isDraggingRef.current) {
+        // 检查是否在画布区域释放
+        const { isOverCanvas, setDraggingCardFromPool, setIsOverCanvas, setPoolDragGhostPosition } = useUIStore.getState()
+
+        if (isOverCanvas) {
+          // 在画布区域释放，添加节点到画布
+          const { currentProject } = useProjectsStore.getState()
+          const { moveNodeFromPool } = useCanvasStore.getState()
+          const { addToast } = useUIStore.getState()
+
+          if (currentProject) {
+            try {
+              const nodeData = JSON.parse(card.content)
+              const canvasRect = document.querySelector('[data-canvas-container]')?.getBoundingClientRect()
+              const { zoom, panX, panY } = useCanvasStore.getState()
+
+              // 计算在画布上的位置（考虑画布偏移和缩放）
+              // 鼠标在画布容器中的位置 = 鼠标屏幕位置 - 画布容器位置
+              const mouseInCanvasX = canvasRect ? e.clientX - canvasRect.left : e.clientX
+              const mouseInCanvasY = canvasRect ? e.clientY - canvasRect.top : e.clientY
+
+              // 转换为画布坐标 = (鼠标位置 - 平移偏移) / 缩放
+              const canvasX = (mouseInCanvasX - panX) / zoom
+              const canvasY = (mouseInCanvasY - panY) / zoom
+
+              // 节点宽高
+              const nodeWidth = nodeData.width || 200
+              const nodeHeight = nodeData.height || 120
+
+              // 让节点中心对准鼠标落点，需要偏移半个宽高
+              const nodeX = canvasX - nodeWidth / 2
+              const nodeY = canvasY - nodeHeight / 2
+
+              const newNode = {
+                id: `node-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+                x: nodeX,
+                y: nodeY,
+                width: nodeWidth,
+                height: nodeHeight,
+                title: nodeData.title || card.name,
+                content: nodeData.content || '',
+                type: nodeData.type || card.type || 'text',
+                color: nodeData.color || card.color,
+                fontSize: nodeData.fontSize || 14,
+                locked: false,
+                zIndex: 1,
+                textAlign: nodeData.textAlign || 'left',
+                collapsed: nodeData.collapsed || false,
+                ...(nodeData.type === 'image' && { imageUrl: nodeData.imageUrl || card.thumbnail }),
+              }
+
+              // 使用 moveNodeFromPool 添加节点到画布（支持撤销/重做）
+              // 方案：通过节点内容匹配来找到并删除/恢复卡片
+              moveNodeFromPool(
+                newNode,
+                async () => {
+                  // execute: 从节点池移除卡片
+                  // 通过节点ID匹配找到对应的卡片（支持首次执行和重做）
+                  const { cardsMap, removeCard } = useNodePoolStore.getState()
+                  const { currentProject } = useProjectsStore.getState()
+                  if (!currentProject) return
+
+                  // 查找匹配的卡片（通过项目名称和节点内容匹配）
+                  for (const [cardId, poolCard] of cardsMap) {
+                    if (poolCard.projectId === currentProject.id) {
+                      try {
+                        const cardNodeData = JSON.parse(poolCard.content)
+                        // 如果内容中的节点ID匹配，则移除该卡片
+                        if (cardNodeData.id === newNode.id || poolCard.id === card.id) {
+                          await removeCard(cardId)
+                          break
+                        }
+                      } catch {
+                        // 解析失败，跳过
+                      }
+                    }
+                  }
+                },
+                async () => {
+                  // undo: 重新添加卡片到节点池
+                  const { currentProject } = useProjectsStore.getState()
+                  const { addCard } = useNodePoolStore.getState()
+                  if (currentProject) {
+                    await addCard(currentProject.id, {
+                      projectId: currentProject.id,
+                      name: card.name,
+                      content: JSON.stringify(newNode),
+                      type: card.type,
+                      color: card.color,
+                      tags: card.tags,
+                      createdBy: card.createdBy,
+                      sortOrder: card.sortOrder,
+                      folderId: card.folderId,
+                      thumbnail: card.thumbnail,
+                    })
+                  }
+                }
+              )
+
+              // 显示成功提示
+              addToast({ type: 'success', title: '节点已添加', message: '节点已添加到画布' })
+            } catch (error) {
+              addToast({ type: 'error', title: '添加失败', message: '无法解析节点数据' })
+            }
+          }
+
+          // 清除拖拽状态
+          setDraggingCardFromPool(null)
+          setIsOverCanvas(false)
+          setPoolDragGhostPosition(null)
+        } else {
+          // 清除拖拽状态
+          const { setDraggingCardFromPool, setIsOverCanvas, setPoolDragGhostPosition } = useUIStore.getState()
+          setDraggingCardFromPool(null)
+          setIsOverCanvas(false)
+          setPoolDragGhostPosition(null)
+        }
+      } else {
+        // 没有拖拽，处理点击
+        if (!hasMoved.current) {
+          // 处理卡片点击
+          if (cardRef.current) {
+            const rect = cardRef.current.getBoundingClientRect()
+            setPreviewPosition({ top: rect.top })
+          }
+
+          if (onTogglePreview) {
+            onTogglePreview(showPreview ? null : card.id)
+          }
+        }
+      }
+
+      // 触发全局拖拽结束事件
+      const dragEndEvent = new CustomEvent('nodePoolDragEnd')
+      document.dispatchEvent(dragEndEvent)
+
+      // 重置状态
+      setIsDragging(false)
+      isDraggingRef.current = false
+      dragStartRef.current = null
+      mouseDownPos.current = null
+      hasMoved.current = false
+    }
+
+    if (dragStartRef.current) {
+      document.addEventListener('mousemove', handleMouseMove)
+      document.addEventListener('mouseup', handleMouseUp)
+    }
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove)
+      document.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [card, showPreview, onTogglePreview, dragSession])
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -222,19 +425,18 @@ export const NodeCardItem = memo(function NodeCardItem({
       {/* Card */}
       <div
         ref={cardRef}
-        style={{ backgroundColor: card.color || '#ffffff' }}
+        style={{
+          backgroundColor: card.color || '#ffffff',
+          opacity: isDragging ? 0 : 1,
+          visibility: isDragging ? 'hidden' : 'visible',
+        }}
         className={clsx(
           'p-4 rounded-lg border hover:border-blue-400 dark:hover:border-blue-500 cursor-pointer group relative transition-all duration-200 hover:shadow-md',
-          isDragging && 'opacity-50 rotate-2 scale-105',
+          isExternalDragging && 'opacity-50 rotate-2 scale-105',
           isDragOver && dragOverPosition === 'inside' && 'ring-2 ring-blue-500'
         )}
-        onClick={handleCardClick}
         onContextMenu={(e) => onContextMenu?.(e, card)}
         onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onDragStart={handleDragStart}
-        onDragEnd={handleDragEnd}
-        draggable
       >
         <div className="flex items-start justify-between">
           <div className="flex-1 min-w-0 flex items-start gap-2">

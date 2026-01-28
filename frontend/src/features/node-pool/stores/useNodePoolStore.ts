@@ -279,8 +279,6 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
 
         // If should delete, discard the real card
         if (shouldDelete) {
-          console.log(`[NodePool] 临时卡片已标记为删除或已移除，丢弃：${created.name}`)
-
           // Update operation status as completed
           const updatedOp = newOperationQueue.get(operationId)
           if (updatedOp) {

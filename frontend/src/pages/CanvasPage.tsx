@@ -738,6 +738,12 @@ export function CanvasPage() {
         removeCard(card.id)
 
         addToast({ type: 'success', title: '移动成功', message: '节点已移动到画布' })
+
+        // 清除拖拽状态
+        const { setDraggingCardFromPool, setIsOverCanvas, setPoolDragGhostPosition } = useUIStore.getState()
+        setDraggingCardFromPool(null)
+        setIsOverCanvas(false)
+        setPoolDragGhostPosition(null)
       } catch (error) {
         addToast({ type: 'error', title: '移动失败', message: '无法解析节点数据' })
       }
@@ -2717,67 +2723,6 @@ export function CanvasPage() {
     }
   }
 
-  // Handle drop from node pool to canvas
-  const handleCanvasDrop = async (e: React.DragEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-
-    const cardData = e.dataTransfer.getData('application/nodepool-card')
-    if (!cardData || !containerRef.current) return
-
-    try {
-      const draggedCard = JSON.parse(cardData) as NodeCard & { _uniqueId?: string }
-      const rect = containerRef.current.getBoundingClientRect()
-
-      // Calculate drop position in canvas coordinates
-      const mouseX = e.clientX - rect.left
-      const mouseY = e.clientY - rect.top
-      const canvasX = (mouseX - panX) / zoom
-      const canvasY = (mouseY - panY) / zoom
-
-      // 使用唯一标识符从节点池中查找对应的卡片
-      const { useCard: poolUseCard, cardsMap } = useNodePoolStore.getState()
-
-      // 通过唯一标识符查找真实的卡片
-      let realCard: NodeCard | undefined
-      if (draggedCard._uniqueId) {
-        // 使用唯一标识符查找
-        for (const [id, card] of cardsMap) {
-          const cardUniqueId = `card-${card.id}-${card.createdAt}`
-          if (cardUniqueId === draggedCard._uniqueId) {
-            realCard = card
-            break
-          }
-        }
-      }
-
-      // 如果找不到，使用原始ID（向后兼容）
-      if (!realCard) {
-        realCard = cardsMap.get(draggedCard.id)
-      }
-
-      if (!realCard) {
-        addToast({ type: 'error', title: '节点未找到', message: '无法在节点池中找到对应的卡片' })
-        return
-      }
-
-      // 使用找到的真实卡片
-      await poolUseCard(realCard, (nodeData) => {
-        const newNode = {
-          ...nodeData,
-          id: `${nodeData.id}-pool-${Date.now()}`,
-          x: canvasX - (nodeData.width || 200) / 2,
-          y: canvasY - (nodeData.height || 120) / 2,
-        }
-        addNode(newNode)
-      })
-
-      addToast({ type: 'success', title: '节点已取出', message: '卡片已从池中取出到画布' })
-    } catch (error) {
-      addToast({ type: 'error', title: '使用节点失败', message: error instanceof Error ? error.message : '未知错误' })
-    }
-  }
-
   // Handle keyboard shortcuts for node operations
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -2891,6 +2836,13 @@ export function CanvasPage() {
       const customEvent = e as CustomEvent<{ nodeId: string; x: number; y: number }>
       const { nodeId, x, y } = customEvent.detail
       setDraggingNodePositions(prev => new Map(prev).set(nodeId, { x, y }))
+
+      // 检查是否拖拽到节点池区域
+      const node = nodes.get(nodeId) as Node | undefined
+      if (node) {
+        const { setDraggingNodeFromCanvas } = useUIStore.getState()
+        setDraggingNodeFromCanvas({ nodeId, nodeData: node })
+      }
     }
 
     const handleNodeDragMove = (e: Event) => {
@@ -2900,13 +2852,71 @@ export function CanvasPage() {
     }
 
     const handleNodeDragEnd = (e: Event) => {
-      const customEvent = e as CustomEvent<{ nodeId: string }>
-      const { nodeId } = customEvent.detail
+      const customEvent = e as CustomEvent<{ nodeId: string; droppedInNodePool?: boolean }>
+      const { nodeId, droppedInNodePool } = customEvent.detail
       setDraggingNodePositions(prev => {
         const newMap = new Map(prev)
         newMap.delete(nodeId)
         return newMap
       })
+
+      // 如果在节点池区域释放，则添加节点到节点池
+      if (droppedInNodePool) {
+        const { draggingNodeFromCanvas } = useUIStore.getState()
+        if (draggingNodeFromCanvas) {
+          const { currentProject } = useProjectsStore.getState()
+          const { addCard } = useNodePoolStore.getState()
+          const { moveNodeToPool } = useCanvasStore.getState()
+          const { addToast } = useUIStore.getState()
+
+          if (currentProject) {
+            const node = draggingNodeFromCanvas.nodeData as Node
+            // 使用 moveNodeToPool 将节点移动到节点池（支持撤销/重做）
+            // onExecute: 添加卡片到节点池
+            // onUndo: 从节点池移除卡片
+            moveNodeToPool(
+              nodeId,
+              node,
+              async () => {
+                // execute: 添加卡片到节点池
+                await addCard(currentProject.id, {
+                  projectId: currentProject.id,
+                  name: node.title || node.content || '未命名',
+                  content: JSON.stringify(node),
+                  type: node.type || 'text',
+                  color: node.color,
+                  tags: null,
+                  createdBy: 1,
+                  sortOrder: 0,
+                  folderId: null,
+                  thumbnail: node.type === 'image' ? (node as any).imageUrl : undefined,
+                })
+              },
+              async () => {
+                // undo: 需要从节点池找到并移除对应的卡片
+                // 由于卡片ID是后端生成的，我们需要通过内容匹配来找到它
+                const { cardsMap, removeCard } = useNodePoolStore.getState()
+                // 查找匹配的卡片（通过项目名称和内容匹配）
+                for (const [cardId, card] of cardsMap) {
+                  if (card.projectId === currentProject.id) {
+                    try {
+                      const cardNodeData = JSON.parse(card.content)
+                      // 如果内容匹配，则移除该卡片
+                      if (cardNodeData.id === node.id) {
+                        await removeCard(cardId)
+                        break
+                      }
+                    } catch {
+                      // 解析失败，跳过
+                    }
+                  }
+                }
+              }
+            )
+            addToast({ type: 'success', title: '已添加到节点池', message: '节点已添加到节点池' })
+          }
+        }
+      }
     }
 
     window.addEventListener('nodeDragStart', handleNodeDragStart as EventListener)
@@ -2918,7 +2928,7 @@ export function CanvasPage() {
       window.removeEventListener('nodeDragMove', handleNodeDragMove as EventListener)
       window.removeEventListener('nodeDragEnd', handleNodeDragEnd as EventListener)
     }
-  }, [])
+  }, [nodes])
 
   // Show/hide rich text toolbar based on editing state
   useEffect(() => {
@@ -3027,8 +3037,7 @@ export function CanvasPage() {
             e.preventDefault()
           }
         }}
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={handleCanvasDrop}
+
         style={{
           cursor: customCursor || (isCreatingConnection ? 'crosshair' : isCreatingGroup ? 'crosshair' : isDragging ? 'grabbing' : isDefaultSelectionTool(currentTool) || currentTool === 'pan' || isSpacePressed ? 'grab' : currentTool === 'node' || currentTool === 'image' ? 'pointer' : currentTool === 'domain' ? 'cell' : currentTool === 'connection' ? 'crosshair' : currentTool === 'group' ? 'crosshair' : 'default'),
           userSelect: isDragging || currentTool === 'pan' ? 'none' : undefined,

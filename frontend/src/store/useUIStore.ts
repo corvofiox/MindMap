@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { persist, createJSONStorage } from 'zustand/middleware'
 import { nanoid } from 'nanoid'
-import type { Theme, Tool, DragMode, NodeCard, Toast, NodeDefaults } from '@/types'
+import type { Theme, Tool, DragMode, NodeCard, Toast, NodeDefaults, Node } from '@/types'
 import { STORAGE_KEYS, DEFAULT_NODE_DEFAULTS } from '@/constants'
 import { getToastConfig } from '@/config/messageConfig'
 import { setupTheme, applyTheme, initThemeListener } from '@/utils/themeManager'
@@ -44,6 +44,22 @@ interface UIState {
   dragGhostCard: NodeCard | null
   dragGhostPosition: { x: number; y: number } | null
   setDragGhost: (card: NodeCard | null, position: { x: number; y: number } | null) => void
+
+  // Drag from canvas to node pool
+  draggingNodeFromCanvas: { nodeId: string; nodeData: Node } | null
+  isOverNodePool: boolean
+  canvasDragGhostPosition: { x: number; y: number } | null
+  setDraggingNodeFromCanvas: (data: { nodeId: string; nodeData: Node } | null) => void
+  setIsOverNodePool: (isOver: boolean) => void
+  setCanvasDragGhostPosition: (position: { x: number; y: number } | null) => void
+
+  // Drag from node pool to canvas
+  draggingCardFromPool: NodeCard | null
+  isOverCanvas: boolean
+  poolDragGhostPosition: { x: number; y: number } | null
+  setDraggingCardFromPool: (card: NodeCard | null) => void
+  setIsOverCanvas: (isOver: boolean) => void
+  setPoolDragGhostPosition: (position: { x: number; y: number } | null) => void
 
   // Minimap
   minimapVisible: boolean
@@ -174,6 +190,22 @@ export const useUIStore = create<UIState>()(
         dragGhostCard: null,
         dragGhostPosition: null,
         setDragGhost: (card, position) => set({ dragGhostCard: card, dragGhostPosition: position }),
+
+        // Drag from canvas to node pool
+        draggingNodeFromCanvas: null,
+        isOverNodePool: false,
+        canvasDragGhostPosition: null,
+        setDraggingNodeFromCanvas: (data) => set({ draggingNodeFromCanvas: data }),
+        setIsOverNodePool: (isOver) => set({ isOverNodePool: isOver }),
+        setCanvasDragGhostPosition: (position) => set({ canvasDragGhostPosition: position }),
+
+        // Drag from node pool to canvas
+        draggingCardFromPool: null,
+        isOverCanvas: false,
+        poolDragGhostPosition: null,
+        setDraggingCardFromPool: (card) => set({ draggingCardFromPool: card }),
+        setIsOverCanvas: (isOver) => set({ isOverCanvas: isOver }),
+        setPoolDragGhostPosition: (position) => set({ poolDragGhostPosition: position }),
 
         // Minimap
         minimapVisible: true,

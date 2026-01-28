@@ -55,6 +55,10 @@ interface CanvasState {
   removeNode: (id: string) => void
   duplicateNode: (id: string) => void
 
+  // Node Pool actions
+  moveNodeToPool: (nodeId: string, nodeData: Node, onExecute?: () => Promise<void>, onUndo?: () => Promise<void>) => void
+  moveNodeFromPool: (node: Node, onExecute?: () => Promise<void>, onUndo?: () => Promise<void>) => void
+
   // Group actions
   addGroup: (group: NodeGroup) => void
   updateGroup: (id: string, updates: Partial<NodeGroup>) => void
@@ -714,6 +718,73 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   // Dirty state
   setDirty: (dirty) => {
     set({ isDirty: dirty })
+  },
+
+  // Node Pool actions
+  moveNodeToPool: (nodeId: string, nodeData: Node, onExecute?: () => Promise<void>, onUndo?: () => Promise<void>) => {
+    const state = get()
+    const node = state.nodes.get(nodeId)
+    if (!node) return
+
+    // 收集与该节点相关的连接
+    const removedConnections: Connection[] = []
+    for (const [, conn] of state.connections) {
+      if (conn.fromNodeId === nodeId || conn.toNodeId === nodeId) {
+        removedConnections.push(conn)
+      }
+    }
+
+    get().executeCommand({
+      type: 'moveNodeToPool',
+      timestamp: Date.now(),
+      execute: () => {
+        const state = get()
+        const nodes = new Map(state.nodes)
+        nodes.delete(nodeId)
+        const connections = new Map(state.connections)
+        for (const conn of removedConnections) {
+          connections.delete(conn.id)
+        }
+        // 异步添加卡片到节点池
+        onExecute?.()
+        return { nodes, connections, selectedIds: [], isDirty: true }
+      },
+      undo: () => {
+        const state = get()
+        const nodes = new Map(state.nodes)
+        const connections = new Map(state.connections)
+        nodes.set(nodeId, nodeData)
+        for (const conn of removedConnections) {
+          connections.set(conn.id, conn)
+        }
+        // 异步从节点池移除卡片（撤销时）
+        onUndo?.()
+        return { nodes, connections, isDirty: true }
+      },
+    })
+  },
+
+  moveNodeFromPool: (node: Node, onExecute?: () => Promise<void>, onUndo?: () => Promise<void>) => {
+    get().executeCommand({
+      type: 'moveNodeFromPool',
+      timestamp: Date.now(),
+      execute: () => {
+        const state = get()
+        const nodes = new Map(state.nodes)
+        nodes.set(node.id, node)
+        // 异步从节点池移除卡片
+        onExecute?.()
+        return { nodes, selectedIds: [node.id], isDirty: true }
+      },
+      undo: () => {
+        const state = get()
+        const nodes = new Map(state.nodes)
+        nodes.delete(node.id)
+        // 异步添加卡片到节点池（撤销时）
+        onUndo?.()
+        return { nodes, selectedIds: [], isDirty: true }
+      },
+    })
   },
 
   // Undo/Redo actions
