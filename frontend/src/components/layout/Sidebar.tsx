@@ -612,8 +612,13 @@ export function Sidebar({ open }: SidebarProps) {
                     />
                   ))
               ) : (
-                <div className="text-center text-sm text-gray-400 dark:text-gray-500 px-4 py-4">
-                  根目录 (拖拽画布到此处移出文件夹)
+                <div className={clsx(
+                  'text-center py-4 text-sm rounded-lg transition-all duration-200',
+                  isRootDragOver
+                    ? 'text-blue-500 bg-blue-50 dark:bg-blue-900/20'
+                    : 'text-gray-400'
+                )}>
+                  暂无画布
                 </div>
               )}
             </div>

@@ -16,10 +16,13 @@ export function DomainContextMenu({ domainId, position, onClose }: DomainContext
   const { openStylePanel, setSelectedType } = useUIStore()
 
   const menuRef = useRef<HTMLDivElement>(null)
+  const [isPositioned, setIsPositioned] = useState(false)
   const [adjustedPosition, setAdjustedPosition] = useState(position)
   const domain = domains.get(domainId)
 
   useEffect(() => {
+    if (isPositioned) return
+
     const adjustPosition = () => {
       if (!menuRef.current) return
 
@@ -46,10 +49,12 @@ export function DomainContextMenu({ domainId, position, onClose }: DomainContext
       }
 
       setAdjustedPosition({ x, y })
+      setIsPositioned(true)
     }
 
-    adjustPosition()
-  }, [position])
+    const rafId = requestAnimationFrame(adjustPosition)
+    return () => cancelAnimationFrame(rafId)
+  }, [position, isPositioned])
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -131,6 +136,9 @@ export function DomainContextMenu({ domainId, position, onClose }: DomainContext
         style={{
           left: adjustedPosition.x,
           top: adjustedPosition.y,
+          opacity: isPositioned ? 1 : 0,
+          pointerEvents: isPositioned ? 'auto' : 'none',
+          transition: 'opacity 0.1s ease-out',
           zIndex: Z_INDEX.CONTEXT_MENU,
         }}
       >

@@ -47,6 +47,8 @@ export function NodeContextMenu({ nodeId, position, onClose }: NodeContextMenuPr
 
   // Adjust menu position based on actual menu size and viewport boundaries
   useEffect(() => {
+    if (isPositioned) return
+
     const adjustPosition = () => {
       if (!menuRef.current) return
 
@@ -80,7 +82,7 @@ export function NodeContextMenu({ nodeId, position, onClose }: NodeContextMenuPr
 
     const rafId = requestAnimationFrame(adjustPosition)
     return () => cancelAnimationFrame(rafId)
-  }, [position])
+  }, [position, isPositioned])
 
   // Re-adjust when color section opens/closes
   useEffect(() => {

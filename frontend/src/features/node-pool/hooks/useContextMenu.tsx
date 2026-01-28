@@ -24,6 +24,8 @@ export function useContextMenu({ initialPosition, onClose }: UseContextMenuOptio
   const menuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
+    if (isPositioned) return
+
     const adjustPosition = () => {
       if (!menuRef.current) return
 
@@ -49,7 +51,7 @@ export function useContextMenu({ initialPosition, onClose }: UseContextMenuOptio
 
     const rafId = requestAnimationFrame(adjustPosition)
     return () => cancelAnimationFrame(rafId)
-  }, [initialPosition])
+  }, [initialPosition, isPositioned])
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {

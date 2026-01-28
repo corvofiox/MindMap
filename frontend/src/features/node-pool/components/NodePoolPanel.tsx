@@ -624,7 +624,7 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
         onDrop={handleRootDrop}
       >
         {/* Render folder tree */}
-        {filteredFolderTree.length === 0 && !searchQuery.trim() ? (
+        {filteredFolderTree.length === 0 && !filteredCardsByFolder.get(null)?.length && !searchQuery.trim() ? (
           <EmptyState onAddToPool={handleAddToPool} />
         ) : filteredFolderTree.length === 0 && searchQuery.trim() ? (
           <div className="text-center py-8 text-gray-500 dark:text-gray-400">
