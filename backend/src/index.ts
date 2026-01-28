@@ -10,7 +10,6 @@ const __dirname = path.dirname(__filename)
 dotenv.config({ path: path.resolve(__dirname, '..', '.env') })
 
 import express from 'express'
-import cors from 'cors'
 import { createServer } from 'http'
 import { WebSocketServer } from 'ws'
 import cookieParser from 'cookie-parser'

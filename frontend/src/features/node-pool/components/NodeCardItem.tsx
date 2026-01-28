@@ -2,7 +2,7 @@
  * NodeCardItem Component
  *
  * Renders a node card in the node pool.
- * Can be dragged to the canvas (to use).
+ * Can be dragged to canvas (to use).
  */
 
 import { useState, useCallback, memo, useRef, useEffect } from 'react'
@@ -11,6 +11,7 @@ import { clsx } from 'clsx'
 import type { NodeCardItemProps } from '../types/node-pool'
 import { containsHTML, safeHTML } from '@/utils/sanitizeHTML'
 import { Z_INDEX } from '@/constants'
+import { useNodePoolStore } from '../stores/useNodePoolStore'
 
 function SearchHighlighter({ text, query }: { text: string; query: string }) {
   if (!query.trim() || !text.toLowerCase().includes(query.toLowerCase())) {
@@ -49,16 +50,40 @@ export const NodeCardItem = memo(function NodeCardItem({
   onTogglePreview,
   searchQuery = '',
 }: NodeCardItemProps & { searchQuery?: string }) {
-  if ((card as any)._markedForDeletion) {
-    return null
-  }
-
   const [isEditing, setIsEditing] = useState(false)
   const [editName, setEditName] = useState(card.name)
   const [previewPosition, setPreviewPosition] = useState({ top: 0 })
   const cardRef = useRef<HTMLDivElement>(null)
   const mouseDownPos = useRef<{ x: number; y: number } | null>(null)
   const hasMoved = useRef(false)
+
+  // 卡片可见性状态（用于管理删除标记）
+  const [isVisible, setIsVisible] = useState(true)
+
+  // 监听 _markedForDeletion 状态变化
+  useEffect(() => {
+    const checkDeletionStatus = () => {
+      const tempCard = useNodePoolStore.getState().temporaryCards.get(card.id)
+      const isMarkedForDeletion = tempCard?.card._markedForDeletion === true
+
+      if (isMarkedForDeletion && isVisible) {
+        setIsVisible(false)
+      } else if (!isMarkedForDeletion && !isVisible) {
+        const store = useNodePoolStore.getState()
+        if (store.cardsMap.has(card.id)) {
+          setIsVisible(true)
+        }
+      }
+    }
+
+    checkDeletionStatus()
+
+    const interval = setInterval(() => {
+      checkDeletionStatus()
+    }, 50)
+
+    return () => clearInterval(interval)
+  }, [card.id, isVisible])
 
   const handleSave = useCallback(async () => {
     if (editName.trim() && editName.trim() !== card.name) {
@@ -159,7 +184,6 @@ export const NodeCardItem = memo(function NodeCardItem({
     }
   }, [showPreview, onTogglePreview])
 
-  // Parse card content for display
   const parseCardContent = useCallback(() => {
     try {
       const nodeData = JSON.parse(card.content)
@@ -182,6 +206,11 @@ export const NodeCardItem = memo(function NodeCardItem({
   }, [card])
 
   const contentData = parseCardContent()
+
+  // 如果卡片不可见，不渲染内容
+  if (!isVisible) {
+    return null
+  }
 
   return (
     <>

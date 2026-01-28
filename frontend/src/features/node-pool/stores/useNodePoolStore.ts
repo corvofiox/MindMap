@@ -31,7 +31,6 @@ function generateTempId(): number {
 
 function generateOperationId(): string {
   return `op-${Date.now()}-${operationIdCounter++}`
-
 }
 
 export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
@@ -80,7 +79,20 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
     }
 
     try {
-      const nodeData = JSON.parse(actualCard.content)
+      const freshTempCard = get().temporaryCards.get(cardId)
+      if (freshTempCard?.card._markedForDeletion) {
+        console.warn(`[NodePool] useCard aborted: card ${cardId} marked for deletion`)
+        return
+      }
+
+      let nodeData
+      try {
+        nodeData = JSON.parse(actualCard.content)
+      } catch (error) {
+        console.error(`[NodePool] Failed to parse card content for card ${cardId}:`, error)
+        throw new Error('Failed to parse card content')
+      }
+
       const newNode = {
         ...nodeData,
         id: `${nodeData.id}-pool-${Date.now()}`,
@@ -123,7 +135,7 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
         await api.removeFromNodePool(cardToRemove.card.id)
       }
 
-      set((prevState) => {
+      set(() => {
         const updatedOp = newOperationQueue.get(operationId)
         if (updatedOp) {
           newOperationQueue.set(operationId, { ...updatedOp, status: 'completed' })
@@ -405,17 +417,32 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
   updateCard: async (id: number, data: Partial<NodeCard>) => {
     const isPendingCard = get().pendingCardIds.has(id)
     const originalCard = get().cardsMap.get(id)
-    if (!originalCard) return
+    if (!originalCard) {
+      console.warn(`[NodePool] updateCard skipped: card ${id} not found`)
+      return
+    }
+
+    const tempCard = get().temporaryCards.get(id)
+    if (tempCard?.card._markedForDeletion) {
+      console.warn(`[NodePool] updateCard skipped: card ${id} marked for deletion`)
+      return
+    }
 
     if (isPendingCard) {
-      setTimeout(() => {
-        const store = get()
-        const card = store.cardsMap.get(id)
-        if (card && !store.pendingCardIds.has(id)) {
-          store.updateCard(id, data)
-        }
-      }, 100)
-      return
+      // 等待卡片创建完成后再更新
+      let retries = 0
+      const maxRetries = 20  // 最多重试20次（2秒）
+
+      while (retries < maxRetries && get().pendingCardIds.has(id)) {
+        await new Promise(resolve => setTimeout(resolve, 100))
+        retries++
+      }
+
+      // 如果重试后仍是pending，可能卡片已被删除或失败
+      if (get().pendingCardIds.has(id)) {
+        console.warn(`[NodePool] updateCard aborted: card ${id} still pending after retries`)
+        return
+      }
     }
 
     set((state) => {
@@ -445,6 +472,7 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
 
       const errorMessage = error instanceof Error ? error.message : '更新卡片失败'
       set({ error: errorMessage })
+      throw error
     }
   },
 
@@ -821,7 +849,6 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
   // ========== State Validation ==========
 
   validateAndFixState: () => {
-    const state = get()
     const fixes: string[] = []
 
     set((prevState) => {
@@ -839,7 +866,7 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
       }
 
       // Fix 2: Add IDs to pending if card exists but not in pending
-      for (const [id, tempCard] of newTemporaryCards) {
+      for (const [id, _tempCard] of newTemporaryCards) {
         if (!newPendingCardIds.has(id)) {
           newPendingCardIds.add(id)
           fixes.push(`Added missing pending ID: ${id}`)

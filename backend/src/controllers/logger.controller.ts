@@ -67,7 +67,13 @@ export const getLogs = async (req: Request, res: Response) => {
       }
 
       const logContent = fs.readFileSync(logFilePath, 'utf8')
-      const logs = logContent.split('\n').filter(line => line.trim()).map(line => JSON.parse(line))
+      const logs = logContent.split('\n').filter(line => line.trim()).map(line => {
+        try {
+          return JSON.parse(line)
+        } catch {
+          return { timestamp: new Date().toISOString(), level: 'info', message: line }
+        }
+      })
 
       res.json({ success: true, logs })
     } catch (error) {

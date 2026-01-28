@@ -321,3 +321,215 @@ export type NodeDefaults = {
   textNode: TextNodeDefaults
   imageNode: ImageNodeDefaults
 }
+
+// ============ API Response Types ============
+// These types eliminate the need for 'any' in API calls
+
+// Auth API Responses
+export interface AuthApiResponse {
+  success: boolean
+  data: {
+    user: User
+    token: string
+  }
+}
+
+// User API Responses
+export interface UserApiResponse {
+  success: boolean
+  data: User
+}
+
+export interface UploadAvatarResponse {
+  success: boolean
+  data: {
+    avatar: string
+  }
+}
+
+export interface ChangePasswordResponse {
+  success: boolean
+  data: {
+    message: string
+  }
+}
+
+export interface DeleteAccountResponse {
+  success: boolean
+  data: {
+    message: string
+  }
+}
+
+export interface UploadImageResponse {
+  success: boolean
+  data: {
+    url: string
+    filename: string
+    mimetype: string
+    size: number
+  }
+}
+
+// Project API Responses
+export interface ProjectsApiResponse {
+  success: boolean
+  data: Project[]
+}
+
+export interface ProjectApiResponse {
+  success: boolean
+  data: Project
+}
+
+export interface CreateProjectApiResponse {
+  success: boolean
+  data: Project
+}
+
+export interface UpdateProjectApiResponse {
+  success: boolean
+  data: Project
+}
+
+export interface DeleteProjectApiResponse {
+  success: boolean
+  data: {
+    message: string
+  }
+}
+
+// Canvas API Responses
+export interface CanvasesApiResponse {
+  success: boolean
+  data: Canvas[]
+}
+
+export interface CanvasApiResponse {
+  success: boolean
+  data: Canvas & {
+    yjsData?: string
+  }
+}
+
+export interface CreateCanvasApiResponse {
+  success: boolean
+  data: Canvas
+}
+
+export interface UpdateCanvasApiResponse {
+  success: boolean
+  data: Canvas
+}
+
+export interface DeleteCanvasApiResponse {
+  success: boolean
+  data: {
+    message: string
+  }
+}
+
+export interface SaveCanvasDataApiResponse {
+  success: boolean
+  data: {
+    message: string
+  }
+}
+
+export interface CanvasNodesData {
+  nodes: Node[]
+  groups: NodeGroup[]
+  domains: Domain[]
+  connections: Connection[]
+  drawings?: unknown[]
+}
+
+export interface LoadCanvasNodesDataApiResponse {
+  success: boolean
+  data: CanvasNodesData | null
+}
+
+// Folder API Responses
+export interface FoldersApiResponse {
+  success: boolean
+  data: Folder[]
+}
+
+export interface CreateFolderApiResponse {
+  success: boolean
+  data: Folder
+}
+
+export interface UpdateFolderApiResponse {
+  success: boolean
+  data: Folder
+}
+
+export interface DeleteFolderApiResponse {
+  success: boolean
+  data: {
+    message: string
+  }
+}
+
+// Node Pool API Responses
+export interface NodePoolApiResponse {
+  success: boolean
+  data: NodeCard[]
+}
+
+export interface AddNodePoolApiResponse {
+  success: boolean
+  data: NodeCard
+}
+
+export interface UpdateNodeCardApiResponse {
+  success: boolean
+  data: NodeCard
+}
+
+export interface IncrementUseCountApiResponse {
+  success: boolean
+  data: NodeCard
+}
+
+export interface RemoveNodePoolApiResponse {
+  success: boolean
+  data: {
+    message: string
+  }
+}
+
+export interface NodePoolFoldersApiResponse {
+  success: boolean
+  data: NodePoolFolder[]
+}
+
+export interface CreateNodePoolFolderApiResponse {
+  success: boolean
+  data: NodePoolFolder
+}
+
+export interface UpdateNodePoolFolderApiResponse {
+  success: boolean
+  data: NodePoolFolder
+}
+
+export interface DeleteNodePoolFolderApiResponse {
+  success: boolean
+  data: {
+    message: string
+  }
+}
+
+// User Settings API Responses
+export interface NodeDefaultsApiResponse {
+  success: boolean
+  data: NodeDefaults
+}
+
+export interface UpdateNodeDefaultsApiResponse {
+  success: boolean
+  data: NodeDefaults
+}
+

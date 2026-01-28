@@ -1,4 +1,4 @@
-import { getSqlite, scheduleSave } from './connection.js'
+import { getSqlite } from './connection.js'
 import { runMigrations } from './migration.js'
 import path from 'path'
 import { fileURLToPath } from 'url'

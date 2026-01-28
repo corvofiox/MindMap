@@ -16,7 +16,7 @@ export function Sidebar({ open }: SidebarProps) {
   const location = useLocation()
   const canvasIdMatch = location.pathname.match(/\/canvas\/(\d+)/)
   const activeCanvasId = canvasIdMatch ? parseInt(canvasIdMatch[1]) : null
-  const { projects, canvases, folders, currentProject, createCanvas, createFolder, updateCanvas, updateProject, deleteProject, setCurrentProject, loadProjects, moveCanvasToFolder, isLoading, loadingMessage } = useProjectsStore()
+  const { projects, canvases, folders, currentProject, createCanvas, createFolder, updateProject, deleteProject, setCurrentProject, loadProjects, moveCanvasToFolder, isLoading, loadingMessage } = useProjectsStore()
   const { addToast } = useUIStore()
 
   // 判断当前是否在项目页面
@@ -96,11 +96,6 @@ export function Sidebar({ open }: SidebarProps) {
       }
       return newSet
     })
-  }
-
-  // 拖拽开始
-  const handleDragStart = (canvasId: number) => {
-    setDraggedCanvasId(canvasId)
   }
 
   // 拖拽结束

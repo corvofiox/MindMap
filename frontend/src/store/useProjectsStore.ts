@@ -316,8 +316,9 @@ export const useProjectsStore = create<ProjectsState>()(
             await api.updateCanvas(canvasId, { folderId })
           } catch (error) {
             if (!silent) {
-              set((state) => ({
-                canvases: state.canvases.map((c) => (c.id === canvasId ? { ...c, folderId: originalFolderId } : c)),
+              const canvases = get().canvases
+            set((_state) => ({
+                canvases: canvases.map((c) => (c.id === canvasId ? { ...c, folderId: originalFolderId } : c)),
               }))
               handleError(error, '移动画布失败')
             }
@@ -473,7 +474,7 @@ export const useProjectsStore = create<ProjectsState>()(
             await api.removeFromNodePool(id)
           } catch (error) {
             // API失败：回滚到原始状态
-            set((state) => ({
+            set((_state) => ({
               nodePool: originalNodePool,
             }))
 

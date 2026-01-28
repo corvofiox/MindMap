@@ -79,13 +79,13 @@ export const useAuthStore = create<AuthState>()(
             const oldToken = localStorage.getItem('mindmap_token')
             const response = await api.login(credentials)
 
-            if (oldToken && oldToken !== response.token) {
+            if (oldToken && oldToken !== response.data.token) {
               clearAllStorage()
             }
 
             // 更新 apiClient 实例的 token
-            api.apiClient.setToken(response.token)
-            localStorage.setItem('mindmap_token', response.token)
+            api.apiClient.setToken(response.data.token)
+            localStorage.setItem('mindmap_token', response.data.token)
 
             // 获取 CSRF token
             try {
@@ -95,8 +95,8 @@ export const useAuthStore = create<AuthState>()(
             }
 
             set({
-              user: response.user,
-              token: response.token,
+              user: response.data.user,
+              token: response.data.token,
               isAuthenticated: true,
               isLoading: false,
             })
@@ -135,13 +135,13 @@ export const useAuthStore = create<AuthState>()(
             const oldToken = localStorage.getItem('mindmap_token')
             const response = await api.register(data)
 
-            if (oldToken && oldToken !== response.token) {
+            if (oldToken && oldToken !== response.data.token) {
               clearAllStorage()
             }
 
-            localStorage.setItem('mindmap_token', response.token)
+            localStorage.setItem('mindmap_token', response.data.token)
             // 更新 apiClient 实例的 token
-            api.apiClient.setToken(response.token)
+            api.apiClient.setToken(response.data.token)
 
             // 获取 CSRF token
             try {
@@ -151,8 +151,8 @@ export const useAuthStore = create<AuthState>()(
             }
 
             set({
-              user: response.user,
-              token: response.token,
+              user: response.data.user,
+              token: response.data.token,
               isAuthenticated: true,
               isLoading: false,
             })
@@ -195,12 +195,12 @@ export const useAuthStore = create<AuthState>()(
 
           try {
             const response = await api.refreshToken()
-            localStorage.setItem('mindmap_token', response.token)
+            localStorage.setItem('mindmap_token', response.data.token)
             // 更新 apiClient 实例的 token
-            api.apiClient.setToken(response.token)
+            api.apiClient.setToken(response.data.token)
             set({
-              user: response.user,
-              token: response.token,
+              user: response.data.user,
+              token: response.data.token,
               isAuthenticated: true,
             })
           } catch (error) {

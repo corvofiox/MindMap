@@ -74,7 +74,6 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
 
   // Sort functionality
   useNodePoolSort({ sortBy, sortOrder })
-  const folderTree = useFolderTree()
 
   // Load node pool data when project changes
   useEffect(() => {
@@ -273,27 +272,35 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
     const canvasNodeData = e.dataTransfer.getData('application/canvas-node')
 
     if (cardData) {
-      const card = JSON.parse(cardData) as NodeCard
-      handleMoveCardToFolder(card, folder.id)
+      try {
+        const card = JSON.parse(cardData) as NodeCard
+        handleMoveCardToFolder(card, folder.id)
+      } catch (error) {
+        addToast({ type: 'error', title: '解析失败', message: '卡片数据格式错误' })
+      }
     } else if (canvasNodeData && currentProject) {
       // 添加新卡片到节点池
-      const node = JSON.parse(canvasNodeData) as unknown as Node
-      addCard(currentProject.id, {
-        projectId: currentProject.id,
-        name: node.title || node.content || '未命名',
-        content: JSON.stringify(node),
-        type: node.type || 'text',
-        color: node.color,
-        tags: null,
-        createdBy: user?.id || 1,
-        sortOrder: 0,
-        folderId: folder.id,
-        thumbnail: node.type === 'image' ? (node as any).imageUrl : undefined,
-      }).then(() => {
-        addToast({ type: 'success', title: '已添加到节点池', message: '节点已添加到节点池' })
-      }).catch(error => {
-        addToast({ type: 'error', title: '添加失败', message: error instanceof Error ? error.message : '未知错误' })
-      })
+      try {
+        const node = JSON.parse(canvasNodeData) as unknown as Node
+        addCard(currentProject.id, {
+          projectId: currentProject.id,
+          name: node.title || node.content || '未命名',
+          content: JSON.stringify(node),
+          type: node.type || 'text',
+          color: node.color,
+          tags: null,
+          createdBy: user?.id || 1,
+          sortOrder: 0,
+          folderId: folder.id,
+          thumbnail: node.type === 'image' ? (node as any).imageUrl : undefined,
+        }).then(() => {
+          addToast({ type: 'success', title: '已添加到节点池', message: '节点已添加到节点池' })
+        }).catch(error => {
+          addToast({ type: 'error', title: '添加失败', message: error instanceof Error ? error.message : '未知错误' })
+        })
+      } catch (error) {
+        addToast({ type: 'error', title: '解析失败', message: '节点数据格式错误' })
+      }
     }
   }, [handleMoveCardToFolder, addToast, currentProject, addCard, user])
 
@@ -307,27 +314,35 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
     const canvasNodeData = e.dataTransfer.getData('application/canvas-node')
 
     if (cardData) {
-      const card = JSON.parse(cardData) as NodeCard
-      handleMoveCardToFolder(card, null)
+      try {
+        const card = JSON.parse(cardData) as NodeCard
+        handleMoveCardToFolder(card, null)
+      } catch (error) {
+        addToast({ type: 'error', title: '解析失败', message: '卡片数据格式错误' })
+      }
     } else if (canvasNodeData && currentProject) {
       // 添加新卡片到节点池
-      const node = JSON.parse(canvasNodeData) as unknown as Node
-      addCard(currentProject.id, {
-        projectId: currentProject.id,
-        name: node.title || node.content || '未命名',
-        content: JSON.stringify(node),
-        type: node.type || 'text',
-        color: node.color,
-        tags: null,
-        createdBy: user?.id || 1,
-        sortOrder: 0,
-        folderId: null,
-        thumbnail: node.type === 'image' ? (node as any).imageUrl : undefined,
-      }).then(() => {
-        addToast({ type: 'success', title: '已添加到节点池', message: '节点已添加到节点池' })
-      }).catch(error => {
-        addToast({ type: 'error', title: '添加失败', message: error instanceof Error ? error.message : '未知错误' })
-      })
+      try {
+        const node = JSON.parse(canvasNodeData) as unknown as Node
+        addCard(currentProject.id, {
+          projectId: currentProject.id,
+          name: node.title || node.content || '未命名',
+          content: JSON.stringify(node),
+          type: node.type || 'text',
+          color: node.color,
+          tags: null,
+          createdBy: user?.id || 1,
+          sortOrder: 0,
+          folderId: null,
+          thumbnail: node.type === 'image' ? (node as any).imageUrl : undefined,
+        }).then(() => {
+          addToast({ type: 'success', title: '已添加到节点池', message: '节点已添加到节点池' })
+        }).catch(error => {
+          addToast({ type: 'error', title: '添加失败', message: error instanceof Error ? error.message : '未知错误' })
+        })
+      } catch (error) {
+        addToast({ type: 'error', title: '解析失败', message: '节点数据格式错误' })
+      }
     }
   }, [handleMoveCardToFolder, addToast, currentProject, addCard, user])
 

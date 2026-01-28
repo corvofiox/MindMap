@@ -1,6 +1,5 @@
 import type {
   User,
-  AuthResponse,
   LoginCredentials,
   RegisterData,
   Project,
@@ -20,13 +19,22 @@ import { apiClient } from './apiClient.js'
 // Export apiClient for use in auth store
 export { apiClient }
 
+// Import API response types
+import type {
+  AuthApiResponse,
+  UploadAvatarResponse,
+  ChangePasswordResponse,
+  DeleteAccountResponse,
+  UploadImageResponse,
+} from '@/types'
+
 // Auth API
-export async function register(data: RegisterData): Promise<AuthResponse> {
-  return await apiClient.post<AuthResponse>(API_ENDPOINTS.AUTH_REGISTER, data)
+export async function register(data: RegisterData): Promise<AuthApiResponse> {
+  return await apiClient.post<AuthApiResponse>(API_ENDPOINTS.AUTH_REGISTER, data)
 }
 
-export async function login(credentials: LoginCredentials): Promise<AuthResponse> {
-  return await apiClient.post<AuthResponse>(API_ENDPOINTS.AUTH_LOGIN, credentials)
+export async function login(credentials: LoginCredentials): Promise<AuthApiResponse> {
+  return await apiClient.post<AuthApiResponse>(API_ENDPOINTS.AUTH_LOGIN, credentials)
 }
 
 export async function logout(): Promise<void> {
@@ -39,8 +47,8 @@ export async function logout(): Promise<void> {
   }
 }
 
-export async function refreshToken(): Promise<AuthResponse> {
-  return await apiClient.post<AuthResponse>(API_ENDPOINTS.AUTH_REFRESH)
+export async function refreshToken(): Promise<AuthApiResponse> {
+  return await apiClient.post<AuthApiResponse>(API_ENDPOINTS.AUTH_REFRESH)
 }
 
 // User API

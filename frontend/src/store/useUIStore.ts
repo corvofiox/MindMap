@@ -5,7 +5,7 @@ import type { Theme, Tool, DragMode, NodeCard, Toast, NodeDefaults } from '@/typ
 import { STORAGE_KEYS, DEFAULT_NODE_DEFAULTS } from '@/constants'
 import { getToastConfig } from '@/config/messageConfig'
 import { setupTheme, applyTheme, initThemeListener } from '@/utils/themeManager'
-import { getNodeDefaults, updateNodeDefaults } from '@/services/api'
+import { updateNodeDefaults } from '@/services/api'
 import { logger } from '@/utils/logger'
 
 const getDefaultNodeDefaults = (): NodeDefaults => DEFAULT_NODE_DEFAULTS
