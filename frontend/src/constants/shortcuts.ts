@@ -51,11 +51,6 @@ export const SHORTCUTS: Shortcut[] = [
     category: 'edit'
   },
   {
-    keys: ['Ctrl', 'Shift', 'Z'],
-    description: '重做',
-    category: 'edit'
-  },
-  {
     keys: ['Ctrl', 'D'],
     description: '复制选中节点',
     category: 'edit'

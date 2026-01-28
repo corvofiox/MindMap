@@ -692,6 +692,10 @@ export function CanvasPage() {
     openStylePanel,
     addToast,
     nodeDefaults,
+    toggleSidebar,
+    toggleNodePool,
+    setSettingsOpen,
+    setCommandPaletteOpen,
   } = useUIStore()
 
   // Refs to store latest values for global event listeners
@@ -1587,6 +1591,21 @@ export function CanvasPage() {
         e.preventDefault()
         setZoom(Math.max(zoom - 0.1, 0.1))
       }
+
+      // Panel shortcuts
+      if ((e.ctrlKey || e.metaKey) && e.key === 'b') {
+        e.preventDefault()
+        toggleSidebar()
+      } else if ((e.ctrlKey || e.metaKey) && e.key === 'p') {
+        e.preventDefault()
+        toggleNodePool()
+      } else if ((e.ctrlKey || e.metaKey) && e.key === ',') {
+        e.preventDefault()
+        setSettingsOpen(true)
+      } else if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault()
+        setCommandPaletteOpen(true)
+      }
     }
 
     window.addEventListener('keydown', handleKeyDown)
@@ -1594,7 +1613,7 @@ export function CanvasPage() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
     }
-  }, [zoom, setCurrentTool, setZoom, setPan, toggleGrid, setEditingId, nodes, groups, selectedIds, addGroup])
+  }, [zoom, setCurrentTool, setZoom, setPan, toggleGrid, setEditingId, nodes, groups, selectedIds, addGroup, toggleSidebar, toggleNodePool, setSettingsOpen, setCommandPaletteOpen])
 
   // Handle click outside to end group name editing
   useEffect(() => {
