@@ -26,6 +26,25 @@ import html2canvas from 'html2canvas-pro'
 
 const AUTO_SAVE_INTERVAL = 5000
 const CACHE_SAVE_DELAY = 500
+const CANVAS_VIEW_STORAGE_KEY = 'mindmap_canvas_views'
+
+// Helper functions to save/load canvas view state from localStorage
+const saveCanvasView = (canvasId: number, zoom: number, panX: number, panY: number) => {
+  const views = JSON.parse(localStorage.getItem(CANVAS_VIEW_STORAGE_KEY) || '{}')
+  views[canvasId] = { zoom, panX, panY, timestamp: Date.now() }
+  localStorage.setItem(CANVAS_VIEW_STORAGE_KEY, JSON.stringify(views))
+}
+
+const loadCanvasView = (canvasId: number) => {
+  const views = JSON.parse(localStorage.getItem(CANVAS_VIEW_STORAGE_KEY) || '{}')
+  return views[canvasId] || null
+}
+
+const clearCanvasView = (canvasId: number) => {
+  const views = JSON.parse(localStorage.getItem(CANVAS_VIEW_STORAGE_KEY) || '{}')
+  delete views[canvasId]
+  localStorage.setItem(CANVAS_VIEW_STORAGE_KEY, JSON.stringify(views))
+}
 
 // Thumbnail generation constants
 const THUMBNAIL = {
@@ -501,8 +520,8 @@ export function CanvasPage() {
   const cacheTimeoutRef = useRef<ReturnType<typeof setTimeout>>()
   const dbSaveTimeoutRef = useRef<ReturnType<typeof setTimeout>>()
   const mouseDownOnContentRef = useRef(false) // Track if mouse down was on content
-  const hasInitializedCameraRef = useRef(false) // Track if camera has been initialized
-  const hasLoadedCanvasDataRef = useRef(false) // Track if canvas data has been loaded
+  const [hasInitializedCamera, setHasInitializedCamera] = useState(false) // Track if camera has been initialized
+  const [hasLoadedCanvasData, setHasLoadedCanvasData] = useState(false) // Track if canvas data has been loaded
   const justFinishedConnectionRef = useRef(false) // Track if just finished creating a connection
   const justFinishedBoxSelectingRef = useRef(false) // Track if just finished box selection
   const justFinishedEndpointDraggingRef = useRef(false) // Track if just finished dragging endpoint
@@ -631,7 +650,6 @@ export function CanvasPage() {
     setCanvasData,
     setZoom,
     setPan,
-    fitViewToContent,
     setEditingId,
     setSelectedIds,
     addToSelection,
@@ -787,7 +805,10 @@ export function CanvasPage() {
     if (isNaN(id)) return
 
     // Reset camera initialization flag when canvas changes
-    hasInitializedCameraRef.current = false
+    setHasInitializedCamera(false)
+
+    // Reset data loaded flag when canvas changes
+    setHasLoadedCanvasData(false)
 
     // Reset last save time when canvas changes
     lastSaveTimeRef.current = 0
@@ -852,7 +873,10 @@ export function CanvasPage() {
         }
       } finally {
         setLoading(false)
-        hasLoadedCanvasDataRef.current = true
+        // Reset camera initialization flag before setting data loaded flag
+        // This ensures camera will be initialized for the new canvas
+        setHasInitializedCamera(false)
+        setHasLoadedCanvasData(true)
       }
     }
 
@@ -864,31 +888,66 @@ export function CanvasPage() {
     }
   }, [canvasId])
 
-  // Center camera on content when canvas data is loaded (only on first load)
+  // Initialize camera position from localStorage when canvas data is loaded
   useEffect(() => {
     if (!canvasId) return
 
     const id = parseInt(canvasId)
     if (isNaN(id)) return
 
-    if (hasInitializedCameraRef.current) return
+    if (hasInitializedCamera) return
 
     if (containerSize.width === 0 || containerSize.height === 0) return
 
     if (isLoading) return
 
-    const { fitViewToContent, nodes, groups, domains } = useCanvasStore.getState()
-    const hasElements = nodes.size > 0 || groups.size > 0 || domains.size > 0
+    // Only initialize camera after data has been loaded
+    if (!hasLoadedCanvasData) return
 
-    if (hasElements) {
-      fitViewToContent(containerSize.width, containerSize.height)
-      hasInitializedCameraRef.current = true
+    // Load saved view state from localStorage
+    const savedView = loadCanvasView(id)
+    if (savedView) {
+      // Restore saved camera state
+      setZoom(savedView.zoom)
+      setPan(savedView.panX, savedView.panY)
+    } else {
+      // Set default view state: 100% zoom, viewport centered at origin
+      // Calculate pan so that viewport center aligns with canvas origin (0, 0)
+      // viewport center = (containerWidth/2 - panX) / zoom = 0
+      // => panX = containerWidth / 2
+      const defaultPanX = containerSize.width / 2
+      const defaultPanY = containerSize.height / 2
+      setZoom(1)
+      setPan(defaultPanX, defaultPanY)
+      // Save default state to localStorage
+      saveCanvasView(id, 1, defaultPanX, defaultPanY)
     }
-  }, [canvasId, containerSize.width, containerSize.height, isLoading])
+
+    setHasInitializedCamera(true)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canvasId, containerSize.width, containerSize.height, isLoading, hasLoadedCanvasData])
 
   // Note: We no longer auto-adjust zoom when container size changes
   // The zoom level should remain constant, only the viewport size changes
   // The minimap will automatically update to reflect the new viewport size
+
+  // Auto-save camera state to localStorage when zoom or pan changes
+  useEffect(() => {
+    if (!canvasId) return
+
+    const id = parseInt(canvasId)
+    if (isNaN(id)) return
+
+    // Only save after camera has been initialized
+    if (!hasInitializedCamera) return
+
+    // Debounce save to avoid frequent writes
+    const timer = setTimeout(() => {
+      saveCanvasView(id, zoom, panX, panY)
+    }, 500)
+
+    return () => clearTimeout(timer)
+  }, [canvasId, zoom, panX, panY, hasInitializedCamera])
 
   const generateThumbnail = useCallback(async (canvasId: number) => {
     if (!containerRef.current) {
@@ -1513,8 +1572,8 @@ export function CanvasPage() {
 
       if ((e.ctrlKey || e.metaKey) && e.key === '0') {
         e.preventDefault()
+        // Only reset zoom, keep camera position unchanged
         setZoom(1)
-        setPan(0, 0)
       } else if ((e.ctrlKey || e.metaKey) && (e.key === '=' || e.key === '+')) {
         e.preventDefault()
         setZoom(Math.min(zoom + 0.1, 5))

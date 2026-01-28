@@ -16,8 +16,8 @@ export function ZoomControls() {
   }
 
   const handleReset = () => {
+    // Only reset zoom, keep camera position unchanged
     setZoom(CANVAS_DEFAULTS.DEFAULT_ZOOM)
-    setPan(0, 0)
   }
 
   return (
