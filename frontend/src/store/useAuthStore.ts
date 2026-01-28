@@ -79,13 +79,13 @@ export const useAuthStore = create<AuthState>()(
             const oldToken = localStorage.getItem('mindmap_token')
             const response = await api.login(credentials)
 
-            if (oldToken && oldToken !== response.data.token) {
+            if (oldToken && oldToken !== response.token) {
               clearAllStorage()
             }
 
             // 更新 apiClient 实例的 token
-            api.apiClient.setToken(response.data.token)
-            localStorage.setItem('mindmap_token', response.data.token)
+            api.apiClient.setToken(response.token)
+            localStorage.setItem('mindmap_token', response.token)
 
             // 获取 CSRF token
             try {
@@ -95,18 +95,17 @@ export const useAuthStore = create<AuthState>()(
             }
 
             set({
-              user: response.data.user,
-              token: response.data.token,
+              user: response.user,
+              token: response.token,
               isAuthenticated: true,
               isLoading: false,
             })
 
             // 重置并加载 UI Store 的节点默认配置
             const uiModule = await loadUIStore() as {
-              getDefaultNodeDefaults: () => NodeDefaults
               useUIStore: {
                 getState: () => {
-                  setState: (state: Partial<{ nodeDefaults: NodeDefaults; nodeDefaultsOpen: boolean }>) => void
+                  resetForLogin: () => void
                   loadNodeDefaults: () => Promise<void>
                 }
               }
@@ -114,9 +113,7 @@ export const useAuthStore = create<AuthState>()(
 
             const uiStore = uiModule.useUIStore.getState()
 
-            uiStore.setState({
-              nodeDefaults: uiModule.getDefaultNodeDefaults(),
-            })
+            uiStore.resetForLogin()
 
             await uiStore.loadNodeDefaults()
           } catch (error) {
@@ -135,13 +132,13 @@ export const useAuthStore = create<AuthState>()(
             const oldToken = localStorage.getItem('mindmap_token')
             const response = await api.register(data)
 
-            if (oldToken && oldToken !== response.data.token) {
+            if (oldToken && oldToken !== response.token) {
               clearAllStorage()
             }
 
-            localStorage.setItem('mindmap_token', response.data.token)
+            localStorage.setItem('mindmap_token', response.token)
             // 更新 apiClient 实例的 token
-            api.apiClient.setToken(response.data.token)
+            api.apiClient.setToken(response.token)
 
             // 获取 CSRF token
             try {
@@ -151,13 +148,14 @@ export const useAuthStore = create<AuthState>()(
             }
 
             set({
-              user: response.data.user,
-              token: response.data.token,
+              user: response.user,
+              token: response.token,
               isAuthenticated: true,
               isLoading: false,
             })
           } catch (error) {
             handleError(error, '注册失败')
+            throw error
           }
         },
 
@@ -171,12 +169,8 @@ export const useAuthStore = create<AuthState>()(
             // 更新 apiClient 实例的 token
             api.apiClient.setToken(null)
 
-            loadUIStore().then(({ useUIStore, getDefaultNodeDefaults }) => {
-              const uiStore = useUIStore.getState()
-              uiStore.setState({
-                nodeDefaults: getDefaultNodeDefaults(),
-                nodeDefaultsOpen: false,
-              })
+            loadUIStore().then(({ useUIStore }) => {
+              useUIStore.getState().resetForLogout()
             }).catch(err => {
               logger.error('Failed to reset UI store on logout', err)
             })
@@ -195,12 +189,12 @@ export const useAuthStore = create<AuthState>()(
 
           try {
             const response = await api.refreshToken()
-            localStorage.setItem('mindmap_token', response.data.token)
+            localStorage.setItem('mindmap_token', response.token)
             // 更新 apiClient 实例的 token
-            api.apiClient.setToken(response.data.token)
+            api.apiClient.setToken(response.token)
             set({
-              user: response.data.user,
-              token: response.data.token,
+              user: response.user,
+              token: response.token,
               isAuthenticated: true,
             })
           } catch (error) {

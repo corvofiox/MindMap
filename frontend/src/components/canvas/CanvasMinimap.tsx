@@ -1,11 +1,12 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import { Z_INDEX } from '@/constants'
-import type { Node, NodeGroup, Domain } from '@/types'
+import type { Node, NodeGroup, Domain, Connection } from '@/types'
 
 interface CanvasMinimapProps {
   nodes: Map<string, Node>
   groups: Map<string, NodeGroup>
   domains: Map<string, Domain>
+  connections: Map<string, Connection>
   zoom: number
   panX: number
   panY: number
@@ -27,6 +28,7 @@ export function CanvasMinimap({
   nodes,
   groups,
   domains,
+  connections,
   zoom,
   panX,
   panY,
@@ -40,7 +42,7 @@ export function CanvasMinimap({
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 })
   const [contentBounds, setContentBounds] = useState<Bounds>({ x: -500, y: -500, width: 1000, height: 1000 })
   const [minimapSize, setMinimapSize] = useState({ width: 200, height: 150 })
-  const [scale, setScale] = useState(0.2)
+  const scaleRef = useRef(0.2)
 
   // Calculate content bounds based on all elements
   useEffect(() => {
@@ -55,7 +57,20 @@ export function CanvasMinimap({
     const MIN_BOUNDS_HEIGHT = 3000
 
     if (allElements.length === 0) {
-      setContentBounds({ x: -MIN_BOUNDS_WIDTH / 2, y: -MIN_BOUNDS_HEIGHT / 2, width: MIN_BOUNDS_WIDTH, height: MIN_BOUNDS_HEIGHT })
+      const bounds = { x: -MIN_BOUNDS_WIDTH / 2, y: -MIN_BOUNDS_HEIGHT / 2, width: MIN_BOUNDS_WIDTH, height: MIN_BOUNDS_HEIGHT }
+      setContentBounds(bounds)
+
+      // 空画布时也计算 minimapSize
+      const maxMinimapWidth = 220
+      const maxMinimapHeight = 165
+      const aspectRatio = bounds.width / bounds.height
+      let width = maxMinimapWidth
+      let height = maxMinimapWidth / aspectRatio
+      if (height > maxMinimapHeight) {
+        height = maxMinimapHeight
+        width = maxMinimapHeight * aspectRatio
+      }
+      setMinimapSize({ width, height })
       return
     }
 
@@ -114,6 +129,145 @@ export function CanvasMinimap({
     setMinimapSize({ width, height })
   }, [nodes, groups, domains])
 
+  // Helper function to get node center point
+  const getNodeCenter = useCallback((node: Node): { x: number; y: number } => {
+    return {
+      x: node.x + node.width / 2,
+      y: node.y + node.height / 2,
+    }
+  }, [])
+
+  // Helper function to get port position
+  const getPortPosition = useCallback((node: Node, port: 'top' | 'right' | 'bottom' | 'left'): { x: number; y: number } => {
+    const center = getNodeCenter(node)
+
+    switch (port) {
+      case 'top':
+        return { x: center.x, y: node.y }
+      case 'right':
+        return { x: node.x + node.width, y: center.y }
+      case 'bottom':
+        return { x: center.x, y: node.y + node.height }
+      case 'left':
+        return { x: node.x, y: center.y }
+      default:
+        return center
+    }
+  }, [getNodeCenter])
+
+  // Helper function to draw a connection path
+  const drawConnection = useCallback((
+    ctx: CanvasRenderingContext2D,
+    connection: Connection,
+    fromNode: Node,
+    toNode: Node,
+    scale: number,
+    offsetX: number,
+    offsetY: number
+  ) => {
+    const fromPos = getPortPosition(fromNode, connection.fromPort)
+    const toPos = getPortPosition(toNode, connection.toPort)
+
+    const x1 = (fromPos.x - contentBounds.x) * scale + offsetX
+    const y1 = (fromPos.y - contentBounds.y) * scale + offsetY
+    const x2 = (toPos.x - contentBounds.x) * scale + offsetX
+    const y2 = (toPos.y - contentBounds.y) * scale + offsetY
+
+    // Set line style
+    ctx.strokeStyle = connection.color || '#6b7280'
+    ctx.lineWidth = Math.max(connection.width * scale, 1)
+
+    // Set dash pattern
+    if (connection.style === 'dashed') {
+      ctx.setLineDash([5 * scale, 3 * scale])
+    } else if (connection.style === 'dotted') {
+      ctx.setLineDash([2 * scale, 2 * scale])
+    } else {
+      ctx.setLineDash([])
+    }
+
+    ctx.beginPath()
+
+    // Handle bend points
+    if (connection.bendPoints && connection.bendPoints.length > 0) {
+      ctx.moveTo(x1, y1)
+      connection.bendPoints.forEach((point) => {
+        const bx = (point.x - contentBounds.x) * scale + offsetX
+        const by = (point.y - contentBounds.y) * scale + offsetY
+        ctx.lineTo(bx, by)
+      })
+      ctx.lineTo(x2, y2)
+    } else {
+      // Draw based on connection type
+      switch (connection.type) {
+        case 'curve': {
+          const midX = (x1 + x2) / 2
+          ctx.moveTo(x1, y1)
+          ctx.bezierCurveTo(midX, y1, midX, y2, x2, y2)
+          break
+        }
+        case 'step': {
+          const midY = (y1 + y2) / 2
+          ctx.moveTo(x1, y1)
+          ctx.lineTo(x1, midY)
+          ctx.lineTo(x2, midY)
+          ctx.lineTo(x2, y2)
+          break
+        }
+        case 'orthogonal': {
+          const midX = (x1 + x2) / 2
+          ctx.moveTo(x1, y1)
+          ctx.lineTo(midX, y1)
+          ctx.lineTo(midX, y2)
+          ctx.lineTo(x2, y2)
+          break
+        }
+        case 'straight':
+        default:
+          ctx.moveTo(x1, y1)
+          ctx.lineTo(x2, y2)
+          break
+      }
+    }
+
+    ctx.stroke()
+    ctx.setLineDash([])
+
+    // Draw arrowheads based on arrowType
+    if (connection.arrowType !== 'none') {
+      const arrowSize = 6 * scale
+      const drawArrow = (x: number, y: number, angle: number) => {
+        ctx.save()
+        ctx.translate(x, y)
+        ctx.rotate(angle)
+        ctx.beginPath()
+        ctx.moveTo(-arrowSize, -arrowSize / 2)
+        ctx.lineTo(0, 0)
+        ctx.lineTo(-arrowSize, arrowSize / 2)
+        ctx.stroke()
+        ctx.restore()
+      }
+
+      // Calculate angle for end arrow
+      let endAngle = Math.atan2(y2 - y1, x2 - x1)
+      if (connection.bendPoints && connection.bendPoints.length > 0) {
+        const lastPoint = connection.bendPoints[connection.bendPoints.length - 1]
+        const lastX = (lastPoint.x - contentBounds.x) * scale + offsetX
+        const lastY = (lastPoint.y - contentBounds.y) * scale + offsetY
+        endAngle = Math.atan2(y2 - lastY, x2 - lastX)
+      }
+
+      // Draw end arrow
+      if (connection.arrowType === 'end' || connection.arrowType === 'both') {
+        drawArrow(x2, y2, endAngle)
+      }
+      // Draw start arrow
+      if (connection.arrowType === 'start' || connection.arrowType === 'both') {
+        drawArrow(x1, y1, endAngle + Math.PI)
+      }
+    }
+  }, [contentBounds, getPortPosition])
+
   // Draw minimap
   useEffect(() => {
     const canvas = canvasRef.current
@@ -122,16 +276,25 @@ export function CanvasMinimap({
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
+    // Set Canvas dimensions
+    const targetWidth = Math.max(1, Math.floor(minimapSize.width))
+    const targetHeight = Math.max(1, Math.floor(minimapSize.height))
+
+    if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
+      canvas.width = targetWidth
+      canvas.height = targetHeight
+    }
+
     // Calculate scale to fit content bounds in minimap
-    const scaleX = minimapSize.width / contentBounds.width
-    const scaleY = minimapSize.height / contentBounds.height
+    const scaleX = targetWidth / contentBounds.width
+    const scaleY = targetHeight / contentBounds.height
     const newScale = Math.min(scaleX, scaleY)
-    setScale(newScale)
+
+    scaleRef.current = newScale
 
     // Calculate center offset to center content in minimap
-    // Use newScale for both to maintain aspect ratio
-    const offsetX = (minimapSize.width - contentBounds.width * newScale) / 2
-    const offsetY = (minimapSize.height - contentBounds.height * newScale) / 2
+    const offsetX = (targetWidth - contentBounds.width * newScale) / 2
+    const offsetY = (targetHeight - contentBounds.height * newScale) / 2
 
     // Clear canvas
     ctx.clearRect(0, 0, canvas.width, canvas.height)
@@ -169,41 +332,78 @@ export function CanvasMinimap({
       ctx.strokeRect(x, y, w, h)
     })
 
-    // Draw nodes
-    ctx.fillStyle = '#ffffff'
-    ctx.strokeStyle = '#374151'
-    ctx.lineWidth = 0.5
+    // Draw connections first (so they appear behind nodes)
+    Array.from(connections.values()).forEach((connection) => {
+      const fromNode = nodes.get(connection.fromNodeId)
+      const toNode = nodes.get(connection.toNodeId)
+      if (fromNode && toNode) {
+        drawConnection(ctx, connection, fromNode, toNode, newScale, offsetX, offsetY)
+      }
+    })
+
+    // Draw nodes with color support
     Array.from(nodes.values()).forEach((node) => {
       const x = (node.x - contentBounds.x) * newScale + offsetX
       const y = (node.y - contentBounds.y) * newScale + offsetY
-      const w = Math.max(node.width * newScale, 3)
-      const h = Math.max(node.height * newScale, 2)
+      const w = Math.max(node.width * newScale, 4)
+      const h = Math.max(node.height * newScale, 3)
+
+      // Use node color if available, otherwise default to white
+      ctx.fillStyle = node.color || '#ffffff'
       ctx.fillRect(x, y, w, h)
+
+      // Draw border - darker version of fill color or default gray
+      if (node.collapsed) {
+        ctx.strokeStyle = '#1f2937'
+        ctx.lineWidth = 1.5
+      } else {
+        ctx.strokeStyle = '#374151'
+        ctx.lineWidth = 0.5
+      }
       ctx.strokeRect(x, y, w, h)
+
+      // Draw small indicator for collapsed nodes
+      if (node.collapsed) {
+        ctx.fillStyle = '#1f2937'
+        ctx.fillRect(x + 2, y + 2, Math.max(w - 4, 2), 2)
+      }
     })
 
     // Restore context
     ctx.restore()
 
-    // Calculate viewport rectangle
-    // The canvas uses transform: translate(panX, panY) scale(zoom) with transform-origin: 0 0
-    // For screen coordinates (screenX, screenY) and canvas coordinates (canvasX, canvasY):
-    //   screenX = canvasX * zoom + panX
-    //   screenY = canvasY * zoom + panY
-    // Reverse: canvasX = (screenX - panX) / zoom
+    // Skip drawing viewport if container dimensions are invalid
+    // This ensures we don't draw with incorrect fallback values
+    if (containerWidth <= 0 || containerHeight <= 0) {
+      return
+    }
+
+    // Calculate viewport rectangle using actual container dimensions
     const viewportLeft = (0 - panX) / zoom
     const viewportTop = (0 - panY) / zoom
     const viewportRight = (containerWidth - panX) / zoom
     const viewportBottom = (containerHeight - panY) / zoom
 
-    // Convert to minimap coordinates (relative to minimap origin)
-    // Use newScale to match node scaling
+    const viewportRectWidth = viewportRight - viewportLeft
+    const viewportRectHeight = viewportBottom - viewportTop
+
+    // Skip drawing if viewport dimensions are invalid (NaN, Infinity, negative, or zero)
+    if (
+      !isFinite(viewportRectWidth) ||
+      !isFinite(viewportRectHeight) ||
+      viewportRectWidth <= 0 ||
+      viewportRectHeight <= 0
+    ) {
+      return
+    }
+
+    // Convert to minimap coordinates
     const vpX = (viewportLeft - contentBounds.x) * newScale + offsetX
     const vpY = (viewportTop - contentBounds.y) * newScale + offsetY
-    const vpW = (viewportRight - viewportLeft) * newScale
-    const vpH = (viewportBottom - viewportTop) * newScale
+    const vpW = viewportRectWidth * newScale
+    const vpH = viewportRectHeight * newScale
 
-    // Draw viewport rectangle (on top of content)
+    // Draw viewport rectangle
     ctx.strokeStyle = '#3b82f6'
     ctx.lineWidth = 2
     ctx.strokeRect(vpX, vpY, vpW, vpH)
@@ -211,49 +411,64 @@ export function CanvasMinimap({
     // Draw viewport semi-transparent fill
     ctx.fillStyle = 'rgba(59, 130, 246, 0.15)'
     ctx.fillRect(vpX, vpY, vpW, vpH)
-  }, [nodes, groups, domains, contentBounds, minimapSize, scale, panX, panY, zoom, containerWidth, containerHeight])
+  }, [nodes, groups, domains, connections, contentBounds, minimapSize, panX, panY, zoom, containerWidth, containerHeight, drawConnection])
 
   // Handle mouse events for dragging viewport
   const handleMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
     setIsDragging(true)
     setDragStart({ x: e.clientX, y: e.clientY })
   }
 
   const handleMouseMove = (e: React.MouseEvent) => {
     if (!isDragging) return
+    e.preventDefault()
+    e.stopPropagation()
 
     const dx = e.clientX - dragStart.x
     const dy = e.clientY - dragStart.y
 
     // Convert minimap pixel delta to canvas pan delta
-    // dx is in minimap pixels, scale is the minimap scale factor
-    // To convert to canvas coordinates: dx / scale
-    // Then apply zoom to get screen coordinates: (dx / scale) * zoom
-    const newPanX = panX - (dx / scale) * zoom
-    const newPanY = panY - (dy / scale) * zoom
+    // The scale is minimap scale, zoom is canvas zoom
+    // Minimap pixel -> Canvas pixel: dx / scale
+    // Canvas pixel -> Screen pixel: (dx / scale) * zoom
+    // Pan is in screen coordinates, so we need to negate the movement
+    const newPanX = panX - (dx / scaleRef.current) * zoom
+    const newPanY = panY - (dy / scaleRef.current) * zoom
 
     onViewportChange(newPanX, newPanY)
 
     setDragStart({ x: e.clientX, y: e.clientY })
   }
 
-  const handleMouseUp = () => {
+  const handleMouseUp = (e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
     setIsDragging(false)
   }
 
-  const handleMouseLeave = () => {
+  const handleMouseLeave = (e: React.MouseEvent) => {
+    if (isDragging) {
+      e.preventDefault()
+      e.stopPropagation()
+    }
     setIsDragging(false)
   }
 
   // Click to jump to position
   const handleClick = (e: React.MouseEvent) => {
-    e.stopPropagation() // Prevent event from bubbling to canvas container
+    e.preventDefault()
+    e.stopPropagation()
+
+    // Don't trigger click if we were dragging
+    if (isDragging) return
 
     const rect = e.currentTarget.getBoundingClientRect()
     const x = e.clientX - rect.left - 4 // Subtract margin
     const y = e.clientY - rect.top - 4
 
-    // Recalculate scale and offset (same as in draw)
+    // Recalculate scale and offset
     const scaleX = minimapSize.width / contentBounds.width
     const scaleY = minimapSize.height / contentBounds.height
     const newScale = Math.min(scaleX, scaleY)
@@ -288,9 +503,9 @@ export function CanvasMinimap({
     >
       <canvas
         ref={canvasRef}
-        width={minimapSize.width}
-        height={minimapSize.height}
-        className="cursor-crosshair"
+        width={Math.max(1, Math.floor(minimapSize.width))}
+        height={Math.max(1, Math.floor(minimapSize.height))}
+        className={`${isDragging ? 'cursor-grabbing' : 'cursor-crosshair'}`}
         style={{
           margin: 4,
           display: 'block',

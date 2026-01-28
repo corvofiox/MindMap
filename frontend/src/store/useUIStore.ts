@@ -119,6 +119,12 @@ interface UIState {
   loadNodeDefaults: () => Promise<void>
   saveNodeDefaults: () => Promise<void>
   resetNodeDefaults: () => void
+
+  // Reset for logout
+  resetForLogout: () => void
+
+  // Reset for login
+  resetForLogin: () => void
 }
 
 
@@ -315,6 +321,17 @@ setSelectedType: (type) => {
           }
         },
         resetNodeDefaults: () => set({ nodeDefaults: getDefaultNodeDefaults() }),
+
+        // Reset for logout
+        resetForLogout: () => set({
+          nodeDefaults: getDefaultNodeDefaults(),
+          nodeDefaultsOpen: false,
+        }),
+
+        // Reset for login
+        resetForLogin: () => set({
+          nodeDefaults: getDefaultNodeDefaults(),
+        }),
       }
     },
     {

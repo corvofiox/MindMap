@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from 'react'
+import { useEffect, useLayoutEffect, useState, useRef, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useCanvasStore } from '@/store/useCanvasStore'
 import { useProjectsStore } from '@/store/useProjectsStore'
@@ -502,6 +502,7 @@ export function CanvasPage() {
   const dbSaveTimeoutRef = useRef<ReturnType<typeof setTimeout>>()
   const mouseDownOnContentRef = useRef(false) // Track if mouse down was on content
   const hasInitializedCameraRef = useRef(false) // Track if camera has been initialized
+  const hasLoadedCanvasDataRef = useRef(false) // Track if canvas data has been loaded
   const justFinishedConnectionRef = useRef(false) // Track if just finished creating a connection
   const justFinishedBoxSelectingRef = useRef(false) // Track if just finished box selection
   const justFinishedEndpointDraggingRef = useRef(false) // Track if just finished dragging endpoint
@@ -630,6 +631,7 @@ export function CanvasPage() {
     setCanvasData,
     setZoom,
     setPan,
+    fitViewToContent,
     setEditingId,
     setSelectedIds,
     addToSelection,
@@ -850,6 +852,7 @@ export function CanvasPage() {
         }
       } finally {
         setLoading(false)
+        hasLoadedCanvasDataRef.current = true
       }
     }
 
@@ -863,74 +866,29 @@ export function CanvasPage() {
 
   // Center camera on content when canvas data is loaded (only on first load)
   useEffect(() => {
-    // Only proceed if canvas is ready
     if (!canvasId) return
 
     const id = parseInt(canvasId)
     if (isNaN(id)) return
 
-    // Only center camera on first load of this specific canvas
     if (hasInitializedCameraRef.current) return
 
-    // Wait for container size to be truly ready
-    if (!containerReady || containerSize.width === 0 || containerSize.height === 0) return
+    if (containerSize.width === 0 || containerSize.height === 0) return
 
-    // Add a small delay to ensure container size is stable and rendering has settled
-    const timer = setTimeout(() => {
-      // Check again after delay
-      const currentNodes = useCanvasStore.getState().nodes
-      const currentGroups = useCanvasStore.getState().groups
-      const currentDomains = useCanvasStore.getState().domains
+    if (isLoading) return
 
-      // Calculate content bounds
-      let minX = Infinity
-      let minY = Infinity
-      let maxX = -Infinity
-      let maxY = -Infinity
+    const { fitViewToContent, nodes, groups, domains } = useCanvasStore.getState()
+    const hasElements = nodes.size > 0 || groups.size > 0 || domains.size > 0
 
-      currentNodes.forEach((node) => {
-        minX = Math.min(minX, node.x)
-        minY = Math.min(minY, node.y)
-        maxX = Math.max(maxX, node.x + node.width)
-        maxY = Math.max(maxY, node.y + node.height)
-      })
-
-      currentGroups.forEach((group) => {
-        minX = Math.min(minX, group.x)
-        minY = Math.min(minY, group.y)
-        maxX = Math.max(maxX, group.x + group.width)
-        maxY = Math.max(maxY, group.y + group.height)
-      })
-
-      currentDomains.forEach((domain) => {
-        minX = Math.min(minX, domain.x)
-        minY = Math.min(minY, domain.y)
-        maxX = Math.max(maxX, domain.x + domain.width)
-        maxY = Math.max(maxY, domain.y + domain.height)
-      })
-
-      let contentCenterX = 0
-      let contentCenterY = 0
-
-      if (minX === Infinity || minY === Infinity) {
-        // Empty canvas - center on origin
-        contentCenterX = 0
-        contentCenterY = 0
-      } else {
-        contentCenterX = (minX + maxX) / 2
-        contentCenterY = (minY + maxY) / 2
-      }
-
-      // Set camera to center on content
-      const newPanX = containerSize.width / 2 - contentCenterX * zoom
-      const newPanY = containerSize.height / 2 - contentCenterY * zoom
-
-      setPan(newPanX, newPanY)
+    if (hasElements) {
+      fitViewToContent(containerSize.width, containerSize.height)
       hasInitializedCameraRef.current = true
-    }, 100)
+    }
+  }, [canvasId, containerSize.width, containerSize.height, isLoading])
 
-    return () => clearTimeout(timer)
-  }, [canvasId, containerReady, containerSize.width, containerSize.height, setPan, zoom])
+  // Note: We no longer auto-adjust zoom when container size changes
+  // The zoom level should remain constant, only the viewport size changes
+  // The minimap will automatically update to reflect the new viewport size
 
   const generateThumbnail = useCallback(async (canvasId: number) => {
     if (!containerRef.current) {
@@ -1365,64 +1323,121 @@ export function CanvasPage() {
     }
   }, [canvasId, triggerThumbnailGeneration])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    // 使用 ref 追踪是否已就绪，避免重复设置状态
+    let isReady = false
+    let lastWidth = 0
+    let lastHeight = 0
+    const STABLE_FRAMES = 3
+    let stableFrameCount = 0
+
     const updateSize = () => {
       if (containerRef.current) {
         const width = containerRef.current.clientWidth
         const height = containerRef.current.clientHeight
-        setContainerSize({ width, height })
+
+        // 立即更新容器大小，不等待稳定
         if (width > 0 && height > 0) {
+          setContainerSize({ width, height })
+        }
+
+        // Check if size is stable (not changing rapidly)
+        if (width === lastWidth && height === lastHeight) {
+          stableFrameCount++
+        } else {
+          stableFrameCount = 0
+          lastWidth = width
+          lastHeight = height
+        }
+
+        // Only set ready when size is stable and non-zero
+        if (!isReady && width > 0 && height > 0 && stableFrameCount >= STABLE_FRAMES) {
+          isReady = true
           setContainerReady(true)
+          return true
         }
       }
+      return isReady
     }
 
-    let retryCount = 0
-    const maxRetries = 10
+    // 使用 requestAnimationFrame 确保 DOM 已经渲染完成
+    const measure = () => {
+      if (containerRef.current) {
+        const width = containerRef.current.clientWidth
+        const height = containerRef.current.clientHeight
 
-    const attemptMeasurement = () => {
+        if (width > 0 && height > 0) {
+          // 立即设置容器大小
+          setContainerSize({ width, height })
+          updateSize()
+          return
+        }
+      }
+      // 如果容器大小为 0，继续等待
+      requestAnimationFrame(measure)
+    }
+
+    requestAnimationFrame(measure)
+
+    const resizeObserver = new ResizeObserver(() => {
       updateSize()
-
-      if (!containerRef.current || (containerRef.current && (containerRef.current.clientWidth === 0 || containerRef.current.clientHeight === 0))) {
-        if (retryCount < maxRetries) {
-          retryCount++
-          setTimeout(attemptMeasurement, 100)
-        }
-      }
-    }
-
-    attemptMeasurement()
-
-    const resizeObserver = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        requestAnimationFrame(updateSize)
-      }
     })
 
     if (containerRef.current) {
       resizeObserver.observe(containerRef.current)
     }
 
-    window.addEventListener('resize', updateSize)
+    const handleResize = () => {
+      updateSize()
+    }
+
+    window.addEventListener('resize', handleResize)
 
     return () => {
-      window.removeEventListener('resize', updateSize)
+      window.removeEventListener('resize', handleResize)
       resizeObserver.disconnect()
     }
   }, [])
 
+
   // Update container size when sidebar state changes
   useEffect(() => {
-    const timer = setTimeout(() => {
-      if (containerRef.current) {
-        setContainerSize({
-          width: containerRef.current.clientWidth,
-          height: containerRef.current.clientHeight,
-        })
-      }
-    }, 250)
+    let frameCount = 0
+    const STABLE_FRAMES = 3
+    let lastWidth = 0
+    let lastHeight = 0
+    let stableFrameCount = 0
 
-    return () => clearTimeout(timer)
+    const measure = () => {
+      if (containerRef.current) {
+        const width = containerRef.current.clientWidth
+        const height = containerRef.current.clientHeight
+
+        // Check if size is stable
+        if (width === lastWidth && height === lastHeight) {
+          stableFrameCount++
+        } else {
+          stableFrameCount = 0
+          lastWidth = width
+          lastHeight = height
+        }
+
+        // Update size each frame, but wait for stability before considering it final
+        setContainerSize({ width, height })
+
+        if (stableFrameCount >= STABLE_FRAMES) {
+          return true
+        }
+      }
+
+      frameCount++
+      if (frameCount < 30) {
+        requestAnimationFrame(measure)
+      }
+      return false
+    }
+
+    requestAnimationFrame(measure)
   }, [nodePoolOpen, sidebarOpen])
 
   // Handle keyboard shortcuts
@@ -2962,11 +2977,12 @@ export function CanvasPage() {
       >
         <CanvasGrid zoom={zoom} panX={panX} panY={panY} />
 
-        {containerReady && minimapVisible && (
+        {minimapVisible && (
           <CanvasMinimap
             nodes={nodes}
             groups={groups}
             domains={domains}
+            connections={connections}
             zoom={zoom}
             panX={panX}
             panY={panY}

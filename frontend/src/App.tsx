@@ -1,4 +1,4 @@
-import { Routes, Route, Navigate } from 'react-router-dom'
+import { Routes, Route, Navigate, Outlet } from 'react-router-dom'
 import { useEffect } from 'react'
 import { useAuthStore } from './store/useAuthStore'
 import { useUIStore } from './store/useUIStore'
@@ -10,9 +10,10 @@ import { ProjectsPage } from './pages/ProjectsPage'
 import { DragGhost } from './components/DragGhost'
 import { ToastContainer } from './components/ui/ToastContainer'
 
-function ProtectedRoute({ children }: { children: React.ReactNode }) {
+// 使用 Outlet 模式避免组件重新挂载
+function ProtectedRoute() {
   const { isAuthenticated } = useAuthStore()
-  return isAuthenticated ? children : <Navigate to="/login" replace />
+  return isAuthenticated ? <Outlet /> : <Navigate to="/login" replace />
 }
 
 function App() {
@@ -44,16 +45,10 @@ function App() {
         <Route path="/register" element={!isAuthenticated ? <RegisterPage /> : <Navigate to="/projects" />} />
         <Route path="/" element={<MainLayout />}>
           <Route index element={<Navigate to="/projects" replace />} />
-          <Route path="projects" element={
-            <ProtectedRoute>
-              <ProjectsPage />
-            </ProtectedRoute>
-          } />
-          <Route path="canvas/:canvasId" element={
-            <ProtectedRoute>
-              <CanvasPage />
-            </ProtectedRoute>
-          } />
+          <Route element={<ProtectedRoute />}>
+            <Route path="projects" element={<ProjectsPage />} />
+            <Route path="canvas/:canvasId" element={<CanvasPage />} />
+          </Route>
         </Route>
         <Route path="*" element={<Navigate to={isAuthenticated ? "/projects" : "/login"} replace />} />
       </Routes>

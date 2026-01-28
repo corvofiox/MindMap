@@ -86,6 +86,7 @@ interface CanvasState {
   setZoom: (zoom: number) => void
   setPan: (x: number, y: number) => void
   resetView: () => void
+  fitViewToContent: (containerWidth: number, containerHeight: number, padding?: number) => void
 
   // Edit state
   setEditingId: (id: string | null) => void
@@ -666,6 +667,45 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       panX: 0,
       panY: 0,
     }),
+  fitViewToContent: (containerWidth, containerHeight, padding = 100) => {
+    const state = get()
+    const { nodes, groups, domains } = state
+
+    let minX = Infinity
+    let minY = Infinity
+    let maxX = -Infinity
+    let maxY = -Infinity
+
+    const allElements = [...Array.from(nodes.values()), ...Array.from(groups.values()), ...Array.from(domains.values())]
+
+    if (allElements.length === 0) {
+      return
+    }
+
+    allElements.forEach((el) => {
+      const right = el.x + (el.width || 0)
+      const bottom = el.y + (el.height || 0)
+      minX = Math.min(minX, el.x)
+      minY = Math.min(minY, el.y)
+      maxX = Math.max(maxX, right)
+      maxY = Math.max(maxY, bottom)
+    })
+
+    const contentWidth = maxX - minX + padding * 2
+    const contentHeight = maxY - minY + padding * 2
+    const contentCenterX = (minX + maxX) / 2
+    const contentCenterY = (minY + maxY) / 2
+
+    const scaleX = containerWidth / contentWidth
+    const scaleY = containerHeight / contentHeight
+    const newZoom = Math.min(scaleX, scaleY, CANVAS_DEFAULTS.MAX_ZOOM)
+    const clampedZoom = Math.max(newZoom, CANVAS_DEFAULTS.MIN_ZOOM)
+
+    const newPanX = containerWidth / 2 - contentCenterX * clampedZoom
+    const newPanY = containerHeight / 2 - contentCenterY * clampedZoom
+
+    set({ zoom: clampedZoom, panX: newPanX, panY: newPanY })
+  },
 
   // Edit state
   setEditingId: (id) => set({ editingId: id }),

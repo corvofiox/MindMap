@@ -327,11 +327,8 @@ export type NodeDefaults = {
 
 // Auth API Responses
 export interface AuthApiResponse {
-  success: boolean
-  data: {
-    user: User
-    token: string
-  }
+  user: User
+  token: string
 }
 
 // User API Responses

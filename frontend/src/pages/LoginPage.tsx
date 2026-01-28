@@ -21,7 +21,8 @@ export function LoginPage() {
       addToast({ type: 'success', title: '欢迎回来！', message: '您已成功登录' })
       navigate('/projects')
     } catch (error) {
-      // Error is already handled in the login function
+      const errorMessage = error instanceof Error ? error.message : '登录失败，请检查邮箱和密码'
+      addToast({ type: 'error', title: '登录失败', message: errorMessage })
     } finally {
       setIsLoading(false)
     }
