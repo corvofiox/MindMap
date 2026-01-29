@@ -320,312 +320,311 @@ export function Sidebar({ open }: SidebarProps) {
           open ? 'w-64 transform translate-x-0' : 'w-64 transform -translate-x-full'
         )}
       >
-      {isProjectsPage || !currentProject ? (
-        // 项目选择视图
-        <>
-          <div className="relative h-14 flex-shrink-0 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
-            <div className="h-full flex items-center px-4">
-              <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow-md">
-                  <FolderKanban className="w-5 h-5 text-white" />
-                </div>
-                <div>
-                  <h2 className="font-bold text-gray-900 dark:text-white text-base tracking-wide">项目管理</h2>
-                  <p className="text-[10px] text-gray-500 dark:text-gray-400 font-medium tracking-wider">PROJECTS</p>
+        {isProjectsPage || !currentProject ? (
+          // 项目选择视图
+          <>
+            <div className="relative h-14 flex-shrink-0 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+              <div className="h-full flex items-center px-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow-md">
+                    <FolderKanban className="w-5 h-5 text-white" />
+                  </div>
+                  <div>
+                    <h2 className="font-bold text-gray-900 dark:text-white text-base tracking-wide">项目管理</h2>
+                    <p className="text-[10px] text-gray-500 dark:text-gray-400 font-medium tracking-wider">PROJECTS</p>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
-          <div className="flex-1 overflow-y-auto custom-scrollbar p-3">
-            {projects.length === 0 ? (
-              <div className="text-center py-8">
-                <FolderKanban className="w-12 h-12 text-gray-400 mx-auto mb-3" />
-                <p className="text-sm text-gray-600 dark:text-gray-400">还没有项目</p>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {projects.map((project) => (
-                  <div
-                    key={project.id}
-                    className={clsx(
-                      'rounded-xl transition-all duration-200 group',
-                      editingProjectId === project.id
-                        ? 'bg-gradient-to-br from-blue-600/10 to-indigo-600/10 dark:from-blue-600/20 dark:to-indigo-600/20 border border-blue-200 dark:border-blue-900/40'
-                        : 'bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-700 dark:to-gray-800 border border-gray-200 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-800/50 hover:shadow-md'
-                    )}
-                  >
-                    {editingProjectId === project.id ? (
-                      // 编辑模式
-                      <div className="p-3 space-y-2">
-                        <input
-                          type="text"
-                          value={editProjectName}
-                          onChange={(e) => setEditProjectName(e.target.value)}
-                          onKeyDown={(e) => e.key === 'Enter' && handleSaveProject()}
-                          placeholder="项目名称"
-                          className="w-full px-2 py-1 text-sm bg-white dark:bg-gray-800 border border-blue-500 rounded focus:outline-none text-gray-900 dark:text-white"
-                          autoFocus
-                        />
-                        <textarea
-                          value={editProjectDesc}
-                          onChange={(e) => setEditProjectDesc(e.target.value)}
-                          placeholder="描述（可选）"
-                          rows={2}
-                          className="w-full px-2 py-1 text-sm bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded focus:outline-none text-gray-900 dark:text-white resize-none"
-                        />
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={handleSaveProject}
-                            className="flex items-center gap-1 px-2 py-1 text-xs bg-green-600 hover:bg-green-700 text-white rounded transition-colors"
-                          >
-                            <Check className="w-3 h-3" />
-                            保存
-                          </button>
-                          <button
-                            onClick={handleCancelEditProject}
-                            className="flex items-center gap-1 px-2 py-1 text-xs bg-gray-400 hover:bg-gray-500 text-white rounded transition-colors"
-                          >
-                            <X className="w-3 h-3" />
-                            取消
-                          </button>
+            <div className="flex-1 overflow-y-auto custom-scrollbar p-3">
+              {projects.length === 0 ? (
+                <div className="text-center py-8">
+                  <FolderKanban className="w-12 h-12 text-gray-400 mx-auto mb-3" />
+                  <p className="text-sm text-gray-600 dark:text-gray-400">还没有项目</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {projects.map((project) => (
+                    <div
+                      key={project.id}
+                      className={clsx(
+                        'rounded-xl transition-all duration-200 group',
+                        editingProjectId === project.id
+                          ? 'bg-gradient-to-br from-blue-600/10 to-indigo-600/10 dark:from-blue-600/20 dark:to-indigo-600/20 border border-blue-200 dark:border-blue-900/40'
+                          : 'bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-700 dark:to-gray-800 border border-gray-200 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-800/50 hover:shadow-md'
+                      )}
+                    >
+                      {editingProjectId === project.id ? (
+                        // 编辑模式
+                        <div className="p-3 space-y-2">
+                          <input
+                            type="text"
+                            value={editProjectName}
+                            onChange={(e) => setEditProjectName(e.target.value)}
+                            onKeyDown={(e) => e.key === 'Enter' && handleSaveProject()}
+                            placeholder="项目名称"
+                            className="w-full px-2 py-1 text-sm bg-white dark:bg-gray-800 border border-blue-500 rounded focus:outline-none text-gray-900 dark:text-white"
+                            autoFocus
+                          />
+                          <textarea
+                            value={editProjectDesc}
+                            onChange={(e) => setEditProjectDesc(e.target.value)}
+                            placeholder="描述（可选）"
+                            rows={2}
+                            className="w-full px-2 py-1 text-sm bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded focus:outline-none text-gray-900 dark:text-white resize-none"
+                          />
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={handleSaveProject}
+                              className="flex items-center gap-1 px-2 py-1 text-xs bg-green-600 hover:bg-green-700 text-white rounded transition-colors"
+                            >
+                              <Check className="w-3 h-3" />
+                              保存
+                            </button>
+                            <button
+                              onClick={handleCancelEditProject}
+                              className="flex items-center gap-1 px-2 py-1 text-xs bg-gray-400 hover:bg-gray-500 text-white rounded transition-colors"
+                            >
+                              <X className="w-3 h-3" />
+                              取消
+                            </button>
+                          </div>
                         </div>
-                      </div>
-                    ) : (
-                      // 查看模式
-                      <div
-                        onClick={() => handleSelectProject(project)}
-                        className="cursor-pointer p-3"
-                      >
-                        <div className="flex items-start justify-between">
-                          <div className="flex-1 min-w-0 pr-2">
-                            <h3 className="font-bold text-gray-900 dark:text-gray-100 truncate text-sm">
-                              {project.name}
-                            </h3>
-                            {project.description && (
-                              <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1 line-clamp-2 leading-relaxed">
-                                {project.description}
-                              </p>
-                            )}
-                            <div className="flex items-center gap-2 mt-2 text-[10px] text-gray-400 dark:text-gray-500">
-                              <Calendar className="w-3 h-3" />
-                              <span>{new Date(project.updatedAt).toLocaleDateString()}</span>
+                      ) : (
+                        // 查看模式
+                        <div
+                          onClick={() => handleSelectProject(project)}
+                          className="cursor-pointer p-3"
+                        >
+                          <div className="flex items-start justify-between">
+                            <div className="flex-1 min-w-0 pr-2">
+                              <h3 className="font-bold text-gray-900 dark:text-gray-100 truncate text-sm">
+                                {project.name}
+                              </h3>
+                              {project.description && (
+                                <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1 line-clamp-2 leading-relaxed">
+                                  {project.description}
+                                </p>
+                              )}
+                              <div className="flex items-center gap-2 mt-2 text-[10px] text-gray-400 dark:text-gray-500">
+                                <Calendar className="w-3 h-3" />
+                                <span>{new Date(project.updatedAt).toLocaleDateString()}</span>
+                              </div>
+                            </div>
+                            <div className="relative" ref={projectMenuRef}>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  setShowProjectMenu(showProjectMenu === project.id ? null : project.id)
+                                }}
+                                className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-600 transition-opacity"
+                              >
+                                <MoreVertical className="w-4 h-4 text-gray-600 dark:text-gray-400" />
+                              </button>
+
+                              {/* 下拉菜单 */}
+                              {showProjectMenu === project.id && (
+                                <div className="absolute top-full right-0 mt-1 w-32 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1" style={{ zIndex: Z_INDEX.SIDEBAR_SUBMENU }}>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      handleStartEditProject(project)
+                                    }}
+                                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
+                                  >
+                                    <Edit2 className="w-3 h-3" />
+                                    重命名
+                                  </button>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      handleDeleteProject(project)
+                                    }}
+                                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30"
+                                  >
+                                    <Trash2 className="w-3 h-3" />
+                                    删除
+                                  </button>
+                                </div>
+                              )}
                             </div>
                           </div>
-                          <div className="relative" ref={projectMenuRef}>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                setShowProjectMenu(showProjectMenu === project.id ? null : project.id)
-                              }}
-                              className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-600 transition-opacity"
-                            >
-                              <MoreVertical className="w-4 h-4 text-gray-600 dark:text-gray-400" />
-                            </button>
-
-                            {/* 下拉菜单 */}
-                            {showProjectMenu === project.id && createPortal(
-                              <div className="fixed w-32 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1" style={{ zIndex: Z_INDEX.SIDEBAR_SUBMENU }}>
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                    handleStartEditProject(project)
-                                  }}
-                                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
-                                >
-                                  <Edit2 className="w-3 h-3" />
-                                  重命名
-                                </button>
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                    handleDeleteProject(project)
-                                  }}
-                                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30"
-                                >
-                                  <Trash2 className="w-3 h-3" />
-                                  删除
-                                </button>
-                              </div>,
-                              document.body
-                            )}
-                          </div>
                         </div>
-                      </div>
-                    )}
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </>
+        ) : (
+          // 项目和画布管理视图
+          <>
+            {/* 项目信息区域 */}
+            <div className="border-b border-gray-200 dark:border-gray-700">
+              <div className="p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <button
+                    onClick={handleBackToProjects}
+                    className="flex items-center gap-1 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors"
+                  >
+                    <FolderKanban className="w-4 h-4" />
+                    返回项目列表
+                  </button>
+                </div>
+                <div className="bg-gradient-to-br from-blue-600/10 to-indigo-600/10 dark:from-blue-600/20 dark:to-indigo-600/20 rounded-xl p-3 border border-blue-100 dark:border-blue-900/30">
+                  <div className="flex items-center gap-2 mb-1">
+                    <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+                    <span className="text-[10px] font-bold text-blue-600 dark:text-blue-400 uppercase tracking-wider">当前项目</span>
                   </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </>
-      ) : (
-        // 项目和画布管理视图
-        <>
-          {/* 项目信息区域 */}
-          <div className="border-b border-gray-200 dark:border-gray-700">
-            <div className="p-4">
-              <div className="flex items-center justify-between mb-3">
-                <button
-                  onClick={handleBackToProjects}
-                  className="flex items-center gap-1 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors"
-                >
-                  <FolderKanban className="w-4 h-4" />
-                  返回项目列表
-                </button>
-              </div>
-              <div className="bg-gradient-to-br from-blue-600/10 to-indigo-600/10 dark:from-blue-600/20 dark:to-indigo-600/20 rounded-xl p-3 border border-blue-100 dark:border-blue-900/30">
-                <div className="flex items-center gap-2 mb-1">
-                  <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
-                  <span className="text-[10px] font-bold text-blue-600 dark:text-blue-400 uppercase tracking-wider">当前项目</span>
+                  <h3 className="font-bold text-gray-900 dark:text-gray-100 truncate text-sm">
+                    {currentProject.name}
+                  </h3>
+                  {currentProject.description && (
+                    <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1 line-clamp-2 leading-relaxed">
+                      {currentProject.description}
+                    </p>
+                  )}
                 </div>
-                <h3 className="font-bold text-gray-900 dark:text-gray-100 truncate text-sm">
-                  {currentProject.name}
-                </h3>
-                {currentProject.description && (
-                  <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1 line-clamp-2 leading-relaxed">
-                    {currentProject.description}
-                  </p>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* 画布管理区域 */}
-          <div className='flex-1 flex flex-col min-h-0'>
-            <div className="relative h-12 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-4 flex-shrink-0">
-              <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shadow-md">
-                  <FileText className="w-5 h-5 text-white" />
-                </div>
-                <div>
-                  <h2 className="font-bold text-gray-900 dark:text-white text-base tracking-wide">画布管理</h2>
-                  <p className="text-[10px] text-gray-500 dark:text-gray-400 font-medium tracking-wider">CANVASES</p>
-                </div>
-              </div>
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={() => setShowNewFolderInput(!showNewFolderInput)}
-                  className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400 transition-colors"
-                  title="新建文件夹"
-                >
-                  <FolderPlus className="w-4 h-4" />
-                </button>
-                <button
-                  onClick={handleCreateCanvas}
-                  className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400 transition-colors"
-                  title="新建画布"
-                >
-                  <Plus className="w-4 h-4" />
-                </button>
               </div>
             </div>
 
-            {/* 新建文件夹输入框 */}
-            {showNewFolderInput && (
-              <div className="p-3 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
-                <div className="flex gap-2 items-center">
-                  <input
-                    type="text"
-                    placeholder="文件夹名称..."
-                    value={newFolderName}
-                    onChange={(e) => setNewFolderName(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        handleCreateFolder()
-                      } else if (e.key === 'Escape') {
+            {/* 画布管理区域 */}
+            <div className='flex-1 flex flex-col min-h-0'>
+              <div className="relative h-12 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-4 flex-shrink-0">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shadow-md">
+                    <FileText className="w-5 h-5 text-white" />
+                  </div>
+                  <div>
+                    <h2 className="font-bold text-gray-900 dark:text-white text-base tracking-wide">画布管理</h2>
+                    <p className="text-[10px] text-gray-500 dark:text-gray-400 font-medium tracking-wider">CANVASES</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => setShowNewFolderInput(!showNewFolderInput)}
+                    className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400 transition-colors"
+                    title="新建文件夹"
+                  >
+                    <FolderPlus className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={handleCreateCanvas}
+                    className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400 transition-colors"
+                    title="新建画布"
+                  >
+                    <Plus className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+
+              {/* 新建文件夹输入框 */}
+              {showNewFolderInput && (
+                <div className="p-3 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
+                  <div className="flex gap-2 items-center">
+                    <input
+                      type="text"
+                      placeholder="文件夹名称..."
+                      value={newFolderName}
+                      onChange={(e) => setNewFolderName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          handleCreateFolder()
+                        } else if (e.key === 'Escape') {
+                          setShowNewFolderInput(false)
+                          setNewFolderName('')
+                        }
+                      }}
+                      className="flex-1 min-w-0 px-2 py-1.5 text-sm bg-gray-100 dark:bg-gray-700 border-0 rounded focus:ring-2 focus:ring-blue-500 text-gray-800 dark:text-white"
+                    />
+                    <button
+                      onClick={handleCreateFolder}
+                      className="flex-shrink-0 px-3 py-1.5 text-sm bg-blue-500 text-white rounded hover:bg-blue-600 whitespace-nowrap"
+                    >
+                      创建
+                    </button>
+                    <button
+                      onClick={() => {
                         setShowNewFolderInput(false)
                         setNewFolderName('')
-                      }
-                    }}
-                    className="flex-1 min-w-0 px-2 py-1.5 text-sm bg-gray-100 dark:bg-gray-700 border-0 rounded focus:ring-2 focus:ring-blue-500 text-gray-800 dark:text-white"
-                  />
-                  <button
-                    onClick={handleCreateFolder}
-                    className="flex-shrink-0 px-3 py-1.5 text-sm bg-blue-500 text-white rounded hover:bg-blue-600 whitespace-nowrap"
-                  >
-                    创建
-                  </button>
-                  <button
-                    onClick={() => {
-                      setShowNewFolderInput(false)
-                      setNewFolderName('')
-                    }}
-                    className="flex-shrink-0 p-1.5 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
+                      }}
+                      className="flex-shrink-0 p-1.5 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
-              </div>
-            )}
-
-            <div
-              className={clsx(
-                'flex-1 overflow-y-auto custom-scrollbar p-3 transition-all duration-200',
-                isRootDragOver && !dragOverFolderId && 'bg-blue-50 dark:bg-blue-900/20'
               )}
-              style={isRootDragOver && !dragOverFolderId ? {
-                border: '2px solid rgba(59, 130, 246, 0.5)',
-                borderRadius: '8px'
-              } : {}}
-              data-sidebar-content
-              onDragOver={(e) => {
-                handleDragOverRoot(e);
-                e.stopPropagation();
-              }}
-              onDragLeave={handleDragLeaveRoot}
-              onDrop={handleDropOnRoot}
-            >
-              {/* 文件夹列表 */}
-              {folders
-                .filter(f => !f.parentId)
-                .sort((a, b) => a.sortOrder - b.sortOrder)
-                .map((folder) => (
-                  <FolderItem
-                    key={folder.id}
-                    folder={folder}
-                    canvases={canvases}
-                    activeCanvasId={activeCanvasId}
-                    isExpanded={expandedFolderIds.has(folder.id)}
-                    onToggle={handleToggleFolder}
-                    draggedCanvasId={draggedCanvasId}
-                    dragOverFolderId={dragOverFolderId}
-                    onDragOverFolder={handleDragOverFolder}
-                    onDragLeaveFolder={handleDragLeaveFolder}
-                    onDropOnFolder={handleDropOnFolder}
-                    onDragStart={handleDragStartWithGlobal}
-                    onDragEnd={handleDragEnd}
-                  />
-                ))}
 
-              {/* 根目录画布 */}
-              {rootCanvases.length > 0 ? (
-                rootCanvases
+              <div
+                className={clsx(
+                  'flex-1 overflow-y-auto custom-scrollbar p-3 transition-all duration-200',
+                  isRootDragOver && !dragOverFolderId && 'bg-blue-50 dark:bg-blue-900/20'
+                )}
+                style={isRootDragOver && !dragOverFolderId ? {
+                  border: '2px solid rgba(59, 130, 246, 0.5)',
+                  borderRadius: '8px'
+                } : {}}
+                data-sidebar-content
+                onDragOver={(e) => {
+                  handleDragOverRoot(e);
+                  e.stopPropagation();
+                }}
+                onDragLeave={handleDragLeaveRoot}
+                onDrop={handleDropOnRoot}
+              >
+                {/* 文件夹列表 */}
+                {folders
+                  .filter(f => !f.parentId)
                   .sort((a, b) => a.sortOrder - b.sortOrder)
-                  .map((canvas) => (
-                    <CanvasItem
-                      key={canvas.id}
-                      canvas={canvas}
-                      isActive={activeCanvasId === canvas.id}
-                      isDragging={draggedCanvasId === canvas.id}
+                  .map((folder) => (
+                    <FolderItem
+                      key={folder.id}
+                      folder={folder}
+                      canvases={canvases}
+                      activeCanvasId={activeCanvasId}
+                      isExpanded={expandedFolderIds.has(folder.id)}
+                      onToggle={handleToggleFolder}
+                      draggedCanvasId={draggedCanvasId}
+                      dragOverFolderId={dragOverFolderId}
+                      onDragOverFolder={handleDragOverFolder}
+                      onDragLeaveFolder={handleDragLeaveFolder}
+                      onDropOnFolder={handleDropOnFolder}
                       onDragStart={handleDragStartWithGlobal}
                       onDragEnd={handleDragEnd}
                     />
-                  ))
-              ) : (
-                <div className={clsx(
-                  'text-center py-4 text-sm rounded-lg transition-all duration-200',
-                  isRootDragOver
-                    ? 'text-blue-500 bg-blue-50 dark:bg-blue-900/20'
-                    : 'text-gray-400'
-                )}>
-                  暂无画布
-                </div>
-              )}
+                  ))}
+
+                {/* 根目录画布 */}
+                {rootCanvases.length > 0 ? (
+                  rootCanvases
+                    .sort((a, b) => a.sortOrder - b.sortOrder)
+                    .map((canvas) => (
+                      <CanvasItem
+                        key={canvas.id}
+                        canvas={canvas}
+                        isActive={activeCanvasId === canvas.id}
+                        isDragging={draggedCanvasId === canvas.id}
+                        onDragStart={handleDragStartWithGlobal}
+                        onDragEnd={handleDragEnd}
+                      />
+                    ))
+                ) : (
+                  <div className={clsx(
+                    'text-center py-4 text-sm rounded-lg transition-all duration-200',
+                    isRootDragOver
+                      ? 'text-blue-500 bg-blue-50 dark:bg-blue-900/20'
+                      : 'text-gray-400'
+                  )}>
+                    暂无画布
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
-        </>
-       )}
-       </aside>
+          </>
+        )}
+      </aside>
     </>
   )
 }
@@ -889,7 +888,7 @@ function FolderItem({
           </div>
 
           {isExpanded && (
-            <div 
+            <div
               className={clsx(
                 'ml-4 pl-3 mt-1 space-y-0.5 rounded-lg transition-all duration-200',
                 dragOverFolderId === folder.id
@@ -1053,7 +1052,7 @@ function CanvasItem({
       await deleteCanvas(canvas.id)
       addToast({ type: 'success', title: '已删除', message: '画布已被删除' })
       setShowContextMenu(false)
-      
+
       // 如果删除的是当前活跃的画布，导航到新建画布页面
       if (isActive) {
         navigate('/canvas/new')
@@ -1152,120 +1151,120 @@ function CanvasItem({
               onClick={() => navigate(`/canvas/${canvas.id}`)}
               className="aspect-video bg-gradient-to-br from-gray-100 to-gray-200 dark:from-gray-700 dark:to-gray-800 rounded-t-lg relative overflow-hidden"
             >
-            {canvas.thumbnail ? (
-              <img
-                src={canvas.thumbnail}
-                alt={canvas.name}
-                className="w-full h-full object-cover"
-                onDragStart={(e) => e.preventDefault()}
-              />
-            ) : (
-              <div className="w-full h-full flex items-center justify-center">
-                <FileText className="w-8 h-8 text-gray-400 dark:text-gray-600" />
-              </div>
-            )}
-
-            {/* 悬停时的遮罩 */}
-            <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
-              <span className="text-white opacity-0 group-hover:opacity-100 transition-opacity text-sm font-medium">
-                打开画布
-              </span>
-            </div>
-          </div>
-
-          {/* 画布信息 */}
-          <div className="p-2">
-            <h4
-              onClick={() => navigate(`/canvas/${canvas.id}`)}
-              className="text-sm font-medium text-gray-900 dark:text-white truncate pr-6"
-            >
-              {canvas.name}
-            </h4>
-            {canvas.updatedAt && (
-              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                {new Date(canvas.updatedAt).toLocaleDateString()}
-              </p>
-            )}
-          </div>
-
-          {/* 右键菜单 */}
-          {showContextMenu && createPortal(
-            <div
-              ref={contextMenuRef}
-              className="fixed bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1 min-w-[160px]"
-              style={{
-                left: contextMenuPosition.x,
-                top: contextMenuPosition.y,
-                zIndex: Z_INDEX.CONTEXT_MENU,
-              }}
-              onContextMenu={(e) => e.preventDefault()}
-            >
-              <button
-                onClick={(e) => {
-                  e.stopPropagation()
-                  setShowMoveMenu(!showMoveMenu)
-                }}
-                className="w-full flex items-center justify-between gap-2 px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
-              >
-                <div className="flex items-center gap-2">
-                  <Folder className="w-3 h-3" />
-                  移动到
-                </div>
-                <span className="text-gray-400">›</span>
-              </button>
-
-              {showMoveMenu && (
-                <div className="border-t border-gray-200 dark:border-gray-700">
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      handleMoveToFolder(null)
-                    }}
-                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
-                  >
-                    <span className="w-3 h-3" />
-                    根目录
-                  </button>
-                  {folders.map((folder) => (
-                    <button
-                      key={folder.id}
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        handleMoveToFolder(folder.id)
-                      }}
-                      className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
-                    >
-                      <Folder className="w-3 h-3" />
-                      {folder.name}
-                    </button>
-                  ))}
+              {canvas.thumbnail ? (
+                <img
+                  src={canvas.thumbnail}
+                  alt={canvas.name}
+                  className="w-full h-full object-cover"
+                  onDragStart={(e) => e.preventDefault()}
+                />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center">
+                  <FileText className="w-8 h-8 text-gray-400 dark:text-gray-600" />
                 </div>
               )}
 
-              <button
-                onClick={(e) => {
-                  e.stopPropagation()
-                  handleStartEdit()
-                }}
-                className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
+              {/* 悬停时的遮罩 */}
+              <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
+                <span className="text-white opacity-0 group-hover:opacity-100 transition-opacity text-sm font-medium">
+                  打开画布
+                </span>
+              </div>
+            </div>
+
+            {/* 画布信息 */}
+            <div className="p-2">
+              <h4
+                onClick={() => navigate(`/canvas/${canvas.id}`)}
+                className="text-sm font-medium text-gray-900 dark:text-white truncate pr-6"
               >
-                <Edit2 className="w-3 h-3" />
-                重命名
-              </button>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation()
-                  handleDelete()
+                {canvas.name}
+              </h4>
+              {canvas.updatedAt && (
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  {new Date(canvas.updatedAt).toLocaleDateString()}
+                </p>
+              )}
+            </div>
+
+            {/* 右键菜单 */}
+            {showContextMenu && createPortal(
+              <div
+                ref={contextMenuRef}
+                className="fixed bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1 min-w-[160px]"
+                style={{
+                  left: contextMenuPosition.x,
+                  top: contextMenuPosition.y,
+                  zIndex: Z_INDEX.CONTEXT_MENU,
                 }}
-                className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30"
+                onContextMenu={(e) => e.preventDefault()}
               >
-                <Trash2 className="w-3 h-3" />
-                删除
-              </button>
-            </div>,
-            document.body
-          )}
-        </div>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setShowMoveMenu(!showMoveMenu)
+                  }}
+                  className="w-full flex items-center justify-between gap-2 px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
+                >
+                  <div className="flex items-center gap-2">
+                    <Folder className="w-3 h-3" />
+                    移动到
+                  </div>
+                  <span className="text-gray-400">›</span>
+                </button>
+
+                {showMoveMenu && (
+                  <div className="border-t border-gray-200 dark:border-gray-700">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        handleMoveToFolder(null)
+                      }}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
+                    >
+                      <span className="w-3 h-3" />
+                      根目录
+                    </button>
+                    {folders.map((folder) => (
+                      <button
+                        key={folder.id}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleMoveToFolder(folder.id)
+                        }}
+                        className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
+                      >
+                        <Folder className="w-3 h-3" />
+                        {folder.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    handleStartEdit()
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
+                >
+                  <Edit2 className="w-3 h-3" />
+                  重命名
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    handleDelete()
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30"
+                >
+                  <Trash2 className="w-3 h-3" />
+                  删除
+                </button>
+              </div>,
+              document.body
+            )}
+          </div>
         </>
       )}
     </div>

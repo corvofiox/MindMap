@@ -238,7 +238,7 @@ export function ProjectsPage() {
             </div>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
             {projects.map((project) => {
               const isEditing = editState.id === project.id
 
@@ -246,27 +246,21 @@ export function ProjectsPage() {
                 <div
                   key={project.id}
                   onClick={() => handleOpenProject(project)}
-                  className="group bg-white dark:bg-gray-800 rounded-xl shadow-sm hover:shadow-lg transition-all duration-300 cursor-pointer border-2 border-gray-200 dark:border-gray-600 w-full min-w-[200px] max-w-[200px] overflow-hidden hover:-translate-y-1"
+                  className="group bg-white dark:bg-gray-800 rounded-xl shadow-sm hover:shadow-xl transition-all duration-300 cursor-pointer border-2 border-gray-200 dark:border-gray-600 overflow-hidden hover:-translate-y-1 hover:z-10 relative"
                 >
                   <div className="p-3 relative bg-gradient-to-br from-white to-gray-50 dark:from-gray-800 dark:to-gray-900">
-                    <div className="flex items-start justify-between gap-2 mb-2">
+                    <div className="flex items-center justify-between gap-2 mb-2">
                       {isEditing ? (
-                        <input
-                          type="text"
-                          value={editState.name}
-                          onChange={(e) => setEditState(prev => ({ ...prev, name: e.target.value }))}
-                          onClick={(e) => e.stopPropagation()}
-                          className="flex-1 px-3 py-1.5 bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white font-semibold text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none shadow-sm"
-                          autoFocus
-                        />
-                      ) : (
-                        <h3 className="font-semibold text-gray-900 dark:text-white text-sm flex-1 truncate leading-tight tracking-tight">
-                          {project.name}
-                        </h3>
-                      )}
-                      <div className="flex items-center gap-0.5 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300" onClick={(e) => e.stopPropagation()}>
-                        {isEditing ? (
-                          <>
+                        <>
+                          <input
+                            type="text"
+                            value={editState.name}
+                            onChange={(e) => setEditState(prev => ({ ...prev, name: e.target.value }))}
+                            onClick={(e) => e.stopPropagation()}
+                            className="flex-1 px-3 py-1.5 bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white font-semibold text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none shadow-sm min-w-0"
+                            autoFocus
+                          />
+                          <div className="flex items-center gap-1 flex-shrink-0">
                             <button
                               onClick={() => handleSaveEdit(project.id)}
                               className="p-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-900/30 transition-all duration-200 hover:scale-105"
@@ -281,17 +275,24 @@ export function ProjectsPage() {
                             >
                               <X className="w-3.5 h-3.5" />
                             </button>
-                          </>
-                        ) : (
-                          <button
-                            onClick={() => handleStartEdit(project)}
-                            className="p-1.5 rounded-lg bg-gray-50 dark:bg-gray-700 text-gray-500 dark:text-gray-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 hover:text-indigo-600 dark:hover:text-indigo-400 transition-all duration-200 hover:scale-105"
-                            title="编辑"
-                          >
-                            <Edit3 className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                      </div>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <h3 className="font-semibold text-gray-900 dark:text-white text-sm flex-1 truncate leading-tight tracking-tight">
+                            {project.name}
+                          </h3>
+                          <div className="flex items-center gap-0.5 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300" onClick={(e) => e.stopPropagation()}>
+                            <button
+                              onClick={() => handleStartEdit(project)}
+                              className="p-1.5 rounded-lg bg-gray-50 dark:bg-gray-700 text-gray-500 dark:text-gray-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 hover:text-indigo-600 dark:hover:text-indigo-400 transition-all duration-200 hover:scale-105"
+                              title="编辑"
+                            >
+                              <Edit3 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </>
+                      )}
                     </div>
 
                     {isEditing ? (
