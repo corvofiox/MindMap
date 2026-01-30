@@ -758,9 +758,12 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
       temp.innerHTML = html
 
       range.deleteContents()
+      // 使用 DocumentFragment 一次性插入所有节点，保持正确顺序
+      const fragment = document.createDocumentFragment()
       Array.from(temp.childNodes).forEach(node => {
-        range.insertNode(node.cloneNode(true))
+        fragment.appendChild(node.cloneNode(true))
       })
+      range.insertNode(fragment)
       range.collapse(false)
       selection.removeAllRanges()
       selection.addRange(range)
