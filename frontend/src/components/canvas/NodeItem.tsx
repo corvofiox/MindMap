@@ -35,7 +35,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
     setEditingId,
   } = useCanvasStore()
 
-  const { setSelectedType, currentTool, draggingNodeFromCanvas, isOverNodePool } = useUIStore()
+  const { setSelectedType, currentTool, draggingNodeFromCanvas, isOverNodePool, quickEditMode } = useUIStore()
 
   const [isDragging, setIsDragging] = useState(false)
   const [isResizing, setIsResizing] = useState(false)
@@ -418,7 +418,31 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
       }
 
       if (editingField !== null) {
-        // Prevent loss of focus and event leakage when clicking on node internal areas while editing
+        if (quickEditMode && !node.locked) {
+          const target = e.target as HTMLElement
+          const fieldElement = target.closest('[data-field]') as HTMLElement
+          const clickedField = fieldElement?.dataset.field as 'title' | 'content' | undefined
+
+          if (clickedField && clickedField !== editingField) {
+            if (clickedField === 'content' && node.type === 'image') {
+              e.preventDefault()
+              e.stopPropagation()
+              return
+            }
+            e.preventDefault()
+            e.stopPropagation()
+            if (editingField === 'title') {
+              saveTitle()
+            } else if (editingField === 'content') {
+              saveContent()
+            }
+            setEditingField(clickedField)
+            window.dispatchEvent(new CustomEvent('nodeEditingFieldChange', {
+              detail: { field: clickedField }
+            }))
+            return
+          }
+        }
         e.preventDefault()
         e.stopPropagation()
         return
@@ -444,6 +468,44 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
 
       // Only allow selection and dragging in default selection mode
       if (!isDefaultSelectionTool(currentTool)) {
+        return
+      }
+
+      // Quick edit mode: single click enters edit mode directly
+      if (quickEditMode && !node.locked && !e.shiftKey) {
+        const target = e.target as HTMLElement
+        const fieldElement = target.closest('[data-field]') as HTMLElement
+        const clickedField = fieldElement?.dataset.field as 'title' | 'content' | undefined
+
+        let field: 'title' | 'content'
+        if (clickedField === 'title') {
+          field = 'title'
+        } else if (clickedField === 'content') {
+          if (node.type === 'image') {
+            setSelectedIds([node.id])
+            setSelectedType('node')
+            return
+          }
+          field = 'content'
+        } else {
+          field = node.title && node.title.trim() !== '' ? 'content' : 'title'
+          if (node.type === 'image' && field === 'content') {
+            setSelectedIds([node.id])
+            setSelectedType('node')
+            return
+          }
+        }
+
+        if (isEditingTitle) {
+          saveTitle()
+        } else if (isEditingContent) {
+          saveContent()
+        }
+        setEditingField(field)
+        setEditingId(node.id)
+        window.dispatchEvent(new CustomEvent('nodeEditingFieldChange', {
+          detail: { field }
+        }))
         return
       }
 
@@ -481,12 +543,20 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
       node.y,
       node.width,
       node.height,
+      node.title,
+      node.type,
       setSelectedIds,
       addToSelection,
       removeFromSelection,
       onDragStart,
       node.id,
       currentTool,
+      quickEditMode,
+      isEditingTitle,
+      isEditingContent,
+      saveTitle,
+      saveContent,
+      setSelectedType,
     ]
   )
 
@@ -1122,6 +1192,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
             <div className="w-full h-full flex flex-col">
               {/* Title Area */}
               <div
+                data-field="title"
                 className="flex-shrink-0 px-4 py-2.5 border-b border-gray-100 dark:border-gray-700/50 bg-white dark:bg-gray-800"
                 style={{ minHeight: '36px' }}
               >
@@ -1219,6 +1290,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
             <div className="w-full h-full flex flex-col">
               {/* 标题区域 */}
               <div
+                data-field="title"
                 className="flex-shrink-0 px-4 py-2.5 border-b border-gray-100 dark:border-gray-700/50"
                 style={{ minHeight: '36px' }}
               >
@@ -1262,7 +1334,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
               </div>
 
               {/* 内容区域 */}
-              <div className="flex-1 p-4 overflow-auto">
+              <div data-field="content" className="flex-1 p-4 overflow-auto">
                 {isEditingContent ? (
                   <div
                     ref={contentRef}

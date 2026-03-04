@@ -36,6 +36,11 @@ export const SHORTCUTS: Shortcut[] = [
     category: 'view'
   },
   {
+    keys: ['E'],
+    description: '切换快速编辑模式',
+    category: 'edit'
+  },
+  {
     keys: ['Ctrl', 'G'],
     description: '创建分组',
     category: 'actions'

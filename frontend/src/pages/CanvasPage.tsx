@@ -701,6 +701,7 @@ export function CanvasPage() {
     setDomainEditMode,
     setCurrentTool,
     toggleGrid,
+    toggleQuickEditMode,
     setSelectedType,
     isLoading,
     setLoading,
@@ -1588,6 +1589,8 @@ export function CanvasPage() {
         }
       } else if (e.key === 'h' || e.key === 'H') {
         toggleGrid()
+      } else if (e.key === 'e' || e.key === 'E') {
+        toggleQuickEditMode()
       } else if (e.key === 'Escape') {
         // 退出域编辑模式
         if (domainEditMode) {
@@ -1633,7 +1636,7 @@ export function CanvasPage() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
     }
-  }, [zoom, currentTool, setCurrentTool, setZoom, setPan, toggleGrid, setEditingId, nodes, groups, selectedIds, addGroup, toggleSidebar, toggleNodePool, setSettingsOpen, setCommandPaletteOpen])
+  }, [zoom, currentTool, setCurrentTool, setZoom, setPan, toggleGrid, toggleQuickEditMode, setEditingId, nodes, groups, selectedIds, addGroup, toggleSidebar, toggleNodePool, setSettingsOpen, setCommandPaletteOpen])
 
   // Handle click outside to end group name editing
   useEffect(() => {

@@ -66,6 +66,10 @@ interface UIState {
   setMinimapVisible: (visible: boolean) => void
   toggleMinimap: () => void
 
+  // Quick Edit Mode
+  quickEditMode: boolean
+  toggleQuickEditMode: () => void
+
   // Domain Edit Mode
   domainEditMode: boolean
   setDomainEditMode: (enabled: boolean) => void
@@ -211,6 +215,10 @@ export const useUIStore = create<UIState>()(
         minimapVisible: true,
         setMinimapVisible: (visible) => set({ minimapVisible: visible }),
         toggleMinimap: createToggle('minimapVisible'),
+
+        // Quick Edit Mode
+        quickEditMode: false,
+        toggleQuickEditMode: createToggle('quickEditMode'),
 
         // Domain Edit Mode
         domainEditMode: false,
@@ -376,6 +384,7 @@ export const useUIStore = create<UIState>()(
         dragMode: state.dragMode,
         gridVisible: state.gridVisible,
         minimapVisible: state.minimapVisible,
+        quickEditMode: state.quickEditMode,
         // nodeDefaults 不持久化，始终从服务器获取当前用户的配置
       }),
       onRehydrateStorage: () => (state) => {
