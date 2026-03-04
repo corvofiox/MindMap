@@ -171,6 +171,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
       .replace(/&quot;/g, '"')
       .replace(/&#x27;/g, "'")
       .replace(/&apos;/g, "'")
+      .replace(/\u200B/g, '')
 
     return text
   }, [])
@@ -232,7 +233,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
       return {
         textAlign: align,
         justifyContent: align === 'left' ? 'flex-start' :
-                        align === 'center' ? 'center' : 'flex-end'
+          align === 'center' ? 'center' : 'flex-end'
       }
     }
     return {
@@ -379,8 +380,8 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
       const temp = document.createElement('div')
       temp.innerHTML = titleRef.current.innerHTML
       const text = temp.textContent || ''
-      const title = text.replace(/\n/g, '').trim()
-      
+      const title = text.replace(/\n/g, '').replace(/\u200B/g, '').trim()
+
       if (title !== editingTitleRef.current) {
         updateNode(node.id, { title })
         editingTitleRef.current = title
@@ -521,7 +522,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
         if (nodePoolElement) {
           const rect = nodePoolElement.getBoundingClientRect()
           const isOver = e.clientX >= rect.left && e.clientX <= rect.right &&
-                        e.clientY >= rect.top && e.clientY <= rect.bottom
+            e.clientY >= rect.top && e.clientY <= rect.bottom
 
           const { setIsOverNodePool, setCanvasDragGhostPosition, isOverNodePool: currentIsOverNodePool } = useUIStore.getState()
 
@@ -685,6 +686,27 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
   // 不做状态更新，避免光标跳动
   const handleInputChange = useCallback(() => { }, [])
 
+  // 手动插入换行，确保光标位置正确
+  const insertLineBreakManually = useCallback(() => {
+    const selection = window.getSelection()
+    if (!selection || selection.rangeCount === 0) return
+
+    const range = selection.getRangeAt(0)
+    range.deleteContents()
+
+    const br = document.createElement('br')
+    range.insertNode(br)
+
+    const zeroWidthSpace = document.createTextNode('\u200B')
+    range.setStartAfter(br)
+    range.insertNode(zeroWidthSpace)
+
+    range.setStartBefore(zeroWidthSpace)
+    range.collapse(true)
+    selection.removeAllRanges()
+    selection.addRange(range)
+  }, [])
+
   // Handle key down
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent, field: 'title' | 'content') => {
@@ -718,7 +740,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
         // Shift+Enter 或 Ctrl+Enter/Meta+Enter：换行不退出
         if (e.shiftKey || e.ctrlKey || e.metaKey) {
           e.preventDefault()
-          document.execCommand('insertLineBreak', false, undefined)
+          insertLineBreakManually()
           return
         }
         e.preventDefault()
@@ -734,7 +756,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
         }))
       }
     },
-    [isComposing, saveTitle, saveContent]
+    [isComposing, saveTitle, saveContent, insertLineBreakManually]
   )
 
   // Handle paste - 统一处理 HTML 和纯文本，保留换行格式
