@@ -118,7 +118,7 @@ interface UIState {
   isLoading: boolean
   setLoading: (loading: boolean) => void
 
-// Style Panel
+  // Style Panel
   stylePanelOpen: boolean
   selectedType: 'node' | 'connection' | 'domain' | null
   selectedNodeIds: string[]
@@ -305,7 +305,7 @@ export const useUIStore = create<UIState>()(
         selectedNodeIds: [],
         openStylePanel: () => set({ stylePanelOpen: true }),
         closeStylePanel: () => set({ stylePanelOpen: false }),
-setSelectedType: (type) => {
+        setSelectedType: (type) => {
           const state = get()
           if (state.stylePanelOpen && state.selectedType !== type) {
             set({ stylePanelOpen: false })

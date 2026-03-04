@@ -132,6 +132,19 @@ function findBestPort(node: Node, mouseX: number, mouseY: number): 'top' | 'righ
   return 'top'
 }
 
+function isPointInNode(node: Node, x: number, y: number): boolean {
+  return x >= node.x && x <= node.x + node.width && y >= node.y && y <= node.y + node.height
+}
+
+function findNodeAtPoint(nodes: Map<string, Node>, x: number, y: number): Node | null {
+  for (const node of nodes.values()) {
+    if (isPointInNode(node, x, y)) {
+      return node
+    }
+  }
+  return null
+}
+
 // Helper function to calculate optimal bend point position
 function calculateOptimalBendPoint(
   fromX: number, fromY: number,
@@ -558,6 +571,12 @@ export function CanvasPage() {
   // Snapping state for connection creation and endpoint dragging
   const [snappedPort, setSnappedPort] = useState<{ nodeId: string; port: 'top' | 'right' | 'bottom' | 'left'; position: { x: number; y: number } } | null>(null)
 
+  // Start port preview state for connection creation
+  const [startPortPreview, setStartPortPreview] = useState<{ port: 'top' | 'right' | 'bottom' | 'left'; position: { x: number; y: number } } | null>(null)
+
+  // Hovered port state for showing port preview before connection starts
+  const [hoveredPort, setHoveredPort] = useState<{ nodeId: string; port: 'top' | 'right' | 'bottom' | 'left'; position: { x: number; y: number } } | null>(null)
+
   // Node dragging state for real-time connection updates
   const [draggingNodePositions, setDraggingNodePositions] = useState<Map<string, { x: number; y: number }>>(new Map())
 
@@ -934,7 +953,7 @@ export function CanvasPage() {
     }
 
     setHasInitializedCamera(true)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canvasId, containerSize.width, containerSize.height, isLoading, hasLoadedCanvasData])
 
   // Note: We no longer auto-adjust zoom when container size changes
@@ -1522,13 +1541,13 @@ export function CanvasPage() {
 
       // Tool shortcuts
       if (e.key === 'v' || e.key === 'V') {
-        setCurrentTool('select')
+        setCurrentTool(currentTool === 'select' ? 'select' : 'select')
       } else if (e.key === 'n' || e.key === 'N') {
-        setCurrentTool('node')
+        setCurrentTool(currentTool === 'node' ? 'select' : 'node')
       } else if (e.key === 'r' || e.key === 'R') {
-        setCurrentTool('domain')
+        setCurrentTool(currentTool === 'domain' ? 'select' : 'domain')
       } else if (e.key === 'l' || e.key === 'L') {
-        setCurrentTool('connection')
+        setCurrentTool(currentTool === 'connection' ? 'select' : 'connection')
       } else if (e.key === 'g' || e.key === 'G') {
         if (e.ctrlKey || e.metaKey) {
           e.preventDefault()
@@ -1565,7 +1584,7 @@ export function CanvasPage() {
             }
           }
         } else {
-          setCurrentTool('group')
+          setCurrentTool(currentTool === 'group' ? 'select' : 'group')
         }
       } else if (e.key === 'h' || e.key === 'H') {
         toggleGrid()
@@ -1578,6 +1597,7 @@ export function CanvasPage() {
         setEditingId(null)
         setIsCreatingConnection(false)
         setConnectionStartNodeId(null)
+        setStartPortPreview(null)
       }
 
       if ((e.ctrlKey || e.metaKey) && e.key === '0') {
@@ -1613,7 +1633,7 @@ export function CanvasPage() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
     }
-  }, [zoom, setCurrentTool, setZoom, setPan, toggleGrid, setEditingId, nodes, groups, selectedIds, addGroup, toggleSidebar, toggleNodePool, setSettingsOpen, setCommandPaletteOpen])
+  }, [zoom, currentTool, setCurrentTool, setZoom, setPan, toggleGrid, setEditingId, nodes, groups, selectedIds, addGroup, toggleSidebar, toggleNodePool, setSettingsOpen, setCommandPaletteOpen])
 
   // Handle click outside to end group name editing
   useEffect(() => {
@@ -1650,6 +1670,7 @@ export function CanvasPage() {
       if (node) {
         setIsCreatingConnection(true)
         setConnectionStartNodeId(nodeId)
+        setHoveredPort(null)
 
         const rect = containerRef.current?.getBoundingClientRect()
         if (rect) {
@@ -1660,6 +1681,7 @@ export function CanvasPage() {
 
           const portPosition = getPortPosition(node, bestPort)
           setConnectionEndPosition(portPosition)
+          setStartPortPreview({ port: bestPort, position: portPosition })
         }
       }
     }
@@ -1988,6 +2010,25 @@ export function CanvasPage() {
           y: canvasMouseY,
         })
       }
+
+      if (connectionStartNodeId) {
+        const startNode = nodes.get(connectionStartNodeId)
+        if (startNode) {
+          const startNearest = findNearestPort(
+            new Map([[connectionStartNodeId, startNode]]),
+            canvasMouseX,
+            canvasMouseY,
+            undefined,
+            50
+          )
+          if (startNearest) {
+            setStartPortPreview({ port: startNearest.port, position: startNearest.position })
+            setConnectionStartPort(startNearest.port)
+          } else {
+            setStartPortPreview(null)
+          }
+        }
+      }
     } else if (isDraggingConnectionEndpoint && containerRef.current) {
       const rect = containerRef.current.getBoundingClientRect()
       const mouseX = e.clientX - rect.left
@@ -2048,6 +2089,21 @@ export function CanvasPage() {
       }
 
       setCustomCursor(isNearEndpoint ? 'crosshair' : null)
+
+      if (currentTool === 'connection') {
+        const hoveredNode = findNodeAtPoint(nodes, canvasX, canvasY)
+        if (hoveredNode) {
+          const bestPort = findBestPort(hoveredNode, canvasX, canvasY)
+          const portPosition = getPortPosition(hoveredNode, bestPort)
+          setHoveredPort({ nodeId: hoveredNode.id, port: bestPort, position: portPosition })
+        } else {
+          setHoveredPort(null)
+        }
+      } else {
+        setHoveredPort(null)
+      }
+    } else {
+      setHoveredPort(null)
     }
   }, [isDragging, isBoxSelecting, isCreatingDomain, isCreatingConnection, isDraggingConnectionEndpoint, isDraggingBendPoint, isResizingGroup, isCreatingGroup, panX, panY, zoom, setPan, nodes, connectionStartNodeId, draggingConnectionId, draggingEndpoint, draggingBendPointId, connections, isDraggingGroup, draggingGroupId, groups, groupDragStart, groupInitialPositions, initialGroupNodeIds, groupDragInitialGroupPos, resizeHandle, resizeStart, resizeInitialGroup, resizeInitialNodePositions, updateGroup, resizingGroupId, currentTool, selectedIds, customCursor, setCustomCursor])
 
@@ -2425,6 +2481,7 @@ export function CanvasPage() {
       setConnectionStartNodeId(null)
       setConnectionStartPort(null)
       setSnappedPort(null)
+      setStartPortPreview(null)
       justFinishedConnectionRef.current = true
       setTimeout(() => {
         justFinishedConnectionRef.current = false
@@ -2704,13 +2761,6 @@ export function CanvasPage() {
 
   // Handle mouse wheel for zooming and panning
   const handleWheel = (e: React.WheelEvent) => {
-    // If hovering over a node and not holding any modifier keys, 
-    // allow the default scroll behavior for node content instead of zooming the canvas
-    const isOverNode = (e.target as HTMLElement).closest('.node-item')
-    if (isOverNode && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
-      return
-    }
-
     if (e.shiftKey) {
       e.preventDefault()
       setPan(panX - e.deltaY, panY)
@@ -3638,6 +3688,19 @@ export function CanvasPage() {
                 </g>
               )
             })}
+
+            {/* Hovered port preview (before connection starts) - only in connection tool mode */}
+            {hoveredPort && !isCreatingConnection && currentTool === 'connection' && (
+              <circle
+                cx={hoveredPort.position.x}
+                cy={hoveredPort.position.y}
+                r={10}
+                fill="none"
+                stroke="#4A90E2"
+                strokeWidth={2}
+              />
+            )}
+
             {/* Connection creation preview */}
             {isCreatingConnection && connectionStartNodeId && (
               <>
@@ -3663,6 +3726,17 @@ export function CanvasPage() {
                   <circle
                     cx={snappedPort.position.x}
                     cy={snappedPort.position.y}
+                    r={10}
+                    fill="none"
+                    stroke="#4A90E2"
+                    strokeWidth={2}
+                  />
+                )}
+
+                {startPortPreview && (
+                  <circle
+                    cx={startPortPreview.position.x}
+                    cy={startPortPreview.position.y}
                     r={10}
                     fill="none"
                     stroke="#4A90E2"
