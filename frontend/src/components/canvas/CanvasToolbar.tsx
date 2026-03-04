@@ -224,7 +224,7 @@ export function CanvasToolbar({ onSave }: CanvasToolbarProps) {
                 : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
               }
             `}
-            title="切换缩略图"
+            title="切换小地图 (M)"
           >
             <Map className="w-5 h-5" />
           </button>

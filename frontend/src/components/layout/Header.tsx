@@ -8,7 +8,7 @@ import { DropdownMenu } from '../ui/DropdownMenu'
 export function Header() {
   const navigate = useNavigate()
   const { user, logout } = useAuthStore()
-  const { toggleSidebar, toggleNodePool, addErrorToast } = useUIStore()
+  const { sidebarOpen, nodePoolOpen, toggleSidebar, toggleNodePool, addErrorToast } = useUIStore()
   const { currentProject } = useProjectsStore()
 
   const handleLogout = async () => {
@@ -46,7 +46,11 @@ export function Header() {
       <div className="flex items-center gap-2">
         <button
           onClick={toggleSidebar}
-          className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400"
+          className={`p-2 rounded-lg transition-colors ${
+            sidebarOpen
+              ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
+              : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
+          }`}
           title="切换侧边栏 (Ctrl+B)"
         >
           <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -56,7 +60,11 @@ export function Header() {
 
         <button
           onClick={toggleNodePool}
-          className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400"
+          className={`p-2 rounded-lg transition-colors ${
+            nodePoolOpen
+              ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
+              : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
+          }`}
           title="切换节点池 (Ctrl+P)"
         >
           <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">

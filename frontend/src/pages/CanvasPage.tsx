@@ -702,6 +702,8 @@ export function CanvasPage() {
     setCurrentTool,
     toggleGrid,
     toggleQuickEditMode,
+    toggleDragMode,
+    toggleMinimap,
     setSelectedType,
     isLoading,
     setLoading,
@@ -1535,77 +1537,222 @@ export function CanvasPage() {
       // Don't handle shortcuts when typing in input fields
       if (
         e.target instanceof HTMLInputElement ||
-        e.target instanceof HTMLTextAreaElement
+        e.target instanceof HTMLTextAreaElement ||
+        (e.target as HTMLElement).contentEditable === 'true'
       ) {
         return
       }
 
-      // Tool shortcuts
-      if (e.key === 'v' || e.key === 'V') {
-        setCurrentTool(currentTool === 'select' ? 'select' : 'select')
-      } else if (e.key === 'n' || e.key === 'N') {
-        setCurrentTool(currentTool === 'node' ? 'select' : 'node')
-      } else if (e.key === 'r' || e.key === 'R') {
-        setCurrentTool(currentTool === 'domain' ? 'select' : 'domain')
-      } else if (e.key === 'l' || e.key === 'L') {
-        setCurrentTool(currentTool === 'connection' ? 'select' : 'connection')
-      } else if (e.key === 'g' || e.key === 'G') {
-        if (e.ctrlKey || e.metaKey) {
-          e.preventDefault()
-          if (selectedIds.length > 0) {
-            const selectedNodes = selectedIds.map(id => nodes.get(id)).filter(Boolean)
-            if (selectedNodes.length > 0) {
-              let minX = Infinity
-              let minY = Infinity
-              let maxX = -Infinity
-              let maxY = -Infinity
-
-              selectedNodes.forEach(node => {
-                minX = Math.min(minX, node.x)
-                minY = Math.min(minY, node.y)
-                maxX = Math.max(maxX, node.x + node.width)
-                maxY = Math.max(maxY, node.y + node.height)
-              })
-
-              const newGroup = {
-                id: generateId('group'),
-                name: `组 ${groups.size + 1}`,
-                x: minX - 10,
-                y: minY - 10,
-                width: maxX - minX + 20,
-                height: maxY - minY + 20,
-                borderColor: '#3b82f6',
-                backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                borderWidth: 2,
-                borderRadius: 8,
-                nodeIds: selectedIds,
-                collapsed: false,
-              }
-              addGroup(newGroup)
-            }
-          }
-        } else {
-          setCurrentTool(currentTool === 'group' ? 'select' : 'group')
+      // Don't handle most shortcuts when editing
+      const { editingId: currentEditingId } = useCanvasStore.getState()
+      if (currentEditingId !== null) {
+        // Only allow Escape when editing
+        if (e.key === 'Escape') {
+          setEditingId(null)
         }
-      } else if (e.key === 'h' || e.key === 'H') {
-        toggleGrid()
-      } else if (e.key === 'e' || e.key === 'E') {
-        toggleQuickEditMode()
-      } else if (e.key === 'Escape') {
-        // 退出域编辑模式
-        if (domainEditMode) {
-          setDomainEditMode(false)
-        }
-        setCurrentTool('select')
-        setEditingId(null)
-        setIsCreatingConnection(false)
-        setConnectionStartNodeId(null)
-        setStartPortPreview(null)
+        return
       }
 
+      // Ctrl+S save shortcut
+      if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
+        e.preventDefault()
+        handleManualSave().then(() => {
+          addToast({
+            type: 'success',
+            title: '保存成功',
+            message: '画布内容已保存到服务器',
+            duration: 3000,
+          })
+        }).catch((error) => {
+          addToast({
+            type: 'error',
+            title: '保存失败',
+            message: error instanceof Error ? error.message : '保存画布时发生错误',
+            duration: 5000,
+          })
+        })
+        return
+      }
+
+      // Delete/Backspace
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedIds.length > 0) {
+        e.preventDefault()
+        const { removeNode, removeConnection, removeGroup, removeDomain, nodes: currentNodes, connections: currentConnections, groups: currentGroups, domains: currentDomains } = useCanvasStore.getState()
+        selectedIds.forEach((id) => {
+          if (currentNodes.has(id)) {
+            removeNode(id)
+          } else if (currentConnections.has(id)) {
+            removeConnection(id)
+          } else if (currentGroups.has(id)) {
+            removeGroup(id)
+          } else if (currentDomains.has(id)) {
+            removeDomain(id)
+          }
+        })
+        setSelectedIds([])
+        return
+      }
+
+      // Undo: Ctrl+Z
+      if ((e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
+        e.preventDefault()
+        if (canUndo()) {
+          undo()
+        }
+        return
+      }
+
+      // Redo: Ctrl+Y or Ctrl+Shift+Z
+      if (((e.key === 'y' || e.key === 'Y') && (e.ctrlKey || e.metaKey)) ||
+        ((e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey) && e.shiftKey)) {
+        e.preventDefault()
+        if (canRedo()) {
+          redo()
+        }
+        return
+      }
+
+      // Duplicate: Ctrl+D
+      if ((e.key === 'd' || e.key === 'D') && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault()
+        const { duplicateNode } = useCanvasStore.getState()
+        if (selectedIds.length === 1) {
+          duplicateNode(selectedIds[0])
+        }
+        return
+      }
+
+      // Copy: Ctrl+C
+      if ((e.key === 'c' || e.key === 'C') && (e.ctrlKey || e.metaKey)) {
+        const nodesToCopy = selectedIds.map((id) => nodes.get(id)).filter(Boolean)
+        sessionStorage.setItem('clipboard_nodes', JSON.stringify(nodesToCopy))
+        return
+      }
+
+      // Paste: Ctrl+V
+      if ((e.key === 'v' || e.key === 'V') && (e.ctrlKey || e.metaKey)) {
+        const clipboard = sessionStorage.getItem('clipboard_nodes')
+        if (clipboard) {
+          try {
+            const nodesToPaste = JSON.parse(clipboard) as Node[]
+            nodesToPaste.forEach((node) => {
+              const newNode = {
+                ...node,
+                id: generateId('node'),
+                x: node.x + 20,
+                y: node.y + 20,
+              }
+              addNode(newNode)
+            })
+          } catch {
+            // Silently fail
+          }
+        }
+        return
+      }
+
+      // Select all: Ctrl+A
+      if ((e.key === 'a' || e.key === 'A') && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault()
+        setSelectedIds(Array.from(nodes.keys()))
+        return
+      }
+
+      // Shift key - toggle drag mode
+      if (e.key === 'Shift' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        toggleDragMode()
+        return
+      }
+
+      // Tool shortcuts (single key, no modifiers)
+      if (!e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey) {
+        if (e.key === 'n' || e.key === 'N') {
+          setCurrentTool(currentTool === 'node' ? 'select' : 'node')
+          return
+        } else if (e.key === 'i' || e.key === 'I') {
+          setCurrentTool(currentTool === 'image' ? 'select' : 'image')
+          return
+        } else if (e.key === 'r' || e.key === 'R') {
+          setCurrentTool(currentTool === 'domain' ? 'select' : 'domain')
+          return
+        } else if (e.key === 'l' || e.key === 'L') {
+          setCurrentTool(currentTool === 'connection' ? 'select' : 'connection')
+          return
+        } else if (e.key === 'g' || e.key === 'G') {
+          setCurrentTool(currentTool === 'group' ? 'select' : 'group')
+          return
+        } else if (e.key === 'h' || e.key === 'H') {
+          toggleGrid()
+          return
+        } else if (e.key === 'm' || e.key === 'M') {
+          toggleMinimap()
+          return
+        } else if (e.key === 'e' || e.key === 'E') {
+          toggleQuickEditMode()
+          return
+        } else if (e.key === 'Enter') {
+          if (selectedIds.length === 1) {
+            const nodeId = selectedIds[0]
+            if (nodes.has(nodeId)) {
+              e.preventDefault()
+              setEditingId(nodeId)
+              return
+            }
+          }
+        } else if (e.key === 'Escape') {
+          if (domainEditMode) {
+            setDomainEditMode(false)
+          }
+          setCurrentTool('select')
+          setEditingId(null)
+          setIsCreatingConnection(false)
+          setConnectionStartNodeId(null)
+          setStartPortPreview(null)
+          return
+        }
+      }
+
+      // Ctrl+G create group
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'g' || e.key === 'G')) {
+        e.preventDefault()
+        if (selectedIds.length > 0) {
+          const selectedNodes = selectedIds.map(id => nodes.get(id)).filter(Boolean)
+          if (selectedNodes.length > 0) {
+            let minX = Infinity
+            let minY = Infinity
+            let maxX = -Infinity
+            let maxY = -Infinity
+
+            selectedNodes.forEach(node => {
+              minX = Math.min(minX, node.x)
+              minY = Math.min(minY, node.y)
+              maxX = Math.max(maxX, node.x + node.width)
+              maxY = Math.max(maxY, node.y + node.height)
+            })
+
+            const newGroup = {
+              id: generateId('group'),
+              name: `组 ${groups.size + 1}`,
+              x: minX - 10,
+              y: minY - 10,
+              width: maxX - minX + 20,
+              height: maxY - minY + 20,
+              borderColor: '#3b82f6',
+              backgroundColor: 'rgba(59, 130, 246, 0.1)',
+              borderWidth: 2,
+              borderRadius: 8,
+              nodeIds: selectedIds,
+              collapsed: false,
+            }
+            addGroup(newGroup)
+          }
+        }
+        return
+      }
+
+      // Zoom shortcuts
       if ((e.ctrlKey || e.metaKey) && e.key === '0') {
         e.preventDefault()
-        // Only reset zoom, keep camera position unchanged
         setZoom(1)
       } else if ((e.ctrlKey || e.metaKey) && (e.key === '=' || e.key === '+')) {
         e.preventDefault()
@@ -1636,7 +1783,7 @@ export function CanvasPage() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
     }
-  }, [zoom, currentTool, setCurrentTool, setZoom, setPan, toggleGrid, toggleQuickEditMode, setEditingId, nodes, groups, selectedIds, addGroup, toggleSidebar, toggleNodePool, setSettingsOpen, setCommandPaletteOpen])
+  }, [zoom, currentTool, setCurrentTool, setZoom, setPan, toggleGrid, toggleQuickEditMode, toggleDragMode, toggleMinimap, setEditingId, nodes, groups, selectedIds, addGroup, toggleSidebar, toggleNodePool, setSettingsOpen, setCommandPaletteOpen, handleManualSave, domainEditMode, setDomainEditMode, setIsCreatingConnection, setConnectionStartNodeId, setStartPortPreview, setSelectedIds, canUndo, canRedo, undo, redo, addNode, addToast])
 
   // Handle click outside to end group name editing
   useEffect(() => {
@@ -2794,93 +2941,6 @@ export function CanvasPage() {
       setPan(newPanX, newPanY)
     }
   }
-
-  // Handle keyboard shortcuts for node operations
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (
-        e.target instanceof HTMLInputElement ||
-        e.target instanceof HTMLTextAreaElement ||
-        (e.target as HTMLElement).contentEditable === 'true'
-      ) {
-        return
-      }
-
-      const { editingId } = useCanvasStore.getState()
-      if (editingId !== null) {
-        return
-      }
-
-      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedIds.length > 0) {
-        const { removeNode, removeConnection, nodes, connections } = useCanvasStore.getState()
-        selectedIds.forEach((id) => {
-          if (nodes.has(id)) {
-            removeNode(id)
-          } else if (connections.has(id)) {
-            removeConnection(id)
-          }
-        })
-        setSelectedIds([])
-      }
-
-      if ((e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
-        e.preventDefault()
-        if (canUndo()) {
-          undo()
-        }
-      }
-
-      if (((e.key === 'y' || e.key === 'Y') && (e.ctrlKey || e.metaKey)) ||
-        ((e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey) && e.shiftKey)) {
-        e.preventDefault()
-        if (canRedo()) {
-          redo()
-        }
-      }
-
-      if ((e.key === 'd' || e.key === 'D') && (e.ctrlKey || e.metaKey)) {
-        e.preventDefault()
-        const { duplicateNode } = useCanvasStore.getState()
-        if (selectedIds.length === 1) {
-          duplicateNode(selectedIds[0])
-        }
-      }
-
-      if ((e.key === 'c' || e.key === 'C') && (e.ctrlKey || e.metaKey)) {
-        const nodesToCopy = selectedIds.map((id) => nodes.get(id)).filter(Boolean)
-        sessionStorage.setItem('clipboard_nodes', JSON.stringify(nodesToCopy))
-      }
-
-      if ((e.key === 'v' || e.key === 'V') && (e.ctrlKey || e.metaKey)) {
-        const clipboard = sessionStorage.getItem('clipboard_nodes')
-        if (clipboard) {
-          try {
-            const nodesToPaste = JSON.parse(clipboard) as Node[]
-            nodesToPaste.forEach((node) => {
-              const newNode = {
-                ...node,
-                id: generateId('node'),
-                x: node.x + 20,
-                y: node.y + 20,
-              }
-              addNode(newNode)
-            })
-          } catch (e) {
-            // Silently fail
-          }
-        }
-      }
-
-      // Select all nodes
-      if ((e.key === 'a' || e.key === 'A') && (e.ctrlKey || e.metaKey)) {
-        e.preventDefault()
-        setSelectedIds(Array.from(nodes.keys()))
-      }
-    }
-
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [selectedIds, nodes, addNode, setSelectedIds, undo, redo, canUndo, canRedo])
 
   // Close context menu when clicking outside
   useEffect(() => {

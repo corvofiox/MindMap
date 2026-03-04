@@ -940,7 +940,12 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
 
   // Sync with global editing state
   useEffect(() => {
-    if (globalEditingId !== node.id && editingField !== null) {
+    if (globalEditingId === node.id && editingField === null) {
+      setEditingField('content')
+      window.dispatchEvent(new CustomEvent('nodeEditingFieldChange', {
+        detail: { field: 'content' }
+      }))
+    } else if (globalEditingId !== node.id && editingField !== null) {
       if (editingField === 'title') {
         saveTitle()
       } else if (editingField === 'content') {

@@ -125,63 +125,6 @@ export const BORDER_COLORS = [
 export const DEFAULT_NODE_DEFAULTS: NodeDefaults = SHARED_NODE_DEFAULTS
 export { type NodeDefaults as NodeDefaultsType } from '@shared/constants'
 
-export const SHORTCUTS = {
-  // Canvas
-  CANVAS_ZOOM_IN: 'Ctrl+=',
-  CANVAS_ZOOM_OUT: 'Ctrl+-',
-  CANVAS_ZOOM_RESET: 'Ctrl+0',
-  CANVAS_FIT: 'F',
-  CANVAS_TOGGLE_GRID: 'G',
-
-  // Node
-  NODE_CREATE: 'N',
-  NODE_DELETE: 'Delete',
-  NODE_COPY: 'Ctrl+C',
-  NODE_PASTE: 'Ctrl+V',
-  NODE_CUT: 'Ctrl+X',
-  NODE_DUPLICATE: 'Ctrl+D',
-  NODE_EDIT: 'Enter',
-  NODE_ESCAPE: 'Escape',
-
-  // Group
-  GROUP_CREATE: 'Ctrl+G',
-  GROUP_UNGROUP: 'Ctrl+Shift+G',
-
-  // Domain
-  DOMAIN_MODE: 'R',
-
-  // Connection
-  CONNECTION_MODE: 'L',
-
-  // Selection
-  SELECT_ALL: 'Ctrl+A',
-  SELECT_NONE: 'Ctrl+Shift+A',
-
-  // File
-  FILE_SAVE: 'Ctrl+S',
-  FILE_EXPORT: 'Ctrl+E',
-  FILE_NEW: 'Ctrl+N',
-  FILE_CLOSE: 'Ctrl+W',
-
-  // Search
-  SEARCH: 'Ctrl+F',
-  SEARCH_GLOBAL: 'Ctrl+Shift+F',
-
-  // Panels
-  PANEL_SIDEBAR: 'Ctrl+B',
-  PANEL_NODE_POOL: 'Ctrl+P',
-  PANEL_SETTINGS: 'Ctrl+,',
-  PANEL_HELP: 'Ctrl+H',
-
-  // Undo/Redo
-  UNDO: 'Ctrl+Z',
-  REDO: 'Ctrl+Y',
-
-  // Tabs
-  TAB_NEXT: 'Ctrl+Tab',
-  TAB_PREV: 'Ctrl+Shift+Tab',
-} as const
-
 // Local storage keys
 export const STORAGE_KEYS = {
   TOKEN: 'mindmap_token',

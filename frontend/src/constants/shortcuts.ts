@@ -6,23 +6,18 @@ export interface Shortcut {
 
 export const SHORTCUTS: Shortcut[] = [
   {
-    keys: ['V'],
-    description: '选择工具',
-    category: 'tools'
-  },
-  {
     keys: ['N'],
     description: '节点工具',
     category: 'tools'
   },
   {
-    keys: ['R'],
-    description: '领域工具',
+    keys: ['I'],
+    description: '图片工具',
     category: 'tools'
   },
   {
     keys: ['L'],
-    description: '连接工具',
+    description: '连线工具',
     category: 'tools'
   },
   {
@@ -31,8 +26,43 @@ export const SHORTCUTS: Shortcut[] = [
     category: 'tools'
   },
   {
+    keys: ['R'],
+    description: '域工具',
+    category: 'tools'
+  },
+  {
     keys: ['H'],
     description: '切换网格显示',
+    category: 'view'
+  },
+  {
+    keys: ['M'],
+    description: '切换小地图',
+    category: 'view'
+  },
+  {
+    keys: ['Space'],
+    description: '拖动画布（按住）',
+    category: 'view'
+  },
+  {
+    keys: ['Shift'],
+    description: '切换拖动模式',
+    category: 'view'
+  },
+  {
+    keys: ['Ctrl', '0'],
+    description: '重置缩放',
+    category: 'view'
+  },
+  {
+    keys: ['Ctrl', '+'],
+    description: '放大',
+    category: 'view'
+  },
+  {
+    keys: ['Ctrl', '-'],
+    description: '缩小',
     category: 'view'
   },
   {
@@ -41,9 +71,9 @@ export const SHORTCUTS: Shortcut[] = [
     category: 'edit'
   },
   {
-    keys: ['Ctrl', 'G'],
-    description: '创建分组',
-    category: 'actions'
+    keys: ['Enter'],
+    description: '编辑选中节点',
+    category: 'edit'
   },
   {
     keys: ['Ctrl', 'Z'],
@@ -53,6 +83,11 @@ export const SHORTCUTS: Shortcut[] = [
   {
     keys: ['Ctrl', 'Y'],
     description: '重做',
+    category: 'edit'
+  },
+  {
+    keys: ['Ctrl', 'S'],
+    description: '保存',
     category: 'edit'
   },
   {
@@ -76,6 +111,11 @@ export const SHORTCUTS: Shortcut[] = [
     category: 'selection'
   },
   {
+    keys: ['Ctrl', 'G'],
+    description: '创建分组',
+    category: 'actions'
+  },
+  {
     keys: ['Delete'],
     description: '删除选中元素',
     category: 'actions'
@@ -89,21 +129,6 @@ export const SHORTCUTS: Shortcut[] = [
     keys: ['Escape'],
     description: '退出当前操作',
     category: 'actions'
-  },
-  {
-    keys: ['Ctrl', '0'],
-    description: '重置缩放',
-    category: 'view'
-  },
-  {
-    keys: ['Ctrl', '+'],
-    description: '放大',
-    category: 'view'
-  },
-  {
-    keys: ['Ctrl', '-'],
-    description: '缩小',
-    category: 'view'
   },
   {
     keys: ['Ctrl', 'B'],
