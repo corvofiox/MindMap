@@ -18,7 +18,7 @@ import { ContextMenuWrapper } from '@/components/ContextMenuWrapper'
 import { RichTextToolbar } from '@/components/canvas/RichTextToolbar'
 import { ConnectionLine } from '@/components/canvas/ConnectionLine'
 import { CONNECTION_DEFAULTS, Z_INDEX } from '@/constants'
-import { generateId, colorToHex, hexToRgba } from '@/utils/canvas'
+import { generateId, colorToHex, hexToRgba, calculateCurveControlPoints, getCurveThroughPoints, getStepPath, pointsToPath, type PortDirection } from '@/utils/canvas'
 import { saveToCache, loadFromCache } from '@/utils/nodeCache'
 import { saveCanvasNodesData, loadCanvasNodesData } from '@/services/api'
 import type { Node, Connection, NodeCard } from '@/types'
@@ -240,6 +240,10 @@ function getLabelPosition(
   bendPoints: { x: number; y: number }[]
 ): { x: number; y: number } {
   if (connType === 'straight') {
+    if (bendPoints.length > 0) {
+      const points = [{ x: fromX, y: fromY }, ...bendPoints, { x: toX, y: toY }]
+      return getPolylineMidpoint(points)
+    }
     return { x: (fromX + toX) / 2, y: (fromY + toY) / 2 }
   }
 
@@ -248,7 +252,7 @@ function getLabelPosition(
     return getCatmullRomMidpoint(points)
   }
 
-  if (connType === 'orthogonal' && bendPoints.length > 0) {
+  if (connType === 'step' && bendPoints.length > 0) {
     const points = [{ x: fromX, y: fromY }, ...bendPoints, { x: toX, y: toY }]
     return getPolylineMidpoint(points)
   }
@@ -578,7 +582,10 @@ export function CanvasPage() {
   const [hoveredPort, setHoveredPort] = useState<{ nodeId: string; port: 'top' | 'right' | 'bottom' | 'left'; position: { x: number; y: number } } | null>(null)
 
   // Node dragging state for real-time connection updates
-  const [draggingNodePositions, setDraggingNodePositions] = useState<Map<string, { x: number; y: number }>>(new Map())
+  // Using ref to avoid re-renders on every mousemove
+  const draggingNodePositionsRef = useRef<Map<string, { x: number; y: number }>>(new Map())
+  // Counter to force re-render when dragging position changes
+  const [, setDragRenderCounter] = useState(0)
 
   // Group creation state
   const [isCreatingGroup, setIsCreatingGroup] = useState(false)
@@ -1095,20 +1102,53 @@ export function CanvasPage() {
           ctx.translate(x, y)
           ctx.scale(scale, scale)
 
+          // Helper function to draw SVG path on Canvas
+          const drawSvgPath = (ctx: CanvasRenderingContext2D, pathData: string) => {
+            const commands = pathData.match(/[MLC]\s*[\d.\-\s]+/g)
+            if (!commands) return
+
+            commands.forEach(cmd => {
+              const type = cmd[0]
+              const nums = cmd.slice(1).trim().split(/[\s,]+/).map(Number)
+
+              if (type === 'M') {
+                ctx.moveTo(nums[0], nums[1])
+              } else if (type === 'L') {
+                ctx.lineTo(nums[0], nums[1])
+              } else if (type === 'C') {
+                ctx.bezierCurveTo(nums[0], nums[1], nums[2], nums[3], nums[4], nums[5])
+              }
+            })
+          }
+
+          // Helper function to get last point and direction from path for arrow positioning
+          const getLastPointAndDirection = (points: { x: number; y: number }[]): { x: number; y: number; dx: number; dy: number } | null => {
+            if (points.length < 2) return null
+            const last = points[points.length - 1]
+            const secondLast = points[points.length - 2]
+            const dx = last.x - secondLast.x
+            const dy = last.y - secondLast.y
+            return { x: last.x, y: last.y, dx, dy }
+          }
+
+          // Helper function to get first point and direction from path for arrow positioning
+          const getFirstPointAndDirection = (points: { x: number; y: number }[]): { x: number; y: number; dx: number; dy: number } | null => {
+            if (points.length < 2) return null
+            const first = points[0]
+            const second = points[1]
+            const dx = first.x - second.x
+            const dy = first.y - second.y
+            return { x: first.x, y: first.y, dx, dy }
+          }
+
           currentConnections.forEach((conn) => {
             const fromNode = currentNodes.get(conn.fromNodeId)
             const toNode = currentNodes.get(conn.toNodeId)
             if (!fromNode || !toNode) return
 
-            // Calculate positions in thumbnail coordinates
-            const fromX = fromNode.x - minX + THUMBNAIL.PADDING
-            const fromY = fromNode.y - minY + THUMBNAIL.PADDING
-            const toX = toNode.x - minX + THUMBNAIL.PADDING
-            const toY = toNode.y - minY + THUMBNAIL.PADDING
-
             // Get port positions
-            const fromPort = getConnectionPort(conn, 'start')
-            const toPort = getConnectionPort(conn, 'end')
+            const fromPort = getConnectionPort(conn, 'start') as PortDirection
+            const toPort = getConnectionPort(conn, 'end') as PortDirection
             const fromPos = getPortPosition(fromNode, fromPort)
             const toPos = getPortPosition(toNode, toPort)
 
@@ -1133,55 +1173,100 @@ export function CanvasPage() {
               ctx.setLineDash([])
             }
 
-            // Draw connection based on type
+            // Prepare bend points for thumbnail coordinates
+            const bendPoints = conn.bendPoints?.map(bp => ({
+              x: bp.x - minX + THUMBNAIL.PADDING,
+              y: bp.y - minY + THUMBNAIL.PADDING
+            })) || []
+
+            // Draw connection based on type with bend points support
             ctx.beginPath()
+
+            let pathPoints: { x: number; y: number }[] = []
+            let pathData = ''
+
             if (conn.type === 'straight') {
-              ctx.moveTo(startX, startY)
-              ctx.lineTo(endX, endY)
+              if (bendPoints.length > 0) {
+                pathPoints = [
+                  { x: startX, y: startY },
+                  ...bendPoints,
+                  { x: endX, y: endY }
+                ]
+                pathData = pointsToPath(pathPoints)
+              } else {
+                ctx.moveTo(startX, startY)
+                ctx.lineTo(endX, endY)
+                pathPoints = [{ x: startX, y: startY }, { x: endX, y: endY }]
+              }
             } else if (conn.type === 'curve') {
-              const midX = (startX + endX) / 2
-              const midY = (startY + endY) / 2
-              const dx = endX - startX
-              const dy = endY - startY
-              const controlX = midX - dy * 0.2
-              const controlY = midY + dx * 0.2
-              ctx.quadraticCurveTo(controlX, controlY, endX, endY)
+              if (bendPoints.length > 0) {
+                const points = [
+                  { x: startX, y: startY },
+                  ...bendPoints,
+                  { x: endX, y: endY }
+                ]
+                pathData = getCurveThroughPoints(points, fromPort, toPort)
+                pathPoints = points
+              } else {
+                const { cp1x, cp1y, cp2x, cp2y } = calculateCurveControlPoints(
+                  startX, startY, endX, endY, fromPort, toPort
+                )
+                ctx.moveTo(startX, startY)
+                ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, endX, endY)
+                pathPoints = [{ x: startX, y: startY }, { x: endX, y: endY }]
+              }
             } else if (conn.type === 'step') {
-              const midX = (startX + endX) / 2
-              ctx.moveTo(startX, startY)
-              ctx.lineTo(midX, startY)
-              ctx.lineTo(midX, endY)
-              ctx.lineTo(endX, endY)
+              pathPoints = getStepPath(startX, startY, endX, endY, bendPoints, fromPort, toPort)
+              pathData = pointsToPath(pathPoints)
+            }
+
+            // Draw the path
+            if (pathData) {
+              drawSvgPath(ctx, pathData)
             }
             ctx.stroke()
 
             // Draw arrows
-            if (conn.arrowType !== 'none') {
-              const drawArrow = (fromX: number, fromY: number, toX: number, toY: number) => {
-                const angle = Math.atan2(toY - fromY, toX - fromX)
-                const arrowLength = 10
-                const arrowWidth = 5
-
-                ctx.beginPath()
-                ctx.moveTo(toX, toY)
-                ctx.lineTo(
-                  toX - arrowLength * Math.cos(angle - Math.PI / 6),
-                  toY - arrowLength * Math.sin(angle - Math.PI / 6)
-                )
-                ctx.lineTo(
-                  toX - arrowLength * Math.cos(angle + Math.PI / 6),
-                  toY - arrowLength * Math.sin(angle + Math.PI / 6)
-                )
-                ctx.closePath()
-                ctx.fillStyle = conn.color
-                ctx.fill()
-              }
-
+            if (conn.arrowType !== 'none' && pathPoints.length >= 2) {
               if (conn.arrowType === 'end' || conn.arrowType === 'both') {
-                drawArrow(startX, startY, endX, endY)
+                const lastInfo = getLastPointAndDirection(pathPoints)
+                if (lastInfo) {
+                  const arrowAngle = Math.atan2(lastInfo.dy, lastInfo.dx)
+                  const arrowLength = 10
+                  ctx.beginPath()
+                  ctx.moveTo(lastInfo.x, lastInfo.y)
+                  ctx.lineTo(
+                    lastInfo.x - arrowLength * Math.cos(arrowAngle - Math.PI / 6),
+                    lastInfo.y - arrowLength * Math.sin(arrowAngle - Math.PI / 6)
+                  )
+                  ctx.lineTo(
+                    lastInfo.x - arrowLength * Math.cos(arrowAngle + Math.PI / 6),
+                    lastInfo.y - arrowLength * Math.sin(arrowAngle + Math.PI / 6)
+                  )
+                  ctx.closePath()
+                  ctx.fillStyle = conn.color
+                  ctx.fill()
+                }
               }
               if (conn.arrowType === 'start' || conn.arrowType === 'both') {
-                drawArrow(endX, endY, startX, startY)
+                const firstInfo = getFirstPointAndDirection(pathPoints)
+                if (firstInfo) {
+                  const arrowAngle = Math.atan2(firstInfo.dy, firstInfo.dx)
+                  const arrowLength = 10
+                  ctx.beginPath()
+                  ctx.moveTo(firstInfo.x, firstInfo.y)
+                  ctx.lineTo(
+                    firstInfo.x - arrowLength * Math.cos(arrowAngle - Math.PI / 6),
+                    firstInfo.y - arrowLength * Math.sin(arrowAngle - Math.PI / 6)
+                  )
+                  ctx.lineTo(
+                    firstInfo.x - arrowLength * Math.cos(arrowAngle + Math.PI / 6),
+                    firstInfo.y - arrowLength * Math.sin(arrowAngle + Math.PI / 6)
+                  )
+                  ctx.closePath()
+                  ctx.fillStyle = conn.color
+                  ctx.fill()
+                }
               }
             }
           })
@@ -2967,7 +3052,8 @@ export function CanvasPage() {
     const handleNodeDragStart = (e: Event) => {
       const customEvent = e as CustomEvent<{ nodeId: string; x: number; y: number }>
       const { nodeId, x, y } = customEvent.detail
-      setDraggingNodePositions(prev => new Map(prev).set(nodeId, { x, y }))
+      draggingNodePositionsRef.current.set(nodeId, { x, y })
+      setDragRenderCounter(c => c + 1)
 
       // 检查是否拖拽到节点池区域
       const node = nodes.get(nodeId) as Node | undefined
@@ -2980,17 +3066,16 @@ export function CanvasPage() {
     const handleNodeDragMove = (e: Event) => {
       const customEvent = e as CustomEvent<{ nodeId: string; x: number; y: number }>
       const { nodeId, x, y } = customEvent.detail
-      setDraggingNodePositions(prev => new Map(prev).set(nodeId, { x, y }))
+      draggingNodePositionsRef.current.set(nodeId, { x, y })
+      setDragRenderCounter(c => c + 1)
     }
 
     const handleNodeDragEnd = (e: Event) => {
       const customEvent = e as CustomEvent<{ nodeId: string; droppedInNodePool?: boolean }>
       const { nodeId, droppedInNodePool } = customEvent.detail
-      setDraggingNodePositions(prev => {
-        const newMap = new Map(prev)
-        newMap.delete(nodeId)
-        return newMap
-      })
+
+      draggingNodePositionsRef.current.delete(nodeId)
+      setDragRenderCounter(c => c + 1)
 
       // 如果在节点池区域释放，则添加节点到节点池
       if (droppedInNodePool) {
@@ -3670,8 +3755,8 @@ export function CanvasPage() {
               const toNode = nodes.get(conn.toNodeId)
               if (!fromNode || !toNode) return null
 
-              const fromDraggingPos = draggingNodePositions.get(conn.fromNodeId)
-              const toDraggingPos = draggingNodePositions.get(conn.toNodeId)
+              const fromDraggingPos = draggingNodePositionsRef.current.get(conn.fromNodeId)
+              const toDraggingPos = draggingNodePositionsRef.current.get(conn.toNodeId)
 
               const actualFromNode = getActualNodePosition(fromNode, fromDraggingPos, isDraggingGroup, draggingGroupId, initialGroupNodeIds, groupDragOffset)
               const actualToNode = getActualNodePosition(toNode, toDraggingPos, isDraggingGroup, draggingGroupId, initialGroupNodeIds, groupDragOffset)
@@ -3682,11 +3767,6 @@ export function CanvasPage() {
               const fromY = fromPosition.y
               const toX = toPosition.x
               const toY = toPosition.y
-
-              const lineColor = conn.color
-
-              // Disable transition during dragging for better performance
-              const disableTransition = isDragging || isDraggingGroup || isDraggingBendPoint
 
               return (
                 <g key={conn.id}>
@@ -3724,7 +3804,8 @@ export function CanvasPage() {
                     fromY={fromY}
                     toX={toX}
                     toY={toY}
-                    disableTransition={disableTransition}
+                    fromPort={getConnectionPort(conn, 'start')}
+                    toPort={getConnectionPort(conn, 'end')}
                     onClick={handleConnectionClick}
                     onContextMenu={handleConnectionContextMenu}
                     onDoubleClick={handleConnectionDoubleClick}
@@ -3874,8 +3955,8 @@ export function CanvasPage() {
               const toNode = nodes.get(conn.toNodeId)
               if (!fromNode || !toNode) return null
 
-              const fromDraggingPos = draggingNodePositions.get(conn.fromNodeId)
-              const toDraggingPos = draggingNodePositions.get(conn.toNodeId)
+              const fromDraggingPos = draggingNodePositionsRef.current.get(conn.fromNodeId)
+              const toDraggingPos = draggingNodePositionsRef.current.get(conn.toNodeId)
 
               const actualFromNode = getActualNodePosition(fromNode, fromDraggingPos, isDraggingGroup, draggingGroupId, initialGroupNodeIds, groupDragOffset)
               const actualToNode = getActualNodePosition(toNode, toDraggingPos, isDraggingGroup, draggingGroupId, initialGroupNodeIds, groupDragOffset)
@@ -3929,16 +4010,16 @@ export function CanvasPage() {
               )
             })}
 
-          {/* Render bend points for orthogonal and curve connections */}
+          {/* Render bend points for straight, step and curve connections */}
           {Array.from(connections.values())
-            .filter(conn => (conn.type === 'orthogonal' || conn.type === 'curve') && selectedIds.includes(conn.id) && conn.bendPoints && conn.bendPoints.length > 0)
+            .filter(conn => (conn.type === 'straight' || conn.type === 'step' || conn.type === 'curve') && selectedIds.includes(conn.id) && conn.bendPoints && conn.bendPoints.length > 0)
             .map((conn) => {
               const fromNode = nodes.get(conn.fromNodeId)
               const toNode = nodes.get(conn.toNodeId)
               if (!fromNode || !toNode) return null
 
-              const fromDraggingPos = draggingNodePositions.get(conn.fromNodeId)
-              const toDraggingPos = draggingNodePositions.get(conn.toNodeId)
+              const fromDraggingPos = draggingNodePositionsRef.current.get(conn.fromNodeId)
+              const toDraggingPos = draggingNodePositionsRef.current.get(conn.toNodeId)
 
               const actualFromNode = getActualNodePosition(fromNode, fromDraggingPos, isDraggingGroup, draggingGroupId, initialGroupNodeIds, groupDragOffset)
               const actualToNode = getActualNodePosition(toNode, toDraggingPos, isDraggingGroup, draggingGroupId, initialGroupNodeIds, groupDragOffset)
@@ -3963,7 +4044,7 @@ export function CanvasPage() {
                           cursor: 'move',
                           pointerEvents: 'all',
                           zIndex: Z_INDEX.BEND_POINT,
-                          transition: 'all 0.15s ease',
+                          transition: isDragging ? 'none' : 'all 0.15s ease',
                         }}
                         onMouseEnter={() => {
                           setHoveredBendPoint({ connectionId: conn.id, bendPointId: bendPoint.id })
@@ -4218,10 +4299,10 @@ export function CanvasPage() {
             改变颜色
           </label>
 
-          {/* Add Bend Point - only for orthogonal and curve connections */}
+          {/* Add Bend Point - for straight, step and curve connections */}
           {(() => {
             const connection = connections.get(connectionContextMenu.connectionId)
-            if (connection?.type === 'orthogonal' || connection?.type === 'curve') {
+            if (connection?.type === 'straight' || connection?.type === 'step' || connection?.type === 'curve') {
               return (
                 <button
                   className="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"

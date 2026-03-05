@@ -16,8 +16,8 @@ export function ConnectionStylePanel() {
     selectedIds.forEach((id) => {
       const connection = connections.get(id)
       if (connection) {
-        // If changing to non-orthogonal and non-curve type, clear bend points
-        if (updates.type && updates.type !== 'orthogonal' && updates.type !== 'curve' && (connection.type === 'orthogonal' || connection.type === 'curve')) {
+        // If changing to non-step and non-curve type, clear bend points
+        if (updates.type && updates.type !== 'step' && updates.type !== 'curve' && (connection.type === 'step' || connection.type === 'curve')) {
           updateConnection(id, { ...updates, bendPoints: undefined })
         } else {
           updateConnection(id, updates)
@@ -28,9 +28,8 @@ export function ConnectionStylePanel() {
 
   const CONNECTION_TYPES = [
     { value: 'straight', label: '直线' },
-    { value: 'step', label: '折线' },
+    { value: 'step', label: '直角线' },
     { value: 'curve', label: '曲线' },
-    { value: 'orthogonal', label: '直角线' },
   ] as const
 
   const CONNECTION_STYLES = [
@@ -212,11 +211,11 @@ export function ConnectionStylePanel() {
           />
         </div>
 
-        {/* Orthogonal Mode Info */}
-        {firstConnection.type === 'orthogonal' && (
+        {/* Step Mode Info */}
+        {(firstConnection.type === 'step' || firstConnection.type === 'straight' || firstConnection.type === 'curve') && (
           <div className="mt-4 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
             <div className="text-sm text-blue-700 dark:text-blue-300 mb-1">
-              💡 直角线模式
+              💡 弯折点
             </div>
             <div className="text-xs text-blue-600 dark:text-blue-400">
               右键点击连线可添加或删除弯折点，拖拽弯折点可调整连线形状。

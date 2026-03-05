@@ -83,8 +83,8 @@ interface UIState {
   setConnectionStyle: (style: 'solid' | 'dashed' | 'dotted') => void
 
   // Connection Type
-  connectionType: 'straight' | 'curve' | 'step' | 'orthogonal'
-  setConnectionType: (type: 'straight' | 'curve' | 'step' | 'orthogonal') => void
+  connectionType: 'straight' | 'curve' | 'step'
+  setConnectionType: (type: 'straight' | 'curve' | 'step') => void
 
   // Context Menu
   contextMenuOpen: boolean

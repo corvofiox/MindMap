@@ -131,7 +131,7 @@ export interface Connection {
   toNodeId: string
   fromPort: 'top' | 'right' | 'bottom' | 'left'
   toPort: 'top' | 'right' | 'bottom' | 'left'
-  type: 'straight' | 'curve' | 'step' | 'orthogonal'
+  type: 'straight' | 'curve' | 'step'
   style: 'solid' | 'dashed' | 'dotted'
   color: string
   width: number

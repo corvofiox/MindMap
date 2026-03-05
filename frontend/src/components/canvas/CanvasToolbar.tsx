@@ -40,9 +40,8 @@ export function CanvasToolbar({ onSave }: CanvasToolbarProps) {
 
     const connectionTypes = [
       { id: 'straight' as const, label: '直线' },
-      { id: 'step' as const, label: '折线' },
+      { id: 'step' as const, label: '直角线' },
       { id: 'curve' as const, label: '曲线' },
-      { id: 'orthogonal' as const, label: '直角线' },
     ]
 
   const canUndo = history.currentIndex >= 0

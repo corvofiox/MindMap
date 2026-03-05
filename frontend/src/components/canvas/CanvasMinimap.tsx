@@ -214,14 +214,6 @@ export function CanvasMinimap({
           ctx.lineTo(x2, y2)
           break
         }
-        case 'orthogonal': {
-          const midX = (x1 + x2) / 2
-          ctx.moveTo(x1, y1)
-          ctx.lineTo(midX, y1)
-          ctx.lineTo(midX, y2)
-          ctx.lineTo(x2, y2)
-          break
-        }
         case 'straight':
         default:
           ctx.moveTo(x1, y1)
