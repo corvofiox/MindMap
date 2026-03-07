@@ -81,7 +81,7 @@ export const canvases = sqliteTable('canvases', {
   name: text('name').notNull(),
   projectId: integer('project_id').notNull().references(() => projects.id),
   folderId: integer('folder_id').references(() => folders.id),
-  yjsData: text('yjs_data'), // Binary Yjs data as base64 string
+  yjsData: text('yjs_data'), // Canvas data as JSON base64 (legacy field name)
   previewText: text('preview_text'),
   thumbnail: text('thumbnail'),
   sortOrder: integer('sort_order').notNull().default(0),

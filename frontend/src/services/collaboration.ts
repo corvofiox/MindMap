@@ -1,5 +1,6 @@
 import { useCanvasStore } from '@/store/useCanvasStore'
 import { useAuthStore } from '@/store/useAuthStore'
+import { logger } from '@/utils/logger'
 import type { Node, NodeGroup, Domain, Connection } from '@/types'
 
 interface CollabUser {
@@ -29,6 +30,12 @@ interface CursorData {
 
 type OperationHandler = (data: unknown) => void
 
+interface QueuedOperation {
+  operation: string
+  data: unknown
+  timestamp: number
+}
+
 class CollaborationService {
   private ws: WebSocket | null = null
   private canvasId: number | null = null
@@ -44,6 +51,9 @@ class CollaborationService {
   private operationHandlers = new Map<string, OperationHandler[]>()
   private cursorListeners: ((cursors: Map<number, CursorData>) => void)[] = []
   private userListeners: ((users: CollabUser[]) => void)[] = []
+
+  private offlineQueue: QueuedOperation[] = []
+  private maxQueueSize = 100
 
   connect(canvasId: number) {
     const token = localStorage.getItem('mindmap_token')
@@ -67,6 +77,7 @@ class CollaborationService {
         this.reconnectAttempts = 0
         this.reconnectDelay = 2000
         this.requestSync()
+        this.flushOfflineQueue()
       }
 
       this.ws.onmessage = (event) => {
@@ -109,6 +120,7 @@ class CollaborationService {
     }
     this.cursors.clear()
     this.users = []
+    this.offlineQueue = []
     this.canvasId = null
   }
 
@@ -182,6 +194,43 @@ class CollaborationService {
 
   private handleSync(message: { nodes: Node[]; groups: NodeGroup[]; domains: Domain[]; connections: Connection[] }) {
     const store = useCanvasStore.getState()
+
+    // Check if we already have data loaded
+    const hasLocalData = store.nodes.size > 0 || store.groups.size > 0 || store.domains.size > 0 || store.connections.size > 0
+    const hasRemoteData = message.nodes.length > 0 || message.groups.length > 0 || message.domains.length > 0 || message.connections.length > 0
+
+    logger.info('[CollabService] handleSync called', {
+      localNodes: store.nodes.size,
+      localGroups: store.groups.size,
+      localDomains: store.domains.size,
+      localConnections: store.connections.size,
+      remoteNodes: message.nodes.length,
+      remoteGroups: message.groups.length,
+      remoteDomains: message.domains.length,
+      remoteConnections: message.connections.length,
+      hasLocalData,
+      hasRemoteData
+    })
+
+    // If we have local data but remote is empty, don't overwrite
+    // This can happen when:
+    // 1. We just loaded data from DB/API
+    // 2. WebSocket connects and sends sync-request
+    // 3. Server returns empty data (e.g., data not yet saved to DB)
+    if (hasLocalData && !hasRemoteData) {
+      logger.info('[CollabService] Skipping sync - local data exists but remote is empty')
+      return
+    }
+
+    // If both have data, we need to merge (for now, prefer the one with more nodes)
+    if (hasLocalData && hasRemoteData) {
+      if (store.nodes.size >= message.nodes.length) {
+        logger.info('[CollabService] Skipping sync - local data has same or more nodes')
+        return
+      }
+    }
+
+    logger.info('[CollabService] Applying sync data')
     store.setCanvasData({
       nodes: message.nodes,
       groups: message.groups,
@@ -197,17 +246,35 @@ class CollaborationService {
   }
 
   sendOperation(operation: string, data: unknown) {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return
+    const timestamp = Date.now()
+
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      if (this.offlineQueue.length < this.maxQueueSize) {
+        this.offlineQueue.push({ operation, data, timestamp })
+      }
+      return
+    }
 
     const message: CollabMessage = {
       type: 'operation',
       operation,
       data,
-      timestamp: Date.now(),
+      timestamp,
       senderId: this.userId || 0
     }
 
     this.ws.send(JSON.stringify(message))
+  }
+
+  private flushOfflineQueue() {
+    if (this.offlineQueue.length === 0) return
+
+    const queue = [...this.offlineQueue]
+    this.offlineQueue = []
+
+    for (const item of queue) {
+      this.sendOperation(item.operation, item.data)
+    }
   }
 
   sendCursor(x: number, y: number) {

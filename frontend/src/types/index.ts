@@ -227,7 +227,7 @@ export interface ProjectMember {
   invitationStatus?: null
 }
 
-// Canvas state for Yjs
+// Canvas state
 export interface CanvasState {
   nodes: Map<string, Node>
   groups: Map<string, NodeGroup>
