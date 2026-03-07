@@ -292,11 +292,11 @@ export function ProjectsPage() {
                         <>
                           <div className="flex items-center gap-1.5 flex-1 min-w-0">
                             {isOwner ? (
-                              <Crown className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" title="项目所有者" />
+                              <Crown className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
                             ) : isEditor ? (
-                              <Edit2 className="w-3.5 h-3.5 text-blue-500 flex-shrink-0" title="编辑者" />
+                              <Edit2 className="w-3.5 h-3.5 text-blue-500 flex-shrink-0" />
                             ) : (
-                              <Eye className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" title="查看者" />
+                              <Eye className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
                             )}
                             <h3 className="font-semibold text-gray-900 dark:text-white text-sm truncate leading-tight tracking-tight">
                               {project.name}

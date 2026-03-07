@@ -158,7 +158,7 @@ export function useCollaboration({ canvasId, enabled = true }: UseCollaborationO
             const allKeys = new Set([...Object.keys(prevNode), ...Object.keys(node)]) as Set<keyof Node>
             allKeys.forEach(key => {
               if (JSON.stringify(prevNode[key]) !== JSON.stringify(node[key])) {
-                updates[key] = node[key]
+                ;(updates as Record<string, unknown>)[key] = node[key]
               }
             })
             if (Object.keys(updates).length > 0) {
@@ -192,7 +192,7 @@ export function useCollaboration({ canvasId, enabled = true }: UseCollaborationO
             const allKeys = new Set([...Object.keys(prevGroup), ...Object.keys(group)]) as Set<keyof NodeGroup>
             allKeys.forEach(key => {
               if (JSON.stringify(prevGroup[key]) !== JSON.stringify(group[key])) {
-                updates[key] = group[key]
+                ;(updates as Record<string, unknown>)[key] = group[key]
               }
             })
             if (Object.keys(updates).length > 0) {
@@ -226,7 +226,7 @@ export function useCollaboration({ canvasId, enabled = true }: UseCollaborationO
             const allKeys = new Set([...Object.keys(prevDomain), ...Object.keys(domain)]) as Set<keyof Domain>
             allKeys.forEach(key => {
               if (JSON.stringify(prevDomain[key]) !== JSON.stringify(domain[key])) {
-                updates[key] = domain[key]
+                ;(updates as Record<string, unknown>)[key] = domain[key]
               }
             })
             if (Object.keys(updates).length > 0) {
@@ -260,7 +260,7 @@ export function useCollaboration({ canvasId, enabled = true }: UseCollaborationO
             const allKeys = new Set([...Object.keys(prevConnection), ...Object.keys(connection)]) as Set<keyof Connection>
             allKeys.forEach(key => {
               if (JSON.stringify(prevConnection[key]) !== JSON.stringify(connection[key])) {
-                updates[key] = connection[key]
+                ;(updates as Record<string, unknown>)[key] = connection[key]
               }
             })
             if (Object.keys(updates).length > 0) {

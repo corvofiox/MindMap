@@ -407,11 +407,11 @@ export function Sidebar({ open }: SidebarProps) {
                             <div className="flex-1 min-w-0 pr-2">
                               <div className="flex items-center gap-1.5">
                                 {project.memberRole === 'owner' ? (
-                                  <Crown className="w-3 h-3 text-amber-500 flex-shrink-0" title="项目所有者" />
+                                  <Crown className="w-3 h-3 text-amber-500 flex-shrink-0" />
                                 ) : project.memberRole === 'editor' ? (
-                                  <Edit3 className="w-3 h-3 text-blue-500 flex-shrink-0" title="编辑者" />
+                                  <Edit3 className="w-3 h-3 text-blue-500 flex-shrink-0" />
                                 ) : (
-                                  <Eye className="w-3 h-3 text-gray-400 flex-shrink-0" title="查看者" />
+                                  <Eye className="w-3 h-3 text-gray-400 flex-shrink-0" />
                                 )}
                                 <h3 className="font-bold text-gray-900 dark:text-gray-100 truncate text-sm">
                                   {project.name}
@@ -539,11 +539,11 @@ export function Sidebar({ open }: SidebarProps) {
                     </div>
                     <div className="flex items-center gap-1">
                       {currentMemberRole === 'owner' ? (
-                        <Crown className="w-3.5 h-3.5 text-amber-500" title="项目所有者" />
+                        <Crown className="w-3.5 h-3.5 text-amber-500" />
                       ) : currentMemberRole === 'editor' ? (
-                        <Edit3 className="w-3.5 h-3.5 text-blue-500" title="编辑者" />
+                        <Edit3 className="w-3.5 h-3.5 text-blue-500" />
                       ) : (
-                        <Eye className="w-3.5 h-3.5 text-gray-400" title="查看者" />
+                        <Eye className="w-3.5 h-3.5 text-gray-400" />
                       )}
                       <span className={`
                         text-[10px] font-medium
@@ -678,6 +678,7 @@ export function Sidebar({ open }: SidebarProps) {
                       onDropOnFolder={handleDropOnFolder}
                       onDragStart={handleDragStartWithGlobal}
                       onDragEnd={handleDragEnd}
+                      isViewer={isViewer}
                     />
                   ))}
 
@@ -728,6 +729,7 @@ function FolderItem({
   onDropOnFolder,
   onDragStart,
   onDragEnd,
+  isViewer,
 }: {
   folder: any
   canvases: any[]
@@ -741,6 +743,7 @@ function FolderItem({
   onDropOnFolder: (e: React.DragEvent, folderId: number) => void
   onDragStart: (canvasId: number) => void
   onDragEnd: () => void
+  isViewer: boolean
 }) {
   const { updateFolder, deleteFolder } = useProjectsStore()
   const { addToast } = useUIStore()
@@ -991,8 +994,8 @@ function FolderItem({
                   canvas={canvas}
                   isActive={activeCanvasId === canvas.id}
                   isDragging={draggedCanvasId === canvas.id}
-                  onDragStart={handleDragStartWithGlobal}
-                  onDragEnd={handleDragEnd}
+                  onDragStart={onDragStart}
+                  onDragEnd={onDragEnd}
                   isViewer={isViewer}
                 />
               ))}
