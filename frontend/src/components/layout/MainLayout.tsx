@@ -14,9 +14,10 @@ import { useAuthStore } from '@/store/useAuthStore'
 
 export function MainLayout() {
   const { sidebarOpen, nodePoolOpen } = useUIStore()
-  const { isAuthenticated } = useAuthStore()
+  const { isAuthenticated, isHydrated } = useAuthStore()
 
-  if (!isAuthenticated) {
+  // Wait for hydration or show minimal layout for unauthenticated users
+  if (!isHydrated || !isAuthenticated) {
     return <Outlet />
   }
 

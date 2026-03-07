@@ -12,6 +12,7 @@ interface AuthState {
   isAuthenticated: boolean
   isLoading: boolean
   error: string | null
+  isHydrated: boolean // Track if persist has been restored
 
   // Actions
   login: (credentials: LoginCredentials) => Promise<void>
@@ -40,6 +41,7 @@ export const useAuthStore = create<AuthState>()(
         isAuthenticated: false,
         isLoading: false,
         error: null,
+        isHydrated: false,
 
         validateToken: async () => {
           const token = get().token || localStorage.getItem('mindmap_token')
@@ -238,6 +240,12 @@ export const useAuthStore = create<AuthState>()(
         token: state.token,
         isAuthenticated: state.isAuthenticated,
       }),
+      onRehydrateStorage: () => (state) => {
+        // Mark as hydrated after persist has been restored
+        if (state) {
+          state.isHydrated = true
+        }
+      },
     }
   )
 )

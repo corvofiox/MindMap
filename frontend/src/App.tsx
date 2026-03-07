@@ -10,14 +10,19 @@ import { ProjectsPage } from './pages/ProjectsPage'
 import { DragGhost } from './components/DragGhost'
 import { ToastContainer } from './components/ui/ToastContainer'
 
-// 使用 Outlet 模式避免组件重新挂载
 function ProtectedRoute() {
-  const { isAuthenticated } = useAuthStore()
+  const { isAuthenticated, isHydrated } = useAuthStore()
+  
+  // Wait for hydration to complete before making routing decisions
+  if (!isHydrated) {
+    return null // or a loading spinner
+  }
+  
   return isAuthenticated ? <Outlet /> : <Navigate to="/login" replace />
 }
 
 function App() {
-  const { isAuthenticated, validateToken } = useAuthStore()
+  const { isAuthenticated, isHydrated, validateToken } = useAuthStore()
   const { initializeTheme, loadNodeDefaults } = useUIStore()
 
   // 初始化时验证 token，并在成功后加载节点默认配置
@@ -35,6 +40,22 @@ function App() {
   useEffect(() => {
     initializeTheme()
   }, [initializeTheme])
+
+  // Wait for hydration to complete before making routing decisions
+  if (!isHydrated) {
+    return (
+      <>
+        <DragGhost />
+        <ToastContainer />
+        <div className="h-screen w-screen flex items-center justify-center bg-gray-100 dark:bg-gray-900">
+          <div className="text-center">
+            <div className="inline-block animate-spin rounded-full h-10 w-10 border-4 border-gray-300 border-t-blue-500 mb-3" />
+            <p className="text-sm font-medium text-gray-600 dark:text-gray-400">加载中...</p>
+          </div>
+        </div>
+      </>
+    )
+  }
 
   return (
     <>
