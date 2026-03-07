@@ -9,12 +9,16 @@ import { CanvasPage } from './pages/CanvasPage'
 import { ProjectsPage } from './pages/ProjectsPage'
 import { DragGhost } from './components/DragGhost'
 import { ToastContainer } from './components/ui/ToastContainer'
+import { logger } from './utils/logger'
 
 function ProtectedRoute() {
   const { isAuthenticated, isHydrated } = useAuthStore()
   
+  logger.info('[App] ProtectedRoute check', { isAuthenticated, isHydrated })
+  
   // Wait for hydration to complete before making routing decisions
   if (!isHydrated) {
+    logger.info('[App] Not hydrated yet, returning null')
     return null // or a loading spinner
   }
   
@@ -25,10 +29,14 @@ function App() {
   const { isAuthenticated, isHydrated, validateToken } = useAuthStore()
   const { initializeTheme, loadNodeDefaults } = useUIStore()
 
+  logger.info('[App] App render', { isAuthenticated, isHydrated })
+
   // 初始化时验证 token，并在成功后加载节点默认配置
   useEffect(() => {
     const init = async () => {
+      logger.info('[App] Starting init, validating token')
       const isValid = await validateToken()
+      logger.info('[App] Token validation result', { isValid })
       // 只有在 token 验证成功后才加载节点默认配置
       if (isValid) {
         loadNodeDefaults()
@@ -43,6 +51,7 @@ function App() {
 
   // Wait for hydration to complete before making routing decisions
   if (!isHydrated) {
+    logger.info('[App] Not hydrated, showing loading screen')
     return (
       <>
         <DragGhost />
