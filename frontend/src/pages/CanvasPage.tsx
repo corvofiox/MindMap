@@ -8,6 +8,7 @@ import { useCollaboration } from '@/hooks/useCollaboration'
 import { CanvasToolbar } from '@/components/canvas/CanvasToolbar'
 import { CanvasGrid } from '@/components/canvas/CanvasGrid'
 import { CanvasMinimap } from '@/components/canvas/CanvasMinimap'
+import { logger } from '@/utils/logger'
 import { ZoomControls } from '@/components/canvas/ZoomControls'
 import { NodeItem } from '@/components/canvas/NodeItem'
 import { NodeContextMenu } from '@/components/canvas/NodeContextMenu'
@@ -857,28 +858,57 @@ export function CanvasPage() {
     // Reset last save time when canvas changes
     lastSaveTimeRef.current = 0
 
+    // Track if this effect is still active
+    let isCancelled = false
+    let isMounted = true
+
     const loadFromDatabase = async () => {
       // Update store canvasId so thumbnail generation works correctly
       setCanvasId(id)
 
       try {
         setLoading(true)
+        logger.info('[CanvasPage] Loading canvas data', { canvasId: id })
 
         // 如果是临时ID，不尝试从数据库加载数据
         if (id < 0) {
           // 清空画布，准备一个新的画布
           clearCanvas()
           setDirty(false)
+          logger.info('[CanvasPage] Temporary canvas ID, skipping data load', { canvasId: id })
           return
         }
 
         // Ensure projects are loaded first to get correct context
         if (useProjectsStore.getState().projects.length === 0) {
+          logger.info('[CanvasPage] Projects not loaded, loading projects first')
           await stableLoadProjects()
           await stableRestoreCurrentProject()
+
+          // Check if cancelled after async operations
+          if (!isMounted || isCancelled) {
+            logger.info('[CanvasPage] Canvas loading cancelled after loading projects', { canvasId: id })
+            return
+          }
         }
 
+        logger.info('[CanvasPage] Loading canvas nodes data from API', { canvasId: id })
         const dbData = await loadCanvasNodesData(id)
+
+        // Check if cancelled after API call
+        if (!isMounted || isCancelled) {
+          logger.info('[CanvasPage] Canvas loading cancelled after API call', { canvasId: id })
+          return
+        }
+
+        logger.info('[CanvasPage] Canvas data loaded', {
+          canvasId: id,
+          hasData: !!dbData,
+          nodesCount: dbData?.nodes?.length || 0,
+          groupsCount: dbData?.groups?.length || 0,
+          domainsCount: dbData?.domains?.length || 0,
+          connectionsCount: dbData?.connections?.length || 0
+        })
 
         const hasData = dbData && (
           (dbData.nodes && dbData.nodes.length > 0) ||
@@ -889,26 +919,38 @@ export function CanvasPage() {
 
         if (hasData) {
           // Found data in DB
+          logger.info('[CanvasPage] Setting canvas data from DB', { canvasId: id })
           clearCanvas()
           setCanvasData(dbData)
           setDirty(false)
           saveToCache(id, dbData)
         } else {
           // No data in DB, try cache
+          logger.info('[CanvasPage] No data in DB, trying cache', { canvasId: id })
           const cachedData = loadFromCache(id)
           if (cachedData) {
+            logger.info('[CanvasPage] Found cached data', { canvasId: id })
             clearCanvas()
             setCanvasData(cachedData)
             setDirty(false)
           } else {
             // No data anywhere
+            logger.info('[CanvasPage] No data anywhere, clearing canvas', { canvasId: id })
             clearCanvas()
           }
         }
       } catch (error) {
+        // Check if cancelled
+        if (!isMounted || isCancelled) {
+          logger.info('[CanvasPage] Canvas loading cancelled during error handling', { canvasId: id })
+          return
+        }
+
         // DB load failed, fallback to cache
+        logger.error('[CanvasPage] Failed to load canvas data', { canvasId: id, error: error instanceof Error ? error.message : String(error) })
         const cachedData = loadFromCache(id)
         if (cachedData) {
+          logger.info('[CanvasPage] Using cached data after error', { canvasId: id })
           clearCanvas()
           setCanvasData(cachedData)
           setDirty(false)
@@ -916,19 +958,24 @@ export function CanvasPage() {
           clearCanvas()
         }
       } finally {
-        setLoading(false)
-        // Reset camera initialization flag before setting data loaded flag
-        // This ensures camera will be initialized for the new canvas
-        setHasInitializedCamera(false)
-        setHasLoadedCanvasData(true)
+        // Only update state if still mounted
+        if (isMounted) {
+          setLoading(false)
+          setHasLoadedCanvasData(true)
+          logger.info('[CanvasPage] Canvas loading complete', { canvasId: id })
+        }
       }
     }
 
     loadFromDatabase()
 
     return () => {
+      // Mark as cancelled when effect is cleaned up
+      isCancelled = true
+      isMounted = false
       clearTimeout(cacheTimeoutRef.current)
       clearTimeout(dbSaveTimeoutRef.current)
+      logger.info('[CanvasPage] Canvas loading effect cleaned up', { canvasId: id })
     }
   }, [canvasId])
 
@@ -941,12 +988,15 @@ export function CanvasPage() {
 
     if (hasInitializedCamera) return
 
-    if (containerSize.width === 0 || containerSize.height === 0) return
-
     if (isLoading) return
 
     // Only initialize camera after data has been loaded
     if (!hasLoadedCanvasData) return
+
+    // Wait for container to have valid dimensions
+    if (containerSize.width === 0 || containerSize.height === 0) {
+      return
+    }
 
     // Load saved view state from localStorage
     const savedView = loadCanvasView(id)

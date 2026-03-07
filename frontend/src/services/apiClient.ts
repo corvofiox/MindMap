@@ -41,6 +41,8 @@ export const getErrorMessageByStatus = (status: number, defaultMessage: string):
 export class ApiClient {
   private token: string | null = null
   private baseUrl: string
+  private defaultTimeout = 30000 // 30 seconds default timeout
+  private maxRetries = 2 // Maximum retry attempts
 
   constructor(baseUrl: string = API_BASE_URL) {
     this.baseUrl = baseUrl
@@ -86,6 +88,13 @@ export class ApiClient {
   private showErrorToast(message: string): void {
     const addErrorToast = useUIStore.getState().addErrorToast
     addErrorToast(message, '操作失败')
+  }
+
+  // Create an AbortController with timeout
+  private createTimeoutController(timeout: number): { controller: AbortController; timeoutId: ReturnType<typeof setTimeout> } {
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), timeout)
+    return { controller, timeoutId }
   }
 
 

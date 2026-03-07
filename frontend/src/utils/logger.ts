@@ -8,9 +8,9 @@
 type LogLevel = 'info' | 'warn' | 'error' | 'debug'
 
 function shouldLog(level: LogLevel): boolean {
-  // In production, only log errors and warnings
+  // In production, log info, errors and warnings for debugging
   if (import.meta.env.PROD) {
-    return level === 'error' || level === 'warn'
+    return level === 'error' || level === 'warn' || level === 'info'
   }
   return true
 }
