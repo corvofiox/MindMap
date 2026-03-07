@@ -30,18 +30,6 @@ vi.mock('jsonwebtoken', () => ({
   },
 }))
 
-// Mock Yjs
-vi.mock('yjs', () => ({
-  default: {
-    Doc: vi.fn().mockImplementation(() => ({
-      destroy: vi.fn(),
-      on: vi.fn(),
-      getArray: vi.fn().mockReturnValue([]),
-    })),
-    encodeStateAsUpdate: vi.fn().mockReturnValue(new Uint8Array([1, 2, 3, 4])),
-  },
-}))
-
 // Mock environment
 vi.mock('../utils/env', () => ({
   getValidatedEnv: () => ({
@@ -351,23 +339,6 @@ describe('WebSocket Server', () => {
 
     it('should save document before room cleanup', async () => {
       // Test that document is saved when last client disconnects
-      expect(true).toBe(true)
-    })
-  })
-
-  describe('Yjs Integration', () => {
-    it('should apply state updates to document', async () => {
-      // Test that Yjs updates are applied to the document
-      expect(true).toBe(true)
-    })
-
-    it('should broadcast updates to all clients', async () => {
-      // Test that updates are broadcast to all connected clients
-      expect(true).toBe(true)
-    })
-
-    it('should handle update conflicts', async () => {
-      // Test concurrent update handling
       expect(true).toBe(true)
     })
   })
