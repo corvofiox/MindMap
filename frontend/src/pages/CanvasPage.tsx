@@ -986,22 +986,44 @@ export function CanvasPage() {
     const id = parseInt(canvasId)
     if (isNaN(id)) return
 
-    if (hasInitializedCamera) return
+    logger.info('[CanvasPage] Camera init check', {
+      canvasId: id,
+      hasInitializedCamera,
+      isLoading,
+      hasLoadedCanvasData,
+      containerWidth: containerSize.width,
+      containerHeight: containerSize.height
+    })
 
-    if (isLoading) return
+    if (hasInitializedCamera) {
+      logger.info('[CanvasPage] Camera already initialized, skipping', { canvasId: id })
+      return
+    }
+
+    if (isLoading) {
+      logger.info('[CanvasPage] Still loading, skipping camera init', { canvasId: id })
+      return
+    }
 
     // Only initialize camera after data has been loaded
-    if (!hasLoadedCanvasData) return
+    if (!hasLoadedCanvasData) {
+      logger.info('[CanvasPage] Data not loaded yet, skipping camera init', { canvasId: id })
+      return
+    }
 
     // Wait for container to have valid dimensions
     if (containerSize.width === 0 || containerSize.height === 0) {
+      logger.info('[CanvasPage] Container size is 0, skipping camera init', { canvasId: id })
       return
     }
+
+    logger.info('[CanvasPage] Initializing camera', { canvasId: id })
 
     // Load saved view state from localStorage
     const savedView = loadCanvasView(id)
     if (savedView) {
       // Restore saved camera state
+      logger.info('[CanvasPage] Restoring saved camera state', { canvasId: id, savedView })
       setZoom(savedView.zoom)
       setPan(savedView.panX, savedView.panY)
     } else {
@@ -1011,6 +1033,7 @@ export function CanvasPage() {
       // => panX = containerWidth / 2
       const defaultPanX = containerSize.width / 2
       const defaultPanY = containerSize.height / 2
+      logger.info('[CanvasPage] Setting default camera state', { canvasId: id, defaultPanX, defaultPanY })
       setZoom(1)
       setPan(defaultPanX, defaultPanY)
       // Save default state to localStorage
@@ -1018,8 +1041,9 @@ export function CanvasPage() {
     }
 
     setHasInitializedCamera(true)
+    logger.info('[CanvasPage] Camera initialized', { canvasId: id })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canvasId, containerSize.width, containerSize.height, isLoading, hasLoadedCanvasData])
+  }, [canvasId, containerSize.width, containerSize.height, isLoading, hasLoadedCanvasData, hasInitializedCamera])
 
   // Note: We no longer auto-adjust zoom when container size changes
   // The zoom level should remain constant, only the viewport size changes
