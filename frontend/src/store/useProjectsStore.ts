@@ -7,6 +7,7 @@ interface ProjectsState {
   projects: Project[]
   currentProject: Project | null
   currentProjectId: number | null  // 持久化项目ID
+  currentMemberRole: 'owner' | 'editor' | 'viewer' | null
   canvases: Canvas[]
   folders: Folder[]
   nodePool: NodeCard[]
@@ -22,6 +23,7 @@ interface ProjectsState {
   setCurrentProject: (project: Project | null) => Promise<void>
   restoreCurrentProject: () => Promise<void>  // 恢复上次的项目
   loadCanvases: (projectId: number) => Promise<void>
+  refreshCanvasesSilent: (projectId: number) => Promise<void>  // 静默刷新画布列表
   loadFolders: (projectId: number) => Promise<void>
   loadNodePool: (projectId: number) => Promise<void>
   loadNodePoolFolders: (projectId: number) => Promise<void>
@@ -77,6 +79,7 @@ export const useProjectsStore = create<ProjectsState>()(
         projects: [],
         currentProject: null,
         currentProjectId: null,
+        currentMemberRole: null,
         canvases: [],
         folders: [],
         nodePool: [],
@@ -100,7 +103,8 @@ export const useProjectsStore = create<ProjectsState>()(
         setCurrentProject: async (project) => {
           set({
             currentProject: project,
-            currentProjectId: project?.id || null
+            currentProjectId: project?.id || null,
+            currentMemberRole: project?.memberRole || null,
           })
           if (project) {
             await Promise.all([
@@ -129,6 +133,15 @@ export const useProjectsStore = create<ProjectsState>()(
             set({ canvases, isLoading: false, loadingMessage: '' })
           } catch (error) {
             handleError(error, '加载画布失败')
+          }
+        },
+
+        refreshCanvasesSilent: async (projectId) => {
+          try {
+            const canvases = await api.getCanvases(projectId)
+            set({ canvases })
+          } catch {
+            // 静默失败，不更新 loading 状态
           }
         },
 
@@ -317,7 +330,7 @@ export const useProjectsStore = create<ProjectsState>()(
           } catch (error) {
             if (!silent) {
               const canvases = get().canvases
-            set((_state) => ({
+              set((_state) => ({
                 canvases: canvases.map((c) => (c.id === canvasId ? { ...c, folderId: originalFolderId } : c)),
               }))
               handleError(error, '移动画布失败')

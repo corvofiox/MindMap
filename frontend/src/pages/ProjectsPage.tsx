@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, FolderOpen, Trash2, Edit3, Save, X, GitBranch, Users, Zap, ArrowUp } from 'lucide-react'
+import { Plus, FolderOpen, Trash2, Edit3, Save, X, GitBranch, Users, Zap, ArrowUp, Crown, Eye, Edit2 } from 'lucide-react'
 import { useProjectsStore } from '@/store/useProjectsStore'
 import { useUIStore } from '@/store/useUIStore'
 import { useAuthStore } from '@/store/useAuthStore'
@@ -241,6 +241,9 @@ export function ProjectsPage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
             {projects.map((project) => {
               const isEditing = editState.id === project.id
+              const isOwner = project.memberRole === 'owner'
+              const isEditor = project.memberRole === 'editor'
+              const isViewer = project.memberRole === 'viewer'
 
               return (
                 <div
@@ -248,6 +251,14 @@ export function ProjectsPage() {
                   onClick={() => handleOpenProject(project)}
                   className="group bg-white dark:bg-gray-800 rounded-xl shadow-sm hover:shadow-xl transition-all duration-300 cursor-pointer border-2 border-gray-200 dark:border-gray-600 overflow-hidden hover:-translate-y-1 hover:z-10 relative"
                 >
+                  {/* 协作标识 */}
+                  {!isOwner && (
+                    <div className={`
+                      absolute top-0 left-0 right-0 h-1.5
+                      ${isEditor ? 'bg-blue-500' : 'bg-gray-400'}
+                    `} />
+                  )}
+
                   <div className="p-3 relative bg-gradient-to-br from-white to-gray-50 dark:from-gray-800 dark:to-gray-900">
                     <div className="flex items-center justify-between gap-2 mb-2">
                       {isEditing ? (
@@ -279,18 +290,29 @@ export function ProjectsPage() {
                         </>
                       ) : (
                         <>
-                          <h3 className="font-semibold text-gray-900 dark:text-white text-sm flex-1 truncate leading-tight tracking-tight">
-                            {project.name}
-                          </h3>
-                          <div className="flex items-center gap-0.5 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300" onClick={(e) => e.stopPropagation()}>
-                            <button
-                              onClick={() => handleStartEdit(project)}
-                              className="p-1.5 rounded-lg bg-gray-50 dark:bg-gray-700 text-gray-500 dark:text-gray-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 hover:text-indigo-600 dark:hover:text-indigo-400 transition-all duration-200 hover:scale-105"
-                              title="编辑"
-                            >
-                              <Edit3 className="w-3.5 h-3.5" />
-                            </button>
+                          <div className="flex items-center gap-1.5 flex-1 min-w-0">
+                            {isOwner ? (
+                              <Crown className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" title="项目所有者" />
+                            ) : isEditor ? (
+                              <Edit2 className="w-3.5 h-3.5 text-blue-500 flex-shrink-0" title="编辑者" />
+                            ) : (
+                              <Eye className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" title="查看者" />
+                            )}
+                            <h3 className="font-semibold text-gray-900 dark:text-white text-sm truncate leading-tight tracking-tight">
+                              {project.name}
+                            </h3>
                           </div>
+                          {isOwner && (
+                            <div className="flex items-center gap-0.5 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300" onClick={(e) => e.stopPropagation()}>
+                              <button
+                                onClick={() => handleStartEdit(project)}
+                                className="p-1.5 rounded-lg bg-gray-50 dark:bg-gray-700 text-gray-500 dark:text-gray-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 hover:text-indigo-600 dark:hover:text-indigo-400 transition-all duration-200 hover:scale-105"
+                                title="编辑"
+                              >
+                                <Edit3 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          )}
                         </>
                       )}
                     </div>
@@ -311,16 +333,29 @@ export function ProjectsPage() {
                     )}
 
                     <div className="mt-2 pt-2 border-t border-gray-100 dark:border-gray-700 space-y-0.5">
-                      <div className="flex items-center gap-1 text-[10px] text-gray-400 dark:text-gray-500">
-                        <span>创建：{formatDate(project.createdAt)}</span>
+                      <div className="flex items-center justify-between text-[10px] text-gray-400 dark:text-gray-500">
+                        <div className="flex items-center gap-1">
+                          <span>创建：{formatDate(project.createdAt)}</span>
+                        </div>
+                        {!isOwner && (
+                          <span className={`
+                            px-1.5 py-0.5 rounded text-[9px] font-medium
+                            ${isEditor
+                              ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
+                              : 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400'
+                            }
+                          `}>
+                            协作项目
+                          </span>
+                        )}
                       </div>
                       <div className="flex items-center gap-1 text-[10px] text-gray-400 dark:text-gray-500">
                         <span>更新：{formatDate(project.updatedAt)}</span>
                       </div>
                     </div>
 
-                    {/* 删除按钮 - 定位到右下角 */}
-                    {!isEditing && (
+                    {/* 删除按钮 - 仅所有者可见 */}
+                    {!isEditing && isOwner && (
                       <button
                         onClick={(e) => {
                           e.stopPropagation();

@@ -209,6 +209,25 @@ export async function runMigrations(sqlite: any) {
      }
      }
 
+    // Create project_invitations table if it doesn't exist
+    const projectInvitationsTable = sqlite.exec("SELECT name FROM sqlite_master WHERE type='table' AND name='project_invitations'")
+    if (!projectInvitationsTable || projectInvitationsTable.length === 0 || projectInvitationsTable[0].values.length === 0) {
+      log('Creating project_invitations table')
+      sqlite.run(`
+        CREATE TABLE project_invitations (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          project_id INTEGER NOT NULL REFERENCES projects(id),
+          inviter_id INTEGER NOT NULL REFERENCES users(id),
+          invitee_id INTEGER NOT NULL REFERENCES users(id),
+          role TEXT NOT NULL DEFAULT 'viewer',
+          status TEXT NOT NULL DEFAULT 'pending',
+          created_at INTEGER DEFAULT (strftime('%s', 'now')),
+          responded_at INTEGER
+        )
+      `)
+      log('project_invitations table created successfully')
+    }
+
      log('Migrations completed successfully')
   } catch (error: any) {
     logError('Error running migrations', error.message)

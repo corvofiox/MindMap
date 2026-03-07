@@ -19,15 +19,45 @@ function getProperty<T>(obj: any, ...keys: string[]): T | undefined {
 
 export const projectRouter = Router()
 
-// Get all projects
+// Get all projects (owned + collaborated)
 projectRouter.get('/', authenticate, asyncHandler(async (req: AuthRequest, res) => {
-  const userProjects = await db.query.projects.findMany({
+  const ownedProjects = await db.query.projects.findMany({
     where: eq(projects.ownerId, req.user!.id),
     orderBy: (projects, { desc }) => [desc(projects.updatedAt)],
   })
 
-  // 转换响应数据（下划线命名转驼峰 + 时间戳转ISO）
-  const transformedProjects = transformResponseArray(userProjects, ['createdAt', 'updatedAt'])
+  const memberRecords = await db.query.projectMembers.findMany({
+    where: eq(projectMembers.userId, req.user!.id),
+  })
+
+  const collaboratedProjects = []
+  for (const member of memberRecords) {
+    const projectId = getProperty<number>(member, 'project_id', 'projectId')
+    if (projectId) {
+      const project = await db.query.projects.findFirst({
+        where: eq(projects.id, projectId),
+      })
+      if (project) {
+        collaboratedProjects.push({
+          ...project,
+          memberRole: member.role,
+        })
+      }
+    }
+  }
+
+  const allProjects = [
+    ...ownedProjects.map(p => ({ ...p, memberRole: 'owner' })),
+    ...collaboratedProjects,
+  ]
+
+  allProjects.sort((a, b) => {
+    const aTime = a.updatedAt || a.updated_at || 0
+    const bTime = b.updatedAt || b.updated_at || 0
+    return bTime - aTime
+  })
+
+  const transformedProjects = transformResponseArray(allProjects, ['createdAt', 'updatedAt'])
 
   res.json({
     success: true,
@@ -56,8 +86,27 @@ projectRouter.get('/:id', authenticate, asyncHandler(async (req: AuthRequest, re
     })
   }
 
-  // 转换响应数据
+  const projectOwnerId = getProperty(project, 'owner_id', 'ownerId') || project.ownerId
+  const isOwner = projectOwnerId === req.user!.id
+
+  const member = await db.query.projectMembers.findFirst({
+    where: and(
+      eq(projectMembers.projectId, projectId),
+      eq(projectMembers.userId, req.user!.id)
+    ),
+  })
+
+  const isMember = member && member.id !== undefined
+
+  if (!isOwner && !isMember) {
+    return res.status(403).json({
+      success: false,
+      error: '访问被拒绝',
+    })
+  }
+
   const transformedProject = transformResponse(project, ['createdAt', 'updatedAt'])
+    ; (transformedProject as any).memberRole = isOwner ? 'owner' : member?.role
 
   res.json({
     success: true,
@@ -90,7 +139,7 @@ projectRouter.post('/', authenticate, asyncHandler(async (req: AuthRequest, res)
   })
 }))
 
-// Update project
+// Update project (owner only)
 projectRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, res) => {
   const projectId = parseInt(req.params.id, 10)
   if (isNaN(projectId)) {
@@ -102,17 +151,23 @@ projectRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, re
 
   const { name, description, thumbnail } = req.body
 
-  // Check ownership
   const project = await db.query.projects.findFirst({
     where: eq(projects.id, projectId),
   })
 
+  if (!project) {
+    return res.status(404).json({
+      success: false,
+      error: '项目未找到',
+    })
+  }
+
   const projectOwnerId = getProperty(project, 'owner_id', 'ownerId') || project.ownerId
 
-  if (!project || projectOwnerId !== req.user!.id) {
+  if (projectOwnerId !== req.user!.id) {
     return res.status(403).json({
       success: false,
-      error: '访问被拒绝',
+      error: '只有项目所有者可以修改项目',
     })
   }
 
@@ -129,7 +184,6 @@ projectRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, re
 
   scheduleSave()
 
-  // 转换时间戳字段
   const transformedProject = transformResponse(updatedProject, ['createdAt', 'updatedAt'])
 
   res.json({

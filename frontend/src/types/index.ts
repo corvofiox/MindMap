@@ -36,6 +36,7 @@ export interface Project {
   isPublic: boolean
   createdAt: string
   updatedAt: string
+  memberRole?: 'owner' | 'editor' | 'viewer'
 }
 
 // Folder types
@@ -50,6 +51,15 @@ export interface Folder {
 }
 
 // Canvas types
+export interface CanvasActiveUser {
+  userId: number
+  email: string
+  nickname: string | null
+  avatar: string | null
+  role: 'owner' | 'editor' | 'viewer'
+  joinedAt: number
+}
+
 export interface Canvas {
   id: number
   name: string
@@ -61,6 +71,7 @@ export interface Canvas {
   updatedAt: string
   previewText?: string
   tempId?: number
+  activeUsers?: CanvasActiveUser[]
 }
 
 // Node types
@@ -84,6 +95,7 @@ export interface Node {
   type?: 'text' | 'image'  // 节点类型
   imageUrl?: string        // 图片URL
   aspectRatio?: number     // 图片宽高比
+  _version?: number        // 版本号（用于冲突检测）
 }
 
 // Group types
@@ -205,7 +217,14 @@ export interface ProjectMember {
   userId: number
   role: 'owner' | 'editor' | 'viewer'
   joinedAt: string
-  user?: User
+  user: {
+    id: number
+    email: string
+    nickname: string | null
+    avatar: string | null
+  }
+  isOwner?: boolean
+  invitationStatus?: null
 }
 
 // Canvas state for Yjs
@@ -528,5 +547,47 @@ export interface NodeDefaultsApiResponse {
 export interface UpdateNodeDefaultsApiResponse {
   success: boolean
   data: NodeDefaults
+}
+
+// Collaboration types
+export interface ProjectInvitation {
+  id: number
+  projectId: number
+  inviteeId: number
+  role: 'editor' | 'viewer'
+  status: 'pending' | 'accepted' | 'rejected'
+  createdAt: string | null
+  respondedAt: string | null
+  invitee: {
+    id: number
+    email: string
+    nickname: string | null
+    avatar: string | null
+  }
+}
+
+export interface MyInvitation {
+  id: number
+  projectId: number
+  inviterId: number
+  role: 'editor' | 'viewer'
+  status: 'pending' | 'accepted' | 'rejected'
+  createdAt: string | null
+  project: {
+    id: number
+    name: string
+  }
+  inviter: {
+    id: number
+    email: string
+    nickname: string | null
+    avatar: string | null
+  }
+}
+
+export interface ProjectMembersResponse {
+  members: ProjectMember[]
+  invitations: ProjectInvitation[]
+  ownerId: number
 }
 

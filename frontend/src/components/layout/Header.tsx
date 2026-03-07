@@ -1,5 +1,5 @@
 import { useNavigate } from 'react-router-dom'
-import { Settings, LogOut, User as UserIcon } from 'lucide-react'
+import { Settings, LogOut, User as UserIcon, Users } from 'lucide-react'
 import { useAuthStore } from '@/store/useAuthStore'
 import { useUIStore } from '@/store/useUIStore'
 import { useProjectsStore } from '@/store/useProjectsStore'
@@ -46,11 +46,10 @@ export function Header() {
       <div className="flex items-center gap-2">
         <button
           onClick={toggleSidebar}
-          className={`p-2 rounded-lg transition-colors ${
-            sidebarOpen
-              ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
-              : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
-          }`}
+          className={`p-2 rounded-lg transition-colors ${sidebarOpen
+            ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
+            : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
+            }`}
           title="切换侧边栏 (Ctrl+B)"
         >
           <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -60,11 +59,10 @@ export function Header() {
 
         <button
           onClick={toggleNodePool}
-          className={`p-2 rounded-lg transition-colors ${
-            nodePoolOpen
-              ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
-              : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
-          }`}
+          className={`p-2 rounded-lg transition-colors ${nodePoolOpen
+            ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
+            : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
+            }`}
           title="切换节点池 (Ctrl+P)"
         >
           <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -75,6 +73,15 @@ export function Header() {
 
       {/* Right - User and Settings */}
       <div className="flex items-center gap-2">
+        {/* Collaboration */}
+        <button
+          onClick={() => useUIStore.getState().setCollaborationOpen(true)}
+          className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400"
+          title="实时协作"
+        >
+          <Users className="w-5 h-5" />
+        </button>
+
         {/* Settings */}
         <DropdownMenu
           trigger={

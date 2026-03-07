@@ -20,6 +20,7 @@ import { projectRouter } from './controllers/project.controller.js'
 import { canvasRouter } from './controllers/canvas.controller.js'
 import { logRouter } from './controllers/log.routes.js'
 import { uploadRouter } from './controllers/upload.controller.js'
+import { collaborationRouter } from './controllers/collaboration.controller.js'
 import { apiLimiter } from './middleware/rateLimit.middleware.js'
 import { csrfProtectionMiddleware, getCsrfTokenRoute } from './middleware/csrf.middleware.js'
 import { setupWebSocket } from './websocket/index.js'
@@ -65,6 +66,7 @@ app.use('/api/projects', apiLimiter(), csrfProtectionMiddleware, projectRouter)
 app.use('/api/canvases', apiLimiter(), csrfProtectionMiddleware, canvasRouter)
 app.use('/api/logs', logRouter)
 app.use('/api/upload', apiLimiter(), csrfProtectionMiddleware, uploadRouter)
+app.use('/api/collaboration', apiLimiter(), csrfProtectionMiddleware, collaborationRouter)
 
 // 静态文件服务
 const frontendDistPath = path.join(__dirname, '../../frontend/dist')
@@ -78,17 +80,19 @@ app.get('*', (req, res) => {
 // Error handling
 app.use(errorHandler)
 
+const isProduction = env.NODE_ENV === 'production'
+
 // Start servers
 async function start() {
   try {
     // Initialize database
     console.log('Initializing application...')
     await initDatabase()
-    
+
     // Initialize db instance for controllers
     console.log('Initializing database connection...')
     await initializeDb()
-    
+
     console.log('Application initialization complete')
 
     // HTTP server - 监听0.0.0.0以允许外部访问
@@ -96,10 +100,25 @@ async function start() {
       console.log(`HTTP Server running on port ${PORT}`)
     })
 
-    // WebSocket server - 监听0.0.0.0以允许外部访问
-    const wsServer = new WebSocketServer({ port: WS_PORT, host: '0.0.0.0' })
+    // WebSocket server configuration
+    // 生产环境：WebSocket 绑定到 HTTP Server（共享端口）
+    // 开发环境：WebSocket 使用独立端口
+    let wsServer: WebSocketServer
+
+    if (isProduction) {
+      // 生产环境：WebSocket 绑定到 HTTP Server，共享端口，只处理 /ws 路径
+      wsServer = new WebSocketServer({
+        server,
+        path: '/ws'
+      })
+      console.log(`WebSocket Server sharing port with HTTP Server (${PORT}) at path /ws`)
+    } else {
+      // 开发环境：WebSocket 使用独立端口
+      wsServer = new WebSocketServer({ port: WS_PORT, host: '0.0.0.0' })
+      console.log(`WebSocket Server running on port ${WS_PORT}`)
+    }
+
     setupWebSocket(wsServer)
-    console.log(`WebSocket Server running on port ${WS_PORT}`)
 
     console.log(`Environment: ${process.env.NODE_ENV || 'development'}`)
     console.log(`Application ready at http://localhost:${PORT}`)

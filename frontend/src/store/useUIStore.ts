@@ -109,6 +109,9 @@ interface UIState {
   commandPaletteOpen: boolean
   setCommandPaletteOpen: (open: boolean) => void
 
+  collaborationOpen: boolean
+  setCollaborationOpen: (open: boolean) => void
+
   // Toasts
   toasts: Toast[]
   addToast: (toast: Omit<Toast, 'id'>) => void
@@ -268,6 +271,9 @@ export const useUIStore = create<UIState>()(
 
         commandPaletteOpen: false,
         setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
+
+        collaborationOpen: false,
+        setCollaborationOpen: (open) => set({ collaborationOpen: open }),
 
         // Toasts
         toasts: [],

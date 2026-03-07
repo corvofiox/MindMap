@@ -8,6 +8,7 @@ import { AccountSettingsDialog } from '../ui/AccountSettingsDialog'
 import { ShortcutsDialog } from '../ui/ShortcutsDialog'
 import { SearchPanel } from '../ui/SearchPanel'
 import { NodeDefaultsDialog } from '../ui/NodeDefaultsDialog'
+import { CollaborationDialog } from '../ui/CollaborationDialog'
 import { useUIStore } from '@/store/useUIStore'
 import { useAuthStore } from '@/store/useAuthStore'
 
@@ -49,6 +50,7 @@ export function MainLayout() {
       <ShortcutsDialog />
       <NodeDefaultsDialog />
       <SearchPanel />
+      <CollaborationDialog />
     </div>
   )
 }

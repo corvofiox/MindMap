@@ -81,11 +81,10 @@ COPY --from=builder /app/frontend/.env.example ./frontend/.env.example
 
 
 
-EXPOSE 3000 3001
+EXPOSE 3000
 
 # 设置默认环境变量（可以被 docker run 覆盖）
 ENV PORT=3000
-ENV WS_PORT=3001
 ENV DB_FILE=data/mindmap.db
 ENV LOG_FILE=data/app.log
 ENV ALLOWED_ORIGINS=*

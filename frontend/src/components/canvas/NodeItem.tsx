@@ -20,11 +20,12 @@ interface NodeItemProps {
   groupDragOffset?: { x: number; y: number }
   onNodeContextMenuOpen?: (x: number, y: number, nodeId: string) => void
   onMouseDown?: () => void
+  isViewer?: boolean
 }
 
 type EditingField = 'title' | 'content' | null
 
-export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, groupDragOffset, onNodeContextMenuOpen, onMouseDown }: NodeItemProps) {
+export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, groupDragOffset, onNodeContextMenuOpen, onMouseDown, isViewer }: NodeItemProps) {
   const {
     updateNode,
     setSelectedIds,
@@ -417,6 +418,14 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
         return
       }
 
+      // Viewer cannot edit
+      if (isViewer) {
+        e.stopPropagation()
+        setSelectedIds([node.id])
+        setSelectedType('node')
+        return
+      }
+
       if (editingField !== null) {
         if (quickEditMode && !node.locked) {
           const target = e.target as HTMLElement
@@ -716,31 +725,30 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
   const handleDoubleClick = useCallback(
     (e: React.MouseEvent, field?: 'title' | 'content') => {
       e.stopPropagation()
-      if (!node.locked) {
-        if (!field) {
-          field = node.title && node.title.trim() !== '' ? 'content' : 'title'
-        }
-
-        // 对于图片节点，只允许编辑title，不允许编辑content
-        if (node.type === 'image' && field === 'content') {
-          return
-        }
-
-        // Save current editing content before switching fields
-        if (isEditingTitle) {
-          saveTitle()
-        } else if (isEditingContent) {
-          saveContent()
-        }
-
-        setEditingField(field)
-        setEditingId(node.id)
-        window.dispatchEvent(new CustomEvent('nodeEditingFieldChange', {
-          detail: { field }
-        }))
+      if (node.locked || isViewer) return
+      if (!field) {
+        field = node.title && node.title.trim() !== '' ? 'content' : 'title'
       }
+
+      // 对于图片节点，只允许编辑title，不允许编辑content
+      if (node.type === 'image' && field === 'content') {
+        return
+      }
+
+      // Save current editing content before switching fields
+      if (isEditingTitle) {
+        saveTitle()
+      } else if (isEditingContent) {
+        saveContent()
+      }
+
+      setEditingField(field)
+      setEditingId(node.id)
+      window.dispatchEvent(new CustomEvent('nodeEditingFieldChange', {
+        detail: { field }
+      }))
     },
-    [node.locked, node.title, node.type, isEditingTitle, isEditingContent, saveTitle, saveContent]
+    [node.locked, node.title, node.type, isEditingTitle, isEditingContent, saveTitle, saveContent, isViewer]
   )
 
   // 中文输入法开始
@@ -896,7 +904,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
   // Handle context menu
   const handleContextMenu = useCallback(
     (e: React.MouseEvent) => {
-      if (editingField !== null) return
+      if (editingField !== null || isViewer) return
       e.preventDefault()
       e.stopPropagation()
 

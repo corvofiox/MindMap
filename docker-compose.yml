@@ -7,8 +7,7 @@ services:
       dockerfile: Dockerfile
     container_name: mindmap-app
     ports:
-      - "8001:3000"  # API 服务器
-      - "3001:3001"  # WebSocket 服务器
+      - "8173:3000" # HTTP + WebSocket 服务器（共享端口）
     volumes:
       # 持久化数据库数据
       - ./data:/app/backend/data

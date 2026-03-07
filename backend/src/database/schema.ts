@@ -53,6 +53,18 @@ export const projectMembers = sqliteTable('project_members', {
   joinedAt: integer('joined_at').default(sql`strftime('%s', 'now')`),
 })
 
+// Project Invitations
+export const projectInvitations = sqliteTable('project_invitations', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  projectId: integer('project_id').notNull().references(() => projects.id),
+  inviterId: integer('inviter_id').notNull().references(() => users.id),
+  inviteeId: integer('invitee_id').notNull().references(() => users.id),
+  role: text('role').notNull().default('viewer'), // editor, viewer
+  status: text('status').notNull().default('pending'), // pending, accepted, rejected
+  createdAt: integer('created_at').default(sql`strftime('%s', 'now')`),
+  respondedAt: integer('responded_at'),
+})
+
 // Folders
 export const folders = sqliteTable('folders', {
   id: integer('id').primaryKey({ autoIncrement: true }),
@@ -144,6 +156,8 @@ export type Group = typeof groups.$inferSelect
 export type NewGroup = typeof groups.$inferInsert
 export type Project = typeof projects.$inferSelect
 export type NewProject = typeof projects.$inferInsert
+export type ProjectInvitation = typeof projectInvitations.$inferSelect
+export type NewProjectInvitation = typeof projectInvitations.$inferInsert
 export type Canvas = typeof canvases.$inferSelect
 export type NewCanvas = typeof canvases.$inferInsert
 export type Folder = typeof folders.$inferSelect

@@ -2,7 +2,7 @@ import { Router } from 'express'
 import bcrypt from 'bcrypt'
 import { db, scheduleSave } from '../database/connection.js'
 import { users, projects, projectMembers, groupMembers, nodeCards, files, canvases, folders, canvasRecycleBin, nodePoolFolders, settings } from '../database/schema.js'
-import { eq, and } from 'drizzle-orm'
+import { eq, and, or, like } from 'drizzle-orm'
 import { authenticate, type AuthRequest } from '../middleware/auth.middleware.js'
 import { asyncHandler } from '../middleware/error.middleware.js'
 import { logError } from '../utils/logger.js'
@@ -407,5 +407,51 @@ userRouter.put('/settings/node-defaults', authenticate, asyncHandler(async (req:
   res.json({
     success: true,
     data: { textNode, imageNode },
+  })
+}))
+
+// Search users by email or nickname
+userRouter.get('/search', authenticate, asyncHandler(async (req: AuthRequest, res) => {
+  const { q } = req.query
+
+  if (!q || typeof q !== 'string' || q.trim().length === 0) {
+    return res.json({
+      success: true,
+      data: [],
+    })
+  }
+
+  const searchTerm = `%${q.trim()}%`
+
+  const foundUsers = await db
+    .select({
+      id: users.id,
+      email: users.email,
+      nickname: users.nickname,
+      avatar: users.avatar,
+      created_at: users.createdAt,
+      updated_at: users.updatedAt,
+    })
+    .from(users)
+    .where(
+      or(
+        like(users.email, searchTerm),
+        like(users.nickname, searchTerm)
+      )
+    )
+    .limit(20)
+
+  const formattedUsers = foundUsers.map(user => ({
+    id: user.id,
+    email: user.email,
+    nickname: user.nickname,
+    avatar: user.avatar,
+    created_at: user.created_at,
+    updated_at: user.updated_at,
+  }))
+
+  res.json({
+    success: true,
+    data: formattedUsers,
   })
 }))

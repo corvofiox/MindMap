@@ -80,6 +80,10 @@ export async function deleteAccount(data: {
   return await apiClient.delete<{ message: string }>(API_ENDPOINTS.USER_DELETE_ACCOUNT, data)
 }
 
+export async function searchUsers(query: string): Promise<User[]> {
+  return await apiClient.get<User[]>(`${API_ENDPOINTS.USER_SEARCH}?q=${encodeURIComponent(query)}`)
+}
+
 export async function uploadImage(file: File): Promise<{ url: string, filename: string, mimetype: string, size: number }> {
   const formData = new FormData()
   formData.append('image', file)
@@ -300,4 +304,41 @@ export async function getNodeDefaults(): Promise<NodeDefaults> {
 
 export async function updateNodeDefaults(data: NodeDefaults): Promise<NodeDefaults> {
   return await apiClient.put<NodeDefaults>('/api/users/settings/node-defaults', data)
+}
+
+// Collaboration API
+export async function getProjectMembers(projectId: number): Promise<{
+  members: import('@/types').ProjectMember[]
+  invitations: import('@/types').ProjectInvitation[]
+  ownerId: number
+}> {
+  return await apiClient.get(API_ENDPOINTS.COLLABORATION_PROJECT_MEMBERS(projectId))
+}
+
+export async function inviteUserToProject(projectId: number, userId: number, role: 'editor' | 'viewer' = 'viewer'): Promise<import('@/types').ProjectInvitation> {
+  return await apiClient.post(API_ENDPOINTS.COLLABORATION_INVITE(projectId), { userId, role })
+}
+
+export async function getMyInvitations(): Promise<import('@/types').MyInvitation[]> {
+  return await apiClient.get(API_ENDPOINTS.COLLABORATION_INVITATIONS)
+}
+
+export async function acceptInvitation(invitationId: number): Promise<{ message: string }> {
+  return await apiClient.post(API_ENDPOINTS.COLLABORATION_ACCEPT(invitationId))
+}
+
+export async function rejectInvitation(invitationId: number): Promise<{ message: string }> {
+  return await apiClient.post(API_ENDPOINTS.COLLABORATION_REJECT(invitationId))
+}
+
+export async function removeProjectMember(projectId: number, userId: number): Promise<{ message: string }> {
+  return await apiClient.delete(API_ENDPOINTS.COLLABORATION_REMOVE_MEMBER(projectId, userId))
+}
+
+export async function cancelInvitation(invitationId: number): Promise<{ message: string }> {
+  return await apiClient.delete(API_ENDPOINTS.COLLABORATION_CANCEL_INVITATION(invitationId))
+}
+
+export async function updateMemberRole(projectId: number, userId: number, role: 'editor' | 'viewer'): Promise<import('@/types').ProjectMember> {
+  return await apiClient.put(API_ENDPOINTS.COLLABORATION_UPDATE_ROLE(projectId, userId), { role })
 }

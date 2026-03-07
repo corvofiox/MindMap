@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Plus, Folder, FolderOpen, FolderPlus, FileText, Trash2, MoreVertical, Edit2, Check, X, FolderKanban, Calendar, ChevronRight, ChevronDown } from 'lucide-react'
+import { Plus, Folder, FolderOpen, FolderPlus, FileText, Trash2, MoreVertical, Edit2, Check, X, FolderKanban, Calendar, ChevronRight, ChevronDown, Crown, Eye, Edit3, Users } from 'lucide-react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useProjectsStore } from '@/store/useProjectsStore'
 import { useUIStore } from '@/store/useUIStore'
@@ -16,30 +16,37 @@ export function Sidebar({ open }: SidebarProps) {
   const location = useLocation()
   const canvasIdMatch = location.pathname.match(/\/canvas\/(\d+)/)
   const activeCanvasId = canvasIdMatch ? parseInt(canvasIdMatch[1]) : null
-  const { projects, canvases, folders, currentProject, createCanvas, createFolder, updateProject, deleteProject, setCurrentProject, loadProjects, moveCanvasToFolder, isLoading, loadingMessage } = useProjectsStore()
+  const { projects, canvases, folders, currentProject, createCanvas, createFolder, updateProject, deleteProject, setCurrentProject, loadProjects, moveCanvasToFolder, isLoading, loadingMessage, currentMemberRole, loadCanvases, refreshCanvasesSilent } = useProjectsStore()
   const { addToast } = useUIStore()
 
-  // 判断当前是否在项目页面
+  const isViewer = currentMemberRole === 'viewer'
+
   const isProjectsPage = location.pathname === '/projects'
 
-  // 管理文件夹展开状态
   const [expandedFolderIds, setExpandedFolderIds] = useState<Set<number>>(new Set())
 
-  // 拖拽状态
   const [draggedCanvasId, setDraggedCanvasId] = useState<number | null>(null)
   const [dragOverFolderId, setDragOverFolderId] = useState<number | null>(null)
   const [isRootDragOver, setIsRootDragOver] = useState(false)
 
-  // 其他状态
   const [editingProjectId, setEditingProjectId] = useState<number | null>(null)
   const [editProjectName, setEditProjectName] = useState('')
   const [editProjectDesc, setEditProjectDesc] = useState('')
   const [showProjectMenu, setShowProjectMenu] = useState<number | null>(null)
   const projectMenuRef = useRef<HTMLDivElement>(null)
 
-  // 新建文件夹状态
   const [showNewFolderInput, setShowNewFolderInput] = useState(false)
   const [newFolderName, setNewFolderName] = useState('')
+
+  useEffect(() => {
+    if (!currentProject?.id) return
+
+    const interval = setInterval(() => {
+      refreshCanvasesSilent(currentProject.id)
+    }, 5000)
+
+    return () => clearInterval(interval)
+  }, [currentProject?.id, refreshCanvasesSilent])
 
   const rootCanvases = canvases.filter((c) => !c.folderId)
 
@@ -398,54 +405,80 @@ export function Sidebar({ open }: SidebarProps) {
                         >
                           <div className="flex items-start justify-between">
                             <div className="flex-1 min-w-0 pr-2">
-                              <h3 className="font-bold text-gray-900 dark:text-gray-100 truncate text-sm">
-                                {project.name}
-                              </h3>
+                              <div className="flex items-center gap-1.5">
+                                {project.memberRole === 'owner' ? (
+                                  <Crown className="w-3 h-3 text-amber-500 flex-shrink-0" title="项目所有者" />
+                                ) : project.memberRole === 'editor' ? (
+                                  <Edit3 className="w-3 h-3 text-blue-500 flex-shrink-0" title="编辑者" />
+                                ) : (
+                                  <Eye className="w-3 h-3 text-gray-400 flex-shrink-0" title="查看者" />
+                                )}
+                                <h3 className="font-bold text-gray-900 dark:text-gray-100 truncate text-sm">
+                                  {project.name}
+                                </h3>
+                              </div>
                               {project.description && (
                                 <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1 line-clamp-2 leading-relaxed">
                                   {project.description}
                                 </p>
                               )}
-                              <div className="flex items-center gap-2 mt-2 text-[10px] text-gray-400 dark:text-gray-500">
-                                <Calendar className="w-3 h-3" />
-                                <span>{new Date(project.updatedAt).toLocaleDateString()}</span>
+                              <div className="flex items-center justify-between mt-2">
+                                <div className="flex items-center gap-2 text-[10px] text-gray-400 dark:text-gray-500">
+                                  <Calendar className="w-3 h-3" />
+                                  <span>{new Date(project.updatedAt).toLocaleDateString()}</span>
+                                </div>
+                                {project.memberRole !== 'owner' && (
+                                  <span className={`
+                                    px-1.5 py-0.5 rounded text-[9px] font-medium
+                                    ${project.memberRole === 'editor'
+                                      ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
+                                      : 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400'
+                                    }
+                                  `}>
+                                    协作
+                                  </span>
+                                )}
                               </div>
                             </div>
                             <div className="relative" ref={projectMenuRef}>
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  setShowProjectMenu(showProjectMenu === project.id ? null : project.id)
-                                }}
-                                className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-600 transition-opacity"
-                              >
-                                <MoreVertical className="w-4 h-4 text-gray-600 dark:text-gray-400" />
-                              </button>
+                              {project.memberRole === 'owner' && (
+                                <>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      setShowProjectMenu(showProjectMenu === project.id ? null : project.id)
+                                    }}
+                                    className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-600 transition-opacity"
+                                  >
+                                    <MoreVertical className="w-4 h-4 text-gray-600 dark:text-gray-400" />
+                                  </button>
 
-                              {/* 下拉菜单 */}
-                              {showProjectMenu === project.id && (
-                                <div className="absolute top-full right-0 mt-1 w-32 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1" style={{ zIndex: Z_INDEX.SIDEBAR_SUBMENU }}>
-                                  <button
-                                    onClick={(e) => {
-                                      e.stopPropagation()
-                                      handleStartEditProject(project)
-                                    }}
-                                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
-                                  >
-                                    <Edit2 className="w-3 h-3" />
-                                    重命名
-                                  </button>
-                                  <button
-                                    onClick={(e) => {
-                                      e.stopPropagation()
-                                      handleDeleteProject(project)
-                                    }}
-                                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30"
-                                  >
-                                    <Trash2 className="w-3 h-3" />
-                                    删除
-                                  </button>
-                                </div>
+                                  {/* 下拉菜单 */}
+                                  {showProjectMenu === project.id && (
+                                    <div className="absolute top-full right-0 mt-1 w-32 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1" style={{ zIndex: Z_INDEX.SIDEBAR_SUBMENU }}>
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation()
+                                          handleStartEditProject(project)
+                                        }}
+                                        className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
+                                      >
+                                        <Edit2 className="w-3 h-3" />
+                                        重命名
+                                      </button>
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation()
+                                          handleDeleteProject(project)
+                                        }}
+                                        className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30"
+                                      >
+                                        <Trash2 className="w-3 h-3" />
+                                        删除
+                                      </button>
+                                    </div>
+                                  )}
+                                </>
                               )}
                             </div>
                           </div>
@@ -472,10 +505,58 @@ export function Sidebar({ open }: SidebarProps) {
                     返回项目列表
                   </button>
                 </div>
-                <div className="bg-gradient-to-br from-blue-600/10 to-indigo-600/10 dark:from-blue-600/20 dark:to-indigo-600/20 rounded-xl p-3 border border-blue-100 dark:border-blue-900/30">
-                  <div className="flex items-center gap-2 mb-1">
-                    <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
-                    <span className="text-[10px] font-bold text-blue-600 dark:text-blue-400 uppercase tracking-wider">当前项目</span>
+                <div className={`
+                  rounded-xl p-3 border
+                  ${currentMemberRole === 'owner'
+                    ? 'bg-gradient-to-br from-blue-600/10 to-indigo-600/10 dark:from-blue-600/20 dark:to-indigo-600/20 border-blue-100 dark:border-blue-900/30'
+                    : currentMemberRole === 'editor'
+                      ? 'bg-gradient-to-br from-blue-500/5 to-cyan-500/5 dark:from-blue-500/10 dark:to-cyan-500/10 border-blue-200 dark:border-blue-800/30'
+                      : 'bg-gradient-to-br from-gray-100 to-gray-50 dark:from-gray-800 dark:to-gray-700 border-gray-200 dark:border-gray-700'
+                  }
+                `}>
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center gap-2">
+                      <div className={`
+                        w-2 h-2 rounded-full animate-pulse
+                        ${currentMemberRole === 'owner'
+                          ? 'bg-blue-500'
+                          : currentMemberRole === 'editor'
+                            ? 'bg-blue-400'
+                            : 'bg-gray-400'
+                        }
+                      `} />
+                      <span className={`
+                        text-[10px] font-bold uppercase tracking-wider
+                        ${currentMemberRole === 'owner'
+                          ? 'text-blue-600 dark:text-blue-400'
+                          : currentMemberRole === 'editor'
+                            ? 'text-blue-500 dark:text-blue-300'
+                            : 'text-gray-500 dark:text-gray-400'
+                        }
+                      `}>
+                        {currentMemberRole === 'owner' ? '当前项目' : '协作项目'}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      {currentMemberRole === 'owner' ? (
+                        <Crown className="w-3.5 h-3.5 text-amber-500" title="项目所有者" />
+                      ) : currentMemberRole === 'editor' ? (
+                        <Edit3 className="w-3.5 h-3.5 text-blue-500" title="编辑者" />
+                      ) : (
+                        <Eye className="w-3.5 h-3.5 text-gray-400" title="查看者" />
+                      )}
+                      <span className={`
+                        text-[10px] font-medium
+                        ${currentMemberRole === 'owner'
+                          ? 'text-amber-600 dark:text-amber-400'
+                          : currentMemberRole === 'editor'
+                            ? 'text-blue-600 dark:text-blue-400'
+                            : 'text-gray-500 dark:text-gray-400'
+                        }
+                      `}>
+                        {currentMemberRole === 'owner' ? '所有者' : currentMemberRole === 'editor' ? '编辑者' : '查看者'}
+                      </span>
+                    </div>
                   </div>
                   <h3 className="font-bold text-gray-900 dark:text-gray-100 truncate text-sm">
                     {currentProject.name}
@@ -502,20 +583,24 @@ export function Sidebar({ open }: SidebarProps) {
                   </div>
                 </div>
                 <div className="flex items-center gap-1">
-                  <button
-                    onClick={() => setShowNewFolderInput(!showNewFolderInput)}
-                    className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400 transition-colors"
-                    title="新建文件夹"
-                  >
-                    <FolderPlus className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={handleCreateCanvas}
-                    className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400 transition-colors"
-                    title="新建画布"
-                  >
-                    <Plus className="w-4 h-4" />
-                  </button>
+                  {!isViewer && (
+                    <>
+                      <button
+                        onClick={() => setShowNewFolderInput(!showNewFolderInput)}
+                        className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400 transition-colors"
+                        title="新建文件夹"
+                      >
+                        <FolderPlus className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={handleCreateCanvas}
+                        className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400 transition-colors"
+                        title="新建画布"
+                      >
+                        <Plus className="w-4 h-4" />
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -608,6 +693,7 @@ export function Sidebar({ open }: SidebarProps) {
                         isDragging={draggedCanvasId === canvas.id}
                         onDragStart={handleDragStartWithGlobal}
                         onDragEnd={handleDragEnd}
+                        isViewer={isViewer}
                       />
                     ))
                 ) : (
@@ -905,8 +991,9 @@ function FolderItem({
                   canvas={canvas}
                   isActive={activeCanvasId === canvas.id}
                   isDragging={draggedCanvasId === canvas.id}
-                  onDragStart={onDragStart}
-                  onDragEnd={onDragEnd}
+                  onDragStart={handleDragStartWithGlobal}
+                  onDragEnd={handleDragEnd}
+                  isViewer={isViewer}
                 />
               ))}
               {folderCanvases.length === 0 && (
@@ -968,12 +1055,14 @@ function CanvasItem({
   isDragging,
   onDragStart,
   onDragEnd,
+  isViewer,
 }: {
   canvas: any
   isActive?: boolean
   isDragging?: boolean
   onDragStart?: (canvasId: number) => void
   onDragEnd?: () => void
+  isViewer?: boolean
 }) {
   const navigate = useNavigate()
   const { updateCanvas, deleteCanvas, folders } = useProjectsStore()
@@ -1065,6 +1154,7 @@ function CanvasItem({
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault()
     e.stopPropagation()
+    if (isViewer) return
     setContextMenuPosition({ x: e.clientX, y: e.clientY })
     setShowContextMenu(true)
     setShowMoveMenu(false)
@@ -1125,7 +1215,7 @@ function CanvasItem({
         // 查看模式 - 缩略图卡片
         <>
           <div
-            draggable={!!onDragStart}
+            draggable={!!onDragStart && !isViewer}
             onDragStart={() => onDragStart?.(canvas.id)}
             onDragEnd={onDragEnd}
             onContextMenu={handleContextMenu}
@@ -1161,6 +1251,17 @@ function CanvasItem({
               ) : (
                 <div className="w-full h-full flex items-center justify-center">
                   <FileText className="w-8 h-8 text-gray-400 dark:text-gray-600" />
+                </div>
+              )}
+
+              {/* 活跃用户指示器 */}
+              {canvas.activeUsers && canvas.activeUsers.length > 0 && (
+                <div className="absolute bottom-2 left-2 flex items-center gap-1 bg-black/60 backdrop-blur-sm rounded-full px-2 py-1">
+                  <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+                  <Users className="w-3 h-3 text-white" />
+                  <span className="text-[10px] text-white font-medium">
+                    {canvas.activeUsers.length}
+                  </span>
                 </div>
               )}
 

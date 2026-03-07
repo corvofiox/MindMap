@@ -4,6 +4,7 @@ import { useCanvasStore } from '@/store/useCanvasStore'
 import { useProjectsStore } from '@/store/useProjectsStore'
 import { useUIStore } from '@/store/useUIStore'
 import { useNodePoolStore } from '@/features/node-pool/stores/useNodePoolStore'
+import { useCollaboration } from '@/hooks/useCollaboration'
 import { CanvasToolbar } from '@/components/canvas/CanvasToolbar'
 import { CanvasGrid } from '@/components/canvas/CanvasGrid'
 import { CanvasMinimap } from '@/components/canvas/CanvasMinimap'
@@ -21,7 +22,7 @@ import { CONNECTION_DEFAULTS, Z_INDEX } from '@/constants'
 import { generateId, colorToHex, hexToRgba, calculateCurveControlPoints, getCurveThroughPoints, getStepPath, pointsToPath, type PortDirection } from '@/utils/canvas'
 import { saveToCache, loadFromCache } from '@/utils/nodeCache'
 import { saveCanvasNodesData, loadCanvasNodesData } from '@/services/api'
-import type { Node, Connection, NodeCard } from '@/types'
+import type { Node, Connection } from '@/types'
 import html2canvas from 'html2canvas-pro'
 
 const AUTO_SAVE_INTERVAL = 5000
@@ -38,12 +39,6 @@ const saveCanvasView = (canvasId: number, zoom: number, panX: number, panY: numb
 const loadCanvasView = (canvasId: number) => {
   const views = JSON.parse(localStorage.getItem(CANVAS_VIEW_STORAGE_KEY) || '{}')
   return views[canvasId] || null
-}
-
-const clearCanvasView = (canvasId: number) => {
-  const views = JSON.parse(localStorage.getItem(CANVAS_VIEW_STORAGE_KEY) || '{}')
-  delete views[canvasId]
-  localStorage.setItem(CANVAS_VIEW_STORAGE_KEY, JSON.stringify(views))
 }
 
 // Thumbnail generation constants
@@ -727,6 +722,13 @@ export function CanvasPage() {
     setCommandPaletteOpen,
   } = useUIStore()
 
+  const id = canvasId ? parseInt(canvasId) : null
+
+  const { sendCursor } = useCollaboration({
+    canvasId: id || 0,
+    enabled: id !== null && id > 0
+  })
+
   // Refs to store latest values for global event listeners
   const panXRef = useRef(panX)
   const panYRef = useRef(panY)
@@ -789,7 +791,10 @@ export function CanvasPage() {
     }
   }, [addNode, addToast, panX, panY, zoom])
 
-  const { loadProjects, restoreCurrentProject, canvases, updateCanvas: updateCanvasInStore } = useProjectsStore()
+  const { loadProjects, restoreCurrentProject, canvases, updateCanvas: updateCanvasInStore, currentMemberRole } = useProjectsStore()
+
+  const canEdit = currentMemberRole === 'owner' || currentMemberRole === 'editor'
+  const isViewer = currentMemberRole === 'viewer'
 
   const stableLoadProjects = useCallback(loadProjects, [])
   const stableRestoreCurrentProject = useCallback(restoreCurrentProject, [])
@@ -2340,7 +2345,16 @@ export function CanvasPage() {
     } else {
       setHoveredPort(null)
     }
-  }, [isDragging, isBoxSelecting, isCreatingDomain, isCreatingConnection, isDraggingConnectionEndpoint, isDraggingBendPoint, isResizingGroup, isCreatingGroup, panX, panY, zoom, setPan, nodes, connectionStartNodeId, draggingConnectionId, draggingEndpoint, draggingBendPointId, connections, isDraggingGroup, draggingGroupId, groups, groupDragStart, groupInitialPositions, initialGroupNodeIds, groupDragInitialGroupPos, resizeHandle, resizeStart, resizeInitialGroup, resizeInitialNodePositions, updateGroup, resizingGroupId, currentTool, selectedIds, customCursor, setCustomCursor])
+
+    if (containerRef.current && id && id > 0) {
+      const rect = containerRef.current.getBoundingClientRect()
+      const mouseX = e.clientX - rect.left
+      const mouseY = e.clientY - rect.top
+      const canvasX = (mouseX - panX) / zoom
+      const canvasY = (mouseY - panY) / zoom
+      sendCursor(canvasX, canvasY)
+    }
+  }, [isDragging, isBoxSelecting, isCreatingDomain, isCreatingConnection, isDraggingConnectionEndpoint, isDraggingBendPoint, isResizingGroup, isCreatingGroup, panX, panY, zoom, setPan, nodes, connectionStartNodeId, draggingConnectionId, draggingEndpoint, draggingBendPointId, connections, isDraggingGroup, draggingGroupId, groups, groupDragStart, groupInitialPositions, initialGroupNodeIds, groupDragInitialGroupPos, resizeHandle, resizeStart, resizeInitialGroup, resizeInitialNodePositions, updateGroup, resizingGroupId, currentTool, selectedIds, customCursor, setCustomCursor, id, sendCursor])
 
   // Handle mouse up
   const handleMouseUp = useCallback(async (e: React.MouseEvent) => {
@@ -2836,6 +2850,7 @@ export function CanvasPage() {
   const handleConnectionContextMenu = useCallback((e: React.MouseEvent, connectionId: string) => {
     e.preventDefault()
     e.stopPropagation()
+    if (isViewer) return
     const rect = containerRef.current?.getBoundingClientRect()
     const clickX = rect ? (e.clientX - rect.left - panX) / zoom : 0
     const clickY = rect ? (e.clientY - rect.top - panY) / zoom : 0
@@ -2849,10 +2864,11 @@ export function CanvasPage() {
       clickX,
       clickY,
     })
-  }, [containerRef, panX, panY, zoom])
+  }, [containerRef, panX, panY, zoom, isViewer])
 
   // Handle node context menu
   const handleNodeContextMenu = useCallback((x: number, y: number, nodeId: string) => {
+    if (isViewer) return
     setContextMenu(null)
     setConnectionContextMenu(null)
     setDomainContextMenu(null)
@@ -2867,6 +2883,7 @@ export function CanvasPage() {
   const handleConnectionDoubleClick = useCallback((e: React.MouseEvent, connectionId: string) => {
     e.preventDefault()
     e.stopPropagation()
+    if (isViewer) return
     const connection = connections.get(connectionId)
     if (connection) {
       setEditingConnectionLabel({
@@ -2874,7 +2891,7 @@ export function CanvasPage() {
         label: connection.label || '',
       })
     }
-  }, [connections, setEditingConnectionLabel])
+  }, [connections, setEditingConnectionLabel, isViewer])
 
   // Handle canvas click
   const handleCanvasClick = useCallback((e: React.MouseEvent) => {
@@ -3230,7 +3247,7 @@ export function CanvasPage() {
 
       {/* Canvas Toolbar */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
-        <CanvasToolbar onSave={handleManualSave} />
+        <CanvasToolbar onSave={handleManualSave} isViewer={isViewer} />
       </div>
 
       {/* Zoom Controls */}
@@ -3309,6 +3326,7 @@ export function CanvasPage() {
               onContextMenu={(e) => {
                 e.preventDefault()
                 e.stopPropagation()
+                if (isViewer) return
 
                 const dx = e.clientX - domainContextMenuStartRef.current.x
                 const dy = e.clientY - domainContextMenuStartRef.current.y
@@ -3444,6 +3462,7 @@ export function CanvasPage() {
                 onContextMenu={(e) => {
                   e.preventDefault()
                   e.stopPropagation()
+                  if (isViewer) return
 
                   const dx = e.clientX - groupContextMenuStartRef.current.x
                   const dy = e.clientY - groupContextMenuStartRef.current.y
@@ -3467,6 +3486,7 @@ export function CanvasPage() {
                   onContextMenu={(e) => {
                     e.preventDefault()
                     e.stopPropagation()
+                    if (isViewer) return
 
                     const dx = e.clientX - groupContextMenuStartRef.current.x
                     const dy = e.clientY - groupContextMenuStartRef.current.y
@@ -3480,6 +3500,7 @@ export function CanvasPage() {
                   }}
                   onDoubleClick={(e) => {
                     e.stopPropagation()
+                    if (isViewer) return
                     setEditingGroupName(group.name)
                     setEditingId(group.id)
                   }}
@@ -3964,6 +3985,8 @@ export function CanvasPage() {
               const fromPosition = getPortPosition(actualFromNode, getConnectionPort(conn, 'start'))
               const toPosition = getPortPosition(actualToNode, getConnectionPort(conn, 'end'))
 
+              if (isViewer) return null
+
               return (
                 <div key={`endpoint-${conn.id}`} style={ENDPOINT_CONTAINER_STYLE}>
                   {/* Start endpoint */}
@@ -4120,6 +4143,7 @@ export function CanvasPage() {
                 groupDragOffset={nodeGroupDragOffset}
                 onNodeContextMenuOpen={handleNodeContextMenu}
                 onMouseDown={closeAllContextMenus}
+                isViewer={isViewer}
               />
             )
           })}

@@ -1,15 +1,15 @@
 import { Router } from 'express'
 import { db, scheduleSave } from '../database/connection.js'
-import { canvases, folders, projects } from '../database/schema.js'
-import { eq, inArray } from 'drizzle-orm'
+import { canvases, folders, projects, projectMembers } from '../database/schema.js'
+import { eq, inArray, and } from 'drizzle-orm'
 import { authenticate, type AuthRequest } from '../middleware/auth.middleware.js'
 import { asyncHandler } from '../middleware/error.middleware.js'
 import { transformResponse, transformResponseArray } from '../utils/transformResponse.js'
 import { log } from '../utils/logger.js'
+import { getCanvasActiveUsers } from '../websocket/index.js'
 
 export const canvasRouter = Router()
 
-// Helper function to safely get property from Drizzle result (handles both snake_case and camelCase)
 function getProperty<T>(obj: any, ...keys: string[]): T | undefined {
   for (const key of keys) {
     const value = obj[key]
@@ -18,6 +18,32 @@ function getProperty<T>(obj: any, ...keys: string[]): T | undefined {
     }
   }
   return undefined
+}
+
+async function checkProjectAccess(projectId: number, userId: number): Promise<{ isOwner: boolean; isMember: boolean; canEdit: boolean; role: string | null }> {
+  const project = await db.query.projects.findFirst({
+    where: eq(projects.id, projectId),
+  })
+
+  if (!project) {
+    return { isOwner: false, isMember: false, canEdit: false, role: null }
+  }
+
+  const projectOwnerId = getProperty<number>(project, 'owner_id', 'ownerId') || project.ownerId
+  const isOwner = projectOwnerId === userId
+
+  const member = await db.query.projectMembers.findFirst({
+    where: and(
+      eq(projectMembers.projectId, projectId),
+      eq(projectMembers.userId, userId)
+    ),
+  })
+
+  const isMember = member && member.id !== undefined
+  const role = isOwner ? 'owner' : (member?.role || null)
+  const canEdit = isOwner || (isMember && member?.role === 'editor')
+
+  return { isOwner, isMember, canEdit, role }
 }
 
 // Get canvas by ID (more specific route must come first)
@@ -59,20 +85,9 @@ canvasRouter.get('/:projectId', authenticate, asyncHandler(async (req: AuthReque
     })
   }
 
-  const project = await db.query.projects.findFirst({
-    where: eq(projects.id, projectId),
-  })
+  const access = await checkProjectAccess(projectId, req.user!.id)
 
-  if (!project) {
-    return res.status(404).json({
-      success: false,
-      error: '项目未找到',
-    })
-  }
-
-  const projectOwnerId = getProperty(project, 'owner_id', 'ownerId') || project.ownerId
-
-  if (projectOwnerId !== req.user!.id) {
+  if (!access.isOwner && !access.isMember) {
     return res.status(403).json({
       success: false,
       error: '访问被拒绝',
@@ -86,9 +101,14 @@ canvasRouter.get('/:projectId', authenticate, asyncHandler(async (req: AuthReque
 
   const transformedCanvases = transformResponseArray(projectCanvases, ['createdAt', 'updatedAt'])
 
+  const canvasesWithActiveUsers = transformedCanvases.map(canvas => ({
+    ...canvas,
+    activeUsers: getCanvasActiveUsers(canvas.id),
+  }))
+
   res.json({
     success: true,
-    data: transformedCanvases,
+    data: canvasesWithActiveUsers,
   })
 }))
 
@@ -104,20 +124,9 @@ canvasRouter.post('/:projectId', authenticate, asyncHandler(async (req: AuthRequ
 
   const { name, folderId } = req.body
 
-  const project = await db.query.projects.findFirst({
-    where: eq(projects.id, projectId),
-  })
+  const access = await checkProjectAccess(projectId, req.user!.id)
 
-  if (!project) {
-    return res.status(404).json({
-      success: false,
-      error: '项目未找到',
-    })
-  }
-
-  const projectOwnerId = getProperty(project, 'owner_id', 'ownerId') || project.ownerId
-
-  if (projectOwnerId !== req.user!.id) {
+  if (!access.canEdit) {
     return res.status(403).json({
       success: false,
       error: '访问被拒绝',
@@ -132,6 +141,11 @@ canvasRouter.post('/:projectId', authenticate, asyncHandler(async (req: AuthRequ
       folderId: folderId || null,
     })
     .returning()
+
+  await db
+    .update(projects)
+    .set({ updatedAt: Math.floor(Date.now() / 1000) })
+    .where(eq(projects.id, projectId))
 
   scheduleSave()
 
@@ -172,27 +186,12 @@ canvasRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, res
       })
     }
 
-    // 使用原始列名 project_id（Drizzle ORM 返回原始列名）
     const canvasProjectId = getProperty(canvas, 'project_id', 'projectId') || canvas.projectId
 
-    const project = await db.query.projects.findFirst({
-      where: eq(projects.id, canvasProjectId),
-    })
+    const access = await checkProjectAccess(canvasProjectId, req.user!.id)
 
-    log('PUT canvas - Project query result', { canvasId, projectId: canvasProjectId, projectFound: !!project })
-
-    if (!project) {
-      log('PUT canvas - Project not found', { canvasId, projectId: canvasProjectId })
-      return res.status(404).json({
-        success: false,
-        error: '项目未找到',
-      })
-    }
-
-    const projectOwnerId = getProperty(project, 'owner_id', 'ownerId') || project.ownerId
-
-    if (projectOwnerId !== req.user!.id) {
-      log('PUT canvas - Access denied', { canvasId, projectOwnerId, userId: req.user!.id })
+    if (!access.canEdit) {
+      log('PUT canvas - Access denied', { canvasId, userId: req.user!.id })
       return res.status(403).json({
         success: false,
         error: '访问被拒绝',
@@ -231,6 +230,13 @@ canvasRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, res
       .set(updateData)
       .where(eq(canvases.id, canvasId))
       .returning()
+
+    if (canvasProjectId) {
+      await db
+        .update(projects)
+        .set({ updatedAt: Math.floor(Date.now() / 1000) })
+        .where(eq(projects.id, canvasProjectId))
+    }
 
     scheduleSave()
 
@@ -272,34 +278,19 @@ canvasRouter.delete('/:id', authenticate, asyncHandler(async (req: AuthRequest, 
     })
   }
 
-  // 使用原始列名 project_id（Drizzle ORM 返回原始列名）
   const canvasProjectId = getProperty(canvas, 'project_id', 'projectId') || canvas.projectId
 
   log('DELETE canvas - Canvas found', { canvasId, projectId: canvasProjectId, canvas: JSON.stringify(canvas) })
 
   try {
-    log('DELETE canvas - About to query project', { canvasId, projectId: canvasProjectId, projectIdType: typeof canvasProjectId })
+    log('DELETE canvas - About to check access', { canvasId, projectId: canvasProjectId })
 
-    const project = await db.query.projects.findFirst({
-      where: eq(projects.id, canvasProjectId),
-    })
+    const access = await checkProjectAccess(canvasProjectId, req.user!.id)
 
-    log('DELETE canvas - Project query result', { canvasId, projectId: canvasProjectId, projectFound: !!project })
+    log('DELETE canvas - Access check result', { canvasId, access })
 
-    if (!project) {
-      log('DELETE canvas - Project not found', { canvasId, projectId: canvasProjectId })
-      return res.status(404).json({
-        success: false,
-        error: '项目未找到',
-      })
-    }
-
-    const projectOwnerId = getProperty(project, 'owner_id', 'ownerId') || project.ownerId
-
-    log('DELETE canvas - Checking ownership', { canvasId, projectOwnerId, userId: req.user!.id })
-
-    if (projectOwnerId !== req.user!.id) {
-      log('DELETE canvas - Access denied', { canvasId, projectOwnerId, userId: req.user!.id })
+    if (!access.canEdit) {
+      log('DELETE canvas - Access denied', { canvasId, userId: req.user!.id })
       return res.status(403).json({
         success: false,
         error: '访问被拒绝',
@@ -308,10 +299,16 @@ canvasRouter.delete('/:id', authenticate, asyncHandler(async (req: AuthRequest, 
 
     await db.delete(canvases).where(eq(canvases.id, canvasId))
 
+    if (canvasProjectId) {
+      await db
+        .update(projects)
+        .set({ updatedAt: Math.floor(Date.now() / 1000) })
+        .where(eq(projects.id, canvasProjectId))
+    }
+
     scheduleSave()
 
     log('DELETE canvas - Success', { canvasId })
-
     res.json({
       success: true,
       data: { message: 'Canvas deleted' },
@@ -343,23 +340,11 @@ canvasRouter.post('/:id/data', authenticate, asyncHandler(async (req: AuthReques
     })
   }
 
-  // 使用原始列名 project_id（Drizzle ORM 返回原始列名）
   const canvasProjectId = getProperty(canvas, 'project_id', 'projectId') || canvas.projectId
 
-  const project = await db.query.projects.findFirst({
-    where: eq(projects.id, canvasProjectId),
-  })
+  const access = await checkProjectAccess(canvasProjectId, req.user!.id)
 
-  if (!project) {
-    return res.status(404).json({
-      success: false,
-      error: '项目未找到',
-    })
-  }
-
-  const projectOwnerId = getProperty(project, 'owner_id', 'ownerId') || project.ownerId
-
-  if (projectOwnerId !== req.user!.id) {
+  if (!access.canEdit) {
     return res.status(403).json({
       success: false,
       error: '访问被拒绝',
@@ -402,20 +387,9 @@ canvasRouter.get(
       })
     }
 
-    const project = await db.query.projects.findFirst({
-      where: eq(projects.id, projectId),
-    })
+    const access = await checkProjectAccess(projectId, req.user!.id)
 
-    if (!project) {
-      return res.status(404).json({
-        success: false,
-        error: '项目未找到',
-      })
-    }
-
-    const projectOwnerId = getProperty(project, 'owner_id', 'ownerId') || project.ownerId
-
-    if (projectOwnerId !== req.user!.id) {
+    if (!access.isOwner && !access.isMember) {
       return res.status(403).json({
         success: false,
         error: '访问被拒绝',
@@ -449,20 +423,9 @@ canvasRouter.post(
 
     const { name, parentId } = req.body
 
-    const project = await db.query.projects.findFirst({
-      where: eq(projects.id, projectId),
-    })
+    const access = await checkProjectAccess(projectId, req.user!.id)
 
-    if (!project) {
-      return res.status(404).json({
-        success: false,
-        error: '项目未找到',
-      })
-    }
-
-    const projectOwnerId = getProperty(project, 'owner_id', 'ownerId') || project.ownerId
-
-    if (projectOwnerId !== req.user!.id) {
+    if (!access.canEdit) {
       return res.status(403).json({
         success: false,
         error: '访问被拒绝',
@@ -515,23 +478,11 @@ canvasRouter.put(
       })
     }
 
-    // Use original column name project_id (Drizzle ORM returns original column names)
     const folderProjectId = getProperty(folder, 'project_id', 'projectId') || folder.projectId
 
-    const project = await db.query.projects.findFirst({
-      where: eq(projects.id, folderProjectId),
-    })
+    const access = await checkProjectAccess(folderProjectId, req.user!.id)
 
-    if (!project) {
-      return res.status(404).json({
-        success: false,
-        error: '项目未找到',
-      })
-    }
-
-    const projectOwnerId = getProperty(project, 'owner_id', 'ownerId') || project.ownerId
-
-    if (projectOwnerId !== req.user!.id) {
+    if (!access.canEdit) {
       return res.status(403).json({
         success: false,
         error: '访问被拒绝',
@@ -547,6 +498,13 @@ canvasRouter.put(
       .returning()
 
     const [updatedFolder] = result || []
+
+    if (folderProjectId) {
+      await db
+        .update(projects)
+        .set({ updatedAt: Math.floor(Date.now() / 1000) })
+        .where(eq(projects.id, folderProjectId))
+    }
 
     scheduleSave()
 
@@ -581,23 +539,11 @@ canvasRouter.delete(
       })
     }
 
-    // Use original column name project_id (Drizzle ORM returns original column names)
     const folderProjectId = getProperty(folder, 'project_id', 'projectId') || folder.projectId
 
-    const project = await db.query.projects.findFirst({
-      where: eq(projects.id, folderProjectId),
-    })
+    const access = await checkProjectAccess(folderProjectId, req.user!.id)
 
-    if (!project) {
-      return res.status(404).json({
-        success: false,
-        error: '项目未找到',
-      })
-    }
-
-    const projectOwnerId = getProperty(project, 'owner_id', 'ownerId') || project.ownerId
-
-    if (projectOwnerId !== req.user!.id) {
+    if (!access.canEdit) {
       return res.status(403).json({
         success: false,
         error: '访问被拒绝',
@@ -638,6 +584,13 @@ canvasRouter.delete(
     // Delete in reverse order (children first) to respect foreign key constraints
     for (let i = folderIdsToDelete.length - 1; i >= 0; i--) {
       await db.delete(folders).where(eq(folders.id, folderIdsToDelete[i]))
+    }
+
+    if (folderProjectId) {
+      await db
+        .update(projects)
+        .set({ updatedAt: Math.floor(Date.now() / 1000) })
+        .where(eq(projects.id, folderProjectId))
     }
 
     log('DELETE folder - Success', { folderId, foldersDeleted: folderIdsToDelete.length })

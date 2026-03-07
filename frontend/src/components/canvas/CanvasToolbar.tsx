@@ -1,12 +1,13 @@
- import { MousePointer2, Square, Layers, Link, Grid3x3, Undo, Redo, Trash2, ArrowRight, ArrowLeftRight, Minus, Group, Save, Download, Check, Map, Layout, Image as ImageIcon, Pencil } from 'lucide-react'
-  import { useCanvasStore } from '@/store/useCanvasStore'
-  import { useUIStore } from '@/store/useUIStore'
-  import type { Tool } from '@/types'
-  import { useState, useCallback } from 'react'
-  import { generateId } from '@/utils/canvas'
+import { MousePointer2, Square, Layers, Link, Grid3x3, Undo, Redo, Trash2, ArrowRight, ArrowLeftRight, Minus, Group, Save, Download, Check, Map, Layout, Image as ImageIcon, Pencil } from 'lucide-react'
+import { useCanvasStore } from '@/store/useCanvasStore'
+import { useUIStore } from '@/store/useUIStore'
+import type { Tool } from '@/types'
+import { useState, useCallback } from 'react'
+import { generateId } from '@/utils/canvas'
 
 interface CanvasToolbarProps {
   onSave?: () => Promise<void>
+  isViewer?: boolean
 }
 
 const tools: { id: Tool; icon: typeof MousePointer2; label: string; shortcut: string }[] = [
@@ -19,12 +20,12 @@ const tools: { id: Tool; icon: typeof MousePointer2; label: string; shortcut: st
 
 const toolSeparators = [1, 2]
 
-export function CanvasToolbar({ onSave }: CanvasToolbarProps) {
+export function CanvasToolbar({ onSave, isViewer }: CanvasToolbarProps) {
   const { currentTool, gridVisible, dragMode, minimapVisible, quickEditMode, setCurrentTool, toggleGrid, toggleDragMode, toggleMinimap, toggleQuickEditMode, connectionDirection, setConnectionDirection, connectionStyle, setConnectionStyle, connectionType, setConnectionType, addToast } = useUIStore()
   const { selectedIds, removeNode, removeConnection, removeGroup, removeDomain, nodes, undo, redo, history, groups, domains, addGroup } = useCanvasStore()
 
-    const [isSaving, setIsSaving] = useState(false)
-    const [saveSuccess, setSaveSuccess] = useState(false)
+  const [isSaving, setIsSaving] = useState(false)
+  const [saveSuccess, setSaveSuccess] = useState(false)
 
   const connectionDirections = [
     { id: 'directed' as const, icon: ArrowRight, label: '单向' },
@@ -32,17 +33,17 @@ export function CanvasToolbar({ onSave }: CanvasToolbarProps) {
     { id: 'undirected' as const, icon: Minus, label: '无向' },
   ]
 
-   const connectionStyles = [
-     { id: 'solid' as const, label: '实线' },
-     { id: 'dashed' as const, label: '虚线' },
-     { id: 'dotted' as const, label: '点线' },
-   ]
+  const connectionStyles = [
+    { id: 'solid' as const, label: '实线' },
+    { id: 'dashed' as const, label: '虚线' },
+    { id: 'dotted' as const, label: '点线' },
+  ]
 
-    const connectionTypes = [
-      { id: 'straight' as const, label: '直线' },
-      { id: 'step' as const, label: '直角线' },
-      { id: 'curve' as const, label: '曲线' },
-    ]
+  const connectionTypes = [
+    { id: 'straight' as const, label: '直线' },
+    { id: 'step' as const, label: '直角线' },
+    { id: 'curve' as const, label: '曲线' },
+  ]
 
   const canUndo = history.currentIndex >= 0
   const canRedo = history.currentIndex < history.commands.length - 1
@@ -142,11 +143,13 @@ export function CanvasToolbar({ onSave }: CanvasToolbarProps) {
             const Icon = tool.icon
             const isActive = currentTool === tool.id
             const showSeparatorAfter = toolSeparators.includes(index)
+            const isDisabled = isViewer && tool.id !== 'select'
 
             return (
               <div key={tool.id} className="flex items-center gap-1">
                 <button
                   onClick={() => {
+                    if (isDisabled) return
                     if (currentTool === tool.id) {
                       setCurrentTool('select')
                     } else {
@@ -154,13 +157,16 @@ export function CanvasToolbar({ onSave }: CanvasToolbarProps) {
                     }
                   }}
                   className={`
-                    p-2 rounded-lg transition-colors cursor-pointer
-                    ${isActive
-                      ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
-                      : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
+                    p-2 rounded-lg transition-colors
+                    ${isDisabled
+                      ? 'opacity-50 cursor-not-allowed text-gray-400 dark:text-gray-600'
+                      : isActive
+                        ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 cursor-pointer'
+                        : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400 cursor-pointer'
                     }
                   `}
-                  title={`${tool.label} (${tool.shortcut})`}
+                  title={`${tool.label} (${tool.shortcut})${isDisabled ? ' - 查看者无法使用' : ''}`}
+                  disabled={isDisabled}
                 >
                   <Icon className="w-5 h-5" />
                 </button>
@@ -173,29 +179,35 @@ export function CanvasToolbar({ onSave }: CanvasToolbarProps) {
         {/* Center - View options */}
         <div className="flex items-center gap-2">
           <button
-            onClick={toggleDragMode}
+            onClick={isViewer ? undefined : toggleDragMode}
+            disabled={isViewer}
             className={`
               px-3 py-1.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap
-              ${dragMode === 'grid'
-                ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
-                : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
+              ${isViewer
+                ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed'
+                : dragMode === 'grid'
+                  ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
+                  : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
               }
             `}
-            title="切换拖动模式 (Shift)"
+            title={isViewer ? '查看者无法切换拖动模式' : '切换拖动模式 (Shift)'}
           >
             {dragMode === 'grid' ? '网格吸附' : '自由移动'}
           </button>
 
           <button
-            onClick={toggleQuickEditMode}
+            onClick={isViewer ? undefined : toggleQuickEditMode}
+            disabled={isViewer}
             className={`
               p-2 rounded-lg transition-colors
-              ${quickEditMode
-                ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
-                : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
+              ${isViewer
+                ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed'
+                : quickEditMode
+                  ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
+                  : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
               }
             `}
-            title="快速编辑模式 (E)"
+            title={isViewer ? '查看者无法使用快速编辑模式' : '快速编辑模式 (E)'}
           >
             <Pencil className="w-5 h-5" />
           </button>
@@ -235,30 +247,30 @@ export function CanvasToolbar({ onSave }: CanvasToolbarProps) {
         <div className="flex items-center gap-1">
           <button
             onClick={handleCreateGroup}
-            disabled={!hasSelectedNodes}
+            disabled={!hasSelectedNodes || isViewer}
             className={`
               p-2 rounded-lg transition-colors
-              ${hasSelectedNodes
+              ${hasSelectedNodes && !isViewer
                 ? 'hover:bg-blue-100 dark:hover:bg-blue-900/30 text-blue-600 dark:text-blue-400'
                 : 'text-gray-300 dark:text-gray-600 cursor-not-allowed'
               }
             `}
-            title="创建组 (Ctrl+G)"
+            title={isViewer ? '查看者无法创建组' : '创建组 (Ctrl+G)'}
           >
             <Group className="w-5 h-5" />
           </button>
 
           <button
             onClick={handleDelete}
-            disabled={selectedIds.length === 0}
+            disabled={selectedIds.length === 0 || isViewer}
             className={`
               p-2 rounded-lg transition-colors
-              ${selectedIds.length > 0
+              ${selectedIds.length > 0 && !isViewer
                 ? 'hover:bg-red-100 dark:hover:bg-red-900/30 text-red-600 dark:text-red-400'
                 : 'text-gray-300 dark:text-gray-600 cursor-not-allowed'
               }
             `}
-            title="删除选中项 (Delete)"
+            title={isViewer ? '查看者无法删除' : '删除选中项 (Delete)'}
           >
             <Trash2 className="w-5 h-5" />
           </button>
@@ -267,30 +279,30 @@ export function CanvasToolbar({ onSave }: CanvasToolbarProps) {
 
           <button
             onClick={undo}
-            disabled={!canUndo}
+            disabled={!canUndo || isViewer}
             className={`
               p-2 rounded-lg transition-colors
-              ${canUndo
+              ${canUndo && !isViewer
                 ? 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
                 : 'text-gray-300 dark:text-gray-600 cursor-not-allowed'
               }
             `}
-            title="撤销 (Ctrl+Z)"
+            title={isViewer ? '查看者无法撤销' : '撤销 (Ctrl+Z)'}
           >
             <Undo className="w-5 h-5" />
           </button>
 
           <button
             onClick={redo}
-            disabled={!canRedo}
+            disabled={!canRedo || isViewer}
             className={`
               p-2 rounded-lg transition-colors
-              ${canRedo
+              ${canRedo && !isViewer
                 ? 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
                 : 'text-gray-300 dark:text-gray-600 cursor-not-allowed'
               }
             `}
-            title="重做 (Ctrl+Y)"
+            title={isViewer ? '查看者无法重做' : '重做 (Ctrl+Y)'}
           >
             <Redo className="w-5 h-5" />
           </button>
@@ -299,14 +311,16 @@ export function CanvasToolbar({ onSave }: CanvasToolbarProps) {
 
           <button
             onClick={handleSave}
-            disabled={isSaving || !onSave}
-            className={`p-2 rounded-lg transition-colors relative ${isSaving
+            disabled={isSaving || !onSave || isViewer}
+            className={`p-2 rounded-lg transition-colors relative ${isViewer
+              ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed'
+              : isSaving
                 ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
                 : saveSuccess
                   ? 'bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400'
                   : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
               } ${!onSave ? 'opacity-50 cursor-not-allowed' : ''}`}
-            title="保存 (Ctrl+S)"
+            title={isViewer ? '查看者无法保存' : '保存 (Ctrl+S)'}
           >
             {isSaving ? (
               <div className="w-5 h-5 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />

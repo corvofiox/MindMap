@@ -15,6 +15,7 @@ export const API_ENDPOINTS = {
   USER_AVATAR: '/api/users/avatar',
   USER_PASSWORD: '/api/users/password',
   USER_DELETE_ACCOUNT: '/api/users/account',
+  USER_SEARCH: '/api/users/search',
   UPLOAD: '/api/upload',
 
   // Projects
@@ -34,6 +35,16 @@ export const API_ENDPOINTS = {
   NODE_POOL: (projectId: number) => `/api/projects/${projectId}/node-pool`,
   NODE_POOL_DELETE: (id: number) => `/api/projects/node-pool/${id}`,
   NODE_POOL_UPDATE: (id: number) => `/api/projects/node-pool/${id}`,
+
+  // Collaboration
+  COLLABORATION_PROJECT_MEMBERS: (projectId: number) => `/api/collaboration/projects/${projectId}/members`,
+  COLLABORATION_INVITE: (projectId: number) => `/api/collaboration/projects/${projectId}/invite`,
+  COLLABORATION_INVITATIONS: '/api/collaboration/invitations',
+  COLLABORATION_ACCEPT: (id: number) => `/api/collaboration/invitations/${id}/accept`,
+  COLLABORATION_REJECT: (id: number) => `/api/collaboration/invitations/${id}/reject`,
+  COLLABORATION_REMOVE_MEMBER: (projectId: number, userId: number) => `/api/collaboration/projects/${projectId}/members/${userId}`,
+  COLLABORATION_CANCEL_INVITATION: (id: number) => `/api/collaboration/invitations/${id}`,
+  COLLABORATION_UPDATE_ROLE: (projectId: number, userId: number) => `/api/collaboration/projects/${projectId}/members/${userId}/role`,
 } as const
 
 // WebSocket configuration
