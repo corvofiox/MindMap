@@ -81,17 +81,17 @@ COPY --from=builder /app/frontend/.env.example ./frontend/.env.example
 
 
 
-EXPOSE 3000
+EXPOSE 9000
 
 # 设置默认环境变量（可以被 docker run 覆盖）
-ENV PORT=3000
+ENV PORT=9000
 ENV DB_FILE=data/mindmap.db
 ENV LOG_FILE=data/app.log
 ENV ALLOWED_ORIGINS=*
 
 # 健康检查
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:3000/health || exit 1
+    CMD curl -f http://localhost:9000/health || exit 1
 
 # 使用 start.js 启动，它会自动初始化数据库和环境文件
 # 环境文件和数据库在容器启动时动态创建（不是构建时）

@@ -189,6 +189,22 @@ async function setupEnvironmentFiles() {
     }
 
     // 更新Backend环境变量
+    // 在 Docker/生产环境中，确保 PORT 从环境变量传递
+    if (process.env.PORT) {
+      logStep('INFO', `Using PORT from environment variable: ${process.env.PORT}`);
+      updateEnvFile(backendTargetPath, 'PORT', process.env.PORT);
+    }
+
+    if (process.env.NODE_ENV) {
+      logStep('INFO', `Using NODE_ENV from environment variable: ${process.env.NODE_ENV}`);
+      updateEnvFile(backendTargetPath, 'NODE_ENV', process.env.NODE_ENV);
+    }
+
+    if (process.env.ALLOWED_ORIGINS) {
+      logStep('INFO', `Using ALLOWED_ORIGINS from environment variable: ${process.env.ALLOWED_ORIGINS}`);
+      updateEnvFile(backendTargetPath, 'ALLOWED_ORIGINS', process.env.ALLOWED_ORIGINS);
+    }
+
     if (process.env.JWT_SECRET) {
       logStep('INFO', 'Using JWT_SECRET from environment variable');
       updateEnvFile(backendTargetPath, 'JWT_SECRET', process.env.JWT_SECRET);
