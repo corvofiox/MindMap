@@ -15,7 +15,6 @@ import type {
 } from '@/types'
 import { API_ENDPOINTS } from '@/constants'
 import { apiClient } from './apiClient.js'
-import { logger } from '@/utils/logger'
 
 // Export apiClient for use in auth store
 export { apiClient }
@@ -176,18 +175,10 @@ export async function loadCanvasNodesData(id: number): Promise<{
   drawings?: unknown[]
 } | null> {
   try {
-    logger.info('[API] Loading canvas from API', { canvasId: id })
     const canvas = await getCanvas(id)
-    logger.info('[API] Canvas loaded from API', {
-      canvasId: id,
-      hasCanvas: !!canvas,
-      hasYjsData: !!(canvas as { yjsData?: string }).yjsData,
-      yjsDataLength: (canvas as { yjsData?: string }).yjsData?.length || 0
-    })
     const yjsData = (canvas as { yjsData?: string }).yjsData
 
     if (!yjsData) {
-      logger.info('[API] No yjsData in canvas', { canvasId: id })
       return {
         nodes: [],
         groups: [],
@@ -209,13 +200,6 @@ export async function loadCanvasNodesData(id: number): Promise<{
       // Decode UTF-8 bytes to string
       const jsonString = new TextDecoder().decode(utf8Bytes)
       const data = JSON.parse(jsonString)
-      logger.info('[API] Decoded yjsData', {
-        canvasId: id,
-        hasNodes: !!data.nodes,
-        hasGroups: !!data.groups,
-        hasDomains: !!data.domains,
-        hasConnections: !!data.connections
-      })
 
       // Check if it has the expected structure
       if (data.nodes || data.groups || data.domains || data.connections || data.drawings) {
@@ -227,7 +211,6 @@ export async function loadCanvasNodesData(id: number): Promise<{
           drawings: data.drawings || [],
         }
       } else {
-        logger.info('[API] Decoded data has no expected structure', { canvasId: id })
         return {
           nodes: [],
           groups: [],
@@ -236,8 +219,7 @@ export async function loadCanvasNodesData(id: number): Promise<{
           drawings: [],
         }
       }
-    } catch (e) {
-      logger.error('[API] Failed to decode yjsData', { canvasId: id, error: e instanceof Error ? e.message : String(e) })
+    } catch {
       return {
         nodes: [],
         groups: [],
@@ -246,8 +228,7 @@ export async function loadCanvasNodesData(id: number): Promise<{
         drawings: [],
       }
     }
-  } catch (error) {
-    logger.error('[API] Failed to load canvas from API', { canvasId: id, error: error instanceof Error ? error.message : String(error) })
+  } catch {
     return null
   }
 }

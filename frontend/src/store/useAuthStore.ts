@@ -241,7 +241,6 @@ export const useAuthStore = create<AuthState>()(
         isAuthenticated: state.isAuthenticated,
       }),
       onRehydrateStorage: (state) => {
-        logger.info('[AuthStore] onRehydrateStorage called', { hasState: !!state })
         // This function is called after rehydration
         // We need to mark the state as hydrated
         if (state) {

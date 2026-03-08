@@ -1,6 +1,5 @@
 import { useCanvasStore } from '@/store/useCanvasStore'
 import { useAuthStore } from '@/store/useAuthStore'
-import { logger } from '@/utils/logger'
 import type { Node, NodeGroup, Domain, Connection } from '@/types'
 
 interface CollabUser {
@@ -199,38 +198,22 @@ class CollaborationService {
     const hasLocalData = store.nodes.size > 0 || store.groups.size > 0 || store.domains.size > 0 || store.connections.size > 0
     const hasRemoteData = message.nodes.length > 0 || message.groups.length > 0 || message.domains.length > 0 || message.connections.length > 0
 
-    logger.info('[CollabService] handleSync called', {
-      localNodes: store.nodes.size,
-      localGroups: store.groups.size,
-      localDomains: store.domains.size,
-      localConnections: store.connections.size,
-      remoteNodes: message.nodes.length,
-      remoteGroups: message.groups.length,
-      remoteDomains: message.domains.length,
-      remoteConnections: message.connections.length,
-      hasLocalData,
-      hasRemoteData
-    })
-
     // If we have local data but remote is empty, don't overwrite
     // This can happen when:
     // 1. We just loaded data from DB/API
     // 2. WebSocket connects and sends sync-request
     // 3. Server returns empty data (e.g., data not yet saved to DB)
     if (hasLocalData && !hasRemoteData) {
-      logger.info('[CollabService] Skipping sync - local data exists but remote is empty')
       return
     }
 
     // If both have data, we need to merge (for now, prefer the one with more nodes)
     if (hasLocalData && hasRemoteData) {
       if (store.nodes.size >= message.nodes.length) {
-        logger.info('[CollabService] Skipping sync - local data has same or more nodes')
         return
       }
     }
 
-    logger.info('[CollabService] Applying sync data')
     store.setCanvasData({
       nodes: message.nodes,
       groups: message.groups,

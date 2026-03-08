@@ -8,7 +8,6 @@ import { useCollaboration } from '@/hooks/useCollaboration'
 import { CanvasToolbar } from '@/components/canvas/CanvasToolbar'
 import { CanvasGrid } from '@/components/canvas/CanvasGrid'
 import { CanvasMinimap } from '@/components/canvas/CanvasMinimap'
-import { logger } from '@/utils/logger'
 import { ZoomControls } from '@/components/canvas/ZoomControls'
 import { NodeItem } from '@/components/canvas/NodeItem'
 import { NodeContextMenu } from '@/components/canvas/NodeContextMenu'
@@ -868,47 +867,32 @@ export function CanvasPage() {
 
       try {
         setLoading(true)
-        logger.info('[CanvasPage] Loading canvas data', { canvasId: id })
 
         // 如果是临时ID，不尝试从数据库加载数据
         if (id < 0) {
           // 清空画布，准备一个新的画布
           clearCanvas()
           setDirty(false)
-          logger.info('[CanvasPage] Temporary canvas ID, skipping data load', { canvasId: id })
           return
         }
 
         // Ensure projects are loaded first to get correct context
         if (useProjectsStore.getState().projects.length === 0) {
-          logger.info('[CanvasPage] Projects not loaded, loading projects first')
           await stableLoadProjects()
           await stableRestoreCurrentProject()
 
           // Check if cancelled after async operations
           if (!isMounted || isCancelled) {
-            logger.info('[CanvasPage] Canvas loading cancelled after loading projects', { canvasId: id })
             return
           }
         }
 
-        logger.info('[CanvasPage] Loading canvas nodes data from API', { canvasId: id })
         const dbData = await loadCanvasNodesData(id)
 
         // Check if cancelled after API call
         if (!isMounted || isCancelled) {
-          logger.info('[CanvasPage] Canvas loading cancelled after API call', { canvasId: id })
           return
         }
-
-        logger.info('[CanvasPage] Canvas data loaded', {
-          canvasId: id,
-          hasData: !!dbData,
-          nodesCount: dbData?.nodes?.length || 0,
-          groupsCount: dbData?.groups?.length || 0,
-          domainsCount: dbData?.domains?.length || 0,
-          connectionsCount: dbData?.connections?.length || 0
-        })
 
         const hasData = dbData && (
           (dbData.nodes && dbData.nodes.length > 0) ||
@@ -919,38 +903,31 @@ export function CanvasPage() {
 
         if (hasData) {
           // Found data in DB
-          logger.info('[CanvasPage] Setting canvas data from DB', { canvasId: id })
           clearCanvas()
           setCanvasData(dbData)
           setDirty(false)
           saveToCache(id, dbData)
         } else {
           // No data in DB, try cache
-          logger.info('[CanvasPage] No data in DB, trying cache', { canvasId: id })
           const cachedData = loadFromCache(id)
           if (cachedData) {
-            logger.info('[CanvasPage] Found cached data', { canvasId: id })
             clearCanvas()
             setCanvasData(cachedData)
             setDirty(false)
           } else {
             // No data anywhere
-            logger.info('[CanvasPage] No data anywhere, clearing canvas', { canvasId: id })
             clearCanvas()
           }
         }
       } catch (error) {
         // Check if cancelled
         if (!isMounted || isCancelled) {
-          logger.info('[CanvasPage] Canvas loading cancelled during error handling', { canvasId: id })
           return
         }
 
         // DB load failed, fallback to cache
-        logger.error('[CanvasPage] Failed to load canvas data', { canvasId: id, error: error instanceof Error ? error.message : String(error) })
         const cachedData = loadFromCache(id)
         if (cachedData) {
-          logger.info('[CanvasPage] Using cached data after error', { canvasId: id })
           clearCanvas()
           setCanvasData(cachedData)
           setDirty(false)
@@ -962,7 +939,6 @@ export function CanvasPage() {
         if (isMounted) {
           setLoading(false)
           setHasLoadedCanvasData(true)
-          logger.info('[CanvasPage] Canvas loading complete', { canvasId: id })
         }
       }
     }
@@ -975,7 +951,6 @@ export function CanvasPage() {
       isMounted = false
       clearTimeout(cacheTimeoutRef.current)
       clearTimeout(dbSaveTimeoutRef.current)
-      logger.info('[CanvasPage] Canvas loading effect cleaned up', { canvasId: id })
     }
   }, [canvasId])
 
@@ -986,44 +961,20 @@ export function CanvasPage() {
     const id = parseInt(canvasId)
     if (isNaN(id)) return
 
-    logger.info('[CanvasPage] Camera init check', {
-      canvasId: id,
-      hasInitializedCamera,
-      isLoading,
-      hasLoadedCanvasData,
-      containerWidth: containerSize.width,
-      containerHeight: containerSize.height
-    })
+    if (hasInitializedCamera) return
 
-    if (hasInitializedCamera) {
-      logger.info('[CanvasPage] Camera already initialized, skipping', { canvasId: id })
-      return
-    }
-
-    if (isLoading) {
-      logger.info('[CanvasPage] Still loading, skipping camera init', { canvasId: id })
-      return
-    }
+    if (isLoading) return
 
     // Only initialize camera after data has been loaded
-    if (!hasLoadedCanvasData) {
-      logger.info('[CanvasPage] Data not loaded yet, skipping camera init', { canvasId: id })
-      return
-    }
+    if (!hasLoadedCanvasData) return
 
     // Wait for container to have valid dimensions
-    if (containerSize.width === 0 || containerSize.height === 0) {
-      logger.info('[CanvasPage] Container size is 0, skipping camera init', { canvasId: id })
-      return
-    }
-
-    logger.info('[CanvasPage] Initializing camera', { canvasId: id })
+    if (containerSize.width === 0 || containerSize.height === 0) return
 
     // Load saved view state from localStorage
     const savedView = loadCanvasView(id)
     if (savedView) {
       // Restore saved camera state
-      logger.info('[CanvasPage] Restoring saved camera state', { canvasId: id, savedView })
       setZoom(savedView.zoom)
       setPan(savedView.panX, savedView.panY)
     } else {
@@ -1033,7 +984,6 @@ export function CanvasPage() {
       // => panX = containerWidth / 2
       const defaultPanX = containerSize.width / 2
       const defaultPanY = containerSize.height / 2
-      logger.info('[CanvasPage] Setting default camera state', { canvasId: id, defaultPanX, defaultPanY })
       setZoom(1)
       setPan(defaultPanX, defaultPanY)
       // Save default state to localStorage
@@ -1041,7 +991,6 @@ export function CanvasPage() {
     }
 
     setHasInitializedCamera(true)
-    logger.info('[CanvasPage] Camera initialized', { canvasId: id })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canvasId, containerSize.width, containerSize.height, isLoading, hasLoadedCanvasData, hasInitializedCamera])
 
@@ -1364,11 +1313,8 @@ export function CanvasPage() {
         // Clean up the temporary wrapper
         document.body.removeChild(wrapper)
       }
-    } catch (error) {
-      // Log thumbnail generation errors for debugging
-      import('@/utils/logger').then(({ logger }) => {
-        logger.error('Thumbnail generation error', error)
-      })
+    } catch {
+      // Silently fail for thumbnail generation errors
     }
   }, [])
 
