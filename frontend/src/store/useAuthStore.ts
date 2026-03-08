@@ -47,29 +47,26 @@ export const useAuthStore = create<AuthState>()(
           const token = get().token || localStorage.getItem('mindmap_token')
           if (!token) {
             set({ user: null, token: null, isAuthenticated: false })
-            // 更新 apiClient 实例的 token
             api.apiClient.setToken(null)
             return false
           }
 
           try {
-            // 更新 apiClient 实例的 token
             api.apiClient.setToken(token)
             await api.getProfile()
 
-            // 获取 CSRF token
             try {
               await api.apiClient.getCsrfTokenFromServer()
             } catch (csrfError) {
               logger.error('Failed to fetch CSRF token', csrfError)
             }
 
+            localStorage.setItem('mindmap_token', token)
             set({ token, isAuthenticated: true })
             return true
           } catch {
             localStorage.removeItem('mindmap_token')
             set({ user: null, token: null, isAuthenticated: false })
-            // 更新 apiClient 实例的 token
             api.apiClient.setToken(null)
             return false
           }
