@@ -34,6 +34,7 @@ export interface Project {
   groupId: number | null
   thumbnail: string | null
   isPublic: boolean
+  isCollaborative: boolean
   createdAt: string
   updatedAt: string
   memberRole?: 'owner' | 'editor' | 'viewer'

@@ -1,16 +1,18 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, FolderOpen, Trash2, Edit3, Save, X, GitBranch, Users, Zap, ArrowUp, Crown, Eye, Edit2 } from 'lucide-react'
+import { Plus, FolderOpen, Trash2, Edit3, Save, X, GitBranch, Users, Zap, ArrowUp, Crown, Eye, Edit2, Users2, Lock } from 'lucide-react'
 import { useProjectsStore } from '@/store/useProjectsStore'
 import { useUIStore } from '@/store/useUIStore'
 import { useAuthStore } from '@/store/useAuthStore'
 import { Project } from '@/types'
 import { Z_INDEX } from '@/constants'
+import { addRecentProject } from '@/utils/recentProjects'
 
 interface EditState {
   id: number | null
   name: string
   description: string
+  isCollaborative: boolean
 }
 
 interface DeleteConfirmState {
@@ -20,14 +22,18 @@ interface DeleteConfirmState {
 
 export function ProjectsPage() {
   const navigate = useNavigate()
-  const { projects, loadProjects, createProject, deleteProject, updateProject, setCurrentProject, restoreCurrentProject, isLoading, loadingMessage } = useProjectsStore()
+  const { projects, getFilteredProjects, loadProjects, createProject, deleteProject, updateProject, setCurrentProject, restoreCurrentProject, isLoading, loadingMessage } = useProjectsStore()
   const { addToast } = useUIStore()
   const { user } = useAuthStore()
+
+  // 使用筛选后的项目列表
+  const filteredProjects = getFilteredProjects()
 
   const [showNewProject, setShowNewProject] = useState(false)
   const [newProjectName, setNewProjectName] = useState('')
   const [newProjectDesc, setNewProjectDesc] = useState('')
-  const [editState, setEditState] = useState<EditState>({ id: null, name: '', description: '' })
+  const [newProjectCollaborative, setNewProjectCollaborative] = useState(false)
+  const [editState, setEditState] = useState<EditState>({ id: null, name: '', description: '', isCollaborative: false })
   const [deleteConfirm, setDeleteConfirm] = useState<DeleteConfirmState>({ id: null, name: '' })
 
   useEffect(() => {
@@ -52,10 +58,12 @@ export function ProjectsPage() {
         groupId: null,
         thumbnail: null,
         isPublic: false,
+        isCollaborative: newProjectCollaborative,
       })
       setShowNewProject(false)
       setNewProjectName('')
       setNewProjectDesc('')
+      setNewProjectCollaborative(false)
       addToast({ type: 'success', title: '项目已创建', message: '您的项目已创建成功' })
     } catch (error) {
       addToast({ type: 'error', title: '创建失败', message: error instanceof Error ? error.message : '未知错误' })
@@ -63,7 +71,12 @@ export function ProjectsPage() {
   }
 
   const handleStartEdit = (project: Project) => {
-    setEditState({ id: project.id, name: project.name, description: project.description || '' })
+    setEditState({
+      id: project.id,
+      name: project.name,
+      description: project.description || '',
+      isCollaborative: project.isCollaborative || false
+    })
   }
 
   const handleSaveEdit = async (projectId: number) => {
@@ -76,8 +89,9 @@ export function ProjectsPage() {
       await updateProject(projectId, {
         name: editState.name,
         description: editState.description || null,
+        is_collaborative: editState.isCollaborative,
       })
-      setEditState({ id: null, name: '', description: '' })
+      setEditState({ id: null, name: '', description: '', isCollaborative: false })
       addToast({ type: 'success', title: '项目已更新', message: '项目信息已保存' })
     } catch (error) {
       addToast({ type: 'error', title: '更新失败', message: error instanceof Error ? error.message : '未知错误' })
@@ -85,7 +99,7 @@ export function ProjectsPage() {
   }
 
   const handleCancelEdit = () => {
-    setEditState({ id: null, name: '', description: '' })
+    setEditState({ id: null, name: '', description: '', isCollaborative: false })
   }
 
   const handleDeleteProject = async () => {
@@ -102,6 +116,8 @@ export function ProjectsPage() {
 
   const handleOpenProject = async (project: Project) => {
     if (editState.id === project.id) return
+    // 记录到最近访问
+    addRecentProject(project)
     await setCurrentProject(project)
     navigate(`/canvas/new`)
   }
@@ -170,6 +186,15 @@ export function ProjectsPage() {
                 rows={2}
                 className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 resize-none"
               />
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={newProjectCollaborative}
+                  onChange={(e) => setNewProjectCollaborative(e.target.checked)}
+                  className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+                />
+                <span className="text-sm text-gray-700 dark:text-gray-300">协作项目（启用实时协作功能）</span>
+              </label>
               <div className="flex gap-2">
                 <button
                   onClick={handleCreateProject}
@@ -191,7 +216,7 @@ export function ProjectsPage() {
 
       {/* Projects Grid */}
       <div className="flex-1 overflow-y-auto p-8">
-        {projects.length === 0 ? (
+        {filteredProjects.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center max-w-2xl mx-auto">
             <div className="relative">
               <div className="absolute inset-0 bg-blue-500/10 rounded-full blur-3xl" />
@@ -239,7 +264,7 @@ export function ProjectsPage() {
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-            {projects.map((project) => {
+            {filteredProjects.map((project) => {
               const isEditing = editState.id === project.id
               const isOwner = project.memberRole === 'owner'
               const isEditor = project.memberRole === 'editor'
@@ -249,17 +274,15 @@ export function ProjectsPage() {
                 <div
                   key={project.id}
                   onClick={() => handleOpenProject(project)}
-                  className="group bg-white dark:bg-gray-800 rounded-xl shadow-sm hover:shadow-xl transition-all duration-300 cursor-pointer border-2 border-gray-200 dark:border-gray-600 overflow-hidden hover:-translate-y-1 hover:z-10 relative"
+                  className="group bg-white dark:bg-gray-800 rounded-xl shadow-sm hover:shadow-xl transition-all duration-300 cursor-pointer border-2 border-gray-200 dark:border-gray-600 overflow-hidden hover:-translate-y-1 hover:z-10 relative flex flex-col"
                 >
-                  {/* 协作标识 */}
-                  {!isOwner && (
-                    <div className={`
-                      absolute top-0 left-0 right-0 h-1.5
-                      ${isEditor ? 'bg-blue-500' : 'bg-gray-400'}
-                    `} />
-                  )}
+                  {/* 协作标识 - 所有卡片统一显示顶部条，本地项目使用透明色 */}
+                  <div className={`
+                    absolute top-0 left-0 right-0 h-0.5
+                    ${!isOwner ? 'bg-blue-500' : 'bg-transparent'}
+                  `} />
 
-                  <div className="p-3 relative bg-gradient-to-br from-white to-gray-50 dark:from-gray-800 dark:to-gray-900">
+                  <div className="p-3 pt-3.5 relative bg-gradient-to-br from-white to-gray-50 dark:from-gray-800 dark:to-gray-900 flex flex-col flex-1">
                     <div className="flex items-center justify-between gap-2 mb-2">
                       {isEditing ? (
                         <>
@@ -291,12 +314,18 @@ export function ProjectsPage() {
                       ) : (
                         <>
                           <div className="flex items-center gap-1.5 flex-1 min-w-0">
-                            {isOwner ? (
-                              <Crown className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
-                            ) : isEditor ? (
-                              <Edit2 className="w-3.5 h-3.5 text-blue-500 flex-shrink-0" />
+                            {project.isCollaborative ? (
+                              <>
+                                {isOwner ? (
+                                  <Crown className="w-3.5 h-3.5 text-blue-500 flex-shrink-0" />
+                                ) : isEditor ? (
+                                  <Edit2 className="w-3.5 h-3.5 text-blue-500 flex-shrink-0" />
+                                ) : (
+                                  <Eye className="w-3.5 h-3.5 text-blue-500 flex-shrink-0" />
+                                )}
+                              </>
                             ) : (
-                              <Eye className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
+                              <Lock className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0" />
                             )}
                             <h3 className="font-semibold text-gray-900 dark:text-white text-sm truncate leading-tight tracking-tight">
                               {project.name}
@@ -318,55 +347,70 @@ export function ProjectsPage() {
                     </div>
 
                     {isEditing ? (
-                      <textarea
-                        value={editState.description}
-                        onChange={(e) => setEditState(prev => ({ ...prev, description: e.target.value }))}
-                        onClick={(e) => e.stopPropagation()}
-                        rows={2}
-                        className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-600 dark:text-gray-300 text-xs focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none shadow-sm resize-none"
-                        placeholder="添加项目描述..."
-                      />
+                      <div className="space-y-2 flex-1">
+                        <textarea
+                          value={editState.description}
+                          onChange={(e) => setEditState(prev => ({ ...prev, description: e.target.value }))}
+                          onClick={(e) => e.stopPropagation()}
+                          rows={2}
+                          className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-600 dark:text-gray-300 text-xs focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none shadow-sm resize-none"
+                          placeholder="添加项目描述..."
+                        />
+                      </div>
                     ) : (
-                      <p className="text-xs text-gray-500 dark:text-gray-400 leading-relaxed min-h-[2rem] max-h-[2rem] overflow-hidden line-clamp-2">
+                      <p className="text-xs text-gray-500 dark:text-gray-400 leading-relaxed min-h-[2rem] max-h-[2rem] overflow-hidden line-clamp-2 flex-1">
                         {project.description || '暂无描述'}
                       </p>
                     )}
 
-                    <div className="mt-2 pt-2 border-t border-gray-100 dark:border-gray-700 space-y-0.5">
+                    <div className="mt-auto pt-2 border-t border-gray-100 dark:border-gray-700 space-y-0.5">
                       <div className="flex items-center justify-between text-[10px] text-gray-400 dark:text-gray-500">
                         <div className="flex items-center gap-1">
                           <span>创建：{formatDate(project.createdAt)}</span>
                         </div>
-                        {!isOwner && (
-                          <span className={`
-                            px-1.5 py-0.5 rounded text-[9px] font-medium
-                            ${isEditor
+                        {isEditing ? (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setEditState(prev => ({ ...prev, isCollaborative: !prev.isCollaborative }))
+                            }}
+                            className={`flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-medium transition-all duration-200 ${
+                              editState.isCollaborative
+                                ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
+                                : 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400'
+                            }`}
+                          >
+                            <Users2 className="w-3 h-3" />
+                            {editState.isCollaborative ? '协作项目' : '私人项目'}
+                          </button>
+                        ) : (
+                          <span className={`flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-medium ${
+                            project.isCollaborative
                               ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
-                              : 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400'
-                            }
-                          `}>
-                            协作项目
+                              : 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400'
+                          }`}>
+                            <Users2 className="w-3 h-3" />
+                            {project.isCollaborative ? '协作项目' : '私人项目'}
                           </span>
                         )}
                       </div>
-                      <div className="flex items-center gap-1 text-[10px] text-gray-400 dark:text-gray-500">
+                      <div className="flex items-center justify-between text-[10px] text-gray-400 dark:text-gray-500">
                         <span>更新：{formatDate(project.updatedAt)}</span>
+                        {/* 删除按钮 - 仅所有者可见 */}
+                        {!isEditing && isOwner && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setDeleteConfirm({ id: project.id, name: project.name });
+                            }}
+                            className="p-1 rounded text-gray-400 hover:text-red-500 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-all duration-200 opacity-0 group-hover:opacity-100"
+                            title="删除"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        )}
                       </div>
                     </div>
-
-                    {/* 删除按钮 - 仅所有者可见 */}
-                    {!isEditing && isOwner && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setDeleteConfirm({ id: project.id, name: project.name });
-                        }}
-                        className="absolute bottom-3 right-3 p-1.5 rounded-lg text-gray-400 hover:text-red-500 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-all duration-200 opacity-0 group-hover:opacity-100 hover:scale-110"
-                        title="删除"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    )}
                   </div>
                 </div>
               )

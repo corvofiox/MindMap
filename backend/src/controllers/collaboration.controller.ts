@@ -219,6 +219,16 @@ collaborationRouter.post('/projects/:projectId/invite', authenticate, asyncHandl
     })
   }
 
+  // 自动将项目标记为协作项目
+  const projectIsCollaborative = getProperty<boolean>(project, 'is_collaborative', 'isCollaborative') || project.isCollaborative
+  if (!projectIsCollaborative) {
+    await db
+      .update(projects)
+      .set({ isCollaborative: true })
+      .where(eq(projects.id, projectId))
+    console.log('[Invite] Project marked as collaborative')
+  }
+
   const [invitation] = await db
     .insert(projectInvitations)
     .values({

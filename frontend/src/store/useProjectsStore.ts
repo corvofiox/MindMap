@@ -3,6 +3,13 @@ import { persist } from 'zustand/middleware'
 import type { Project, Canvas, Folder, NodeCard, NodePoolFolder, NodePoolSortOption, NodePoolSortOrder } from '@/types'
 import * as api from '@/services/api'
 
+// 项目筛选状态
+export interface ProjectFilters {
+  showOwned: boolean
+  showCollaborative: boolean
+  showRecentUpdated: boolean
+}
+
 interface ProjectsState {
   projects: Project[]
   currentProject: Project | null
@@ -17,9 +24,13 @@ interface ProjectsState {
   isLoading: boolean
   loadingMessage: string  // 当前加载操作的提示信息
   error: string | null
+  // 项目筛选
+  projectFilters: ProjectFilters
 
   // Actions
   loadProjects: () => Promise<void>
+  setProjectFilters: (filters: Partial<ProjectFilters>) => void
+  getFilteredProjects: () => Project[]
   setCurrentProject: (project: Project | null) => Promise<void>
   restoreCurrentProject: () => Promise<void>  // 恢复上次的项目
   loadCanvases: (projectId: number) => Promise<void>
@@ -89,6 +100,11 @@ export const useProjectsStore = create<ProjectsState>()(
         isLoading: false,
         loadingMessage: '',
         error: null,
+        projectFilters: {
+          showOwned: false,
+          showCollaborative: false,
+          showRecentUpdated: false,
+        },
 
         loadProjects: async () => {
           set({ isLoading: true, loadingMessage: '正在加载项目...', error: null })
@@ -98,6 +114,68 @@ export const useProjectsStore = create<ProjectsState>()(
           } catch (error) {
             handleError(error, '加载项目失败')
           }
+        },
+
+        setProjectFilters: (filters) => {
+          set((state) => ({
+            projectFilters: { ...state.projectFilters, ...filters }
+          }))
+        },
+
+        getFilteredProjects: () => {
+          const { projects, projectFilters } = get()
+          const oneWeekAgo = new Date()
+          oneWeekAgo.setDate(oneWeekAgo.getDate() - 7)
+          oneWeekAgo.setHours(0, 0, 0, 0)
+
+          return projects.filter(project => {
+            // 标记是否满足各类筛选条件
+            let matchesOwned = false
+            let matchesCollaborative = false
+            let matchesRecentUpdated = false
+
+            // 检查是否满足"我拥有的项目"条件
+            if (project.memberRole === 'owner') {
+              matchesOwned = true
+            }
+
+            // 检查是否满足"协作项目"条件
+            if (project.isCollaborative) {
+              matchesCollaborative = true
+            }
+
+            // 检查是否满足"最近一周更新"条件
+            const updatedAt = new Date(project.updatedAt)
+            if (!isNaN(updatedAt.getTime()) && updatedAt >= oneWeekAgo) {
+              matchesRecentUpdated = true
+            }
+
+            // 根据用户勾选的筛选条件进行判断
+            // 如果勾选了某类筛选，则必须满足该类条件
+            let shouldShow = true
+
+            // 如果勾选了"我拥有的项目"，但当前项目不满足，则不显示
+            if (projectFilters.showOwned && !matchesOwned) {
+              shouldShow = false
+            }
+
+            // 如果勾选了"协作项目"，但当前项目不满足，则不显示
+            if (projectFilters.showCollaborative && !matchesCollaborative) {
+              shouldShow = false
+            }
+
+            // 如果勾选了"最近一周更新"，但当前项目不满足，则不显示
+            if (projectFilters.showRecentUpdated && !matchesRecentUpdated) {
+              shouldShow = false
+            }
+
+            // 如果所有筛选都没勾选，显示所有项目
+            if (!projectFilters.showOwned && !projectFilters.showCollaborative && !projectFilters.showRecentUpdated) {
+              shouldShow = true
+            }
+
+            return shouldShow
+          })
         },
 
         setCurrentProject: async (project) => {

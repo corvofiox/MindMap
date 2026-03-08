@@ -1,11 +1,12 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
-import { Plus, Folder, FolderOpen, FolderPlus, FileText, Trash2, MoreVertical, Edit2, Check, X, FolderKanban, Calendar, ChevronRight, ChevronDown, Crown, Eye, Edit3, Users } from 'lucide-react'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
+import { Plus, Folder, FolderOpen, FolderPlus, FileText, Trash2, MoreVertical, Edit2, Check, X, FolderKanban, Calendar, ChevronRight, ChevronDown, Crown, Eye, Edit3, Users, BarChart3, Filter, Tag, Clock, PieChart, Lock } from 'lucide-react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useProjectsStore } from '@/store/useProjectsStore'
 import { useUIStore } from '@/store/useUIStore'
 import clsx from 'clsx'
 import { createPortal } from 'react-dom'
 import { Z_INDEX } from '@/constants'
+import { getRecentProjects, formatRelativeTime, type RecentProject } from '@/utils/recentProjects'
 
 interface SidebarProps {
   open: boolean
@@ -16,7 +17,7 @@ export function Sidebar({ open }: SidebarProps) {
   const location = useLocation()
   const canvasIdMatch = location.pathname.match(/\/canvas\/(\d+)/)
   const activeCanvasId = canvasIdMatch ? parseInt(canvasIdMatch[1]) : null
-  const { projects, canvases, folders, currentProject, createCanvas, createFolder, updateProject, deleteProject, setCurrentProject, loadProjects, moveCanvasToFolder, isLoading, loadingMessage, currentMemberRole, loadCanvases, refreshCanvasesSilent } = useProjectsStore()
+  const { projects, projectFilters, setProjectFilters, getFilteredProjects, canvases, folders, currentProject, createCanvas, createFolder, updateProject, deleteProject, setCurrentProject, loadProjects, moveCanvasToFolder, isLoading, loadingMessage, currentMemberRole, loadCanvases, refreshCanvasesSilent } = useProjectsStore()
   const { addToast } = useUIStore()
 
   const isViewer = currentMemberRole === 'viewer'
@@ -47,6 +48,46 @@ export function Sidebar({ open }: SidebarProps) {
 
     return () => clearInterval(interval)
   }, [currentProject?.id, refreshCanvasesSilent])
+
+  // 计算项目统计数据
+  const projectStats = useMemo(() => {
+    const total = projects.length
+    const owned = projects.filter(p => p.memberRole === 'owner').length
+    const collaborative = projects.filter(p => p.isCollaborative).length
+    const oneWeekAgo = new Date()
+    oneWeekAgo.setDate(oneWeekAgo.getDate() - 7)
+    oneWeekAgo.setHours(0, 0, 0, 0)
+    const recentUpdated = projects.filter(p => {
+      const updatedAt = new Date(p.updatedAt)
+      if (isNaN(updatedAt.getTime())) return false
+      return updatedAt >= oneWeekAgo
+    }).length
+    return { total, owned, collaborative, recentUpdated }
+  }, [projects])
+
+  // 获取筛选后的项目数量
+  const filteredProjectCount = useMemo(() => {
+    return getFilteredProjects().length
+  }, [projects, projectFilters, getFilteredProjects])
+
+  // 最近访问的项目
+  const [recentProjects, setRecentProjects] = useState<RecentProject[]>([])
+
+  // 加载最近访问的项目
+  useEffect(() => {
+    if (isProjectsPage) {
+      setRecentProjects(getRecentProjects())
+    }
+  }, [isProjectsPage, projects])
+
+  // 处理打开最近访问的项目
+  const handleOpenRecentProject = (recentProject: RecentProject) => {
+    const project = projects.find(p => p.id === recentProject.id)
+    if (project) {
+      setCurrentProject(project)
+      navigate(`/canvas/new`)
+    }
+  }
 
   const rootCanvases = canvases.filter((c) => !c.folderId)
 
@@ -328,165 +369,151 @@ export function Sidebar({ open }: SidebarProps) {
         )}
       >
         {isProjectsPage || !currentProject ? (
-          // 项目选择视图
+          // 项目筛选与统计面板
           <>
             <div className="relative h-14 flex-shrink-0 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
               <div className="h-full flex items-center px-4">
                 <div className="flex items-center gap-3">
                   <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow-md">
-                    <FolderKanban className="w-5 h-5 text-white" />
+                    <BarChart3 className="w-5 h-5 text-white" />
                   </div>
                   <div>
-                    <h2 className="font-bold text-gray-900 dark:text-white text-base tracking-wide">项目管理</h2>
-                    <p className="text-[10px] text-gray-500 dark:text-gray-400 font-medium tracking-wider">PROJECTS</p>
+                    <h2 className="font-bold text-gray-900 dark:text-white text-base tracking-wide">项目概览</h2>
+                    <p className="text-[10px] text-gray-500 dark:text-gray-400 font-medium tracking-wider">DASHBOARD</p>
                   </div>
                 </div>
               </div>
             </div>
-            <div className="flex-1 overflow-y-auto custom-scrollbar p-3">
+            <div className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-6">
               {projects.length === 0 ? (
                 <div className="text-center py-8">
                   <FolderKanban className="w-12 h-12 text-gray-400 mx-auto mb-3" />
                   <p className="text-sm text-gray-600 dark:text-gray-400">还没有项目</p>
                 </div>
               ) : (
-                <div className="space-y-2">
-                  {projects.map((project) => (
-                    <div
-                      key={project.id}
-                      className={clsx(
-                        'rounded-xl transition-all duration-200 group',
-                        editingProjectId === project.id
-                          ? 'bg-gradient-to-br from-blue-600/10 to-indigo-600/10 dark:from-blue-600/20 dark:to-indigo-600/20 border border-blue-200 dark:border-blue-900/40'
-                          : 'bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-700 dark:to-gray-800 border border-gray-200 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-800/50 hover:shadow-md'
-                      )}
-                    >
-                      {editingProjectId === project.id ? (
-                        // 编辑模式
-                        <div className="p-3 space-y-2">
-                          <input
-                            type="text"
-                            value={editProjectName}
-                            onChange={(e) => setEditProjectName(e.target.value)}
-                            onKeyDown={(e) => e.key === 'Enter' && handleSaveProject()}
-                            placeholder="项目名称"
-                            className="w-full px-2 py-1 text-sm bg-white dark:bg-gray-800 border border-blue-500 rounded focus:outline-none text-gray-900 dark:text-white"
-                            autoFocus
-                          />
-                          <textarea
-                            value={editProjectDesc}
-                            onChange={(e) => setEditProjectDesc(e.target.value)}
-                            placeholder="描述（可选）"
-                            rows={2}
-                            className="w-full px-2 py-1 text-sm bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded focus:outline-none text-gray-900 dark:text-white resize-none"
-                          />
-                          <div className="flex items-center gap-2">
-                            <button
-                              onClick={handleSaveProject}
-                              className="flex items-center gap-1 px-2 py-1 text-xs bg-green-600 hover:bg-green-700 text-white rounded transition-colors"
-                            >
-                              <Check className="w-3 h-3" />
-                              保存
-                            </button>
-                            <button
-                              onClick={handleCancelEditProject}
-                              className="flex items-center gap-1 px-2 py-1 text-xs bg-gray-400 hover:bg-gray-500 text-white rounded transition-colors"
-                            >
-                              <X className="w-3 h-3" />
-                              取消
-                            </button>
-                          </div>
-                        </div>
-                      ) : (
-                        // 查看模式
-                        <div
-                          onClick={() => handleSelectProject(project)}
-                          className="cursor-pointer p-3"
-                        >
-                          <div className="flex items-start justify-between">
-                            <div className="flex-1 min-w-0 pr-2">
-                              <div className="flex items-center gap-1.5">
-                                {project.memberRole === 'owner' ? (
-                                  <Crown className="w-3 h-3 text-amber-500 flex-shrink-0" />
-                                ) : project.memberRole === 'editor' ? (
-                                  <Edit3 className="w-3 h-3 text-blue-500 flex-shrink-0" />
-                                ) : (
-                                  <Eye className="w-3 h-3 text-gray-400 flex-shrink-0" />
-                                )}
-                                <h3 className="font-bold text-gray-900 dark:text-gray-100 truncate text-sm">
-                                  {project.name}
-                                </h3>
-                              </div>
-                              {project.description && (
-                                <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1 line-clamp-2 leading-relaxed">
-                                  {project.description}
-                                </p>
-                              )}
-                              <div className="flex items-center justify-between mt-2">
-                                <div className="flex items-center gap-2 text-[10px] text-gray-400 dark:text-gray-500">
-                                  <Calendar className="w-3 h-3" />
-                                  <span>{new Date(project.updatedAt).toLocaleDateString()}</span>
-                                </div>
-                                {project.memberRole !== 'owner' && (
-                                  <span className={`
-                                    px-1.5 py-0.5 rounded text-[9px] font-medium
-                                    ${project.memberRole === 'editor'
-                                      ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
-                                      : 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400'
-                                    }
-                                  `}>
-                                    协作
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                            <div className="relative" ref={projectMenuRef}>
-                              {project.memberRole === 'owner' && (
-                                <>
-                                  <button
-                                    onClick={(e) => {
-                                      e.stopPropagation()
-                                      setShowProjectMenu(showProjectMenu === project.id ? null : project.id)
-                                    }}
-                                    className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-600 transition-opacity"
-                                  >
-                                    <MoreVertical className="w-4 h-4 text-gray-600 dark:text-gray-400" />
-                                  </button>
-
-                                  {/* 下拉菜单 */}
-                                  {showProjectMenu === project.id && (
-                                    <div className="absolute top-full right-0 mt-1 w-32 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1" style={{ zIndex: Z_INDEX.SIDEBAR_SUBMENU }}>
-                                      <button
-                                        onClick={(e) => {
-                                          e.stopPropagation()
-                                          handleStartEditProject(project)
-                                        }}
-                                        className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
-                                      >
-                                        <Edit2 className="w-3 h-3" />
-                                        重命名
-                                      </button>
-                                      <button
-                                        onClick={(e) => {
-                                          e.stopPropagation()
-                                          handleDeleteProject(project)
-                                        }}
-                                        className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30"
-                                      >
-                                        <Trash2 className="w-3 h-3" />
-                                        删除
-                                      </button>
-                                    </div>
-                                  )}
-                                </>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      )}
+                <>
+                  {/* 项目统计 */}
+                  <div className="bg-gradient-to-br from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 rounded-xl p-4 border border-blue-100 dark:border-blue-800/30">
+                    <div className="flex items-center gap-2 mb-3">
+                      <PieChart className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                      <h3 className="font-semibold text-gray-900 dark:text-white text-sm">项目统计</h3>
                     </div>
-                  ))}
-                </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="bg-white dark:bg-gray-800 rounded-lg p-3 text-center shadow-sm">
+                        <div className="text-2xl font-bold text-gray-900 dark:text-white">{projectStats.total}</div>
+                        <div className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">总项目</div>
+                      </div>
+                      <div className="bg-white dark:bg-gray-800 rounded-lg p-3 text-center shadow-sm">
+                        <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">{projectStats.owned}</div>
+                        <div className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">我拥有的</div>
+                      </div>
+                      <div className="bg-white dark:bg-gray-800 rounded-lg p-3 text-center shadow-sm">
+                        <div className="text-2xl font-bold text-green-600 dark:text-green-400">{projectStats.collaborative}</div>
+                        <div className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">协作项目</div>
+                      </div>
+                      <div className="bg-white dark:bg-gray-800 rounded-lg p-3 text-center shadow-sm">
+                        <div className="text-2xl font-bold text-amber-600 dark:text-amber-400">{projectStats.recentUpdated}</div>
+                        <div className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">本周更新</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 快速筛选 */}
+                  <div className="bg-white dark:bg-gray-800 rounded-xl p-4 border border-gray-200 dark:border-gray-700">
+                    <div className="flex items-center gap-2 mb-3">
+                      <Filter className="w-4 h-4 text-gray-600 dark:text-gray-400" />
+                      <h3 className="font-semibold text-gray-900 dark:text-white text-sm">快速筛选</h3>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="flex items-center gap-2 cursor-pointer p-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
+                        <input
+                          type="checkbox"
+                          checked={projectFilters.showOwned}
+                          onChange={(e) => setProjectFilters({ showOwned: e.target.checked })}
+                          className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+                        />
+                        <span className="text-sm text-gray-700 dark:text-gray-300">我拥有的项目</span>
+                        <span className="ml-auto text-xs text-gray-400 dark:text-gray-500">({projectStats.owned})</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer p-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
+                        <input
+                          type="checkbox"
+                          checked={projectFilters.showCollaborative}
+                          onChange={(e) => setProjectFilters({ showCollaborative: e.target.checked })}
+                          className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+                        />
+                        <span className="text-sm text-gray-700 dark:text-gray-300">协作项目</span>
+                        <span className="ml-auto text-xs text-gray-400 dark:text-gray-500">({projectStats.collaborative})</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer p-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
+                        <input
+                          type="checkbox"
+                          checked={projectFilters.showRecentUpdated}
+                          onChange={(e) => setProjectFilters({ showRecentUpdated: e.target.checked })}
+                          className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+                        />
+                        <span className="text-sm text-gray-700 dark:text-gray-300">最近一周更新</span>
+                        <span className="ml-auto text-xs text-gray-400 dark:text-gray-500">({projectStats.recentUpdated})</span>
+                      </label>
+                    </div>
+                    <div className="mt-3 pt-3 border-t border-gray-100 dark:border-gray-700">
+                      <div className="text-xs text-gray-500 dark:text-gray-400">
+                        当前显示: <span className="font-medium text-gray-900 dark:text-white">{filteredProjectCount}</span> 个项目
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 最近访问 */}
+                  <div className="bg-white dark:bg-gray-800 rounded-xl p-4 border border-gray-200 dark:border-gray-700">
+                    <div className="flex items-center gap-2 mb-3">
+                      <Clock className="w-4 h-4 text-gray-600 dark:text-gray-400" />
+                      <h3 className="font-semibold text-gray-900 dark:text-white text-sm">最近访问</h3>
+                    </div>
+                    {recentProjects.length === 0 ? (
+                      <div className="text-center py-4 text-gray-400 dark:text-gray-500 text-sm">
+                        暂无访问记录
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {recentProjects.map((recentProject) => {
+                          // 从 projects 数组获取最新的项目数据
+                          const latestProject = projects.find(p => p.id === recentProject.id)
+                          const isCollaborative = latestProject?.isCollaborative ?? recentProject.isCollaborative
+                          const projectName = latestProject?.name ?? recentProject.name
+
+                          return (
+                            <div
+                              key={recentProject.id}
+                              onClick={() => handleOpenRecentProject(recentProject)}
+                              className="flex items-center gap-2 p-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer transition-colors group"
+                            >
+                              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center flex-shrink-0">
+                                <FolderKanban className="w-4 h-4 text-white" />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-1">
+                                  <span className="text-sm text-gray-700 dark:text-gray-300 truncate font-medium">
+                                    {projectName}
+                                  </span>
+                                  <span className={`text-[10px] px-1 py-0.5 rounded flex-shrink-0 ${isCollaborative
+                                    ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
+                                    : 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400'
+                                    }`}>
+                                    {isCollaborative ? '协作' : '私人'}
+                                  </span>
+                                </div>
+                                <div className="text-[10px] text-gray-400 dark:text-gray-500">
+                                  {formatRelativeTime(recentProject.visitedAt)}
+                                </div>
+                              </div>
+                              <ChevronRight className="w-4 h-4 text-gray-300 dark:text-gray-600 group-hover:text-gray-500 dark:group-hover:text-gray-400 transition-colors" />
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </>
               )}
             </div>
           </>
@@ -505,67 +532,42 @@ export function Sidebar({ open }: SidebarProps) {
                     返回项目列表
                   </button>
                 </div>
-                <div className={`
-                  rounded-xl p-3 border
-                  ${currentMemberRole === 'owner'
-                    ? 'bg-gradient-to-br from-blue-600/10 to-indigo-600/10 dark:from-blue-600/20 dark:to-indigo-600/20 border-blue-100 dark:border-blue-900/30'
-                    : currentMemberRole === 'editor'
-                      ? 'bg-gradient-to-br from-blue-500/5 to-cyan-500/5 dark:from-blue-500/10 dark:to-cyan-500/10 border-blue-200 dark:border-blue-800/30'
-                      : 'bg-gradient-to-br from-gray-100 to-gray-50 dark:from-gray-800 dark:to-gray-700 border-gray-200 dark:border-gray-700'
-                  }
-                `}>
+                <div className="rounded-xl p-3 border bg-gradient-to-br from-blue-600/10 to-indigo-600/10 dark:from-blue-600/20 dark:to-indigo-600/20 border-blue-100 dark:border-blue-900/30 min-h-[100px] flex flex-col">
                   <div className="flex items-center justify-between mb-1">
                     <div className="flex items-center gap-2">
-                      <div className={`
-                        w-2 h-2 rounded-full animate-pulse
-                        ${currentMemberRole === 'owner'
-                          ? 'bg-blue-500'
-                          : currentMemberRole === 'editor'
-                            ? 'bg-blue-400'
-                            : 'bg-gray-400'
-                        }
-                      `} />
-                      <span className={`
-                        text-[10px] font-bold uppercase tracking-wider
-                        ${currentMemberRole === 'owner'
-                          ? 'text-blue-600 dark:text-blue-400'
-                          : currentMemberRole === 'editor'
-                            ? 'text-blue-500 dark:text-blue-300'
-                            : 'text-gray-500 dark:text-gray-400'
-                        }
-                      `}>
-                        {currentMemberRole === 'owner' ? '当前项目' : '协作项目'}
+                      <div className="w-2 h-2 rounded-full animate-pulse bg-blue-500" />
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-blue-600 dark:text-blue-400">
+                        {currentProject?.isCollaborative ? '协作项目' : '我的项目'}
                       </span>
                     </div>
-                    <div className="flex items-center gap-1">
-                      {currentMemberRole === 'owner' ? (
-                        <Crown className="w-3.5 h-3.5 text-amber-500" />
-                      ) : currentMemberRole === 'editor' ? (
-                        <Edit3 className="w-3.5 h-3.5 text-blue-500" />
-                      ) : (
-                        <Eye className="w-3.5 h-3.5 text-gray-400" />
-                      )}
-                      <span className={`
-                        text-[10px] font-medium
-                        ${currentMemberRole === 'owner'
-                          ? 'text-amber-600 dark:text-amber-400'
-                          : currentMemberRole === 'editor'
-                            ? 'text-blue-600 dark:text-blue-400'
-                            : 'text-gray-500 dark:text-gray-400'
-                        }
-                      `}>
-                        {currentMemberRole === 'owner' ? '所有者' : currentMemberRole === 'editor' ? '编辑者' : '查看者'}
-                      </span>
-                    </div>
+                    {currentProject?.isCollaborative ? (
+                      <div className="flex items-center gap-1">
+                        {currentMemberRole === 'owner' ? (
+                          <Crown className="w-3.5 h-3.5 text-blue-500" />
+                        ) : currentMemberRole === 'editor' ? (
+                          <Edit3 className="w-3.5 h-3.5 text-blue-500" />
+                        ) : (
+                          <Eye className="w-3.5 h-3.5 text-blue-500" />
+                        )}
+                        <span className="text-[10px] font-medium text-blue-600 dark:text-blue-400">
+                          {currentMemberRole === 'owner' ? '所有者' : currentMemberRole === 'editor' ? '编辑者' : '查看者'}
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1">
+                        <Lock className="w-3.5 h-3.5 text-emerald-500" />
+                        <span className="text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                          私人
+                        </span>
+                      </div>
+                    )}
                   </div>
                   <h3 className="font-bold text-gray-900 dark:text-gray-100 truncate text-sm">
                     {currentProject.name}
                   </h3>
-                  {currentProject.description && (
-                    <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1 line-clamp-2 leading-relaxed">
-                      {currentProject.description}
-                    </p>
-                  )}
+                  <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1 line-clamp-2 leading-relaxed flex-1">
+                    {currentProject.description || '暂无描述'}
+                  </p>
                 </div>
               </div>
             </div>

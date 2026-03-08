@@ -61,20 +61,20 @@ export function CollaborationDialog() {
       const collaborativeList: CollaborativeProject[] = []
 
       for (const project of projectsData) {
+        // 只显示标记为协作项目的项目
+        if (!project.isCollaborative) continue
+
         try {
           const data = await getProjectMembers(project.id)
-          const hasMembers = data.members.length > 0 || data.invitations.length > 0
           const isOwner = data.ownerId === currentUser?.id
 
-          if (hasMembers || isOwner) {
-            collaborativeList.push({
-              id: project.id,
-              name: project.name,
-              ownerId: data.ownerId,
-              memberCount: data.members.length,
-              isOwner,
-            })
-          }
+          collaborativeList.push({
+            id: project.id,
+            name: project.name,
+            ownerId: data.ownerId,
+            memberCount: data.members.length,
+            isOwner,
+          })
         } catch {
           // Skip projects we can't access
         }
@@ -218,6 +218,8 @@ export function CollaborationDialog() {
       await acceptInvitation(invitationId)
       setMyInvitations(prev => prev.filter(i => i.id !== invitationId))
       addSuccessToast('已接受邀请')
+      // 重新加载项目列表以获取新加入的协作项目
+      await loadProjects()
       loadCollaborativeProjects()
     } catch (error) {
       addErrorToast(error instanceof Error ? error.message : '接受失败')
@@ -317,8 +319,9 @@ export function CollaborationDialog() {
 
   const pendingInvitationsCount = myInvitations.length
 
+  // 只显示标记为协作项目但还未添加到协作列表的项目
   const projectsNotInCollaborative = projects?.filter(
-    p => !collaborativeProjects.some(cp => cp.id === p.id) && p.ownerId === currentUser?.id
+    p => !collaborativeProjects.some(cp => cp.id === p.id) && p.ownerId === currentUser?.id && p.isCollaborative
   ) || []
 
   return (
@@ -416,7 +419,7 @@ export function CollaborationDialog() {
                                   </div>
                                   <div className="text-xs text-gray-500 dark:text-gray-400">
                                     {project.memberCount} 名成员
-                                    {project.isOwner && ' · 所有者'}
+                                    {project.isOwner ? ' · 所有者' : ''}
                                   </div>
                                 </div>
                               </div>

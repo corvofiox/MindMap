@@ -51,6 +51,7 @@ describe('Database Integration Tests', () => {
         group_id INTEGER,
         thumbnail TEXT,
         is_public INTEGER DEFAULT 0,
+        is_collaborative INTEGER DEFAULT 0,
         created_at INTEGER DEFAULT (strftime('%s', 'now')),
         updated_at INTEGER DEFAULT (strftime('%s', 'now')),
         FOREIGN KEY (owner_id) REFERENCES users(id)

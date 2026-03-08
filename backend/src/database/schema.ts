@@ -40,6 +40,7 @@ export const projects = sqliteTable('projects', {
   groupId: integer('group_id').references(() => groups.id),
   thumbnail: text('thumbnail'),
   isPublic: integer('is_public', { mode: 'boolean' }).notNull().default(false),
+  isCollaborative: integer('is_collaborative', { mode: 'boolean' }).notNull().default(false),
   createdAt: integer('created_at').default(sql`strftime('%s', 'now')`),
   updatedAt: integer('updated_at').default(sql`strftime('%s', 'now')`),
 })

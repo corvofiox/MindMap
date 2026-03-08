@@ -17,7 +17,7 @@ export async function runMigrations(sqlite: any) {
   try {
     // Check if users table exists, if not create all tables
     const usersTable = sqlite.exec("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
-     if (!usersTable || usersTable.length === 0 || usersTable[0].values.length === 0) {
+    if (!usersTable || usersTable.length === 0 || usersTable[0].values.length === 0) {
       log('Creating database tables')
 
       // Create users table
@@ -181,7 +181,7 @@ export async function runMigrations(sqlite: any) {
       `)
 
       log('All database tables created successfully')
-     }
+    }
 
     // Add new columns to node_cards table if they don't exist
     const tableInfo = sqlite.exec('PRAGMA table_info(node_cards)')
@@ -206,8 +206,8 @@ export async function runMigrations(sqlite: any) {
       // Add sort_order column
       if (!columns.includes('sort_order')) {
         sqlite.run('ALTER TABLE node_cards ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0')
-     }
-     }
+      }
+    }
 
     // Create project_invitations table if it doesn't exist
     const projectInvitationsTable = sqlite.exec("SELECT name FROM sqlite_master WHERE type='table' AND name='project_invitations'")
@@ -228,7 +228,7 @@ export async function runMigrations(sqlite: any) {
       log('project_invitations table created successfully')
     }
 
-     log('Migrations completed successfully')
+    log('Migrations completed successfully')
   } catch (error: any) {
     logError('Error running migrations', error.message)
     throw error

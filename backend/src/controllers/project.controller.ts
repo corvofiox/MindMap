@@ -116,7 +116,10 @@ projectRouter.get('/:id', authenticate, asyncHandler(async (req: AuthRequest, re
 
 // Create project
 projectRouter.post('/', authenticate, asyncHandler(async (req: AuthRequest, res) => {
-  const { name, description, is_public } = req.body
+  const { name, description, is_public, is_collaborative, isCollaborative } = req.body
+
+  // 支持 camelCase 和 snake_case 两种参数名
+  const collaborativeValue = is_collaborative !== undefined ? is_collaborative : isCollaborative
 
   const [newProject] = await db
     .insert(projects)
@@ -125,13 +128,14 @@ projectRouter.post('/', authenticate, asyncHandler(async (req: AuthRequest, res)
       description: description || null,
       ownerId: req.user!.id,
       isPublic: is_public || false,
+      isCollaborative: collaborativeValue || false,
     })
     .returning()
 
   scheduleSave()
 
   const transformedProject = transformResponse(newProject, ['createdAt', 'updatedAt'])
-  ;(transformedProject as any).memberRole = 'owner'
+    ; (transformedProject as any).memberRole = 'owner'
 
   res.json({
     success: true,
@@ -149,7 +153,10 @@ projectRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, re
     })
   }
 
-  const { name, description, thumbnail } = req.body
+  const { name, description, thumbnail, is_collaborative, isCollaborative } = req.body
+
+  // 支持 camelCase 和 snake_case 两种参数名
+  const collaborativeValue = is_collaborative !== undefined ? is_collaborative : isCollaborative
 
   const project = await db.query.projects.findFirst({
     where: eq(projects.id, projectId),
@@ -171,20 +178,26 @@ projectRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, re
     })
   }
 
+  const updateData: Record<string, unknown> = {
+    updatedAt: Math.floor(Date.now() / 1000),
+  }
+
+  if (name !== undefined) updateData.name = name
+  if (description !== undefined) updateData.description = description
+  if (thumbnail !== undefined) updateData.thumbnail = thumbnail
+  if (collaborativeValue !== undefined) updateData.isCollaborative = collaborativeValue
+
   const [updatedProject] = await db
     .update(projects)
-    .set({
-      name: name || project.name,
-      description: description !== undefined ? description : project.description,
-      thumbnail: thumbnail || project.thumbnail,
-      updatedAt: Math.floor(Date.now() / 1000),
-    })
+    .set(updateData)
     .where(eq(projects.id, projectId))
     .returning()
 
   scheduleSave()
 
   const transformedProject = transformResponse(updatedProject, ['createdAt', 'updatedAt'])
+  // 添加 memberRole 字段，表示所有者是所有者
+  ;(transformedProject as any).memberRole = 'owner'
 
   res.json({
     success: true,

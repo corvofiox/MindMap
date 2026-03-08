@@ -19,8 +19,8 @@ export const createCorsMiddleware = (env: EnvVars) => {
 
     if (!allowed) {
       // 提供合理的默认配置
-      origins = env.NODE_ENV === 'development' 
-        ? ['http://localhost:5173', 'http://127.0.0.1:5173'] 
+      origins = env.NODE_ENV === 'development'
+        ? ['http://localhost:*', 'http://127.0.0.1:*']
         : []
     } else {
       origins = allowed === '*' ? ['*'] : allowed.split(',').map(o => o.trim())
@@ -47,8 +47,8 @@ export const createCorsMiddleware = (env: EnvVars) => {
         return callback(null, true)
       }
 
-      // 开发环境：允许本地访问
-      if (isDevEnv && (origin === 'http://localhost:5173' || origin === 'http://127.0.0.1:5173')) {
+      // 开发环境：允许所有 localhost 端口访问
+      if (isDevEnv && /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin)) {
         return callback(null, true)
       }
 
