@@ -823,7 +823,8 @@ export function CanvasPage() {
 
     // 如果画布已被删除且没有临时画布正在处理，重定向到项目列表
     // 临时ID（负数）被允许存在，因为它们会被真实ID替换
-    if (!canvasExists && !hasTemporaryCanvas && canvases.length >= 0) {
+    // 注意：只有当 canvases 已加载（length > 0）时才检查，避免在初始加载时误判
+    if (!canvasExists && !hasTemporaryCanvas && canvases.length > 0) {
       // 清空画布状态
       clearCanvas()
       setCanvasId(null)
