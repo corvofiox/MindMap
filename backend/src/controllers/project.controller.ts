@@ -130,8 +130,8 @@ projectRouter.post('/', authenticate, asyncHandler(async (req: AuthRequest, res)
 
   scheduleSave()
 
-  // 转换时间戳字段
   const transformedProject = transformResponse(newProject, ['createdAt', 'updatedAt'])
+  ;(transformedProject as any).memberRole = 'owner'
 
   res.json({
     success: true,
