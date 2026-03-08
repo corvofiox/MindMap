@@ -73,7 +73,12 @@ const frontendDistPath = path.join(__dirname, '../../frontend/dist')
 app.use(express.static(frontendDistPath))
 
 // 所有未匹配的请求指向index.html
-app.get('*', (req, res) => {
+// 注意：WebSocket升级请求需要跳过，否则会被Express拦截
+app.get('*', (req, res, next) => {
+  // 跳过WebSocket升级请求
+  if (req.headers.upgrade?.toLowerCase() === 'websocket') {
+    return next()
+  }
   res.sendFile(path.join(frontendDistPath, 'index.html'))
 })
 
@@ -95,14 +100,10 @@ async function start() {
 
     console.log('Application initialization complete')
 
-    // HTTP server - 监听0.0.0.0以允许外部访问
-    server.listen(PORT, '0.0.0.0', () => {
-      console.log(`HTTP Server running on port ${PORT}`)
-    })
-
     // WebSocket server configuration
     // 生产环境：WebSocket 绑定到 HTTP Server（共享端口）
     // 开发环境：WebSocket 使用独立端口
+    // 注意：必须在HTTP服务器启动之前创建WebSocket服务器
     let wsServer: WebSocketServer
 
     if (isProduction) {
@@ -120,9 +121,13 @@ async function start() {
 
     setupWebSocket(wsServer)
 
-    console.log(`Environment: ${process.env.NODE_ENV || 'development'}`)
-    console.log(`Application ready at http://localhost:${PORT}`)
-    console.log(`CORS configured with ALLOWED_ORIGINS: ${process.env.ALLOWED_ORIGINS || 'localhost'}`)
+    // HTTP server - 监听0.0.0.0以允许外部访问
+    server.listen(PORT, '0.0.0.0', () => {
+      console.log(`HTTP Server running on port ${PORT}`)
+      console.log(`Environment: ${process.env.NODE_ENV || 'development'}`)
+      console.log(`Application ready at http://localhost:${PORT}`)
+      console.log(`CORS configured with ALLOWED_ORIGINS: ${process.env.ALLOWED_ORIGINS || 'localhost'}`)
+    })
   } catch (error) {
     console.error('Failed to start server:', error)
     process.exit(1)
