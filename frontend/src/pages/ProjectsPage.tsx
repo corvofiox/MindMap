@@ -89,7 +89,7 @@ export function ProjectsPage() {
       await updateProject(projectId, {
         name: editState.name,
         description: editState.description || null,
-        is_collaborative: editState.isCollaborative,
+        isCollaborative: editState.isCollaborative,
       })
       setEditState({ id: null, name: '', description: '', isCollaborative: false })
       addToast({ type: 'success', title: '项目已更新', message: '项目信息已保存' })
