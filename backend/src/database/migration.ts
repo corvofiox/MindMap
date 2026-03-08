@@ -66,6 +66,7 @@ export async function runMigrations(sqlite: any) {
           group_id INTEGER REFERENCES groups(id),
           thumbnail TEXT,
           is_public INTEGER NOT NULL DEFAULT 0,
+          is_collaborative INTEGER NOT NULL DEFAULT 0,
           created_at INTEGER DEFAULT (strftime('%s', 'now')),
           updated_at INTEGER DEFAULT (strftime('%s', 'now'))
         )
@@ -181,6 +182,19 @@ export async function runMigrations(sqlite: any) {
       `)
 
       log('All database tables created successfully')
+    }
+
+    // Add is_collaborative column to projects table if it doesn't exist
+    const projectsTableInfo = sqlite.exec('PRAGMA table_info(projects)')
+    if (projectsTableInfo.length > 0) {
+      const projectColumns = projectsTableInfo[0].values.map((row: any) => row[1])
+
+      // Add is_collaborative column
+      if (!projectColumns.includes('is_collaborative')) {
+        log('Adding is_collaborative column to projects table')
+        sqlite.run('ALTER TABLE projects ADD COLUMN is_collaborative INTEGER NOT NULL DEFAULT 0')
+        log('is_collaborative column added successfully')
+      }
     }
 
     // Add new columns to node_cards table if they don't exist
