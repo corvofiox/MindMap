@@ -178,8 +178,8 @@ export async function loadCanvasNodesData(id: number): Promise<{
   try {
     logger.info('[API] Loading canvas from API', { canvasId: id })
     const canvas = await getCanvas(id)
-    logger.info('[API] Canvas loaded from API', { 
-      canvasId: id, 
+    logger.info('[API] Canvas loaded from API', {
+      canvasId: id,
       hasCanvas: !!canvas,
       hasYjsData: !!(canvas as { yjsData?: string }).yjsData,
       yjsDataLength: (canvas as { yjsData?: string }).yjsData?.length || 0
@@ -209,8 +209,8 @@ export async function loadCanvasNodesData(id: number): Promise<{
       // Decode UTF-8 bytes to string
       const jsonString = new TextDecoder().decode(utf8Bytes)
       const data = JSON.parse(jsonString)
-      logger.info('[API] Decoded yjsData', { 
-        canvasId: id, 
+      logger.info('[API] Decoded yjsData', {
+        canvasId: id,
         hasNodes: !!data.nodes,
         hasGroups: !!data.groups,
         hasDomains: !!data.domains,

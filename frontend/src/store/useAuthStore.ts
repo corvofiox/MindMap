@@ -240,15 +240,10 @@ export const useAuthStore = create<AuthState>()(
         token: state.token,
         isAuthenticated: state.isAuthenticated,
       }),
-      onRehydrateStorage: () => {
-        logger.info('[AuthStore] onRehydrateStorage called')
-        // Return a function that will be called after rehydration
-        return () => {
-          logger.info('[AuthStore] Rehydration complete, setting isHydrated to true')
-          // Use the store's setState to properly update state and trigger re-render
-          useAuthStore.setState({ isHydrated: true })
-        }
-      },
     }
   )
 )
+
+// Set isHydrated to true after store is initialized
+// This is called immediately after the store is created
+useAuthStore.setState({ isHydrated: true })

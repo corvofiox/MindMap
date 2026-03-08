@@ -223,8 +223,8 @@ export class ApiClient {
         // 检查是否是CSRF错误（403 Forbidden）
         if (response.status === 403) {
           const errorData = await this.parseResponse<any>(response)
-          if (errorData && errorData.error && 
-              (errorData.error.includes('CSRF') || errorData.error.includes('csrf'))) {
+          if (errorData && errorData.error &&
+            (errorData.error.includes('CSRF') || errorData.error.includes('csrf'))) {
             // 清除旧的CSRF token并尝试获取新的
             document.cookie = 'x-csrf-token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;'
             return this.retryWithNewCsrfToken<T>(endpoint, options)
