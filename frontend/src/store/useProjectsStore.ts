@@ -355,7 +355,13 @@ export const useProjectsStore = create<ProjectsState>()(
           try {
             const updated = await api.updateCanvas(id, data)
             set((state) => ({
-              canvases: state.canvases.map((c) => (c.id === id ? updated : c)),
+              canvases: state.canvases.map((c) => {
+                if (c.id === id) {
+                  // updateCanvas API 不返回 activeUsers，保留现有的
+                  return { ...updated, activeUsers: c.activeUsers }
+                }
+                return c
+              }),
               isLoading: silent ? state.isLoading : false,
               loadingMessage: silent ? state.loadingMessage : '',
             }))

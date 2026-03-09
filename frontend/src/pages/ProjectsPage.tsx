@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, FolderOpen, Trash2, Edit3, Save, X, GitBranch, Users, Zap, ArrowUp, Crown, Eye, Edit2, Users2, Lock } from 'lucide-react'
+import { Plus, FolderOpen, Trash2, Edit3, Save, X, GitBranch, Users, Zap, ArrowUp, Crown, Eye, Edit2, Users2, Lock, Filter, SearchX, DownloadCloud } from 'lucide-react'
+import { createPortal } from 'react-dom'
 import { useProjectsStore } from '@/store/useProjectsStore'
 import { useUIStore } from '@/store/useUIStore'
 import { useAuthStore } from '@/store/useAuthStore'
@@ -22,7 +23,7 @@ interface DeleteConfirmState {
 
 export function ProjectsPage() {
   const navigate = useNavigate()
-  const { projects, getFilteredProjects, loadProjects, createProject, deleteProject, updateProject, setCurrentProject, restoreCurrentProject, isLoading, loadingMessage } = useProjectsStore()
+  const { projects, getFilteredProjects, loadProjects, createProject, deleteProject, updateProject, setCurrentProject, restoreCurrentProject, isLoading, loadingMessage, setProjectFilters } = useProjectsStore()
   const { addToast } = useUIStore()
   const { user } = useAuthStore()
 
@@ -35,6 +36,10 @@ export function ProjectsPage() {
   const [newProjectCollaborative, setNewProjectCollaborative] = useState(false)
   const [editState, setEditState] = useState<EditState>({ id: null, name: '', description: '', isCollaborative: false })
   const [deleteConfirm, setDeleteConfirm] = useState<DeleteConfirmState>({ id: null, name: '' })
+
+  // 右键菜单状态
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; project: Project | null }>({ x: 0, y: 0, project: null })
+  const contextMenuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const init = async () => {
@@ -131,7 +136,47 @@ export function ProjectsPage() {
     })
   }
 
+  // 处理右键菜单
+  const handleContextMenu = useCallback((e: React.MouseEvent, project: Project) => {
+    e.preventDefault()
+    // 仅对所有者显示右键菜单
+    if (project.memberRole !== 'owner') return
+    setContextMenu({ x: e.clientX, y: e.clientY, project })
+  }, [])
 
+  // 关闭右键菜单
+  const closeContextMenu = useCallback(() => {
+    setContextMenu({ x: 0, y: 0, project: null })
+  }, [])
+
+  // 处理编辑项目
+  const handleEditFromContextMenu = useCallback(() => {
+    if (contextMenu.project) {
+      handleStartEdit(contextMenu.project)
+    }
+    closeContextMenu()
+  }, [contextMenu.project])
+
+  // 处理删除项目
+  const handleDeleteFromContextMenu = useCallback(() => {
+    if (contextMenu.project) {
+      setDeleteConfirm({ id: contextMenu.project.id, name: contextMenu.project.name })
+    }
+    closeContextMenu()
+  }, [contextMenu.project])
+
+  // 点击外部关闭右键菜单
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (contextMenuRef.current && !contextMenuRef.current.contains(e.target as Node)) {
+        closeContextMenu()
+      }
+    }
+    if (contextMenu.project) {
+      document.addEventListener('click', handleClickOutside)
+      return () => document.removeEventListener('click', handleClickOutside)
+    }
+  }, [contextMenu.project, closeContextMenu])
 
   return (
     <div className="h-full bg-gray-50 dark:bg-gray-900 flex flex-col">
@@ -216,7 +261,8 @@ export function ProjectsPage() {
 
       {/* Projects Grid */}
       <div className="flex-1 overflow-y-auto p-8">
-        {filteredProjects.length === 0 ? (
+        {filteredProjects.length === 0 && projects.length === 0 ? (
+          // 用户没有任何项目 - 显示引导创建的空状态
           <div className="flex flex-col items-center justify-center h-full text-center max-w-2xl mx-auto">
             <div className="relative">
               <div className="absolute inset-0 bg-blue-500/10 rounded-full blur-3xl" />
@@ -262,8 +308,31 @@ export function ProjectsPage() {
               <span>点击右上角的 <span className="font-semibold text-gray-700 dark:text-gray-300">"新建项目"</span> 按钮开始</span>
             </div>
           </div>
+        ) : filteredProjects.length === 0 && projects.length > 0 ? (
+          // 筛选结果为空但用户有项目 - 显示筛选无结果提示
+          <div className="flex flex-col items-center justify-center h-full text-center max-w-md mx-auto">
+            <div className="relative mb-6">
+              <div className="absolute inset-0 bg-gray-500/10 rounded-full blur-2xl" />
+              <div className="relative flex items-center justify-center w-20 h-20 rounded-full bg-gray-100 dark:bg-gray-800">
+                <SearchX className="w-10 h-10 text-gray-400 dark:text-gray-500" />
+              </div>
+            </div>
+            <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
+              未找到符合条件的项目
+            </h3>
+            <p className="text-gray-500 dark:text-gray-400 mb-6 text-sm">
+              当前筛选条件下没有匹配的项目，请尝试调整筛选条件
+            </p>
+            <button
+              onClick={() => setProjectFilters({ showOwned: false, showCollaborative: false, showRecentUpdated: false })}
+              className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors"
+            >
+              <Filter className="w-4 h-4" />
+              清除筛选条件
+            </button>
+          </div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+          <div className="flex flex-wrap gap-6 content-start">
             {filteredProjects.map((project) => {
               const isEditing = editState.id === project.id
               const isOwner = project.memberRole === 'owner'
@@ -274,7 +343,8 @@ export function ProjectsPage() {
                 <div
                   key={project.id}
                   onClick={() => handleOpenProject(project)}
-                  className="group bg-white dark:bg-gray-800 rounded-xl shadow-sm hover:shadow-xl transition-all duration-300 cursor-pointer border-2 border-gray-200 dark:border-gray-600 overflow-hidden hover:-translate-y-1 hover:z-10 relative flex flex-col"
+                  onContextMenu={(e) => handleContextMenu(e, project)}
+                  className="group bg-white dark:bg-gray-800 rounded-xl shadow-sm hover:shadow-xl transition-all duration-300 cursor-pointer border-2 border-gray-200 dark:border-gray-600 overflow-hidden hover:-translate-y-1 hover:z-10 relative flex flex-col w-[220px] h-[180px] flex-shrink-0"
                 >
                   {/* 协作标识 - 所有卡片统一显示顶部条，本地项目使用透明色 */}
                   <div className={`
@@ -282,7 +352,7 @@ export function ProjectsPage() {
                     ${!isOwner ? 'bg-blue-500' : 'bg-transparent'}
                   `} />
 
-                  <div className="p-3 pt-3.5 relative bg-gradient-to-br from-white to-gray-50 dark:from-gray-800 dark:to-gray-900 flex flex-col flex-1">
+                  <div className="p-2.5 pt-3 relative bg-gradient-to-br from-white to-gray-50 dark:from-gray-800 dark:to-gray-900 flex flex-col h-full">
                     <div className="flex items-center justify-between gap-2 mb-2">
                       {isEditing ? (
                         <>
@@ -331,7 +401,7 @@ export function ProjectsPage() {
                               {project.name}
                             </h3>
                           </div>
-                          {isOwner && (
+                          {isOwner ? (
                             <div className="flex items-center gap-0.5 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300" onClick={(e) => e.stopPropagation()}>
                               <button
                                 onClick={() => handleStartEdit(project)}
@@ -341,30 +411,36 @@ export function ProjectsPage() {
                                 <Edit3 className="w-3.5 h-3.5" />
                               </button>
                             </div>
+                          ) : (
+                            <div
+                              className="flex items-center gap-0.5 flex-shrink-0 p-1.5 rounded-lg bg-blue-50 dark:bg-blue-900/30 text-blue-500 dark:text-blue-400"
+                              title="远程同步项目"
+                            >
+                              <DownloadCloud className="w-3.5 h-3.5" />
+                            </div>
                           )}
                         </>
                       )}
                     </div>
 
                     {isEditing ? (
-                      <div className="space-y-2 flex-1">
+                      <div className="flex-1 min-h-0">
                         <textarea
                           value={editState.description}
                           onChange={(e) => setEditState(prev => ({ ...prev, description: e.target.value }))}
                           onClick={(e) => e.stopPropagation()}
-                          rows={2}
-                          className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-600 dark:text-gray-300 text-xs focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none shadow-sm resize-none"
+                          className="w-full h-full px-2 py-1 bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-600 dark:text-gray-300 text-xs focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none shadow-sm resize-none"
                           placeholder="添加项目描述..."
                         />
                       </div>
                     ) : (
-                      <p className="text-xs text-gray-500 dark:text-gray-400 leading-relaxed min-h-[2rem] max-h-[2rem] overflow-hidden line-clamp-2 flex-1">
+                      <p className="text-xs text-gray-500 dark:text-gray-400 leading-relaxed max-h-[3.75rem] overflow-hidden line-clamp-3 break-all">
                         {project.description || '暂无描述'}
                       </p>
                     )}
 
-                    <div className="mt-auto pt-2 border-t border-gray-100 dark:border-gray-700 space-y-0.5">
-                      <div className="flex items-center justify-between text-[10px] text-gray-400 dark:text-gray-500">
+                    <div className="mt-auto pt-1.5 border-t border-gray-100 dark:border-gray-700">
+                      <div className="flex items-center justify-between text-[10px] text-gray-400 dark:text-gray-500 h-[18px]">
                         <div className="flex items-center gap-1">
                           <span>创建：{formatDate(project.createdAt)}</span>
                         </div>
@@ -374,41 +450,26 @@ export function ProjectsPage() {
                               e.stopPropagation()
                               setEditState(prev => ({ ...prev, isCollaborative: !prev.isCollaborative }))
                             }}
-                            className={`flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-medium transition-all duration-200 ${
-                              editState.isCollaborative
-                                ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
-                                : 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400'
-                            }`}
+                            className={`flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-medium transition-all duration-200 ${editState.isCollaborative
+                              ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
+                              : 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400'
+                              }`}
                           >
                             <Users2 className="w-3 h-3" />
                             {editState.isCollaborative ? '协作项目' : '私人项目'}
                           </button>
                         ) : (
-                          <span className={`flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-medium ${
-                            project.isCollaborative
-                              ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
-                              : 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400'
-                          }`}>
+                          <span className={`flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-medium ${project.isCollaborative
+                            ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
+                            : 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400'
+                            }`}>
                             <Users2 className="w-3 h-3" />
                             {project.isCollaborative ? '协作项目' : '私人项目'}
                           </span>
                         )}
                       </div>
-                      <div className="flex items-center justify-between text-[10px] text-gray-400 dark:text-gray-500">
+                      <div className="flex items-center justify-between text-[10px] text-gray-400 dark:text-gray-500 h-[18px]">
                         <span>更新：{formatDate(project.updatedAt)}</span>
-                        {/* 删除按钮 - 仅所有者可见 */}
-                        {!isEditing && isOwner && (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setDeleteConfirm({ id: project.id, name: project.name });
-                            }}
-                            className="p-1 rounded text-gray-400 hover:text-red-500 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-all duration-200 opacity-0 group-hover:opacity-100"
-                            title="删除"
-                          >
-                            <Trash2 className="w-3 h-3" />
-                          </button>
-                        )}
                       </div>
                     </div>
                   </div>
@@ -453,6 +514,33 @@ export function ProjectsPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* 右键菜单 */}
+      {contextMenu.project && createPortal(
+        <div
+          ref={contextMenuRef}
+          className="fixed bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-gray-200 dark:border-gray-700 py-1 min-w-[140px] z-50"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            onClick={handleEditFromContextMenu}
+            className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 transition-colors"
+          >
+            <Edit3 className="w-4 h-4" />
+            编辑项目
+          </button>
+          <div className="h-px bg-gray-200 dark:bg-gray-700 my-1" />
+          <button
+            onClick={handleDeleteFromContextMenu}
+            className="w-full px-4 py-2 text-left text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 flex items-center gap-2 transition-colors"
+          >
+            <Trash2 className="w-4 h-4" />
+            删除项目
+          </button>
+        </div>,
+        document.body
       )}
     </div>
   )

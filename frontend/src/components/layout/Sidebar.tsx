@@ -70,14 +70,12 @@ export function Sidebar({ open }: SidebarProps) {
     return getFilteredProjects().length
   }, [projects, projectFilters, getFilteredProjects])
 
-  // 最近访问的项目
-  const [recentProjects, setRecentProjects] = useState<RecentProject[]>([])
-
-  // 加载最近访问的项目
-  useEffect(() => {
-    if (isProjectsPage) {
-      setRecentProjects(getRecentProjects())
-    }
+  // 最近访问的项目（过滤掉已删除的项目）
+  const recentProjects = useMemo(() => {
+    if (!isProjectsPage) return []
+    const allRecent = getRecentProjects()
+    // 只保留仍然存在的项目
+    return allRecent.filter(recent => projects.some(p => p.id === recent.id))
   }, [isProjectsPage, projects])
 
   // 处理打开最近访问的项目
@@ -393,26 +391,26 @@ export function Sidebar({ open }: SidebarProps) {
               ) : (
                 <>
                   {/* 项目统计 */}
-                  <div className="bg-gradient-to-br from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 rounded-xl p-4 border border-blue-100 dark:border-blue-800/30">
+                  <div className="bg-gradient-to-br from-slate-50 to-gray-50 dark:from-slate-900/20 dark:to-gray-900/20 rounded-xl p-4 border border-slate-200 dark:border-slate-800/30">
                     <div className="flex items-center gap-2 mb-3">
-                      <PieChart className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                      <PieChart className="w-4 h-4 text-slate-600 dark:text-slate-400" />
                       <h3 className="font-semibold text-gray-900 dark:text-white text-sm">项目统计</h3>
                     </div>
                     <div className="grid grid-cols-2 gap-3">
                       <div className="bg-white dark:bg-gray-800 rounded-lg p-3 text-center shadow-sm">
-                        <div className="text-2xl font-bold text-gray-900 dark:text-white">{projectStats.total}</div>
+                        <div className="text-2xl font-bold text-slate-700 dark:text-slate-300">{projectStats.total}</div>
                         <div className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">总项目</div>
                       </div>
                       <div className="bg-white dark:bg-gray-800 rounded-lg p-3 text-center shadow-sm">
-                        <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">{projectStats.owned}</div>
-                        <div className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">我拥有的</div>
+                        <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">{projectStats.owned}</div>
+                        <div className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">私人项目</div>
                       </div>
                       <div className="bg-white dark:bg-gray-800 rounded-lg p-3 text-center shadow-sm">
-                        <div className="text-2xl font-bold text-green-600 dark:text-green-400">{projectStats.collaborative}</div>
+                        <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">{projectStats.collaborative}</div>
                         <div className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">协作项目</div>
                       </div>
                       <div className="bg-white dark:bg-gray-800 rounded-lg p-3 text-center shadow-sm">
-                        <div className="text-2xl font-bold text-amber-600 dark:text-amber-400">{projectStats.recentUpdated}</div>
+                        <div className="text-2xl font-bold text-purple-600 dark:text-purple-400">{projectStats.recentUpdated}</div>
                         <div className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">本周更新</div>
                       </div>
                     </div>
