@@ -1,9 +1,10 @@
-import { MousePointer2, Square, Layers, Link, Grid3x3, Undo, Redo, Trash2, ArrowRight, ArrowLeftRight, Minus, Group, Save, Download, Check, Map, Layout, Image as ImageIcon, Pencil } from 'lucide-react'
+import { MousePointer2, Square, Layers, Link, Grid3x3, Undo, Redo, Trash2, ArrowRight, ArrowLeftRight, Minus, Group, Save, Download, Upload, Check, Map, Layout, Image as ImageIcon, Pencil, ChevronDown } from 'lucide-react'
 import { useCanvasStore } from '@/store/useCanvasStore'
 import { useUIStore } from '@/store/useUIStore'
 import type { Tool } from '@/types'
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import { generateId } from '@/utils/canvas'
+import { exportCanvas, importCanvas, downloadJsonFile, readJsonFile } from '@/utils/canvasExport'
 
 interface CanvasToolbarProps {
   onSave?: () => Promise<void>
@@ -22,10 +23,13 @@ const toolSeparators = [1, 2]
 
 export function CanvasToolbar({ onSave, isViewer }: CanvasToolbarProps) {
   const { currentTool, gridVisible, dragMode, minimapVisible, quickEditMode, setCurrentTool, toggleGrid, toggleDragMode, toggleMinimap, toggleQuickEditMode, connectionDirection, setConnectionDirection, connectionStyle, setConnectionStyle, connectionType, setConnectionType, addToast } = useUIStore()
-  const { selectedIds, removeNode, removeConnection, removeGroup, removeDomain, nodes, undo, redo, history, groups, domains, addGroup } = useCanvasStore()
+  const { selectedIds, removeNode, removeConnection, removeGroup, removeDomain, nodes, undo, redo, history, groups, domains, addGroup, connections, zoom, panX, panY, setCanvasData } = useCanvasStore()
 
   const [isSaving, setIsSaving] = useState(false)
   const [saveSuccess, setSaveSuccess] = useState(false)
+  const [showImportExportMenu, setShowImportExportMenu] = useState(false)
+  const importExportRef = useRef<HTMLDivElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const connectionDirections = [
     { id: 'directed' as const, icon: ArrowRight, label: '单向' },
@@ -94,6 +98,81 @@ export function CanvasToolbar({ onSave, isViewer }: CanvasToolbarProps) {
   }
 
   const hasSelectedNodes = selectedIds.some(id => nodes.has(id))
+
+  // 点击外部关闭导入导出菜单
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (importExportRef.current && !importExportRef.current.contains(event.target as Node)) {
+        setShowImportExportMenu(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
+  // 处理导出
+  const handleExport = useCallback(() => {
+    const jsonString = exportCanvas(
+      nodes,
+      connections,
+      groups,
+      domains,
+      { zoom, panX, panY }
+    )
+    const filename = `mindmap-${new Date().toISOString().slice(0, 10)}.json`
+    downloadJsonFile(jsonString, filename)
+    addToast({
+      type: 'success',
+      title: '导出成功',
+      message: '画布数据已导出为 JSON 文件',
+      duration: 3000,
+    })
+    setShowImportExportMenu(false)
+  }, [nodes, connections, groups, domains, zoom, panX, panY, addToast])
+
+  // 处理导入按钮点击
+  const handleImportClick = useCallback(() => {
+    fileInputRef.current?.click()
+    setShowImportExportMenu(false)
+  }, [])
+
+  // 处理文件选择
+  const handleFileSelect = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    try {
+      const jsonString = await readJsonFile(file)
+      const data = importCanvas(jsonString)
+
+      if (data) {
+        setCanvasData(data)
+        addToast({
+          type: 'success',
+          title: '导入成功',
+          message: `成功导入 ${data.nodes.length} 个节点, ${data.connections.length} 条连线`,
+          duration: 3000,
+        })
+      } else {
+        addToast({
+          type: 'error',
+          title: '导入失败',
+          message: '文件格式不正确或已损坏',
+          duration: 5000,
+        })
+      }
+    } catch (error) {
+      addToast({
+        type: 'error',
+        title: '导入失败',
+        message: '读取文件时发生错误',
+        duration: 5000,
+      })
+    }
+
+    // 清空 input 值，允许重复选择同一文件
+    event.target.value = ''
+  }, [setCanvasData, addToast])
 
   const handleCreateGroup = () => {
     if (hasSelectedNodes) {
@@ -331,12 +410,52 @@ export function CanvasToolbar({ onSave, isViewer }: CanvasToolbarProps) {
             )}
           </button>
 
-          <button
-            className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400"
-            title="导出 (Ctrl+E)"
-          >
-            <Download className="w-5 h-5" />
-          </button>
+          <div className="relative" ref={importExportRef}>
+            <button
+              onClick={() => setShowImportExportMenu(!showImportExportMenu)}
+              disabled={isViewer}
+              className={`
+                flex items-center gap-1 px-2 py-2 rounded-lg transition-colors
+                ${isViewer
+                  ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed'
+                  : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
+                }
+              `}
+              title={isViewer ? '查看者无法导入导出' : '导入/导出'}
+            >
+              <Upload className="w-5 h-5" />
+              <ChevronDown className="w-3 h-3" />
+            </button>
+
+            {/* 导入导出下拉菜单 */}
+            {showImportExportMenu && !isViewer && (
+              <div className="absolute right-0 top-full mt-1 w-32 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1 z-50">
+                <button
+                  onClick={handleImportClick}
+                  className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
+                >
+                  <Download className="w-4 h-4" />
+                  导入
+                </button>
+                <button
+                  onClick={handleExport}
+                  className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
+                >
+                  <Upload className="w-4 h-4" />
+                  导出
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* 隐藏的文件输入 */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".json,.mindmap"
+            onChange={handleFileSelect}
+            className="hidden"
+          />
         </div>
       </div>
 
