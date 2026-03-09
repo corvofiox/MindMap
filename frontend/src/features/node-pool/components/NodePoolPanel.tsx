@@ -564,7 +564,7 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
   return (
     <aside
       data-node-pool="true"
-      className={`w-72 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 flex flex-col transition-all duration-200 fixed right-0 top-14 h-[calc(100vh-3.5rem)] ${open ? 'transform translate-x-0' : 'transform translate-x-full'}`}
+      className={`w-72 bg-white dark:bg-gray-800 border-l border-gray-200 dark:border-gray-700 flex flex-col transition-all duration-200 fixed right-0 top-14 h-[calc(100vh-3.5rem)] ${open ? 'transform translate-x-0' : 'transform translate-x-full'}`}
       style={{ zIndex: Z_INDEX.NODE_POOL_PANEL }}
     >
       {/* Header */}

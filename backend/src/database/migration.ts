@@ -242,6 +242,27 @@ export async function runMigrations(sqlite: any) {
       log('project_invitations table created successfully')
     }
 
+    // Create ai_conversations table if it doesn't exist
+    const aiConversationsTable = sqlite.exec("SELECT name FROM sqlite_master WHERE type='table' AND name='ai_conversations'")
+    if (!aiConversationsTable || aiConversationsTable.length === 0 || aiConversationsTable[0].values.length === 0) {
+      log('Creating ai_conversations table')
+      sqlite.run(`
+        CREATE TABLE ai_conversations (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          canvas_id INTEGER NOT NULL REFERENCES canvases(id),
+          user_id INTEGER NOT NULL REFERENCES users(id),
+          messages TEXT NOT NULL,
+          context_divider_index INTEGER NOT NULL DEFAULT -1,
+          updated_at INTEGER DEFAULT (strftime('%s', 'now'))
+        )
+      `)
+      // Create unique index for canvas_id and user_id
+      sqlite.run(`
+        CREATE UNIQUE INDEX ai_conversations_canvas_user_idx ON ai_conversations (canvas_id, user_id)
+      `)
+      log('ai_conversations table created successfully')
+    }
+
     log('Migrations completed successfully')
   } catch (error: any) {
     logError('Error running migrations', error.message)

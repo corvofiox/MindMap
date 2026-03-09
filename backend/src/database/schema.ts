@@ -150,6 +150,16 @@ export const files = sqliteTable('files', {
   createdAt: integer('created_at').default(sql`strftime('%s', 'now')`),
 })
 
+// AI Chat Conversations - 画布级别的AI对话历史
+export const aiConversations = sqliteTable('ai_conversations', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  canvasId: integer('canvas_id').notNull().references(() => canvases.id),
+  userId: integer('user_id').notNull().references(() => users.id),
+  messages: text('messages').notNull(), // JSON string of messages array
+  contextDividerIndex: integer('context_divider_index').notNull().default(-1),
+  updatedAt: integer('updated_at').default(sql`strftime('%s', 'now')`),
+})
+
 // Type exports
 export type User = typeof users.$inferSelect
 export type NewUser = typeof users.$inferInsert
@@ -169,3 +179,5 @@ export type NodePoolFolder = typeof nodePoolFolders.$inferSelect
 export type NewNodePoolFolder = typeof nodePoolFolders.$inferInsert
 export type File = typeof files.$inferSelect
 export type NewFile = typeof files.$inferInsert
+export type AIConversation = typeof aiConversations.$inferSelect
+export type NewAIConversation = typeof aiConversations.$inferInsert

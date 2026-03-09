@@ -297,6 +297,33 @@ export async function deleteNodePoolFolder(id: number): Promise<void> {
   return await apiClient.delete<void>(`/api/projects/node-pool-folders/${id}`)
 }
 
+// AI Conversation API
+interface Message {
+  id: string
+  role: 'user' | 'assistant' | 'divider'
+  content: string
+  timestamp: number
+  reasoningContent?: string
+  isInterrupted?: boolean
+}
+
+interface ConversationData {
+  messages: Message[]
+  contextDividerIndex: number
+}
+
+export async function getAIConversation(canvasId: number): Promise<ConversationData> {
+  return await apiClient.get<ConversationData>(`/api/ai/conversation/${canvasId}`)
+}
+
+export async function saveAIConversation(canvasId: number, data: ConversationData): Promise<void> {
+  await apiClient.post<void>(`/api/ai/conversation/${canvasId}`, data)
+}
+
+export async function deleteAIConversation(canvasId: number): Promise<void> {
+  await apiClient.delete<void>(`/api/ai/conversation/${canvasId}`)
+}
+
 // User Settings API
 export async function getNodeDefaults(): Promise<NodeDefaults> {
   return await apiClient.get<NodeDefaults>('/api/users/settings/node-defaults')

@@ -21,6 +21,7 @@ import { canvasRouter } from './controllers/canvas.controller.js'
 import { logRouter } from './controllers/log.routes.js'
 import { uploadRouter } from './controllers/upload.controller.js'
 import { collaborationRouter } from './controllers/collaboration.controller.js'
+import { aiRouter } from './controllers/ai.controller.js'
 import { apiLimiter } from './middleware/rateLimit.middleware.js'
 import { csrfProtectionMiddleware, getCsrfTokenRoute } from './middleware/csrf.middleware.js'
 import { setupWebSocket } from './websocket/index.js'
@@ -67,6 +68,7 @@ app.use('/api/canvases', apiLimiter(), csrfProtectionMiddleware, canvasRouter)
 app.use('/api/logs', logRouter)
 app.use('/api/upload', apiLimiter(), csrfProtectionMiddleware, uploadRouter)
 app.use('/api/collaboration', apiLimiter(), csrfProtectionMiddleware, collaborationRouter)
+app.use('/api/ai', apiLimiter(), csrfProtectionMiddleware, aiRouter)
 
 // 静态文件服务
 const frontendDistPath = path.join(__dirname, '../../frontend/dist')

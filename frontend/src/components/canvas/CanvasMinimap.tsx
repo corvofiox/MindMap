@@ -13,6 +13,7 @@ interface CanvasMinimapProps {
   containerWidth: number
   containerHeight: number
   nodePoolOpen: boolean
+  aiSidebarOpen: boolean
   secondaryToolbarOpen: boolean
   onViewportChange: (panX: number, panY: number) => void
 }
@@ -34,6 +35,8 @@ export function CanvasMinimap({
   panY,
   containerWidth,
   containerHeight,
+  nodePoolOpen,
+  aiSidebarOpen,
   secondaryToolbarOpen,
   onViewportChange,
 }: CanvasMinimapProps) {
@@ -370,10 +373,16 @@ export function CanvasMinimap({
       return
     }
 
+    // 计算右侧侧边栏占用的宽度（以像素为单位）
+    const sidebarWidth = aiSidebarOpen ? 320 : nodePoolOpen ? 288 : 0
+    // 将侧边栏宽度转换为画布坐标系的宽度
+    const sidebarCanvasWidth = sidebarWidth / zoom
+
     // Calculate viewport rectangle using actual container dimensions
+    // 考虑右侧侧边栏占用的可视区域
     const viewportLeft = (0 - panX) / zoom
     const viewportTop = (0 - panY) / zoom
-    const viewportRight = (containerWidth - panX) / zoom
+    const viewportRight = (containerWidth - panX) / zoom - sidebarCanvasWidth
     const viewportBottom = (containerHeight - panY) / zoom
 
     const viewportRectWidth = viewportRight - viewportLeft
@@ -403,7 +412,7 @@ export function CanvasMinimap({
     // Draw viewport semi-transparent fill
     ctx.fillStyle = 'rgba(59, 130, 246, 0.15)'
     ctx.fillRect(vpX, vpY, vpW, vpH)
-  }, [nodes, groups, domains, connections, contentBounds, minimapSize, panX, panY, zoom, containerWidth, containerHeight, drawConnection])
+  }, [nodes, groups, domains, connections, contentBounds, minimapSize, panX, panY, zoom, containerWidth, containerHeight, nodePoolOpen, aiSidebarOpen, drawConnection])
 
   // Handle mouse events for dragging viewport
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -478,6 +487,13 @@ export function CanvasMinimap({
     onViewportChange(newPanX, newPanY)
   }
 
+  // 计算右侧偏移量
+  const getRightOffset = () => {
+    if (aiSidebarOpen) return '20.5rem' // 320px + 16px margin
+    if (nodePoolOpen) return '18.25rem' // 288px + 16px margin
+    return '16px'
+  }
+
   return (
     <div
       className="minimap bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 overflow-hidden transition-all duration-200"
@@ -485,7 +501,7 @@ export function CanvasMinimap({
         position: 'absolute',
         top: secondaryToolbarOpen ? '64px' : '16px',
         left: 'auto',
-        right: '16px',
+        right: getRightOffset(),
         width: `${minimapSize.width + 8}px`,
         height: `${minimapSize.height + 8}px`,
         zIndex: Z_INDEX.ZOOM_CONTROLS,

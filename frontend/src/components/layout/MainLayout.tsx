@@ -1,6 +1,7 @@
 import { Outlet } from 'react-router-dom'
 import { Header } from './Header'
 import { Sidebar } from './Sidebar'
+import { AiSidebar } from './AiSidebar'
 import { NodePoolPanel } from '@/features/node-pool/components/NodePoolPanel'
 import { CommandPalette } from '../ui/CommandPalette'
 import { SettingsDialog } from '../ui/SettingsDialog'
@@ -13,7 +14,7 @@ import { useUIStore } from '@/store/useUIStore'
 import { useAuthStore } from '@/store/useAuthStore'
 
 export function MainLayout() {
-  const { sidebarOpen, nodePoolOpen } = useUIStore()
+  const { sidebarOpen, nodePoolOpen, aiSidebarOpen } = useUIStore()
   const { isAuthenticated, isHydrated } = useAuthStore()
 
   // Wait for hydration or show minimal layout for unauthenticated users
@@ -34,7 +35,6 @@ export function MainLayout() {
           className="flex-1 overflow-hidden min-h-0 transition-all duration-200"
           style={{
             marginLeft: sidebarOpen ? '16rem' : '0',
-            marginRight: nodePoolOpen ? '18rem' : '0',
           }}
         >
           <Outlet />
@@ -42,6 +42,9 @@ export function MainLayout() {
 
         {/* Right Panel - Node Pool */}
         <NodePoolPanel open={nodePoolOpen} />
+
+        {/* Right Panel - AI Sidebar */}
+        <AiSidebar open={aiSidebarOpen} />
       </div>
 
       {/* Overlays */}

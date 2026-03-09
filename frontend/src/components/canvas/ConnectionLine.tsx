@@ -48,7 +48,7 @@ export function ConnectionLine({
         const pathData = pointsToPath(points)
 
         return (
-          <g>
+          <g style={{ pointerEvents: 'auto' }}>
             <path
               d={pathData}
               stroke="transparent"
@@ -93,7 +93,7 @@ export function ConnectionLine({
       }
 
       return (
-        <g>
+        <g style={{ pointerEvents: 'auto' }}>
           {shouldCreateHitArea && (
             <line
               x1={hitStartX}
@@ -139,7 +139,7 @@ export function ConnectionLine({
         const pathData = getCurveThroughPoints(points, fromPort, toPort)
 
         return (
-          <g>
+          <g style={{ pointerEvents: 'auto' }}>
             <path
               d={pathData}
               stroke="transparent"
@@ -173,7 +173,7 @@ export function ConnectionLine({
       const pathData = `M ${fromX} ${fromY} C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${toX} ${toY}`
 
       return (
-        <g>
+        <g style={{ pointerEvents: 'auto' }}>
           <path
             d={pathData}
             stroke="transparent"
@@ -204,7 +204,7 @@ export function ConnectionLine({
       const pathData = pointsToPath(points)
 
       return (
-        <g>
+        <g style={{ pointerEvents: 'auto' }}>
           <path
             d={pathData}
             stroke="transparent"

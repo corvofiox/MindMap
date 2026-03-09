@@ -28,6 +28,11 @@ interface UIState {
   setNodePoolOpen: (open: boolean) => void
   toggleNodePool: () => void
 
+  // AI Sidebar
+  aiSidebarOpen: boolean
+  setAiSidebarOpen: (open: boolean) => void
+  toggleAiSidebar: () => void
+
   // Canvas
   currentTool: Tool
   setCurrentTool: (tool: Tool) => void
@@ -179,6 +184,11 @@ export const useUIStore = create<UIState>()(
         nodePoolOpen: true,
         setNodePoolOpen: (open) => set({ nodePoolOpen: open }),
         toggleNodePool: createToggle('nodePoolOpen'),
+
+        // AI Sidebar
+        aiSidebarOpen: false,
+        setAiSidebarOpen: (open) => set({ aiSidebarOpen: open }),
+        toggleAiSidebar: createToggle('aiSidebarOpen'),
 
         // Canvas
         currentTool: 'select',
@@ -387,6 +397,7 @@ export const useUIStore = create<UIState>()(
         theme: state.theme,
         sidebarOpen: state.sidebarOpen,
         nodePoolOpen: state.nodePoolOpen,
+        aiSidebarOpen: state.aiSidebarOpen,
         dragMode: state.dragMode,
         gridVisible: state.gridVisible,
         minimapVisible: state.minimapVisible,

@@ -232,7 +232,9 @@ function getLabelPosition(
   connType: string,
   fromX: number, fromY: number,
   toX: number, toY: number,
-  bendPoints: { x: number; y: number }[]
+  bendPoints: { x: number; y: number }[],
+  fromPort: 'top' | 'right' | 'bottom' | 'left' = 'right',
+  toPort: 'top' | 'right' | 'bottom' | 'left' = 'left'
 ): { x: number; y: number } {
   if (connType === 'straight') {
     if (bendPoints.length > 0) {
@@ -253,13 +255,11 @@ function getLabelPosition(
   }
 
   if (connType === 'curve') {
-    const midX = (fromX + toX) / 2
-    const midY = (fromY + toY) / 2
-    const dx = toX - fromX
-    const dy = toY - fromY
-    const controlX = midX - dy * 0.2
-    const controlY = midY + dx * 0.2
-    return getQuadraticBezierMidpoint(fromX, fromY, controlX, controlY, toX, toY)
+    // 使用与实际绘制相同的控制点计算逻辑（三次贝塞尔曲线）
+    const { cp1x, cp1y, cp2x, cp2y } = calculateCurveControlPointsForLabel(
+      fromX, fromY, toX, toY, fromPort, toPort
+    )
+    return getCubicBezierMidpoint(fromX, fromY, cp1x, cp1y, cp2x, cp2y, toX, toY)
   }
 
   if (connType === 'step') {
@@ -274,6 +274,63 @@ function getLabelPosition(
   }
 
   return { x: (fromX + toX) / 2, y: (fromY + toY) / 2 }
+}
+
+// Calculate control points for curve label positioning (same logic as canvas.ts)
+function calculateCurveControlPointsForLabel(
+  fromX: number,
+  fromY: number,
+  toX: number,
+  toY: number,
+  fromPort: 'top' | 'right' | 'bottom' | 'left',
+  toPort: 'top' | 'right' | 'bottom' | 'left'
+): { cp1x: number; cp1y: number; cp2x: number; cp2y: number } {
+  const dx = toX - fromX
+  const dy = toY - fromY
+  const distance = Math.sqrt(dx * dx + dy * dy) || 1
+
+  const getPortOffsetVector = (port: 'top' | 'right' | 'bottom' | 'left') => {
+    switch (port) {
+      case 'top': return { dx: 0, dy: -1 }
+      case 'right': return { dx: 1, dy: 0 }
+      case 'bottom': return { dx: 0, dy: 1 }
+      case 'left': return { dx: -1, dy: 0 }
+    }
+  }
+
+  const fromOffset = getPortOffsetVector(fromPort)
+  const toOffset = getPortOffsetVector(toPort)
+
+  const minOffset = Math.max(distance * 0.25, 60)
+  const maxOffset = Math.min(distance * 0.5, 150)
+  const baseOffset = Math.max(minOffset, maxOffset)
+
+  const cp1x = fromX + fromOffset.dx * baseOffset
+  const cp1y = fromY + fromOffset.dy * baseOffset
+  const cp2x = toX + toOffset.dx * baseOffset
+  const cp2y = toY + toOffset.dy * baseOffset
+
+  return { cp1x, cp1y, cp2x, cp2y }
+}
+
+// Get midpoint of a cubic bezier curve
+function getCubicBezierMidpoint(
+  x1: number, y1: number,
+  cp1x: number, cp1y: number,
+  cp2x: number, cp2y: number,
+  x2: number, y2: number
+): { x: number; y: number } {
+  const t = 0.5
+  const mt = 1 - t
+  const mt3 = mt * mt * mt
+  const mt2t = 3 * mt * mt * t
+  const mt2 = 3 * mt * t * t
+  const t3 = t * t * t
+
+  const x = mt3 * x1 + mt2t * cp1x + mt2 * cp2x + t3 * x2
+  const y = mt3 * y1 + mt2t * cp1y + mt2 * cp2y + t3 * y2
+
+  return { x, y }
 }
 
 // Get midpoint of a quadratic bezier curve
@@ -696,6 +753,7 @@ export function CanvasPage() {
     currentTool,
     dragMode,
     nodePoolOpen,
+    aiSidebarOpen,
     stylePanelOpen,
     sidebarOpen,
     minimapVisible,
@@ -954,6 +1012,14 @@ export function CanvasPage() {
       clearTimeout(dbSaveTimeoutRef.current)
     }
   }, [canvasId])
+
+  // 组件卸载时清空画布ID
+  useEffect(() => {
+    return () => {
+      // 组件卸载时清空 canvasId，确保 AI 侧边栏进入锁定状态
+      setCanvasId(null)
+    }
+  }, [])
 
   // Initialize camera position from localStorage when canvas data is loaded
   useEffect(() => {
@@ -1640,7 +1706,7 @@ export function CanvasPage() {
     }
 
     requestAnimationFrame(measure)
-  }, [nodePoolOpen, sidebarOpen])
+  }, [nodePoolOpen, aiSidebarOpen, sidebarOpen])
 
   // Handle keyboard shortcuts
   useEffect(() => {
@@ -3312,6 +3378,7 @@ export function CanvasPage() {
             containerWidth={containerSize.width}
             containerHeight={containerSize.height}
             nodePoolOpen={nodePoolOpen}
+            aiSidebarOpen={aiSidebarOpen}
             secondaryToolbarOpen={currentTool === 'connection'}
             onViewportChange={setPan}
           />
@@ -3726,7 +3793,7 @@ export function CanvasPage() {
 
           {/* Render connections */}
           <svg
-            className="absolute inset-0"
+            className="absolute inset-0 pointer-events-none"
             style={{ overflow: 'visible', zIndex: Z_INDEX.CONNECTION }}
           >
             <defs>
@@ -3853,7 +3920,25 @@ export function CanvasPage() {
                     onDoubleClick={handleConnectionDoubleClick}
                   />
                   {conn.label && (() => {
-                    const labelPos = getLabelPosition(conn.type, fromX, fromY, toX, toY, conn.bendPoints || [])
+                    // 计算节点拖拽偏移量，用于调整弯曲点坐标
+                    const fromOffsetX = fromDraggingPos ? fromDraggingPos.x - fromNode.x : 0
+                    const fromOffsetY = fromDraggingPos ? fromDraggingPos.y - fromNode.y : 0
+                    const toOffsetX = toDraggingPos ? toDraggingPos.x - toNode.x : 0
+                    const toOffsetY = toDraggingPos ? toDraggingPos.y - toNode.y : 0
+
+                    // 弯曲点需要根据起点和终点的偏移量进行插值调整
+                    const adjustedBendPoints = conn.bendPoints?.map((bp, index, arr) => {
+                      // 根据弯曲点在连线中的位置，计算插值比例
+                      const ratio = (index + 1) / (arr.length + 1)
+                      return {
+                        x: bp.x + fromOffsetX * (1 - ratio) + toOffsetX * ratio,
+                        y: bp.y + fromOffsetY * (1 - ratio) + toOffsetY * ratio
+                      }
+                    }) || []
+
+                    const fromPortDir = getConnectionPort(conn, 'start')
+                    const toPortDir = getConnectionPort(conn, 'end')
+                    const labelPos = getLabelPosition(conn.type, fromX, fromY, toX, toY, adjustedBendPoints, fromPortDir, toPortDir)
                     return (
                       <text
                         x={labelPos.x}

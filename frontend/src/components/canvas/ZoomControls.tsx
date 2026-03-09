@@ -5,7 +5,7 @@ import { CANVAS_DEFAULTS, Z_INDEX } from '@/constants'
 
 export function ZoomControls() {
   const { zoom, setZoom, setPan } = useCanvasStore()
-  const { nodePoolOpen } = useUIStore()
+  const { nodePoolOpen, aiSidebarOpen } = useUIStore()
 
   const handleZoomIn = () => {
     setZoom(Math.min(zoom + CANVAS_DEFAULTS.ZOOM_STEP, CANVAS_DEFAULTS.MAX_ZOOM))
@@ -20,10 +20,17 @@ export function ZoomControls() {
     setZoom(CANVAS_DEFAULTS.DEFAULT_ZOOM)
   }
 
+  // 计算右侧位置
+  const getRightPosition = () => {
+    if (aiSidebarOpen) return '20.5rem' // 320px + 16px margin
+    if (nodePoolOpen) return '18.25rem' // 288px + 16px margin
+    return '1rem' // right-4 = 16px
+  }
+
   return (
     <div
-      className={`absolute bottom-4 flex items-center gap-1 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 p-1 ${nodePoolOpen ? 'right-[18.25rem]' : 'right-4'}`}
-      style={{ zIndex: Z_INDEX.ZOOM_CONTROLS }}
+      className="absolute bottom-4 flex items-center gap-1 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 p-1 transition-all duration-200"
+      style={{ zIndex: Z_INDEX.ZOOM_CONTROLS, right: getRightPosition() }}
     >
       <button
         onClick={handleZoomOut}

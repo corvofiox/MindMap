@@ -3,6 +3,7 @@ import { Plus, Folder, FolderOpen, FolderPlus, FileText, Trash2, MoreVertical, E
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useProjectsStore } from '@/store/useProjectsStore'
 import { useUIStore } from '@/store/useUIStore'
+import { useCanvasStore } from '@/store/useCanvasStore'
 import clsx from 'clsx'
 import { createPortal } from 'react-dom'
 import { Z_INDEX } from '@/constants'
@@ -19,6 +20,7 @@ export function Sidebar({ open }: SidebarProps) {
   const activeCanvasId = canvasIdMatch ? parseInt(canvasIdMatch[1]) : null
   const { projects, projectFilters, setProjectFilters, getFilteredProjects, canvases, folders, currentProject, createCanvas, createFolder, updateProject, deleteProject, setCurrentProject, loadProjects, moveCanvasToFolder, isLoading, loadingMessage, currentMemberRole, loadCanvases, refreshCanvasesSilent } = useProjectsStore()
   const { addToast } = useUIStore()
+  const { setCanvasId } = useCanvasStore()
 
   const isViewer = currentMemberRole === 'viewer'
 
@@ -298,6 +300,7 @@ export function Sidebar({ open }: SidebarProps) {
 
   const handleBackToProjects = () => {
     setCurrentProject(null)
+    setCanvasId(null)
     navigate('/projects')
   }
 
