@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useState, useRef, useCallback } from 'react'
+import { useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useCanvasStore } from '@/store/useCanvasStore'
 import { useProjectsStore } from '@/store/useProjectsStore'
@@ -99,6 +99,54 @@ function getPortPosition(node: Node, port: 'top' | 'right' | 'bottom' | 'left') 
       return { x: node.x + node.width / 2, y: node.y + node.height }
     case 'left':
       return { x: node.x, y: node.y + node.height / 2 }
+  }
+}
+
+// Calculate distributed port position when multiple connections share the same port
+function getDistributedPortPosition(
+  node: Node,
+  port: 'top' | 'right' | 'bottom' | 'left',
+  index: number,
+  total: number
+): { x: number; y: number } {
+  const basePos = getPortPosition(node, port)
+  if (total <= 1) return basePos
+
+  // Calculate offset based on port direction
+  // For top/bottom ports, distribute horizontally
+  // For left/right ports, distribute vertically
+
+  // 动态计算可用空间：根据端口方向使用宽度或高度
+  const availableSpace = port === 'top' || port === 'bottom'
+    ? node.width * 0.9  // 水平方向使用 90% 宽度
+    : node.height * 0.9 // 垂直方向使用 90% 高度
+
+  // 计算最小间距（至少 8px，确保可点击）
+  const minSpacing = 8
+  // 计算最大间距（最多 20px，避免过于分散）
+  const maxSpacing = 20
+
+  // 根据连线数量动态计算间距
+  // 如果空间足够，使用理想间距；否则压缩间距以适应空间
+  const idealTotalSpread = (total - 1) * 16  // 理想情况下每条连线间隔 16px
+  const actualTotalSpread = Math.min(idealTotalSpread, availableSpace)
+
+  // 动态计算实际间距，确保不小于最小间距
+  const actualSpacing = Math.max(
+    minSpacing,
+    Math.min(maxSpacing, actualTotalSpread / (total - 1 || 1))
+  )
+
+  // 计算当前连线的偏移量
+  const offset = (index - (total - 1) / 2) * actualSpacing
+
+  switch (port) {
+    case 'top':
+    case 'bottom':
+      return { x: basePos.x + offset, y: basePos.y }
+    case 'left':
+    case 'right':
+      return { x: basePos.x, y: basePos.y + offset }
   }
 }
 
@@ -3274,6 +3322,42 @@ export function CanvasPage() {
   const validCanvasId = canvasId ? parseInt(canvasId) : null
   const isCanvasValid = validCanvasId !== null && !isNaN(validCanvasId)
 
+  // 使用 useMemo 缓存端口分布计算，按连线 ID 排序确保顺序稳定
+  const portDistribution = useMemo(() => {
+    interface PortConnInfo { connId: string; index: number; total: number }
+    const portConnectionMap = new Map<string, PortConnInfo[]>()
+
+    // 按连线 ID 排序，确保顺序稳定
+    const sortedConnections = Array.from(connections.values()).sort((a, b) =>
+      a.id.localeCompare(b.id)
+    )
+
+    sortedConnections.forEach((c) => {
+      const fromPort = getConnectionPort(c, 'start')
+      const toPort = getConnectionPort(c, 'end')
+
+      // 起点端口（入线和出线合并统计，使用相同的 key 格式）
+      const fromKey = `${c.fromNodeId}-${fromPort}`
+      if (!portConnectionMap.has(fromKey)) portConnectionMap.set(fromKey, [])
+      portConnectionMap.get(fromKey)!.push({ connId: c.id, index: 0, total: 0 })
+
+      // 终点端口（入线和出线合并统计，使用相同的 key 格式）
+      const toKey = `${c.toNodeId}-${toPort}`
+      if (!portConnectionMap.has(toKey)) portConnectionMap.set(toKey, [])
+      portConnectionMap.get(toKey)!.push({ connId: c.id, index: 0, total: 0 })
+    })
+
+    // 为每个端口的连线分配索引
+    portConnectionMap.forEach((list) => {
+      list.forEach((item, idx) => {
+        item.index = idx
+        item.total = list.length
+      })
+    })
+
+    return { portConnectionMap, sortedConnections }
+  }, [connections])
+
   // 如果没有有效的画布ID，显示提示界面
   if (!isCanvasValid) {
     return (
@@ -3859,106 +3943,122 @@ export function CanvasPage() {
                 <path d="M0,0 L10,3.5 L0,7 L3,3.5 Z" fill="#3b82f6" />
               </marker>
             </defs>
-            {Array.from(connections.values()).map((conn) => {
-              const fromNode = nodes.get(conn.fromNodeId)
-              const toNode = nodes.get(conn.toNodeId)
-              if (!fromNode || !toNode) return null
+            {(() => {
+              const { portConnectionMap, sortedConnections } = portDistribution
 
-              const fromDraggingPos = draggingNodePositionsRef.current.get(conn.fromNodeId)
-              const toDraggingPos = draggingNodePositionsRef.current.get(conn.toNodeId)
+              return sortedConnections.map((conn) => {
+                const fromNode = nodes.get(conn.fromNodeId)
+                const toNode = nodes.get(conn.toNodeId)
+                if (!fromNode || !toNode) return null
 
-              const actualFromNode = getActualNodePosition(fromNode, fromDraggingPos, isDraggingGroup, draggingGroupId, initialGroupNodeIds, groupDragOffset)
-              const actualToNode = getActualNodePosition(toNode, toDraggingPos, isDraggingGroup, draggingGroupId, initialGroupNodeIds, groupDragOffset)
+                const fromDraggingPos = draggingNodePositionsRef.current.get(conn.fromNodeId)
+                const toDraggingPos = draggingNodePositionsRef.current.get(conn.toNodeId)
 
-              const fromPosition = getPortPosition(actualFromNode, getConnectionPort(conn, 'start'))
-              const toPosition = getPortPosition(actualToNode, getConnectionPort(conn, 'end'))
-              const fromX = fromPosition.x
-              const fromY = fromPosition.y
-              const toX = toPosition.x
-              const toY = toPosition.y
+                const actualFromNode = getActualNodePosition(fromNode, fromDraggingPos, isDraggingGroup, draggingGroupId, initialGroupNodeIds, groupDragOffset)
+                const actualToNode = getActualNodePosition(toNode, toDraggingPos, isDraggingGroup, draggingGroupId, initialGroupNodeIds, groupDragOffset)
 
-              return (
-                <g key={conn.id}>
-                  {conn.arrowType !== 'none' && (
-                    <defs>
-                      {conn.arrowType === 'end' || conn.arrowType === 'both' ? (
-                        <marker
-                          id={`arrowhead-${conn.id}`}
-                          markerWidth="10"
-                          markerHeight="7"
-                          refX="9"
-                          refY="3.5"
-                          orient="auto"
+                const fromPort = getConnectionPort(conn, 'start')
+                const toPort = getConnectionPort(conn, 'end')
+
+                // 获取该连线在起点和终点端口的分布信息（使用相同的 key 格式）
+                const fromKey = `${conn.fromNodeId}-${fromPort}`
+                const toKey = `${conn.toNodeId}-${toPort}`
+                const fromList = portConnectionMap.get(fromKey) || []
+                const toList = portConnectionMap.get(toKey) || []
+                const fromInfo = fromList.find((i) => i.connId === conn.id)
+                const toInfo = toList.find((i) => i.connId === conn.id)
+
+                // 计算分散的端口位置
+                const fromPosition = getDistributedPortPosition(actualFromNode, fromPort, fromInfo?.index || 0, fromInfo?.total || 1)
+                const toPosition = getDistributedPortPosition(actualToNode, toPort, toInfo?.index || 0, toInfo?.total || 1)
+                const fromX = fromPosition.x
+                const fromY = fromPosition.y
+                const toX = toPosition.x
+                const toY = toPosition.y
+
+                return (
+                  <g key={conn.id}>
+                    {conn.arrowType !== 'none' && (
+                      <defs>
+                        {conn.arrowType === 'end' || conn.arrowType === 'both' ? (
+                          <marker
+                            id={`arrowhead-${conn.id}`}
+                            markerWidth="10"
+                            markerHeight="7"
+                            refX="9"
+                            refY="3.5"
+                            orient="auto"
+                          >
+                            <path d="M0,0 L10,3.5 L0,7 L3,3.5 Z" fill={conn.color} />
+                          </marker>
+                        ) : null}
+                        {conn.arrowType === 'start' || conn.arrowType === 'both' ? (
+                          <marker
+                            id={`arrowhead-reverse-${conn.id}`}
+                            markerWidth="10"
+                            markerHeight="7"
+                            refX="9"
+                            refY="3.5"
+                            orient="auto-start-reverse"
+                          >
+                            <path d="M0,0 L10,3.5 L0,7 L3,3.5 Z" fill={conn.color} />
+                          </marker>
+                        ) : null}
+                      </defs>
+                    )}
+                    <ConnectionLine
+                      conn={conn}
+                      fromX={fromX}
+                      fromY={fromY}
+                      toX={toX}
+                      toY={toY}
+                      fromPort={getConnectionPort(conn, 'start')}
+                      toPort={getConnectionPort(conn, 'end')}
+                      onClick={handleConnectionClick}
+                      onContextMenu={handleConnectionContextMenu}
+                      onDoubleClick={handleConnectionDoubleClick}
+                    />
+                    {conn.label && (() => {
+                      // 计算节点拖拽偏移量，用于调整弯曲点坐标
+                      const fromOffsetX = fromDraggingPos ? fromDraggingPos.x - fromNode.x : 0
+                      const fromOffsetY = fromDraggingPos ? fromDraggingPos.y - fromNode.y : 0
+                      const toOffsetX = toDraggingPos ? toDraggingPos.x - toNode.x : 0
+                      const toOffsetY = toDraggingPos ? toDraggingPos.y - toNode.y : 0
+
+                      // 弯曲点需要根据起点和终点的偏移量进行插值调整
+                      const adjustedBendPoints = conn.bendPoints?.map((bp, index, arr) => {
+                        // 根据弯曲点在连线中的位置，计算插值比例
+                        const ratio = (index + 1) / (arr.length + 1)
+                        return {
+                          x: bp.x + fromOffsetX * (1 - ratio) + toOffsetX * ratio,
+                          y: bp.y + fromOffsetY * (1 - ratio) + toOffsetY * ratio
+                        }
+                      }) || []
+
+                      const fromPortDir = getConnectionPort(conn, 'start')
+                      const toPortDir = getConnectionPort(conn, 'end')
+                      const labelPos = getLabelPosition(conn.type, fromX, fromY, toX, toY, adjustedBendPoints, fromPortDir, toPortDir)
+                      return (
+                        <text
+                          x={labelPos.x}
+                          y={labelPos.y - 5}
+                          textAnchor="middle"
+                          fontSize={11}
+                          fontWeight="500"
+                          fill="#64748b"
+                          style={{
+                            pointerEvents: 'none',
+                            textShadow: '0 1px 3px rgba(255,255,255,0.9)',
+                          }}
                         >
-                          <path d="M0,0 L10,3.5 L0,7 L3,3.5 Z" fill={conn.color} />
-                        </marker>
-                      ) : null}
-                      {conn.arrowType === 'start' || conn.arrowType === 'both' ? (
-                        <marker
-                          id={`arrowhead-reverse-${conn.id}`}
-                          markerWidth="10"
-                          markerHeight="7"
-                          refX="9"
-                          refY="3.5"
-                          orient="auto-start-reverse"
-                        >
-                          <path d="M0,0 L10,3.5 L0,7 L3,3.5 Z" fill={conn.color} />
-                        </marker>
-                      ) : null}
-                    </defs>
-                  )}
-                  <ConnectionLine
-                    conn={conn}
-                    fromX={fromX}
-                    fromY={fromY}
-                    toX={toX}
-                    toY={toY}
-                    fromPort={getConnectionPort(conn, 'start')}
-                    toPort={getConnectionPort(conn, 'end')}
-                    onClick={handleConnectionClick}
-                    onContextMenu={handleConnectionContextMenu}
-                    onDoubleClick={handleConnectionDoubleClick}
-                  />
-                  {conn.label && (() => {
-                    // 计算节点拖拽偏移量，用于调整弯曲点坐标
-                    const fromOffsetX = fromDraggingPos ? fromDraggingPos.x - fromNode.x : 0
-                    const fromOffsetY = fromDraggingPos ? fromDraggingPos.y - fromNode.y : 0
-                    const toOffsetX = toDraggingPos ? toDraggingPos.x - toNode.x : 0
-                    const toOffsetY = toDraggingPos ? toDraggingPos.y - toNode.y : 0
-
-                    // 弯曲点需要根据起点和终点的偏移量进行插值调整
-                    const adjustedBendPoints = conn.bendPoints?.map((bp, index, arr) => {
-                      // 根据弯曲点在连线中的位置，计算插值比例
-                      const ratio = (index + 1) / (arr.length + 1)
-                      return {
-                        x: bp.x + fromOffsetX * (1 - ratio) + toOffsetX * ratio,
-                        y: bp.y + fromOffsetY * (1 - ratio) + toOffsetY * ratio
-                      }
-                    }) || []
-
-                    const fromPortDir = getConnectionPort(conn, 'start')
-                    const toPortDir = getConnectionPort(conn, 'end')
-                    const labelPos = getLabelPosition(conn.type, fromX, fromY, toX, toY, adjustedBendPoints, fromPortDir, toPortDir)
-                    return (
-                      <text
-                        x={labelPos.x}
-                        y={labelPos.y - 5}
-                        textAnchor="middle"
-                        fontSize={11}
-                        fontWeight="500"
-                        fill="#64748b"
-                        style={{
-                          pointerEvents: 'none',
-                          textShadow: '0 1px 3px rgba(255,255,255,0.9)',
-                        }}
-                      >
-                        {conn.label}
-                      </text>
-                    )
-                  })()}
-                </g>
-              )
-            })}
+                          {conn.label}
+                        </text>
+                      )
+                    })()}
+                  </g>
+                )
+              })
+            })()}
 
             {/* Hovered port preview (before connection starts) - only in connection tool mode */}
             {hoveredPort && !isCreatingConnection && currentTool === 'connection' && (
