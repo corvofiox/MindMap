@@ -75,6 +75,11 @@ interface UIState {
   quickEditMode: boolean
   toggleQuickEditMode: () => void
 
+  // Relationship Highlight Mode (关系梳理)
+  relationshipHighlightMode: boolean
+  toggleRelationshipHighlightMode: () => void
+  setRelationshipHighlightMode: (enabled: boolean) => void
+
   // Domain Edit Mode
   domainEditMode: boolean
   setDomainEditMode: (enabled: boolean) => void
@@ -232,6 +237,11 @@ export const useUIStore = create<UIState>()(
         // Quick Edit Mode
         quickEditMode: false,
         toggleQuickEditMode: createToggle('quickEditMode'),
+
+        // Relationship Highlight Mode (关系梳理)
+        relationshipHighlightMode: false,
+        toggleRelationshipHighlightMode: createToggle('relationshipHighlightMode'),
+        setRelationshipHighlightMode: (enabled) => set({ relationshipHighlightMode: enabled }),
 
         // Domain Edit Mode
         domainEditMode: false,
@@ -402,6 +412,7 @@ export const useUIStore = create<UIState>()(
         gridVisible: state.gridVisible,
         minimapVisible: state.minimapVisible,
         quickEditMode: state.quickEditMode,
+        relationshipHighlightMode: state.relationshipHighlightMode,
         // nodeDefaults 不持久化，始终从服务器获取当前用户的配置
       }),
       onRehydrateStorage: () => (state) => {

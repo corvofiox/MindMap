@@ -19,7 +19,7 @@ import { ContextMenuWrapper } from '@/components/ContextMenuWrapper'
 import { RichTextToolbar } from '@/components/canvas/RichTextToolbar'
 import { ConnectionLine } from '@/components/canvas/ConnectionLine'
 import { CONNECTION_DEFAULTS, Z_INDEX } from '@/constants'
-import { generateId, colorToHex, hexToRgba, calculateCurveControlPoints, getCurveThroughPoints, getStepPath, pointsToPath, type PortDirection } from '@/utils/canvas'
+import { generateId, colorToHex, hexToRgba, calculateCurveControlPoints, getCurveThroughPoints, getStepPath, pointsToPath, calculateSmartPortPosition, buildConnectionInfoMap, type PortDirection, type ConnectionInfo } from '@/utils/canvas'
 import { saveToCache, loadFromCache } from '@/utils/nodeCache'
 import { saveCanvasNodesData, loadCanvasNodesData } from '@/services/api'
 import type { Node, Connection } from '@/types'
@@ -806,10 +806,12 @@ export function CanvasPage() {
     sidebarOpen,
     minimapVisible,
     domainEditMode,
+    relationshipHighlightMode,
     setDomainEditMode,
     setCurrentTool,
     toggleGrid,
     toggleQuickEditMode,
+    toggleRelationshipHighlightMode,
     toggleDragMode,
     toggleMinimap,
     setSelectedType,
@@ -1915,6 +1917,9 @@ export function CanvasPage() {
         } else if (e.key === 'e' || e.key === 'E') {
           toggleQuickEditMode()
           return
+        } else if (e.key === 't' || e.key === 'T') {
+          toggleRelationshipHighlightMode()
+          return
         } else if (e.key === 'Enter') {
           if (selectedIds.length === 1) {
             const nodeId = selectedIds[0]
@@ -2008,7 +2013,7 @@ export function CanvasPage() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
     }
-  }, [zoom, currentTool, setCurrentTool, setZoom, setPan, toggleGrid, toggleQuickEditMode, toggleDragMode, toggleMinimap, setEditingId, nodes, groups, selectedIds, addGroup, toggleSidebar, toggleNodePool, setSettingsOpen, setCommandPaletteOpen, handleManualSave, domainEditMode, setDomainEditMode, setIsCreatingConnection, setConnectionStartNodeId, setStartPortPreview, setSelectedIds, canUndo, canRedo, undo, redo, addNode, addToast])
+  }, [zoom, currentTool, setCurrentTool, setZoom, setPan, toggleGrid, toggleQuickEditMode, toggleRelationshipHighlightMode, toggleDragMode, toggleMinimap, setEditingId, nodes, groups, selectedIds, addGroup, toggleSidebar, toggleNodePool, setSettingsOpen, setCommandPaletteOpen, handleManualSave, domainEditMode, setDomainEditMode, setIsCreatingConnection, setConnectionStartNodeId, setStartPortPreview, setSelectedIds, canUndo, canRedo, undo, redo, addNode, addToast])
 
   // Handle click outside to end group name editing
   useEffect(() => {
@@ -3322,41 +3327,44 @@ export function CanvasPage() {
   const validCanvasId = canvasId ? parseInt(canvasId) : null
   const isCanvasValid = validCanvasId !== null && !isNaN(validCanvasId)
 
-  // 使用 useMemo 缓存端口分布计算，按连线 ID 排序确保顺序稳定
+  // 使用 useMemo 缓存端口分布计算，使用智能算法根据连线来源方向排序
   const portDistribution = useMemo(() => {
-    interface PortConnInfo { connId: string; index: number; total: number }
-    const portConnectionMap = new Map<string, PortConnInfo[]>()
-
     // 按连线 ID 排序，确保顺序稳定
     const sortedConnections = Array.from(connections.values()).sort((a, b) =>
       a.id.localeCompare(b.id)
     )
 
-    sortedConnections.forEach((c) => {
-      const fromPort = getConnectionPort(c, 'start')
-      const toPort = getConnectionPort(c, 'end')
+    // 构建连接信息数组，包含节点位置信息
+    const connectionInfos: ConnectionInfo[] = sortedConnections.map((conn) => {
+      const fromNode = nodes.get(conn.fromNodeId)
+      const toNode = nodes.get(conn.toNodeId)
+      const fromPort = getConnectionPort(conn, 'start')
+      const toPort = getConnectionPort(conn, 'end')
 
-      // 起点端口（入线和出线合并统计，使用相同的 key 格式）
-      const fromKey = `${c.fromNodeId}-${fromPort}`
-      if (!portConnectionMap.has(fromKey)) portConnectionMap.set(fromKey, [])
-      portConnectionMap.get(fromKey)!.push({ connId: c.id, index: 0, total: 0 })
+      // 获取节点中心位置（用于计算角度）
+      const fromX = fromNode ? fromNode.x + fromNode.width / 2 : 0
+      const fromY = fromNode ? fromNode.y + fromNode.height / 2 : 0
+      const toX = toNode ? toNode.x + toNode.width / 2 : 0
+      const toY = toNode ? toNode.y + toNode.height / 2 : 0
 
-      // 终点端口（入线和出线合并统计，使用相同的 key 格式）
-      const toKey = `${c.toNodeId}-${toPort}`
-      if (!portConnectionMap.has(toKey)) portConnectionMap.set(toKey, [])
-      portConnectionMap.get(toKey)!.push({ connId: c.id, index: 0, total: 0 })
+      return {
+        connId: conn.id,
+        fromNodeId: conn.fromNodeId,
+        toNodeId: conn.toNodeId,
+        fromX,
+        fromY,
+        toX,
+        toY,
+        fromPort,
+        toPort,
+      }
     })
 
-    // 为每个端口的连线分配索引
-    portConnectionMap.forEach((list) => {
-      list.forEach((item, idx) => {
-        item.index = idx
-        item.total = list.length
-      })
-    })
+    // 构建连接信息映射表
+    const connectionInfoMap = buildConnectionInfoMap(connectionInfos)
 
-    return { portConnectionMap, sortedConnections }
-  }, [connections])
+    return { connectionInfoMap, sortedConnections, connectionInfos }
+  }, [connections, nodes])
 
   // 如果没有有效的画布ID，显示提示界面
   if (!isCanvasValid) {
@@ -3944,7 +3952,18 @@ export function CanvasPage() {
               </marker>
             </defs>
             {(() => {
-              const { portConnectionMap, sortedConnections } = portDistribution
+              const { connectionInfoMap, sortedConnections } = portDistribution
+
+              // Calculate highlighted connections for relationship mode
+              const selectedNodeIds = selectedIds.filter(id => nodes.has(id))
+              const highlightedConnectionIds = new Set<string>()
+              if (relationshipHighlightMode && selectedNodeIds.length > 0) {
+                sortedConnections.forEach((conn) => {
+                  if (selectedNodeIds.includes(conn.fromNodeId) || selectedNodeIds.includes(conn.toNodeId)) {
+                    highlightedConnectionIds.add(conn.id)
+                  }
+                })
+              }
 
               return sortedConnections.map((conn) => {
                 const fromNode = nodes.get(conn.fromNodeId)
@@ -3960,21 +3979,35 @@ export function CanvasPage() {
                 const fromPort = getConnectionPort(conn, 'start')
                 const toPort = getConnectionPort(conn, 'end')
 
-                // 获取该连线在起点和终点端口的分布信息（使用相同的 key 格式）
+                // 获取该连线在起点和终点端口的连接信息列表
                 const fromKey = `${conn.fromNodeId}-${fromPort}`
                 const toKey = `${conn.toNodeId}-${toPort}`
-                const fromList = portConnectionMap.get(fromKey) || []
-                const toList = portConnectionMap.get(toKey) || []
-                const fromInfo = fromList.find((i) => i.connId === conn.id)
-                const toInfo = toList.find((i) => i.connId === conn.id)
+                const fromConnections = connectionInfoMap.get(fromKey) || []
+                const toConnections = connectionInfoMap.get(toKey) || []
 
-                // 计算分散的端口位置
-                const fromPosition = getDistributedPortPosition(actualFromNode, fromPort, fromInfo?.index || 0, fromInfo?.total || 1)
-                const toPosition = getDistributedPortPosition(actualToNode, toPort, toInfo?.index || 0, toInfo?.total || 1)
+                // 使用智能算法计算端口位置
+                const fromPosition = calculateSmartPortPosition(
+                  actualFromNode,
+                  fromPort,
+                  fromConnections,
+                  conn.id
+                )
+                const toPosition = calculateSmartPortPosition(
+                  actualToNode,
+                  toPort,
+                  toConnections,
+                  conn.id
+                )
                 const fromX = fromPosition.x
                 const fromY = fromPosition.y
                 const toX = toPosition.x
                 const toY = toPosition.y
+
+                // Calculate opacity for relationship highlight mode
+                let connectionOpacity = 1
+                if (relationshipHighlightMode && selectedNodeIds.length > 0) {
+                  connectionOpacity = highlightedConnectionIds.has(conn.id) ? 1 : 0.15
+                }
 
                 return (
                   <g key={conn.id}>
@@ -4017,6 +4050,7 @@ export function CanvasPage() {
                       onClick={handleConnectionClick}
                       onContextMenu={handleConnectionContextMenu}
                       onDoubleClick={handleConnectionDoubleClick}
+                      opacity={connectionOpacity}
                     />
                     {conn.label && (() => {
                       // 计算节点拖拽偏移量，用于调整弯曲点坐标
@@ -4046,6 +4080,7 @@ export function CanvasPage() {
                           fontSize={11}
                           fontWeight="500"
                           fill="#64748b"
+                          opacity={connectionOpacity}
                           style={{
                             pointerEvents: 'none',
                             textShadow: '0 1px 3px rgba(255,255,255,0.9)',
@@ -4329,30 +4364,59 @@ export function CanvasPage() {
               )
             })}
 
-          {/* Render nodes */}
-          {Array.from(nodes.values()).map((node) => {
-            // Check if this node is in the currently dragging group
-            let nodeGroupDragOffset: { x: number; y: number } | undefined = undefined
-            if (isDraggingGroup && draggingGroupId) {
-              const group = groups.get(draggingGroupId)
-              if (group && initialGroupNodeIds.has(node.id)) {
-                nodeGroupDragOffset = groupDragOffset
-              }
+          {/* Calculate highlighted nodes and connections for relationship mode */}
+          {(() => {
+            // Calculate highlighted nodes and connections
+            const selectedNodeIds = selectedIds.filter(id => nodes.has(id))
+            const highlightedNodeIds = new Set<string>(selectedNodeIds)
+            const highlightedConnectionIds = new Set<string>()
+
+            if (relationshipHighlightMode && selectedNodeIds.length > 0) {
+              connections.forEach((conn, connId) => {
+                if (selectedNodeIds.includes(conn.fromNodeId) || selectedNodeIds.includes(conn.toNodeId)) {
+                  highlightedConnectionIds.add(connId)
+                  highlightedNodeIds.add(conn.fromNodeId)
+                  highlightedNodeIds.add(conn.toNodeId)
+                }
+              })
             }
 
             return (
-              <NodeItem
-                key={node.id}
-                node={node}
-                isSelected={selectedIds.includes(node.id)}
-                zoom={zoom}
-                groupDragOffset={nodeGroupDragOffset}
-                onNodeContextMenuOpen={handleNodeContextMenu}
-                onMouseDown={closeAllContextMenus}
-                isViewer={isViewer}
-              />
+              <>
+                {/* Render nodes */}
+                {Array.from(nodes.values()).map((node) => {
+                  // Check if this node is in the currently dragging group
+                  let nodeGroupDragOffset: { x: number; y: number } | undefined = undefined
+                  if (isDraggingGroup && draggingGroupId) {
+                    const group = groups.get(draggingGroupId)
+                    if (group && initialGroupNodeIds.has(node.id)) {
+                      nodeGroupDragOffset = groupDragOffset
+                    }
+                  }
+
+                  // Calculate opacity for relationship highlight mode
+                  let nodeOpacity = 1
+                  if (relationshipHighlightMode && selectedNodeIds.length > 0) {
+                    nodeOpacity = highlightedNodeIds.has(node.id) ? 1 : 0.3
+                  }
+
+                  return (
+                    <NodeItem
+                      key={node.id}
+                      node={node}
+                      isSelected={selectedIds.includes(node.id)}
+                      zoom={zoom}
+                      groupDragOffset={nodeGroupDragOffset}
+                      onNodeContextMenuOpen={handleNodeContextMenu}
+                      onMouseDown={closeAllContextMenus}
+                      isViewer={isViewer}
+                      opacity={nodeOpacity}
+                    />
+                  )
+                })}
+              </>
             )
-          })}
+          })()}
 
           {/* Box selection rectangle - rendered on top of everything */}
           {isBoxSelecting && (

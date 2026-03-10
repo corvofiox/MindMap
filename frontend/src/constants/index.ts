@@ -73,7 +73,7 @@ export const CANVAS_DEFAULTS = {
 // Node defaults
 export const NODE_DEFAULTS = {
   WIDTH: 200,
-  HEIGHT: 120,
+  HEIGHT: 160,
   MIN_WIDTH: 100,
   MIN_HEIGHT: 60,
   COLOR: '#ffffff',
@@ -152,3 +152,4 @@ export const TIMEOUTS = {
 } as const
 
 export * from './zIndex'
+export * from './aiPrompts'

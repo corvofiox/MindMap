@@ -21,11 +21,12 @@ interface NodeItemProps {
   onNodeContextMenuOpen?: (x: number, y: number, nodeId: string) => void
   onMouseDown?: () => void
   isViewer?: boolean
+  opacity?: number
 }
 
 type EditingField = 'title' | 'content' | null
 
-export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, groupDragOffset, onNodeContextMenuOpen, onMouseDown, isViewer }: NodeItemProps) {
+export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, groupDragOffset, onNodeContextMenuOpen, onMouseDown, isViewer, opacity = 1 }: NodeItemProps) {
   const {
     updateNode,
     setSelectedIds,
@@ -985,7 +986,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
           top: (groupDragOffset ? localPosition.y + groupDragOffset.y : localPosition.y) - 16,
           width: localSize.width + 32,
           height: localSize.height + 32,
-          opacity: isBeingDraggedToPool ? 0 : 1,
+          opacity: isBeingDraggedToPool ? 0 : opacity,
           visibility: isBeingDraggedToPool ? 'hidden' : 'visible',
           transition: 'opacity 0.2s ease',
         }}

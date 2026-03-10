@@ -49,6 +49,7 @@ const defaultProviderConfig: ProviderConfig = {
 
 // 获取默认配置，包含各提供商的默认地址
 const getDefaultProviderConfigs = (): ProviderConfigs => ({
+  moonshot: { ...defaultProviderConfig, baseUrl: 'https://api.moonshot.cn/v1' },
   deepseek: { ...defaultProviderConfig, baseUrl: 'https://api.deepseek.com' },
   zhipu: { ...defaultProviderConfig, baseUrl: 'https://open.bigmodel.cn/api/paas/v4' },
   gemini: { ...defaultProviderConfig, baseUrl: 'https://generativelanguage.googleapis.com/v1beta' },

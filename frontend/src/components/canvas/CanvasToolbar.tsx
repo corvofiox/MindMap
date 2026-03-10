@@ -1,4 +1,4 @@
-import { MousePointer2, Square, Layers, Link, Grid3x3, Undo, Redo, Trash2, ArrowRight, ArrowLeftRight, Minus, Group, Save, Download, Upload, Check, Map, Layout, Image as ImageIcon, Pencil, ChevronDown } from 'lucide-react'
+import { MousePointer2, Square, Layers, Link, Grid3x3, Undo, Redo, Trash2, ArrowRight, ArrowLeftRight, Minus, Group, Save, Download, Upload, Check, Map, Layout, Image as ImageIcon, Pencil, ChevronDown, GitBranch } from 'lucide-react'
 import { useCanvasStore } from '@/store/useCanvasStore'
 import { useUIStore } from '@/store/useUIStore'
 import type { Tool } from '@/types'
@@ -22,7 +22,7 @@ const tools: { id: Tool; icon: typeof MousePointer2; label: string; shortcut: st
 const toolSeparators = [1, 2]
 
 export function CanvasToolbar({ onSave, isViewer }: CanvasToolbarProps) {
-  const { currentTool, gridVisible, dragMode, minimapVisible, quickEditMode, setCurrentTool, toggleGrid, toggleDragMode, toggleMinimap, toggleQuickEditMode, connectionDirection, setConnectionDirection, connectionStyle, setConnectionStyle, connectionType, setConnectionType, addToast } = useUIStore()
+  const { currentTool, gridVisible, dragMode, minimapVisible, quickEditMode, relationshipHighlightMode, setCurrentTool, toggleGrid, toggleDragMode, toggleMinimap, toggleQuickEditMode, toggleRelationshipHighlightMode, connectionDirection, setConnectionDirection, connectionStyle, setConnectionStyle, connectionType, setConnectionType, addToast } = useUIStore()
   const { selectedIds, removeNode, removeConnection, removeGroup, removeDomain, nodes, undo, redo, history, groups, domains, addGroup, connections, zoom, panX, panY, setCanvasData } = useCanvasStore()
 
   const [isSaving, setIsSaving] = useState(false)
@@ -289,6 +289,23 @@ export function CanvasToolbar({ onSave, isViewer }: CanvasToolbarProps) {
             title={isViewer ? '查看者无法使用快速编辑模式' : '快速编辑模式 (E)'}
           >
             <Pencil className="w-5 h-5" />
+          </button>
+
+          <button
+            onClick={isViewer ? undefined : toggleRelationshipHighlightMode}
+            disabled={isViewer}
+            className={`
+              p-2 rounded-lg transition-colors
+              ${isViewer
+                ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed'
+                : relationshipHighlightMode
+                  ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400'
+                  : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
+              }
+            `}
+            title={isViewer ? '查看者无法使用关系梳理' : '关系梳理 (T)'}
+          >
+            <GitBranch className="w-5 h-5" />
           </button>
 
           <button

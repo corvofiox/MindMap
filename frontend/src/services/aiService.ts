@@ -1,5 +1,5 @@
 // AI 服务 API 接口层
-// 支持 DeepSeek、智谱 GLM、Gemini、Ollama 等主流推理服务
+// 支持 DeepSeek、智谱 GLM、Moonshot Kimi、Gemini、Ollama 等主流推理服务
 
 import { executeToolCall, getToolsForAI, getToolsForGemini } from './aiTools'
 
@@ -30,14 +30,82 @@ export interface AIConfig {
   model: string
   temperature: number
   maxTokens: number
+  enableThinking?: boolean  // DeepSeek/GLM 思考模式
+  responseFormat?: 'text' | 'json_object'  // DeepSeek/GLM/Moonshot JSON Output 模式
+  // GLM 特有配置
+  glmConfig?: {
+    thinking?: { type: 'enabled' | 'disabled' }  // GLM 深度思考模式
+    toolStream?: boolean  // GLM 工具调用流式输出
+    clearThinking?: boolean  // GLM 是否清除历史思考内容（保留式思考）
+  }
+  // Moonshot 特有配置
+  moonshotConfig?: {
+    partial?: boolean  // Partial Mode：预填模型回复来引导输出
+    name?: string  // Partial Mode 中的角色名称，用于强化角色扮演一致性
+  }
 }
 
 // 预设的 AI 提供商配置
 export const AI_PROVIDERS: AIProvider[] = [
   {
+    id: 'moonshot',
+    name: 'Moonshot AI',
+    description: 'Moonshot Kimi 系列模型，支持工具调用、流式输出、深度思考模式',
+    baseUrl: 'https://api.moonshot.cn/v1',
+    apiKeyRequired: true,
+    modelsEndpoint: '/models',
+    chatEndpoint: '/chat/completions',
+    headers: (apiKey) => ({
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    }),
+    parseModels: (response: unknown) => {
+      const data = response as { data: Array<{ id: string; owned_by?: string }> }
+      return data.data
+        .filter((m) => m.id.includes('kimi'))
+        .map((m) => {
+          // 根据模型ID判断支持的特性
+          const supportsThinking = m.id.includes('kimi-k2') || m.id.includes('kimi-k1.5')
+          const supportsToolUse = !m.id.includes('kimi-k1') // k1.5 不支持工具调用
+          return {
+            id: m.id,
+            name: m.id,
+            description: supportsThinking
+              ? (supportsToolUse ? 'Kimi 模型（支持深度思考、工具调用）' : 'Kimi 模型（支持深度思考）')
+              : (supportsToolUse ? 'Kimi 模型（支持工具调用）' : 'Kimi 模型'),
+          }
+        })
+    },
+    parseChatResponse: (response: unknown) => {
+      const data = response as {
+        choices: Array<{
+          message: {
+            content: string
+            reasoning_content?: string
+            tool_calls?: Array<{
+              id: string
+              type: string
+              function: { name: string; arguments: string }
+            }>
+          }
+        }>
+      }
+      const message = data.choices[0]?.message
+      const toolCalls = message?.tool_calls?.map((tc) => ({
+        name: tc.function.name,
+        arguments: JSON.parse(tc.function.arguments),
+      }))
+      return {
+        content: message?.content || '',
+        reasoningContent: message?.reasoning_content,
+        toolCalls,
+      }
+    },
+  },
+  {
     id: 'deepseek',
     name: 'DeepSeek',
-    description: 'DeepSeek 系列模型',
+    description: 'DeepSeek 系列模型，支持思考模式、JSON Output、Tool Calls',
     baseUrl: 'https://api.deepseek.com',
     apiKeyRequired: true,
     modelsEndpoint: '/models',
@@ -53,7 +121,7 @@ export const AI_PROVIDERS: AIProvider[] = [
         .map((m) => ({
           id: m.id,
           name: m.id,
-          description: 'DeepSeek 模型',
+          description: m.id.includes('reasoner') ? 'DeepSeek 思考模型' : 'DeepSeek 模型',
         }))
     },
     parseChatResponse: (response: unknown) => {
@@ -85,7 +153,7 @@ export const AI_PROVIDERS: AIProvider[] = [
   {
     id: 'zhipu',
     name: '智谱 AI',
-    description: '智谱 GLM 系列模型',
+    description: '智谱 GLM 系列模型，支持深度思考、工具调用流式输出、结构化输出',
     baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
     apiKeyRequired: true,
     modelsEndpoint: '/models',
@@ -98,11 +166,20 @@ export const AI_PROVIDERS: AIProvider[] = [
       const data = response as { data: Array<{ id: string }> }
       return data.data
         .filter((m) => m.id.includes('glm'))
-        .map((m) => ({
-          id: m.id,
-          name: m.id,
-          description: '智谱 GLM 模型',
-        }))
+        .map((m) => {
+          // 根据模型ID判断支持的特性
+          const supportsThinking = m.id.includes('glm-5') || m.id.includes('glm-4.7') ||
+            m.id.includes('glm-4.6') || m.id.includes('glm-4.5')
+          // GLM-5、GLM-4.7、GLM-4.6 支持工具流式输出
+          const supportsToolStream = m.id.includes('glm-5') || m.id.includes('glm-4.7') || m.id.includes('glm-4.6')
+          return {
+            id: m.id,
+            name: m.id,
+            description: supportsThinking
+              ? (supportsToolStream ? 'GLM 模型（支持深度思考、工具流式输出）' : 'GLM 模型（支持深度思考）')
+              : '智谱 GLM 模型',
+          }
+        })
     },
     parseChatResponse: (response: unknown) => {
       const data = response as {
@@ -154,11 +231,35 @@ export const AI_PROVIDERS: AIProvider[] = [
     },
     parseChatResponse: (response: unknown) => {
       const data = response as {
-        candidates: Array<{ content: { parts: Array<{ text: string }> }; reasoning_content?: string }>
+        candidates: Array<{
+          content: {
+            parts: Array<{ text: string; thought?: boolean }>
+          }
+        }>
       }
+
+      const candidate = data.candidates?.[0]
+      const parts = candidate?.content?.parts
+
+      if (!parts || parts.length === 0) {
+        return { content: '' }
+      }
+
+      // 分离思考内容和普通内容
+      let reasoningContent = ''
+      let content = ''
+
+      for (const part of parts) {
+        if (part.thought) {
+          reasoningContent += part.text
+        } else {
+          content += part.text
+        }
+      }
+
       return {
-        content: data.candidates?.[0]?.content?.parts?.[0]?.text || '',
-        reasoningContent: data.candidates?.[0]?.reasoning_content,
+        content: content.trim(),
+        reasoningContent: reasoningContent.trim() || undefined
       }
     },
   },
@@ -272,13 +373,7 @@ export function abortCurrentRequest() {
 // 发送聊天消息（支持工具调用和中断）
 export async function sendChatMessageWithTools(
   providerId: string,
-  config: {
-    apiKey: string
-    baseUrl: string
-    model: string
-    temperature: number
-    maxTokens: number
-  },
+  config: AIConfig,
   messages: Array<Record<string, unknown>>,
   enableTools: boolean = true
 ): Promise<{ content: string; reasoningContent?: string; toolResults?: Array<{ tool: string; result: unknown }> }> {
@@ -296,7 +391,10 @@ export async function sendChatMessageWithTools(
   let url: string
   let body: Record<string, unknown>
 
-  const tools = enableTools ? getToolsForAI() : []
+  // 根据供应商决定是否使用 strict 模式
+  // DeepSeek 支持 strict 模式，GLM 等不支持（可能影响指令遵循能力）
+  const useStrict = providerId === 'deepseek'
+  const tools = enableTools ? getToolsForAI(useStrict) : []
 
   // 根据不同提供商构建请求体和 URL
   if (providerId === 'gemini') {
@@ -352,6 +450,95 @@ export async function sendChatMessageWithTools(
       messages: messages,
       temperature: config.temperature,
       max_tokens: config.maxTokens,
+    }
+
+    // DeepSeek 特殊处理
+    if (providerId === 'deepseek') {
+      // 思考模式：deepseek-reasoner 模型自动启用思考模式
+      // 其他模型可以通过 thinking 参数启用
+      if (config.model === 'deepseek-reasoner') {
+        // 思考模式下不支持的参数
+        delete (body as Record<string, unknown>).temperature
+      }
+
+      // JSON Output 模式
+      if (config.responseFormat === 'json_object') {
+        (body as Record<string, unknown>).response_format = { type: 'json_object' }
+      }
+
+      // 非 reasoner 模型的思考模式（通过 extra_body 传入）
+      if (config.enableThinking && config.model !== 'deepseek-reasoner') {
+        (body as Record<string, unknown>).extra_body = {
+          thinking: { type: 'enabled' }
+        }
+      }
+    }
+
+    // GLM 特殊处理
+    if (providerId === 'zhipu') {
+      // GLM 深度思考模式
+      // GLM-5、GLM-4.7 默认开启思考，不需要显式设置
+      // 只在需要禁用思考或设置特定参数时才设置
+      if (config.glmConfig?.thinking) {
+        (body as Record<string, unknown>).thinking = config.glmConfig.thinking
+      } else if (config.enableThinking === false) {
+        // 明确禁用思考模式
+        (body as Record<string, unknown>).thinking = { type: 'disabled' }
+      }
+      // 注意：不设置 thinking 时，GLM-5/4.7 默认开启思考
+
+      // GLM 保留式思考 (Preserved Thinking)
+      // 在工具调用之间保留 reasoning_content，保持推理连贯性
+      if (config.glmConfig?.clearThinking === false) {
+        const thinkingBody = (body as Record<string, unknown>).thinking as Record<string, unknown> || {}
+        thinkingBody.clear_thinking = false
+          ; (body as Record<string, unknown>).thinking = thinkingBody
+      }
+
+      // JSON Output 模式（结构化输出）
+      if (config.responseFormat === 'json_object') {
+        (body as Record<string, unknown>).response_format = { type: 'json_object' }
+      }
+    }
+
+    // Moonshot 特殊处理
+    if (providerId === 'moonshot') {
+      // Moonshot 兼容 OpenAI SDK，支持工具调用、JSON Output
+      // kimi-k2 系列支持深度思考，kimi-k1.5 也支持但不支持工具调用
+      const supportsToolUse = !config.model.includes('kimi-k1')
+
+      // 某些 Moonshot 模型（如 kimi-k2/k2.5 系列、kimi-k1.5 系列）只支持 temperature: 1
+      // 如果用户设置了其他值，需要强制设置为 1
+      if (config.model.includes('kimi-k2') || config.model.includes('kimi-k1')) {
+        (body as Record<string, unknown>).temperature = 1
+      }
+
+      // JSON Output 模式
+      if (config.responseFormat === 'json_object') {
+        (body as Record<string, unknown>).response_format = { type: 'json_object' }
+      }
+
+      // 注意：Moonshot 的 reasoning_content 是模型自动返回的，不需要额外参数开启
+      // 工具调用只在支持的模型上启用
+      if (!supportsToolUse && tools.length > 0) {
+        // k1.5 不支持工具调用，移除工具
+        delete (body as Record<string, unknown>).tools
+        delete (body as Record<string, unknown>).tool_choice
+      }
+
+      // Partial Mode：预填模型回复来引导输出
+      // 参考：https://platform.moonshot.cn/docs/api/partial
+      if (config.moonshotConfig?.partial) {
+        // 检查最后一条消息是否是 assistant 角色
+        const lastMessage = messages[messages.length - 1]
+        if (lastMessage && lastMessage.role === 'assistant') {
+          (lastMessage as Record<string, unknown>).partial = true
+          // 可选：添加 name 字段强化角色一致性
+          if (config.moonshotConfig.name) {
+            (lastMessage as Record<string, unknown>).name = config.moonshotConfig.name
+          }
+        }
+      }
     }
 
     // 添加工具定义
@@ -431,13 +618,7 @@ export interface StreamCallbacks {
 // 发送流式聊天消息
 export async function sendStreamChatMessage(
   providerId: string,
-  config: {
-    apiKey: string
-    baseUrl: string
-    model: string
-    temperature: number
-    maxTokens: number
-  },
+  config: AIConfig,
   messages: Array<Record<string, unknown>>,
   callbacks: StreamCallbacks,
   enableTools: boolean = true
@@ -453,7 +634,10 @@ export async function sendStreamChatMessage(
   }
 
   const baseUrl = config.baseUrl || provider.baseUrl
-  const tools = enableTools ? getToolsForAI() : []
+  // 根据供应商决定是否使用 strict 模式
+  // DeepSeek 支持 strict 模式，GLM 等不支持（可能影响指令遵循能力）
+  const useStrict = providerId === 'deepseek'
+  const tools = enableTools ? getToolsForAI(useStrict) : []
   const geminiTools = enableTools ? getToolsForGemini() : []
 
   let url: string
@@ -535,6 +719,107 @@ export async function sendStreamChatMessage(
       stream: true,
     }
 
+    // DeepSeek 特殊处理
+    if (providerId === 'deepseek') {
+      // 思考模式：deepseek-reasoner 模型自动启用思考模式
+      // 思考模式下不支持 temperature、top_p 等参数
+      if (config.model === 'deepseek-reasoner') {
+        delete (body as Record<string, unknown>).temperature
+      }
+
+      // JSON Output 模式
+      if (config.responseFormat === 'json_object') {
+        body.response_format = { type: 'json_object' }
+      }
+
+      // 非 reasoner 模型的思考模式（通过 extra_body 传入）
+      if (config.enableThinking && config.model !== 'deepseek-reasoner') {
+        body.extra_body = {
+          thinking: { type: 'enabled' }
+        }
+      }
+    }
+
+    // GLM 特殊处理
+    if (providerId === 'zhipu') {
+      // GLM 深度思考模式
+      // GLM-5、GLM-4.7 默认开启思考，不需要显式设置
+      // 只在需要禁用思考或设置特定参数时才设置
+      if (config.glmConfig?.thinking) {
+        body.thinking = config.glmConfig.thinking
+      } else if (config.enableThinking === false) {
+        // 明确禁用思考模式
+        body.thinking = { type: 'disabled' }
+      }
+      // 注意：不设置 thinking 时，GLM-5/4.7 默认开启思考
+
+      // GLM 保留式思考 (Preserved Thinking)
+      // 在工具调用之间保留 reasoning_content，保持推理连贯性
+      // clear_thinking: false 表示保留历史思考内容
+      if (config.glmConfig?.clearThinking === false) {
+        if (!body.thinking) {
+          body.thinking = {}
+        }
+        (body.thinking as Record<string, unknown>).clear_thinking = false
+      }
+
+      // GLM 工具调用流式输出（GLM-5、GLM-4.7、GLM-4.6 支持）
+      const supportsToolStream = config.model.includes('glm-5') ||
+        config.model.includes('glm-4.7') ||
+        config.model.includes('glm-4.6')
+      if (supportsToolStream && tools.length > 0) {
+        // 默认启用，除非明确禁用
+        if (config.glmConfig?.toolStream !== false) {
+          body.tool_stream = true
+        }
+      }
+
+      // JSON Output 模式（结构化输出）
+      if (config.responseFormat === 'json_object') {
+        body.response_format = { type: 'json_object' }
+      }
+    }
+
+    // Moonshot 流式处理
+    if (providerId === 'moonshot') {
+      // Moonshot 兼容 OpenAI SDK，支持工具调用、JSON Output
+      // kimi-k2 系列支持深度思考，kimi-k1.5 也支持但不支持工具调用
+      const supportsToolUse = !config.model.includes('kimi-k1')
+
+      // 某些 Moonshot 模型（如 kimi-k2/k2.5 系列、kimi-k1.5 系列）只支持 temperature: 1
+      // 如果用户设置了其他值，需要强制设置为 1
+      if (config.model.includes('kimi-k2') || config.model.includes('kimi-k1')) {
+        body.temperature = 1
+      }
+
+      // JSON Output 模式
+      if (config.responseFormat === 'json_object') {
+        body.response_format = { type: 'json_object' }
+      }
+
+      // 注意：Moonshot 的 reasoning_content 是模型自动返回的，不需要额外参数开启
+      // 工具调用只在支持的模型上启用
+      if (!supportsToolUse && tools.length > 0) {
+        // k1.5 不支持工具调用，移除工具
+        delete body.tools
+        delete body.tool_choice
+      }
+
+      // Partial Mode：预填模型回复来引导输出
+      // 参考：https://platform.moonshot.cn/docs/api/partial
+      if (config.moonshotConfig?.partial) {
+        // 检查最后一条消息是否是 assistant 角色
+        const lastMessage = messages[messages.length - 1]
+        if (lastMessage && lastMessage.role === 'assistant') {
+          (lastMessage as Record<string, unknown>).partial = true
+          // 可选：添加 name 字段强化角色一致性
+          if (config.moonshotConfig.name) {
+            (lastMessage as Record<string, unknown>).name = config.moonshotConfig.name
+          }
+        }
+      }
+    }
+
     if (tools.length > 0) {
       body.tools = tools
       body.tool_choice = 'auto'
@@ -569,10 +854,12 @@ export async function sendStreamChatMessage(
     let isDone = false
     let assistantContent = ''
     let assistantReasoningContent = ''
+    const geminiThoughtSignatures: string[] = [] // 存储 Gemini 的 thoughtSignature
     const toolCalls: Array<{
       id: string
       type: string
       function: { name: string; arguments: string }
+      thoughtSignature?: string
     }> = []
 
     while (!isDone) {
@@ -604,8 +891,13 @@ export async function sendStreamChatMessage(
 
               if (parts && parts.length > 0) {
                 for (const part of parts) {
-                  // 处理文本内容
-                  if (part.text) {
+                  // 处理思考内容 (thought: true)
+                  if (part.thought && part.text) {
+                    assistantReasoningContent += part.text
+                    callbacks.onReasoningChunk?.(part.text)
+                  }
+                  // 处理普通文本内容
+                  else if (part.text && !part.thought) {
                     assistantContent += part.text
                     callbacks.onContentChunk?.(part.text)
                   }
@@ -613,13 +905,18 @@ export async function sendStreamChatMessage(
                   // 处理 Gemini 工具调用
                   if (part.functionCall) {
                     const fc = part.functionCall
+                    // 保存 thoughtSignature 用于后续函数调用
+                    if (fc.thoughtSignature) {
+                      geminiThoughtSignatures.push(fc.thoughtSignature)
+                    }
                     toolCalls.push({
                       id: fc.name,
                       type: 'function',
                       function: {
                         name: fc.name,
                         arguments: JSON.stringify(fc.args || {})
-                      }
+                      },
+                      thoughtSignature: fc.thoughtSignature
                     })
                     callbacks.onToolCall?.({
                       name: fc.name,
@@ -709,12 +1006,19 @@ export async function sendStreamChatMessage(
           ...messages,
           {
             role: 'model',
-            parts: toolCalls.map(tc => ({
-              functionCall: {
-                name: tc.function.name,
-                args: JSON.parse(tc.function.arguments || '{}')
+            parts: toolCalls.map(tc => {
+              const part: Record<string, unknown> = {
+                functionCall: {
+                  name: tc.function.name,
+                  args: JSON.parse(tc.function.arguments || '{}')
+                }
               }
-            }))
+              // 添加 thoughtSignature 如果有的话
+              if (tc.thoughtSignature) {
+                part.thoughtSignature = tc.thoughtSignature
+              }
+              return part
+            })
           },
           {
             role: 'user',

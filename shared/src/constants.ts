@@ -27,7 +27,7 @@ export interface NodeDefaults {
 export const SHARED_NODE_DEFAULTS = {
   textNode: {
     width: 200,
-    height: 120,
+    height: 160,
     color: '#ffffff',
     fontSize: 14,
     titleAlign: 'left' as const,
@@ -36,7 +36,7 @@ export const SHARED_NODE_DEFAULTS = {
   },
   imageNode: {
     width: 200,
-    height: 150,
+    height: 160,
     fontSize: 14,
     titleAlign: 'left' as const,
     collapsedTitleAlign: 'left' as const,

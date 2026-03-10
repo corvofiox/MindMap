@@ -1,12 +1,16 @@
 import { useState, useRef, useEffect } from 'react'
 import { Send, X, Sparkles, User, Bot, Trash2, Copy, Check, Plus, FileText, Image as ImageIcon, Settings, RefreshCw, Brain, Square, Eraser } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import rehypeHighlight from 'rehype-highlight'
+import 'highlight.js/styles/github-dark.css'
 import { useUIStore } from '@/store/useUIStore'
 import { useAIStore } from '@/store/useAIStore'
 import { useAuthStore } from '@/store/useAuthStore'
 import { AIConfigDialog } from '@/components/ai/AIConfigDialog'
 import { sendStreamChatMessage, abortCurrentRequest, type StreamCallbacks, AI_PROVIDERS, validateApiKey } from '@/services/aiService'
 import { getAIConversation, saveAIConversation, deleteAIConversation } from '@/services/api'
-import { Z_INDEX } from '@/constants'
+import { Z_INDEX, DEFAULT_SYSTEM_PROMPT } from '@/constants'
 import { useCanvasStore } from '@/store/useCanvasStore'
 
 interface Message {
@@ -244,6 +248,7 @@ export function AiSidebar({ open }: AiSidebarProps) {
       }
 
       // 构建消息历史（只包含分隔线以下的消息）
+      // DeepSeek 思考模式优化：在新一轮对话中只传入上一轮的 content，忽略 reasoning_content
       const startIndex = contextDividerIndex >= 0 ? contextDividerIndex : 0
       const messageHistory = messages
         .slice(startIndex)
@@ -279,7 +284,8 @@ export function AiSidebar({ open }: AiSidebarProps) {
             }
           }
 
-          // 普通文本消息
+          // 普通文本消息 - 只返回 content，不返回 reasoning_content
+          // 这是 DeepSeek 思考模式的要求：多轮对话中只保留 content
           return {
             role: m.role,
             content: m.content,
@@ -289,55 +295,7 @@ export function AiSidebar({ open }: AiSidebarProps) {
       // 添加系统提示（包含工具调用说明和思维链）
       const systemMessage = {
         role: 'system',
-        content: `你是一个专业的思维导图助手。你可以帮助用户创建、优化和扩展思维导图。
-
-在回答之前，请先展示你的思考过程（思维链），包括：
-1. 理解用户的问题或需求
-2. 分析当前画布状态（如果需要）
-3. 规划如何回答或操作
-4. 执行相应的工具调用
-5. 总结最终答案
-
-请将你的思考过程放在 reasoning_content 字段中，最终答案放在 content 字段中。
-
-【重要规则】当描述画布内容时：
-1. 只描述文本内容和它们之间的逻辑关系
-2. 用自然语言描述，如"中心主题是XX，包含A、B、C三个分支"、"XX包含YY和ZZ"、"XX与YY相关联"
-3. 严禁使用以下技术术语：
-   - 节点、组、域、连线、连接
-   - ID、UUID等标识符
-   - 坐标位置 (x, y)
-   - 尺寸大小 (width, height)
-   - 颜色代码 (#ffffff 等)
-   - 形状类型
-   - 像素值
-   - 任何数字化的属性值
-
-正确示例：
-"当前思维导图的中心主题是'产品规划'，包含三个主要分支：
-- 市场分析：涵盖目标用户和竞品分析
-- 功能设计：包括核心功能和特色功能
-- 技术架构：涉及前端和后端技术选型
-
-市场分析与功能设计紧密相关，功能设计又影响技术架构的选择。"
-
-错误示例（严禁）：
-"节点1 (ID: xxx) 位置: (100, 200) 尺寸: 300x200 颜色: #ffffff，与节点2有连线连接"
-
-你的回答必须面向人类思维，用纯粹的自然语言描述内容逻辑和关系。
-
-你可以使用以下工具来操作画布：
-- getAllNodes: 获取所有元素信息
-- getAllConnections: 获取所有关系信息
-- getCanvasData: 获取完整画布数据
-- createNode: 创建新元素
-- updateNode: 更新元素
-- deleteNode: 删除元素
-- createConnection: 创建关系
-- deleteConnection: 删除关系
-- generateMindMapStructure: 根据结构自动生成思维导图
-
-当用户要求创建或修改思维导图时，请主动使用这些工具来完成操作。`,
+        content: DEFAULT_SYSTEM_PROMPT,
       }
 
       // 创建助手消息占位符
@@ -455,7 +413,7 @@ export function AiSidebar({ open }: AiSidebarProps) {
       // 发送流式请求
       await sendStreamChatMessage(
         currentProvider,
-        config,
+        { ...config, provider: currentProvider },
         [
           systemMessage,
           ...messageHistory,
@@ -527,30 +485,7 @@ export function AiSidebar({ open }: AiSidebarProps) {
       // 添加系统提示
       const systemMessage = {
         role: 'system',
-        content: `你是一个专业的思维导图助手。你可以帮助用户创建、优化和扩展思维导图。
-
-【重要规则】当用户询问画布信息时：
-1. 只描述节点的文本内容和它们之间的逻辑关系
-2. 用自然语言描述，如"中心主题是XX，包含A、B、C三个分支"
-3. 严禁输出以下任何技术信息：
-   - ID、UUID等标识符
-   - 坐标位置 (x, y)
-   - 尺寸大小 (width, height)
-   - 颜色代码 (#ffffff 等)
-   - 形状类型
-   - 像素值
-   - 任何数字化的属性值
-
-正确示例：
-"当前思维导图的中心主题是'产品规划'，包含三个主要分支：
-- 市场分析：涵盖目标用户和竞品分析
-- 功能设计：包括核心功能和特色功能
-- 技术架构：涉及前端和后端技术选型"
-
-错误示例（严禁）：
-"节点1 (ID: xxx) 位置: (100, 200) 尺寸: 300x200 颜色: #ffffff"
-
-你的回答必须面向人类思维，用纯粹的自然语言描述内容逻辑。`,
+        content: DEFAULT_SYSTEM_PROMPT,
       }
 
       // 创建助手消息占位符
@@ -661,7 +596,7 @@ export function AiSidebar({ open }: AiSidebarProps) {
       // 发送流式请求
       await sendStreamChatMessage(
         currentProvider,
-        config,
+        { ...config, provider: currentProvider },
         [
           systemMessage,
           ...messageHistory,
@@ -1056,7 +991,110 @@ export function AiSidebar({ open }: AiSidebarProps) {
                       <span className="w-2 h-2 bg-purple-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
                     </div>
                   ) : (
-                    <div className="whitespace-pre-wrap">{message.content}</div>
+                    <div className="markdown-content">
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        rehypePlugins={[rehypeHighlight]}
+                        components={{
+                          // 自定义代码块渲染
+                          code({ className, children, ...props }) {
+                            const match = /language-(\w+)/.exec(className || '')
+                            const isInline = !match && !className
+                            return isInline ? (
+                              <code className="bg-gray-200 dark:bg-gray-600 px-1 py-0.5 rounded text-sm" {...props}>
+                                {children}
+                              </code>
+                            ) : (
+                              <div className="relative group/code">
+                                <div className="absolute right-2 top-2 opacity-0 group-hover/code:opacity-100 transition-opacity">
+                                  <span className="text-xs text-gray-400">{match?.[1] || 'code'}</span>
+                                </div>
+                                <pre className="bg-gray-900 text-gray-100 p-3 rounded-lg overflow-x-auto">
+                                  <code className={className} {...props}>
+                                    {children}
+                                  </code>
+                                </pre>
+                              </div>
+                            )
+                          },
+                          // 自定义段落渲染
+                          p({ children }) {
+                            return <p className="mb-2 last:mb-0">{children}</p>
+                          },
+                          // 自定义列表渲染
+                          ul({ children }) {
+                            return <ul className="list-disc list-inside mb-2">{children}</ul>
+                          },
+                          ol({ children }) {
+                            return <ol className="list-decimal list-inside mb-2">{children}</ol>
+                          },
+                          // 自定义标题渲染
+                          h1({ children }) {
+                            return <h1 className="text-lg font-bold mb-2">{children}</h1>
+                          },
+                          h2({ children }) {
+                            return <h2 className="text-base font-bold mb-2">{children}</h2>
+                          },
+                          h3({ children }) {
+                            return <h3 className="text-sm font-bold mb-1">{children}</h3>
+                          },
+                          // 自定义链接渲染
+                          a({ children, href }) {
+                            return (
+                              <a
+                                href={href}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-blue-500 hover:text-blue-600 underline"
+                              >
+                                {children}
+                              </a>
+                            )
+                          },
+                          // 自定义表格渲染
+                          table({ children }) {
+                            return (
+                              <div className="overflow-x-auto mb-2">
+                                <table className="border-collapse border border-gray-300 dark:border-gray-600">
+                                  {children}
+                                </table>
+                              </div>
+                            )
+                          },
+                          thead({ children }) {
+                            return <thead className="bg-gray-100 dark:bg-gray-700">{children}</thead>
+                          },
+                          th({ children }) {
+                            return (
+                              <th className="border border-gray-300 dark:border-gray-600 px-2 py-1 text-left">
+                                {children}
+                              </th>
+                            )
+                          },
+                          td({ children }) {
+                            return (
+                              <td className="border border-gray-300 dark:border-gray-600 px-2 py-1">
+                                {children}
+                              </td>
+                            )
+                          },
+                          // 自定义引用块渲染
+                          blockquote({ children }) {
+                            return (
+                              <blockquote className="border-l-4 border-gray-300 dark:border-gray-600 pl-3 italic mb-2">
+                                {children}
+                              </blockquote>
+                            )
+                          },
+                          // 自定义水平线渲染
+                          hr() {
+                            return <hr className="my-2 border-gray-300 dark:border-gray-600" />
+                          },
+                        }}
+                      >
+                        {message.content}
+                      </ReactMarkdown>
+                    </div>
                   )}
                   {/* 显示图片附件 */}
                   {message.attachments && message.attachments.some(a => a.type === 'image') && (

@@ -19,6 +19,7 @@ interface ConnectionLineProps {
   onClick: (e: React.MouseEvent, connectionId: string) => void
   onContextMenu: (e: React.MouseEvent, connectionId: string) => void
   onDoubleClick: (e: React.MouseEvent, connectionId: string) => void
+  opacity?: number
 }
 
 export function ConnectionLine({
@@ -32,6 +33,7 @@ export function ConnectionLine({
   onClick,
   onContextMenu,
   onDoubleClick,
+  opacity = 1,
 }: ConnectionLineProps) {
   const lineColor = conn.color
 
@@ -48,7 +50,7 @@ export function ConnectionLine({
         const pathData = pointsToPath(points)
 
         return (
-          <g style={{ pointerEvents: 'auto' }}>
+          <g style={{ pointerEvents: 'auto', opacity }}>
             <path
               d={pathData}
               stroke="transparent"
@@ -93,7 +95,7 @@ export function ConnectionLine({
       }
 
       return (
-        <g style={{ pointerEvents: 'auto' }}>
+        <g style={{ pointerEvents: 'auto', opacity }}>
           {shouldCreateHitArea && (
             <line
               x1={hitStartX}
@@ -139,7 +141,7 @@ export function ConnectionLine({
         const pathData = getCurveThroughPoints(points, fromPort, toPort)
 
         return (
-          <g style={{ pointerEvents: 'auto' }}>
+          <g style={{ pointerEvents: 'auto', opacity }}>
             <path
               d={pathData}
               stroke="transparent"
@@ -173,7 +175,7 @@ export function ConnectionLine({
       const pathData = `M ${fromX} ${fromY} C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${toX} ${toY}`
 
       return (
-        <g style={{ pointerEvents: 'auto' }}>
+        <g style={{ pointerEvents: 'auto', opacity }}>
           <path
             d={pathData}
             stroke="transparent"
@@ -204,7 +206,7 @@ export function ConnectionLine({
       const pathData = pointsToPath(points)
 
       return (
-        <g style={{ pointerEvents: 'auto' }}>
+        <g style={{ pointerEvents: 'auto', opacity }}>
           <path
             d={pathData}
             stroke="transparent"

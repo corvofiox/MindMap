@@ -372,6 +372,178 @@ export function getStepPath(
   return points
 }
 
+/**
+ * 智能端口位置计算接口
+ */
+export interface SmartPortPosition {
+  x: number
+  y: number
+  index: number
+  total: number
+}
 
+/**
+ * 连接信息接口，用于智能排序
+ */
+export interface ConnectionInfo {
+  connId: string
+  fromNodeId: string
+  toNodeId: string
+  fromX: number
+  fromY: number
+  toX: number
+  toY: number
+  fromPort: PortDirection
+  toPort: PortDirection
+}
+
+/**
+ * 计算两个点之间的角度（弧度）
+ */
+function calculateAngle(fromX: number, fromY: number, toX: number, toY: number): number {
+  return Math.atan2(toY - fromY, toX - fromX)
+}
+
+/**
+ * 根据端口方向和来源角度计算排序分数
+ * 分数越小，位置越靠近端口的"起点"（上方或左方）
+ */
+function calculateSortScore(port: PortDirection, sourceAngle: number): number {
+  // 将角度归一化到 -PI 到 PI
+  let normalizedAngle = sourceAngle
+  while (normalizedAngle > Math.PI) normalizedAngle -= 2 * Math.PI
+  while (normalizedAngle < -Math.PI) normalizedAngle += 2 * Math.PI
+
+  switch (port) {
+    case 'top':
+      // 对于顶部端口：
+      // 从左边来的角度接近 0（向右指），从右边来的接近 PI（向左指）
+      // 我们希望：从左边来的排在左边（上方），从右边来的排在右边（下方）
+      // 使用 cos 值：左边为正，右边为负
+      return -Math.cos(normalizedAngle)
+
+    case 'bottom':
+      // 对于底部端口：
+      // 从左边来的角度接近 0（向右指），从右边来的接近 PI（向左指）
+      // 我们希望：从左边来的排在左边（上方），从右边来的排在右边（下方）
+      // 使用 cos 值：左边为正，右边为负
+      return -Math.cos(normalizedAngle)
+
+    case 'left':
+      // 对于左侧端口：
+      // 从上方来的角度接近 PI/2（向下指），从下方来的接近 -PI/2（向上指）
+      // 我们希望：从上方来的排在上边（上方），从下方来的排在下边（下方）
+      // 使用 sin 值：上方为正，下方为负
+      return -Math.sin(normalizedAngle)
+
+    case 'right':
+      // 对于右侧端口：
+      // 从上方来的角度接近 PI/2（向下指），从下方来的接近 -PI/2（向上指）
+      // 我们希望：从上方来的排在上边（上方），从下方来的排在下边（下方）
+      // 使用 sin 值：上方为正，下方为负
+      return -Math.sin(normalizedAngle)
+
+    default:
+      return 0
+  }
+}
+
+/**
+ * 计算智能端口分布
+ * 根据连线来源的方向动态排序，使得连线排列更加合理
+ *
+ * @param node 当前节点
+ * @param port 端口方向
+ * @param connections 连接到该端口的所有连线信息
+ * @param currentConnId 当前连线的ID
+ * @returns 智能端口位置信息
+ */
+export function calculateSmartPortPosition(
+  node: { id: string; x: number; y: number; width: number; height: number },
+  port: PortDirection,
+  connections: ConnectionInfo[],
+  currentConnId: string
+): SmartPortPosition {
+  const basePos = {
+    x: node.x + (port === 'top' || port === 'bottom' ? node.width / 2 : port === 'right' ? node.width : 0),
+    y: node.y + (port === 'left' || port === 'right' ? node.height / 2 : port === 'bottom' ? node.height : 0),
+  }
+
+  if (connections.length <= 1) {
+    return { x: basePos.x, y: basePos.y, index: 0, total: connections.length }
+  }
+
+  // 为每个连接计算排序分数
+  const scoredConnections = connections.map((conn) => {
+    // 确定这条连线的另一端位置
+    const isIncoming = conn.toNodeId === node.id && conn.toPort === port
+    const otherX = isIncoming ? conn.fromX : conn.toX
+    const otherY = isIncoming ? conn.fromY : conn.toY
+
+    // 计算从另一端到当前端口的角度
+    const angle = calculateAngle(otherX, otherY, basePos.x, basePos.y)
+
+    // 计算排序分数
+    const score = calculateSortScore(port, angle)
+
+    return { connId: conn.connId, score, angle }
+  })
+
+  // 根据分数排序
+  scoredConnections.sort((a, b) => a.score - b.score)
+
+  // 找到当前连线的索引
+  const currentIndex = scoredConnections.findIndex((sc) => sc.connId === currentConnId)
+  const index = currentIndex >= 0 ? currentIndex : 0
+  const total = connections.length
+
+  // 计算可用空间和间距
+  const availableSpace = port === 'top' || port === 'bottom'
+    ? node.width * 0.85
+    : node.height * 0.85
+
+  const minSpacing = 10
+  const maxSpacing = 24
+  const idealTotalSpread = (total - 1) * maxSpacing
+  const actualTotalSpread = Math.min(idealTotalSpread, availableSpace)
+  const actualSpacing = Math.max(minSpacing, actualTotalSpread / (total - 1 || 1))
+
+  // 计算偏移量（从中心向两侧分布）
+  const offset = (index - (total - 1) / 2) * actualSpacing
+
+  // 根据端口方向应用偏移
+  switch (port) {
+    case 'top':
+    case 'bottom':
+      return { x: basePos.x + offset, y: basePos.y, index, total }
+    case 'left':
+    case 'right':
+      return { x: basePos.x, y: basePos.y + offset, index, total }
+  }
+}
+
+/**
+ * 构建连接信息映射表
+ * 用于智能端口位置计算
+ */
+export function buildConnectionInfoMap(
+  connections: ConnectionInfo[]
+): Map<string, ConnectionInfo[]> {
+  const map = new Map<string, ConnectionInfo[]>()
+
+  connections.forEach((conn) => {
+    // 起点端口
+    const fromKey = `${conn.fromNodeId}-${conn.fromPort}`
+    if (!map.has(fromKey)) map.set(fromKey, [])
+    map.get(fromKey)!.push(conn)
+
+    // 终点端口
+    const toKey = `${conn.toNodeId}-${conn.toPort}`
+    if (!map.has(toKey)) map.set(toKey, [])
+    map.get(toKey)!.push(conn)
+  })
+
+  return map
+}
 
 

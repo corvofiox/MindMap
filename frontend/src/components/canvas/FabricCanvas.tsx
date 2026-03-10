@@ -26,6 +26,7 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
     groups,
     domains,
     connections,
+    selectedIds,
     zoom,
     panX,
     panY,
@@ -40,7 +41,7 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
     setHoveredId,
   } = useCanvasStore()
 
-  const { currentTool, domainEditMode, setDomainEditMode, nodeDefaults } = useUIStore()
+  const { currentTool, domainEditMode, setDomainEditMode, nodeDefaults, relationshipHighlightMode } = useUIStore()
 
   // Selection handlers
   const handleSelectionChanged = useCallback((e: { selected?: fabric.Object[] }) => {
@@ -406,6 +407,55 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
     canvas.setHeight(height)
     canvas.renderAll()
   }, [width, height])
+
+  // Relationship highlight effect (关系梳理)
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+
+    const selectedNodes = selectedIds.filter(id => nodes.has(id))
+
+    // If relationship highlight mode is off or no nodes selected, reset all opacities
+    if (!relationshipHighlightMode || selectedNodes.length === 0) {
+      canvas.getObjects().forEach((obj: any) => {
+        if (obj.data?.type === 'node' || obj.data?.type === 'connection') {
+          obj.set({ opacity: 1 })
+        }
+      })
+      canvas.renderAll()
+      return
+    }
+
+    // Get all related node IDs and connection IDs
+    const relatedNodeIds = new Set<string>(selectedNodes)
+    const relatedConnectionIds = new Set<string>()
+
+    selectedNodes.forEach(nodeId => {
+      connections.forEach((conn, connId) => {
+        if (conn.fromNodeId === nodeId || conn.toNodeId === nodeId) {
+          relatedConnectionIds.add(connId)
+          relatedNodeIds.add(conn.fromNodeId)
+          relatedNodeIds.add(conn.toNodeId)
+        }
+      })
+    })
+
+    // Apply opacity to all objects
+    canvas.getObjects().forEach((obj: any) => {
+      const data = obj.data
+      if (!data) return
+
+      if (data.type === 'node') {
+        const isRelated = relatedNodeIds.has(data.id)
+        obj.set({ opacity: isRelated ? 1 : 0.3 })
+      } else if (data.type === 'connection') {
+        const isRelated = relatedConnectionIds.has(data.id)
+        obj.set({ opacity: isRelated ? 1 : 0.15 })
+      }
+    })
+
+    canvas.renderAll()
+  }, [relationshipHighlightMode, selectedIds, nodes, connections])
 
   return (
     <div
