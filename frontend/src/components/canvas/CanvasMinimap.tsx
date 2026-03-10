@@ -43,6 +43,7 @@ export function CanvasMinimap({
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [isDragging, setIsDragging] = useState(false)
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 })
+  const hasDraggedRef = useRef(false)
   const [contentBounds, setContentBounds] = useState<Bounds>({ x: -500, y: -500, width: 1000, height: 1000 })
   const [minimapSize, setMinimapSize] = useState({ width: 200, height: 150 })
   const scaleRef = useRef(0.2)
@@ -420,6 +421,7 @@ export function CanvasMinimap({
     e.stopPropagation()
     setIsDragging(true)
     setDragStart({ x: e.clientX, y: e.clientY })
+    hasDraggedRef.current = false
   }
 
   const handleMouseMove = (e: React.MouseEvent) => {
@@ -429,6 +431,11 @@ export function CanvasMinimap({
 
     const dx = e.clientX - dragStart.x
     const dy = e.clientY - dragStart.y
+
+    // Mark that we have actually dragged (not just clicked)
+    if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
+      hasDraggedRef.current = true
+    }
 
     // Convert minimap pixel delta to canvas pan delta
     // The scale is minimap scale, zoom is canvas zoom
@@ -464,6 +471,9 @@ export function CanvasMinimap({
 
     // Don't trigger click if we were dragging
     if (isDragging) return
+
+    // Don't trigger click if we just finished a drag operation
+    if (hasDraggedRef.current) return
 
     const rect = e.currentTarget.getBoundingClientRect()
     const x = e.clientX - rect.left - 4 // Subtract margin
