@@ -52,6 +52,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
   const nodeRef = useRef<HTMLDivElement>(null)
   const titleRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
+  const contentAreaRef = useRef<HTMLDivElement>(null)
   const dragStartRef = useRef({ x: 0, y: 0, nodeX: node.x, nodeY: node.y })
   const resizeStartRef = useRef({ x: 0, y: 0, width: node.width, height: node.height })
   const justFinishedDragRef = useRef(false)
@@ -902,6 +903,20 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
     }))
   }, [isEditingTitle, isEditingContent, saveTitle, saveContent, setEditingId])
 
+  // Handle wheel event on content area - prevent canvas zoom when content is scrollable
+  const handleContentWheel = useCallback((e: React.WheelEvent) => {
+    const contentArea = contentAreaRef.current
+    if (!contentArea) return
+
+    // Check if content area is scrollable
+    const isScrollable = contentArea.scrollHeight > contentArea.clientHeight
+    if (!isScrollable) return
+
+    // Always stop propagation when content area is scrollable
+    // This prevents canvas zoom when scrolling node content
+    e.stopPropagation()
+  }, [])
+
   // Handle context menu
   const handleContextMenu = useCallback(
     (e: React.MouseEvent) => {
@@ -1348,7 +1363,12 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
               </div>
 
               {/* 内容区域 */}
-              <div data-field="content" className="flex-1 p-4 overflow-auto">
+              <div
+                ref={contentAreaRef}
+                data-field="content"
+                className="flex-1 p-4 overflow-auto"
+                onWheel={handleContentWheel}
+              >
                 {isEditingContent ? (
                   <div
                     ref={contentRef}

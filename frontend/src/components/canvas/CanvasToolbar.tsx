@@ -1,4 +1,4 @@
-import { MousePointer2, Square, Layers, Link, Grid3x3, Undo, Redo, Trash2, ArrowRight, ArrowLeftRight, Minus, Group, Save, Download, Upload, Check, Map, Layout, Image as ImageIcon, Pencil, ChevronDown, GitBranch } from 'lucide-react'
+import { MousePointer2, Square, Layers, Link, Grid3x3, Undo, Redo, Trash2, ArrowRight, ArrowLeftRight, Minus, Group, Save, Download, Upload, Check, Map, Layout, Image as ImageIcon, Pencil, ChevronDown, GitBranch, Route } from 'lucide-react'
 import { useCanvasStore } from '@/store/useCanvasStore'
 import { useUIStore } from '@/store/useUIStore'
 import type { Tool } from '@/types'
@@ -209,6 +209,76 @@ export function CanvasToolbar({ onSave, isViewer }: CanvasToolbarProps) {
     }
   }
 
+  // 整理连线 - 重新计算所有连线的端口到最近位置
+  const handleOrganizeConnections = () => {
+    if (isViewer) return
+
+    const { updateConnection } = useCanvasStore.getState()
+    let organizedCount = 0
+
+    connections.forEach((conn) => {
+      const fromNode = nodes.get(conn.fromNodeId)
+      const toNode = nodes.get(conn.toNodeId)
+      if (!fromNode || !toNode) return
+
+      // 计算两个节点的中心点
+      const fromCenterX = fromNode.x + fromNode.width / 2
+      const fromCenterY = fromNode.y + fromNode.height / 2
+      const toCenterX = toNode.x + toNode.width / 2
+      const toCenterY = toNode.y + toNode.height / 2
+
+      // 计算角度来确定最佳端口方向
+      const dx = toCenterX - fromCenterX
+      const dy = toCenterY - fromCenterY
+      const angle = Math.atan2(dy, dx) * (180 / Math.PI)
+
+      // 根据角度确定最佳端口方向
+      let bestFromPort: 'top' | 'right' | 'bottom' | 'left'
+      let bestToPort: 'top' | 'right' | 'bottom' | 'left'
+
+      // 确定起始节点的出口方向（指向目标节点）
+      if (angle >= -45 && angle < 45) {
+        bestFromPort = 'right'
+        bestToPort = 'left'
+      } else if (angle >= 45 && angle < 135) {
+        bestFromPort = 'bottom'
+        bestToPort = 'top'
+      } else if (angle >= 135 || angle < -135) {
+        bestFromPort = 'left'
+        bestToPort = 'right'
+      } else {
+        bestFromPort = 'top'
+        bestToPort = 'bottom'
+      }
+
+      // 只有当端口发生变化时才更新
+      if (conn.fromPort !== bestFromPort || conn.toPort !== bestToPort) {
+        updateConnection(conn.id, {
+          fromPort: bestFromPort,
+          toPort: bestToPort,
+        })
+        organizedCount++
+      }
+    })
+
+    // 显示提示
+    if (organizedCount > 0) {
+      addToast({
+        type: 'success',
+        title: '整理完成',
+        message: `已优化 ${organizedCount} 条连线的端口位置`,
+        duration: 3000,
+      })
+    } else {
+      addToast({
+        type: 'info',
+        title: '无需整理',
+        message: '所有连线的端口位置已经是最优',
+        duration: 2000,
+      })
+    }
+  }
+
   // Show secondary toolbar when connection tool is active
   const showSecondaryToolbar = currentTool === 'connection'
 
@@ -341,6 +411,21 @@ export function CanvasToolbar({ onSave, isViewer }: CanvasToolbarProps) {
 
         {/* Right - Actions */}
         <div className="flex items-center gap-1">
+          <button
+            onClick={handleOrganizeConnections}
+            disabled={connections.size === 0 || isViewer}
+            className={`
+              p-2 rounded-lg transition-colors
+              ${connections.size > 0 && !isViewer
+                ? 'hover:bg-purple-100 dark:hover:bg-purple-900/30 text-purple-600 dark:text-purple-400'
+                : 'text-gray-300 dark:text-gray-600 cursor-not-allowed'
+              }
+            `}
+            title={isViewer ? '查看者无法优化连线' : '优化连线 (O) - 调整所有连线到最近端口'}
+          >
+            <Route className="w-5 h-5" />
+          </button>
+
           <button
             onClick={handleCreateGroup}
             disabled={!hasSelectedNodes || isViewer}

@@ -43,11 +43,11 @@ const loadCanvasView = (canvasId: number) => {
 
 // Thumbnail generation constants
 const THUMBNAIL = {
-  WIDTH: 320,
-  HEIGHT: 180,
+  WIDTH: 640,  // Increased from 320 for better clarity
+  HEIGHT: 360, // Increased from 180 for better clarity
   BACKGROUND_COLOR: '#f8fafc',
-  QUALITY: 0.8,
-  PADDING: 40,
+  QUALITY: 0.9, // Increased from 0.8 for better quality
+  PADDING: 20,  // Decreased from 40 to maximize content area
   DEBOUNCE_DELAY: 300,
 } as const
 
@@ -633,6 +633,8 @@ export function CanvasPage() {
   const dragStartRef = useRef({ x: 0, y: 0 })
   const groupContextMenuStartRef = useRef({ x: 0, y: 0 })
   const domainContextMenuStartRef = useRef({ x: 0, y: 0 })
+  const connectionContextMenuStartRef = useRef({ x: 0, y: 0 })
+  const nodeContextMenuStartRef = useRef({ x: 0, y: 0 })
   const panStartRef = useRef({ x: 0, y: 0 })
   const cacheTimeoutRef = useRef<ReturnType<typeof setTimeout>>()
   const dbSaveTimeoutRef = useRef<ReturnType<typeof setTimeout>>()
@@ -643,6 +645,10 @@ export function CanvasPage() {
   const justFinishedBoxSelectingRef = useRef(false) // Track if just finished box selection
   const justFinishedEndpointDraggingRef = useRef(false) // Track if just finished dragging endpoint
   const justFinishedBendPointDraggingRef = useRef(false) // Track if just finished dragging bend point
+
+  // Thumbnail worker ref
+  const thumbnailWorkerRef = useRef<Worker | null>(null)
+  const pendingThumbnailRequests = useRef<Map<string, (dataUrl: string | null) => void>>(new Map())
 
   // Connection creation state
   const [isCreatingConnection, setIsCreatingConnection] = useState(false)
@@ -828,6 +834,7 @@ export function CanvasPage() {
     toggleNodePool,
     setSettingsOpen,
     setCommandPaletteOpen,
+    zoomStep,
   } = useUIStore()
 
   const id = canvasId ? parseInt(canvasId) : null
@@ -966,6 +973,36 @@ export function CanvasPage() {
     // Reset last save time when canvas changes
     lastSaveTimeRef.current = 0
 
+    // Initialize thumbnail worker
+    try {
+      thumbnailWorkerRef.current = new Worker(new URL('@/workers/thumbnail.worker.ts', import.meta.url), {
+        type: 'module',
+      })
+      console.log('[CanvasPage] Thumbnail worker initialized successfully')
+
+      // Set up worker message handler
+      thumbnailWorkerRef.current.onmessage = (event) => {
+        const { id, type, data, error } = event.data
+        console.log(`[CanvasPage] Received worker message: ${type} for ${id}`)
+        const resolve = pendingThumbnailRequests.current.get(id)
+        if (resolve) {
+          resolve(data)
+          pendingThumbnailRequests.current.delete(id)
+        }
+        if (error) {
+          console.error('Thumbnail worker error:', error)
+        }
+      }
+
+      // Handle worker errors
+      thumbnailWorkerRef.current.onerror = (error) => {
+        console.error('[CanvasPage] Thumbnail worker error:', error)
+      }
+    } catch (error) {
+      console.warn('Failed to initialize thumbnail worker:', error)
+      thumbnailWorkerRef.current = null
+    }
+
     // Track if this effect is still active
     let isCancelled = false
     let isMounted = true
@@ -1060,6 +1097,12 @@ export function CanvasPage() {
       isMounted = false
       clearTimeout(cacheTimeoutRef.current)
       clearTimeout(dbSaveTimeoutRef.current)
+
+      // Terminate thumbnail worker
+      if (thumbnailWorkerRef.current) {
+        thumbnailWorkerRef.current.terminate()
+        thumbnailWorkerRef.current = null
+      }
     }
   }, [canvasId])
 
@@ -1134,7 +1177,11 @@ export function CanvasPage() {
   }, [canvasId, zoom, panX, panY, hasInitializedCamera])
 
   const generateThumbnail = useCallback(async (canvasId: number) => {
-    if (!containerRef.current) {
+    console.log(`[CanvasPage] Starting thumbnail generation for canvas ${canvasId}`)
+
+    // Check if thumbnail worker is available
+    if (!thumbnailWorkerRef.current) {
+      console.warn('[CanvasPage] Thumbnail worker not available, skipping thumbnail generation')
       return
     }
 
@@ -1143,295 +1190,72 @@ export function CanvasPage() {
       const currentStore = useCanvasStore.getState()
 
       // CRITICAL: Check if we're still on the same canvas before generating thumbnail
-      // If the user has switched to a different canvas, don't generate the thumbnail
-      // to avoid updating the wrong canvas's thumbnail
       if (currentStore.canvasId !== canvasId) {
+        console.log(`[CanvasPage] Canvas changed, skipping thumbnail generation. Expected: ${canvasId}, Got: ${currentStore.canvasId}`)
         return
       }
 
-      const currentNodes = currentStore.nodes
-      const currentGroups = currentStore.groups
-      const currentDomains = currentStore.domains
-      const currentConnections = currentStore.connections
+      // Convert Maps to arrays for serialization
+      const nodesArray = Array.from(currentStore.nodes.values())
+      const connectionsArray = Array.from(currentStore.connections.values())
+      const groupsArray = Array.from(currentStore.groups.values())
+      const domainsArray = Array.from(currentStore.domains.values())
 
-      // Create thumbnail canvas with constants
-      const thumbnailCanvas = document.createElement('canvas')
-      thumbnailCanvas.width = THUMBNAIL.WIDTH
-      thumbnailCanvas.height = THUMBNAIL.HEIGHT
-      const ctx = thumbnailCanvas.getContext('2d')
-      if (!ctx) {
-        return
-      }
+      console.log(`[CanvasPage] Sending thumbnail request: nodes=${nodesArray.length}, connections=${connectionsArray.length}, groups=${groupsArray.length}, domains=${domainsArray.length}`)
 
-      // Fill background with constant color
-      ctx.fillStyle = THUMBNAIL.BACKGROUND_COLOR
-      ctx.fillRect(0, 0, thumbnailCanvas.width, thumbnailCanvas.height)
-
-      const allElements = [...currentNodes.values(), ...currentGroups.values(), ...currentDomains.values()]
-
-      // Handle empty canvas - still save the blank thumbnail
-      if (allElements.length === 0) {
-        const thumbnailDataUrl = thumbnailCanvas.toDataURL('image/jpeg', THUMBNAIL.QUALITY)
-        try {
+      // Check if canvas is empty
+      if (nodesArray.length === 0 && groupsArray.length === 0 && domainsArray.length === 0) {
+        // Generate blank thumbnail
+        const canvas = document.createElement('canvas')
+        canvas.width = THUMBNAIL.WIDTH
+        canvas.height = THUMBNAIL.HEIGHT
+        const ctx = canvas.getContext('2d')
+        if (ctx) {
+          ctx.fillStyle = THUMBNAIL.BACKGROUND_COLOR
+          ctx.fillRect(0, 0, canvas.width, canvas.height)
+          const thumbnailDataUrl = canvas.toDataURL('image/jpeg', THUMBNAIL.QUALITY)
           await updateCanvasInStore(canvasId, { thumbnail: thumbnailDataUrl }, true)
-        } catch (error) {
-          // Silently fail for thumbnail generation errors
         }
         return
       }
 
-      // Calculate bounding box using helper function
-      const { minX, minY, maxX, maxY, contentWidth, contentHeight } = calculateBoundingBox(allElements)
+      // Generate unique request ID
+      const requestId = `thumb-${canvasId}-${Date.now()}`
 
-      // Create a temporary container to render the canvas content
-      const contentElement = containerRef.current.querySelector('[data-canvas-content]') as HTMLElement
-      if (!contentElement) {
-        return
-      }
-
-      // Clone the content element
-      const clonedContent = contentElement.cloneNode(true) as HTMLElement
-
-      // Create a wrapper div with proper dimensions
-      const wrapper = document.createElement('div')
-      wrapper.style.position = 'absolute'
-      wrapper.style.left = '-9999px'
-      wrapper.style.width = `${contentWidth + THUMBNAIL.PADDING * 2}px`
-      wrapper.style.height = `${contentHeight + THUMBNAIL.PADDING * 2}px`
-      wrapper.style.backgroundColor = THUMBNAIL.BACKGROUND_COLOR
-      wrapper.style.overflow = 'hidden'
-
-      // Setup cloned content
-      clonedContent.style.position = 'absolute'
-      clonedContent.style.transform = 'none'
-      clonedContent.style.transformOrigin = '0 0'
-      clonedContent.style.left = '0px'
-      clonedContent.style.top = '0px'
-
-      // Adjust children positions
-      const children = Array.from(clonedContent.children) as HTMLElement[]
-      children.forEach(child => {
-        const childLeft = parseFloat(child.style.left) || 0
-        const childTop = parseFloat(child.style.top) || 0
-        child.style.left = `${childLeft - minX + THUMBNAIL.PADDING}px`
-        child.style.top = `${childTop - minY + THUMBNAIL.PADDING}px`
+      // Send data to worker
+      thumbnailWorkerRef.current.postMessage({
+        type: 'generateThumbnail',
+        id: requestId,
+        nodes: nodesArray,
+        connections: connectionsArray,
+        groups: groupsArray,
+        domains: domainsArray,
+        targetWidth: THUMBNAIL.WIDTH,
+        targetHeight: THUMBNAIL.HEIGHT,
+        quality: THUMBNAIL.QUALITY,
+        backgroundColor: THUMBNAIL.BACKGROUND_COLOR,
+        padding: THUMBNAIL.PADDING,
       })
 
-      wrapper.appendChild(clonedContent)
-      document.body.appendChild(wrapper)
+      // Wait for worker response
+      const thumbnailDataUrl = await new Promise<string | null>((resolve) => {
+        pendingThumbnailRequests.current.set(requestId, resolve)
 
-      try {
-        // Capture the rendered content
-        const canvasElement = await html2canvas(wrapper, {
-          backgroundColor: THUMBNAIL.BACKGROUND_COLOR,
-          scale: 1,
-          logging: false,
-          useCORS: true,
-          allowTaint: true,
-        })
-
-        // Calculate scale to fit thumbnail (0.95 to leave small margin)
-        const scale = Math.min(
-          THUMBNAIL.WIDTH / canvasElement.width,
-          THUMBNAIL.HEIGHT / canvasElement.height
-        ) * 0.95
-
-        const x = (THUMBNAIL.WIDTH - canvasElement.width * scale) / 2
-        const y = (THUMBNAIL.HEIGHT - canvasElement.height * scale) / 2
-
-        ctx.drawImage(canvasElement, x, y, canvasElement.width * scale, canvasElement.height * scale)
-
-        // Draw connections manually
-        if (currentConnections.size > 0) {
-          ctx.save()
-          ctx.translate(x, y)
-          ctx.scale(scale, scale)
-
-          // Helper function to draw SVG path on Canvas
-          const drawSvgPath = (ctx: CanvasRenderingContext2D, pathData: string) => {
-            const commands = pathData.match(/[MLC]\s*[\d.\-\s]+/g)
-            if (!commands) return
-
-            commands.forEach(cmd => {
-              const type = cmd[0]
-              const nums = cmd.slice(1).trim().split(/[\s,]+/).map(Number)
-
-              if (type === 'M') {
-                ctx.moveTo(nums[0], nums[1])
-              } else if (type === 'L') {
-                ctx.lineTo(nums[0], nums[1])
-              } else if (type === 'C') {
-                ctx.bezierCurveTo(nums[0], nums[1], nums[2], nums[3], nums[4], nums[5])
-              }
-            })
+        // Timeout after 30 seconds (increased for large canvases)
+        setTimeout(() => {
+          if (pendingThumbnailRequests.current.has(requestId)) {
+            console.warn(`Thumbnail generation timeout for request ${requestId}`)
+            pendingThumbnailRequests.current.delete(requestId)
+            resolve(null)
           }
+        }, 30000)
+      })
 
-          // Helper function to get last point and direction from path for arrow positioning
-          const getLastPointAndDirection = (points: { x: number; y: number }[]): { x: number; y: number; dx: number; dy: number } | null => {
-            if (points.length < 2) return null
-            const last = points[points.length - 1]
-            const secondLast = points[points.length - 2]
-            const dx = last.x - secondLast.x
-            const dy = last.y - secondLast.y
-            return { x: last.x, y: last.y, dx, dy }
-          }
-
-          // Helper function to get first point and direction from path for arrow positioning
-          const getFirstPointAndDirection = (points: { x: number; y: number }[]): { x: number; y: number; dx: number; dy: number } | null => {
-            if (points.length < 2) return null
-            const first = points[0]
-            const second = points[1]
-            const dx = first.x - second.x
-            const dy = first.y - second.y
-            return { x: first.x, y: first.y, dx, dy }
-          }
-
-          currentConnections.forEach((conn) => {
-            const fromNode = currentNodes.get(conn.fromNodeId)
-            const toNode = currentNodes.get(conn.toNodeId)
-            if (!fromNode || !toNode) return
-
-            // Get port positions
-            const fromPort = getConnectionPort(conn, 'start') as PortDirection
-            const toPort = getConnectionPort(conn, 'end') as PortDirection
-            const fromPos = getPortPosition(fromNode, fromPort)
-            const toPos = getPortPosition(toNode, toPort)
-
-            // Adjust port positions for thumbnail
-            const startX = fromPos.x - minX + THUMBNAIL.PADDING
-            const startY = fromPos.y - minY + THUMBNAIL.PADDING
-            const endX = toPos.x - minX + THUMBNAIL.PADDING
-            const endY = toPos.y - minY + THUMBNAIL.PADDING
-
-            // Set line style
-            ctx.strokeStyle = conn.color
-            ctx.lineWidth = conn.width
-            ctx.lineCap = 'round'
-            ctx.lineJoin = 'round'
-
-            // Set dash pattern
-            if (conn.style === 'dashed') {
-              ctx.setLineDash([6, 4])
-            } else if (conn.style === 'dotted') {
-              ctx.setLineDash([3, 3])
-            } else {
-              ctx.setLineDash([])
-            }
-
-            // Prepare bend points for thumbnail coordinates
-            const bendPoints = conn.bendPoints?.map(bp => ({
-              x: bp.x - minX + THUMBNAIL.PADDING,
-              y: bp.y - minY + THUMBNAIL.PADDING
-            })) || []
-
-            // Draw connection based on type with bend points support
-            ctx.beginPath()
-
-            let pathPoints: { x: number; y: number }[] = []
-            let pathData = ''
-
-            if (conn.type === 'straight') {
-              if (bendPoints.length > 0) {
-                pathPoints = [
-                  { x: startX, y: startY },
-                  ...bendPoints,
-                  { x: endX, y: endY }
-                ]
-                pathData = pointsToPath(pathPoints)
-              } else {
-                ctx.moveTo(startX, startY)
-                ctx.lineTo(endX, endY)
-                pathPoints = [{ x: startX, y: startY }, { x: endX, y: endY }]
-              }
-            } else if (conn.type === 'curve') {
-              if (bendPoints.length > 0) {
-                const points = [
-                  { x: startX, y: startY },
-                  ...bendPoints,
-                  { x: endX, y: endY }
-                ]
-                pathData = getCurveThroughPoints(points, fromPort, toPort)
-                pathPoints = points
-              } else {
-                const { cp1x, cp1y, cp2x, cp2y } = calculateCurveControlPoints(
-                  startX, startY, endX, endY, fromPort, toPort
-                )
-                ctx.moveTo(startX, startY)
-                ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, endX, endY)
-                pathPoints = [{ x: startX, y: startY }, { x: endX, y: endY }]
-              }
-            } else if (conn.type === 'step') {
-              pathPoints = getStepPath(startX, startY, endX, endY, bendPoints, fromPort, toPort)
-              pathData = pointsToPath(pathPoints)
-            }
-
-            // Draw the path
-            if (pathData) {
-              drawSvgPath(ctx, pathData)
-            }
-            ctx.stroke()
-
-            // Draw arrows
-            if (conn.arrowType !== 'none' && pathPoints.length >= 2) {
-              if (conn.arrowType === 'end' || conn.arrowType === 'both') {
-                const lastInfo = getLastPointAndDirection(pathPoints)
-                if (lastInfo) {
-                  const arrowAngle = Math.atan2(lastInfo.dy, lastInfo.dx)
-                  const arrowLength = 10
-                  ctx.beginPath()
-                  ctx.moveTo(lastInfo.x, lastInfo.y)
-                  ctx.lineTo(
-                    lastInfo.x - arrowLength * Math.cos(arrowAngle - Math.PI / 6),
-                    lastInfo.y - arrowLength * Math.sin(arrowAngle - Math.PI / 6)
-                  )
-                  ctx.lineTo(
-                    lastInfo.x - arrowLength * Math.cos(arrowAngle + Math.PI / 6),
-                    lastInfo.y - arrowLength * Math.sin(arrowAngle + Math.PI / 6)
-                  )
-                  ctx.closePath()
-                  ctx.fillStyle = conn.color
-                  ctx.fill()
-                }
-              }
-              if (conn.arrowType === 'start' || conn.arrowType === 'both') {
-                const firstInfo = getFirstPointAndDirection(pathPoints)
-                if (firstInfo) {
-                  const arrowAngle = Math.atan2(firstInfo.dy, firstInfo.dx)
-                  const arrowLength = 10
-                  ctx.beginPath()
-                  ctx.moveTo(firstInfo.x, firstInfo.y)
-                  ctx.lineTo(
-                    firstInfo.x - arrowLength * Math.cos(arrowAngle - Math.PI / 6),
-                    firstInfo.y - arrowLength * Math.sin(arrowAngle - Math.PI / 6)
-                  )
-                  ctx.lineTo(
-                    firstInfo.x - arrowLength * Math.cos(arrowAngle + Math.PI / 6),
-                    firstInfo.y - arrowLength * Math.sin(arrowAngle + Math.PI / 6)
-                  )
-                  ctx.closePath()
-                  ctx.fillStyle = conn.color
-                  ctx.fill()
-                }
-              }
-            }
-          })
-
-          ctx.restore()
-        }
-
-        const thumbnailDataUrl = thumbnailCanvas.toDataURL('image/jpeg', THUMBNAIL.QUALITY)
-
-        try {
-          await updateCanvasInStore(canvasId, { thumbnail: thumbnailDataUrl }, true)
-        } catch (error) {
-          // Silently fail for thumbnail generation errors
-        }
-      } finally {
-        // Clean up the temporary wrapper
-        document.body.removeChild(wrapper)
+      if (thumbnailDataUrl) {
+        await updateCanvasInStore(canvasId, { thumbnail: thumbnailDataUrl }, true)
       }
-    } catch {
-      // Silently fail for thumbnail generation errors
+    } catch (error) {
+      console.error('Thumbnail generation failed:', error)
     }
   }, [])
 
@@ -1469,6 +1293,11 @@ export function CanvasPage() {
 
     cacheTimeoutRef.current = setTimeout(() => {
       const state = useCanvasStore.getState()
+      // CRITICAL: Check if we're still on the same canvas before saving to cache
+      if (state.canvasId !== id) {
+        console.warn(`[CacheSave] Canvas ID mismatch. Expected: ${id}, Got: ${state.canvasId}. Skipping cache save.`)
+        return
+      }
       const { nodes, groups, domains, connections } = collectCanvasData(state)
       saveToCache(id, { nodes, groups, domains, connections })
     }, CACHE_SAVE_DELAY)
@@ -1484,6 +1313,13 @@ export function CanvasPage() {
       const currentState = useCanvasStore.getState()
       const currentIsDirty = currentState.isDirty
       const currentLastSaveTime = lastSaveTimeRef.current
+
+      // CRITICAL: Check if we're still on the same canvas before saving
+      // This prevents saving the wrong canvas's data when switching between canvases
+      if (currentState.canvasId !== id) {
+        console.warn(`[AutoSave] Canvas ID mismatch. Expected: ${id}, Got: ${currentState.canvasId}. Skipping save.`)
+        return
+      }
 
       if (!currentIsDirty) {
         dbSaveTimeoutRef.current = setTimeout(saveToDatabase, AUTO_SAVE_INTERVAL)
@@ -1920,6 +1756,73 @@ export function CanvasPage() {
         } else if (e.key === 't' || e.key === 'T') {
           toggleRelationshipHighlightMode()
           return
+        } else if (e.key === 'o' || e.key === 'O') {
+          // 优化连线 - 调整所有连线到最近端口
+          e.preventDefault()
+          const { connections: currentConnections, nodes: currentNodes, updateConnection } = useCanvasStore.getState()
+          let organizedCount = 0
+
+          currentConnections.forEach((conn) => {
+            const fromNode = currentNodes.get(conn.fromNodeId)
+            const toNode = currentNodes.get(conn.toNodeId)
+            if (!fromNode || !toNode) return
+
+            // 计算两个节点的中心点
+            const fromCenterX = fromNode.x + fromNode.width / 2
+            const fromCenterY = fromNode.y + fromNode.height / 2
+            const toCenterX = toNode.x + toNode.width / 2
+            const toCenterY = toNode.y + toNode.height / 2
+
+            // 计算角度来确定最佳端口方向
+            const dx = toCenterX - fromCenterX
+            const dy = toCenterY - fromCenterY
+            const angle = Math.atan2(dy, dx) * (180 / Math.PI)
+
+            // 根据角度确定最佳端口方向
+            let bestFromPort: 'top' | 'right' | 'bottom' | 'left'
+            let bestToPort: 'top' | 'right' | 'bottom' | 'left'
+
+            if (angle >= -45 && angle < 45) {
+              bestFromPort = 'right'
+              bestToPort = 'left'
+            } else if (angle >= 45 && angle < 135) {
+              bestFromPort = 'bottom'
+              bestToPort = 'top'
+            } else if (angle >= 135 || angle < -135) {
+              bestFromPort = 'left'
+              bestToPort = 'right'
+            } else {
+              bestFromPort = 'top'
+              bestToPort = 'bottom'
+            }
+
+            // 只有当端口发生变化时才更新
+            if (conn.fromPort !== bestFromPort || conn.toPort !== bestToPort) {
+              updateConnection(conn.id, {
+                fromPort: bestFromPort,
+                toPort: bestToPort,
+              })
+              organizedCount++
+            }
+          })
+
+          // 显示提示
+          if (organizedCount > 0) {
+            addToast({
+              type: 'success',
+              title: '优化完成',
+              message: `已优化 ${organizedCount} 条连线的端口位置`,
+              duration: 3000,
+            })
+          } else {
+            addToast({
+              type: 'info',
+              title: '无需优化',
+              message: '所有连线的端口位置已经是最优',
+              duration: 2000,
+            })
+          }
+          return
         } else if (e.key === 'Enter') {
           if (selectedIds.length === 1) {
             const nodeId = selectedIds[0]
@@ -2195,6 +2098,11 @@ export function CanvasPage() {
       setIsDragging(true)
       dragStartRef.current = { x: e.clientX, y: e.clientY }
       panStartRef.current = { x: panX, y: panY }
+      // Record context menu start position for all element types
+      connectionContextMenuStartRef.current = { x: e.clientX, y: e.clientY }
+      nodeContextMenuStartRef.current = { x: e.clientX, y: e.clientY }
+      groupContextMenuStartRef.current = { x: e.clientX, y: e.clientY }
+      domainContextMenuStartRef.current = { x: e.clientX, y: e.clientY }
       return
     }
 
@@ -2991,6 +2899,12 @@ export function CanvasPage() {
     e.preventDefault()
     e.stopPropagation()
     if (isViewer) return
+
+    // Check if this is a drag operation (mouse moved more than threshold)
+    const dx = e.clientX - connectionContextMenuStartRef.current.x
+    const dy = e.clientY - connectionContextMenuStartRef.current.y
+    if (Math.hypot(dx, dy) > 5) return
+
     const rect = containerRef.current?.getBoundingClientRect()
     const clickX = rect ? (e.clientX - rect.left - panX) / zoom : 0
     const clickY = rect ? (e.clientY - rect.top - panY) / zoom : 0
@@ -3161,7 +3075,9 @@ export function CanvasPage() {
       setPan(panX, panY - e.deltaY)
     } else {
       e.preventDefault()
-      const delta = e.deltaY * -0.001
+      // Use zoomStep for wheel zoom (scale delta based on zoomStep)
+      const direction = e.deltaY > 0 ? -1 : 1
+      const delta = direction * zoomStep
       const newZoom = Math.min(Math.max(zoom + delta, 0.1), 5)
 
       const rect = containerRef.current?.getBoundingClientRect()

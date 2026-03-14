@@ -5,14 +5,14 @@ import { CANVAS_DEFAULTS, Z_INDEX } from '@/constants'
 
 export function ZoomControls() {
   const { zoom, setZoom, setPan } = useCanvasStore()
-  const { nodePoolOpen, aiSidebarOpen } = useUIStore()
+  const { nodePoolOpen, aiSidebarOpen, zoomStep } = useUIStore()
 
   const handleZoomIn = () => {
-    setZoom(Math.min(zoom + CANVAS_DEFAULTS.ZOOM_STEP, CANVAS_DEFAULTS.MAX_ZOOM))
+    setZoom(Math.min(zoom + zoomStep, CANVAS_DEFAULTS.MAX_ZOOM))
   }
 
   const handleZoomOut = () => {
-    setZoom(Math.max(zoom - CANVAS_DEFAULTS.ZOOM_STEP, CANVAS_DEFAULTS.MIN_ZOOM))
+    setZoom(Math.max(zoom - zoomStep, CANVAS_DEFAULTS.MIN_ZOOM))
   }
 
   const handleReset = () => {

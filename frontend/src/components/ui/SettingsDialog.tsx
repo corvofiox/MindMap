@@ -3,7 +3,7 @@ import { X, Settings2 } from 'lucide-react'
 import { Z_INDEX } from '@/constants'
 
 export function SettingsDialog() {
-  const { settingsOpen, setSettingsOpen, theme, setTheme, dragMode, setDragMode, gridVisible, setGridVisible } = useUIStore()
+  const { settingsOpen, setSettingsOpen, theme, setTheme, dragMode, setDragMode, gridVisible, setGridVisible, zoomStep, setZoomStep } = useUIStore()
 
   if (!settingsOpen) return null
 
@@ -105,6 +105,38 @@ export function SettingsDialog() {
                   <option value="free">自由移动</option>
                   <option value="grid">网格吸附</option>
                 </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  缩放步长 ({Math.round(zoomStep * 100)}%)
+                </label>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
+                  设置点击缩放按钮或滚动时的缩放比例
+                </p>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="range"
+                    min="1"
+                    max="50"
+                    value={Math.round(zoomStep * 100)}
+                    onChange={(e) => setZoomStep(Number(e.target.value) / 100)}
+                    className="flex-1 h-2 bg-gray-200 dark:bg-gray-600 rounded-lg appearance-none cursor-pointer"
+                  />
+                  <select
+                    value={Math.round(zoomStep * 100)}
+                    onChange={(e) => setZoomStep(Number(e.target.value) / 100)}
+                    className="w-20 px-2 py-1.5 bg-gray-100 dark:bg-gray-700 border-0 rounded-lg text-gray-900 dark:text-white text-sm"
+                  >
+                    <option value={5}>5%</option>
+                    <option value={10}>10%</option>
+                    <option value={15}>15%</option>
+                    <option value={20}>20%</option>
+                    <option value={25}>25%</option>
+                    <option value={30}>30%</option>
+                    <option value={50}>50%</option>
+                  </select>
+                </div>
               </div>
             </div>
           </section>

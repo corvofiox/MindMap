@@ -52,3 +52,8 @@ aux
 clock$
 com1-com9
 lpt1-lpt9
+
+# Debug and profiling files
+*.heapsnapshot
+*.cpuprofile
+*.log

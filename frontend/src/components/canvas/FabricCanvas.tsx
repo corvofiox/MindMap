@@ -3,7 +3,8 @@ import { useCanvasStore } from '@/store/useCanvasStore'
 import { useUIStore } from '@/store/useUIStore'
 import { CANVAS_DEFAULTS, DOMAIN_DEFAULTS } from '@/constants'
 import { screenToCanvas, generateId, clamp } from '@/utils/canvas'
-import { createFabricNode, createFabricGroup, createFabricDomain, createFabricConnection, updateFabricDomainsEditable, snapToGridFabric } from '@/utils/fabric'
+import { createFabricDomain, updateFabricDomainsEditable, snapToGridFabric } from '@/utils/fabric'
+import { IncrementalRenderer, createIncrementalRenderer } from '@/utils/incrementalRenderer'
 
 interface FabricCanvasProps {
   canvasId: number
@@ -14,6 +15,8 @@ interface FabricCanvasProps {
 export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<fabric.Canvas | null>(null)
+  const rendererRef = useRef<IncrementalRenderer | null>(null)
+  const workerRef = useRef<Worker | null>(null)
   const mouseButtonRef = useRef<number | null>(null)
 
   // Domain creation state
@@ -41,7 +44,7 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
     setHoveredId,
   } = useCanvasStore()
 
-  const { currentTool, domainEditMode, setDomainEditMode, nodeDefaults, relationshipHighlightMode } = useUIStore()
+  const { currentTool, domainEditMode, setDomainEditMode, nodeDefaults, relationshipHighlightMode, zoomStep } = useUIStore()
 
   // Selection handlers
   const handleSelectionChanged = useCallback((e: { selected?: fabric.Object[] }) => {
@@ -122,8 +125,9 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
 
   // Mouse event handlers
   const handleMouseWheel = useCallback((e: any) => {
-    const delta = e.e.deltaY
-    const newZoom = clamp(zoom - delta * 0.001, CANVAS_DEFAULTS.MIN_ZOOM, CANVAS_DEFAULTS.MAX_ZOOM)
+    // Use zoomStep for wheel zoom
+    const direction = e.e.deltaY > 0 ? 1 : -1
+    const newZoom = clamp(zoom - direction * zoomStep, CANVAS_DEFAULTS.MIN_ZOOM, CANVAS_DEFAULTS.MAX_ZOOM)
 
     const pointer = canvasRef.current?.getPointer(e.e)
     if (!pointer) {
@@ -142,7 +146,7 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
 
     setZoom(newZoom)
     setPan(newPanX, newPanY)
-  }, [zoom, panX, panY, setZoom])
+  }, [zoom, panX, panY, setZoom, setPan, zoomStep])
 
   const handleMouseDown = useCallback((e: any) => {
     // Record which mouse button was pressed (0 = left, 2 = right)
@@ -215,7 +219,7 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
       canvas.add(preview)
       setDomainPreviewRect(preview)
     }
-  }, [currentTool, zoom, panX, panY, addNode, addDomain, setSelectedIds])
+  }, [currentTool, zoom, panX, panY, addNode, addDomain, setSelectedIds, nodeDefaults])
 
   const handleMouseMove = useCallback((e: any) => {
     const pointer = canvasRef.current?.getPointer(e.e)
@@ -292,11 +296,10 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
         }
         addDomain(newDomain)
 
-        // 添加到画布
-        const fabricDomain = createFabricDomain(newDomain, true)
-        canvas.add(fabricDomain)
-        canvas.sendToBack(fabricDomain)
-        canvas.renderAll()
+        // 添加到画布（通过增量渲染器）
+        if (rendererRef.current) {
+          rendererRef.current.updateDomain(newDomain, true)
+        }
       }
 
       setDomainStartPos({ x: 0, y: 0 })
@@ -338,6 +341,22 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
 
     canvasRef.current = canvas
 
+    // 初始化 Web Worker
+    try {
+      workerRef.current = new Worker(new URL('@/workers/canvas.worker.ts', import.meta.url), {
+        type: 'module',
+      })
+    } catch (error) {
+      console.warn('Failed to initialize Web Worker:', error)
+      workerRef.current = null
+    }
+
+    // 初始化增量渲染器
+    rendererRef.current = createIncrementalRenderer({
+      canvas,
+      worker: workerRef.current,
+    })
+
     // Set up event handlers
     canvas.on('selection:created', handleSelectionChanged)
     canvas.on('selection:updated', handleSelectionChanged)
@@ -356,47 +375,65 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
 
     return () => {
       canvas.dispose()
+      rendererRef.current = null
+      if (workerRef.current) {
+        workerRef.current.terminate()
+        workerRef.current = null
+      }
     }
   }, [canvasId, handleSelectionChanged, handleSelectionCleared, handleObjectMoved, handleObjectScaling, handleMouseWheel, handleMouseDown, handleMouseUp, handleMouseMove, handleDoubleClick])
 
-  // Load canvas data from store
+  // Load canvas data from store (initial load only)
   const loadCanvasData = useCallback(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
+    const renderer = rendererRef.current
+    if (!renderer) return
 
-    canvas.clear()
-
-    // Add domains (background) - 使用当前编辑模式
+    // 批量加载所有数据
     const isDomainEditable = currentTool === 'domain'
-    domains.forEach((domain) => {
-      const fabricDomain = createFabricDomain(domain, isDomainEditable)
-      if (fabricDomain) canvas.add(fabricDomain)
-    })
-
-    // Add connections
-    connections.forEach((connection) => {
-      const fabricConnection = createFabricConnection(connection, nodes)
-      if (fabricConnection) canvas.add(fabricConnection)
-    })
-
-    // Add groups
-    groups.forEach((group) => {
-      const fabricGroup = createFabricGroup(group)
-      if (fabricGroup) canvas.add(fabricGroup)
-    })
-
-    // Add nodes
-    nodes.forEach((node) => {
-      const fabricNode = createFabricNode(node)
-      if (fabricNode) {
-        canvas.add(fabricNode)
-      }
-    })
+    renderer.updateDomains(domains, isDomainEditable)
+    renderer.updateConnections(connections, nodes)
+    renderer.updateGroups(groups)
+    renderer.updateNodes(nodes)
 
     // Update zoom and pan
-    canvas.setZoom(zoom)
-    canvas.viewportTransform = [zoom, 0, 0, zoom, panX, panY]
+    renderer.setViewport(zoom, panX, panY)
   }, [nodes, groups, domains, connections, zoom, panX, panY, currentTool])
+
+  // Incremental updates for nodes
+  useEffect(() => {
+    const renderer = rendererRef.current
+    if (!renderer) return
+
+    renderer.updateNodes(nodes)
+  }, [nodes])
+
+  // Incremental updates for connections
+  useEffect(() => {
+    const renderer = rendererRef.current
+    if (!renderer) return
+
+    // 异步更新连接（支持 Worker）
+    renderer.updateConnections(connections, nodes).catch((error) => {
+      console.error('Failed to update connections:', error)
+    })
+  }, [connections, nodes])
+
+  // Incremental updates for domains
+  useEffect(() => {
+    const renderer = rendererRef.current
+    if (!renderer) return
+
+    const isDomainEditable = currentTool === 'domain'
+    renderer.updateDomains(domains, isDomainEditable)
+  }, [domains, currentTool])
+
+  // Incremental updates for groups
+  useEffect(() => {
+    const renderer = rendererRef.current
+    if (!renderer) return
+
+    renderer.updateGroups(groups)
+  }, [groups])
 
   // Update canvas size when container size changes
   useEffect(() => {
@@ -408,21 +445,39 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
     canvas.renderAll()
   }, [width, height])
 
-  // Relationship highlight effect (关系梳理)
+  // Update viewport (zoom and pan)
+  useEffect(() => {
+    const renderer = rendererRef.current
+    if (!renderer) return
+
+    renderer.setViewport(zoom, panX, panY)
+  }, [zoom, panX, panY])
+
+  // Relationship highlight effect (关系梳理) - 优化版本
   useEffect(() => {
     const canvas = canvasRef.current
-    if (!canvas) return
+    const renderer = rendererRef.current
+    if (!canvas || !renderer) return
 
     const selectedNodes = selectedIds.filter(id => nodes.has(id))
 
     // If relationship highlight mode is off or no nodes selected, reset all opacities
     if (!relationshipHighlightMode || selectedNodes.length === 0) {
-      canvas.getObjects().forEach((obj: any) => {
-        if (obj.data?.type === 'node' || obj.data?.type === 'connection') {
+      const objectMap = renderer.getObjectMap()
+
+      // 只更新需要恢复透明度的对象
+      objectMap.nodes.forEach((obj) => {
+        if (obj.opacity !== 1) {
           obj.set({ opacity: 1 })
         }
       })
-      canvas.renderAll()
+      objectMap.connections.forEach((obj) => {
+        if (obj.opacity !== 1) {
+          obj.set({ opacity: 1 })
+        }
+      })
+
+      renderer.render()
       return
     }
 
@@ -440,21 +495,28 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
       })
     })
 
-    // Apply opacity to all objects
-    canvas.getObjects().forEach((obj: any) => {
-      const data = obj.data
-      if (!data) return
+    // Apply opacity to objects using renderer's object map
+    const objectMap = renderer.getObjectMap()
 
-      if (data.type === 'node') {
-        const isRelated = relatedNodeIds.has(data.id)
-        obj.set({ opacity: isRelated ? 1 : 0.3 })
-      } else if (data.type === 'connection') {
-        const isRelated = relatedConnectionIds.has(data.id)
-        obj.set({ opacity: isRelated ? 1 : 0.15 })
+    // 批量更新节点透明度
+    objectMap.nodes.forEach((obj, id) => {
+      const isRelated = relatedNodeIds.has(id)
+      const targetOpacity = isRelated ? 1 : 0.3
+      if (obj.opacity !== targetOpacity) {
+        obj.set({ opacity: targetOpacity })
       }
     })
 
-    canvas.renderAll()
+    // 批量更新连接透明度
+    objectMap.connections.forEach((obj, id) => {
+      const isRelated = relatedConnectionIds.has(id)
+      const targetOpacity = isRelated ? 1 : 0.15
+      if (obj.opacity !== targetOpacity) {
+        obj.set({ opacity: targetOpacity })
+      }
+    })
+
+    renderer.render()
   }, [relationshipHighlightMode, selectedIds, nodes, connections])
 
   return (
@@ -464,9 +526,9 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
       style={{
         cursor:
           currentTool === 'node' ? 'crosshair' :
-          currentTool === 'domain' ? 'crosshair' :
-          currentTool === 'pan' ? 'grab' :
-          'default'
+            currentTool === 'domain' ? 'crosshair' :
+              currentTool === 'pan' ? 'grab' :
+                'default'
       }}
     >
       <canvas id="fabric-canvas" />

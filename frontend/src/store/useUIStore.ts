@@ -41,9 +41,14 @@ interface UIState {
   setDragMode: (mode: DragMode) => void
   toggleDragMode: () => void
 
+  // Grid
   gridVisible: boolean
   setGridVisible: (visible: boolean) => void
   toggleGrid: () => void
+
+  // Zoom Step
+  zoomStep: number
+  setZoomStep: (step: number) => void
 
   // Drag Ghost (for node pool copy to canvas)
   dragGhostCard: NodeCard | null
@@ -207,6 +212,10 @@ export const useUIStore = create<UIState>()(
         gridVisible: true,
         setGridVisible: (visible) => set({ gridVisible: visible }),
         toggleGrid: createToggle('gridVisible'),
+
+        // Zoom Step (default 0.1 = 10%)
+        zoomStep: 0.1,
+        setZoomStep: (step) => set({ zoomStep: Math.max(0.01, Math.min(0.5, step)) }),
 
         // Drag Ghost (for node pool copy to canvas)
         dragGhostCard: null,
@@ -413,6 +422,7 @@ export const useUIStore = create<UIState>()(
         minimapVisible: state.minimapVisible,
         quickEditMode: state.quickEditMode,
         relationshipHighlightMode: state.relationshipHighlightMode,
+        zoomStep: state.zoomStep,
         // nodeDefaults 不持久化，始终从服务器获取当前用户的配置
       }),
       onRehydrateStorage: () => (state) => {
