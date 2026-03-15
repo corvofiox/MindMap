@@ -93,9 +93,12 @@ function calculateConnectionPath(
 ): string {
   switch (type) {
     case 'curve': {
-      const dx = Math.abs(toX - fromX)
-      const controlOffset = Math.min(dx * 0.5, 100)
-      return `M ${fromX} ${fromY} C ${fromX + controlOffset} ${fromY}, ${toX - controlOffset} ${toY}, ${toX} ${toY}`
+      const dx = toX - fromX
+      const dy = toY - fromY
+      const distance = Math.sqrt(dx * dx + dy * dy)
+      const controlOffset = Math.min(distance * 0.5, 100)
+      const dirX = dx >= 0 ? 1 : -1
+      return `M ${fromX} ${fromY} C ${fromX + controlOffset * dirX} ${fromY}, ${toX - controlOffset * dirX} ${toY}, ${toX} ${toY}`
     }
     case 'step': {
       const midX = (fromX + toX) / 2
@@ -277,7 +280,7 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
           type: 'boundsResult',
           data: bounds,
         }
-         self.postMessage(response)
+        self.postMessage(response)
         break
       }
 
@@ -325,4 +328,4 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
   }
 }
 
-export {}
+export { }

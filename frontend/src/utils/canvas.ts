@@ -546,4 +546,95 @@ export function buildConnectionInfoMap(
   return map
 }
 
+/**
+ * 连线标签位置信息
+ */
+export interface ConnectionLabelPosition {
+  x: number
+  y: number
+  rotation: number
+  isVertical: boolean
+}
+
+/**
+ * 计算连线标签位置
+ * 标签位于连线起点一侧，显示另一端节点的标题
+ *
+ * @param fromX 起点X坐标
+ * @param fromY 起点Y坐标
+ * @param toX 终点X坐标
+ * @param toY 终点Y坐标
+ * @param fromPort 起点端口方向
+ * @param labelOffset 标签距离端口的偏移量
+ * @returns 标签位置信息
+ */
+export function calculateConnectionLabelPosition(
+  fromX: number,
+  fromY: number,
+  toX: number,
+  toY: number,
+  fromPort: PortDirection,
+  labelOffset: number = 30
+): ConnectionLabelPosition {
+  const dx = toX - fromX
+  const dy = toY - fromY
+  const distance = Math.sqrt(dx * dx + dy * dy) || 1
+
+  const portOffset = getPortOffsetVector(fromPort)
+
+  const labelX = fromX + portOffset.dx * labelOffset
+  const labelY = fromY + portOffset.dy * labelOffset
+
+  let rotation = 0
+  let isVertical = false
+
+  switch (fromPort) {
+    case 'left':
+    case 'right':
+      rotation = 0
+      isVertical = false
+      break
+    case 'top':
+    case 'bottom':
+      rotation = -90
+      isVertical = true
+      break
+  }
+
+  return { x: labelX, y: labelY, rotation, isVertical }
+}
+
+/**
+ * 计算连线标签的防碰撞偏移
+ * 确保同一端口的多个标签不会重叠
+ *
+ * @param basePosition 基础位置
+ * @param port 端口方向
+ * @param index 当前标签索引
+ * @param total 同端口标签总数
+ * @param labelHeight 标签高度
+ * @returns 调整后的位置
+ */
+export function calculateLabelAntiCollisionOffset(
+  basePosition: ConnectionLabelPosition,
+  port: PortDirection,
+  index: number,
+  total: number,
+  labelHeight: number = 20
+): { x: number; y: number } {
+  if (total <= 1) return { x: basePosition.x, y: basePosition.y }
+
+  const spacing = labelHeight + 4
+  const offset = (index - (total - 1) / 2) * spacing
+
+  switch (port) {
+    case 'top':
+    case 'bottom':
+      return { x: basePosition.x + offset, y: basePosition.y }
+    case 'left':
+    case 'right':
+      return { x: basePosition.x, y: basePosition.y + offset }
+  }
+}
+
 

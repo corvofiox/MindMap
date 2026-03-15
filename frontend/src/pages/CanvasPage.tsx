@@ -19,7 +19,7 @@ import { ContextMenuWrapper } from '@/components/ContextMenuWrapper'
 import { RichTextToolbar } from '@/components/canvas/RichTextToolbar'
 import { ConnectionLine } from '@/components/canvas/ConnectionLine'
 import { CONNECTION_DEFAULTS, Z_INDEX } from '@/constants'
-import { generateId, colorToHex, hexToRgba, calculateCurveControlPoints, getCurveThroughPoints, getStepPath, pointsToPath, calculateSmartPortPosition, buildConnectionInfoMap, type PortDirection, type ConnectionInfo } from '@/utils/canvas'
+import { generateId, colorToHex, hexToRgba, calculateCurveControlPoints, getCurveThroughPoints, getStepPath, pointsToPath, calculateSmartPortPosition, buildConnectionInfoMap, getPortOffsetVector, type PortDirection, type ConnectionInfo } from '@/utils/canvas'
 import { saveToCache, loadFromCache } from '@/utils/nodeCache'
 import { saveCanvasNodesData, loadCanvasNodesData } from '@/services/api'
 import type { Node, Connection } from '@/types'
@@ -811,9 +811,7 @@ export function CanvasPage() {
     stylePanelOpen,
     sidebarOpen,
     minimapVisible,
-    domainEditMode,
     relationshipHighlightMode,
-    setDomainEditMode,
     setCurrentTool,
     toggleGrid,
     toggleQuickEditMode,
@@ -1833,9 +1831,6 @@ export function CanvasPage() {
             }
           }
         } else if (e.key === 'Escape') {
-          if (domainEditMode) {
-            setDomainEditMode(false)
-          }
           setCurrentTool('select')
           setEditingId(null)
           setIsCreatingConnection(false)
@@ -1916,7 +1911,7 @@ export function CanvasPage() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
     }
-  }, [zoom, currentTool, setCurrentTool, setZoom, setPan, toggleGrid, toggleQuickEditMode, toggleRelationshipHighlightMode, toggleDragMode, toggleMinimap, setEditingId, nodes, groups, selectedIds, addGroup, toggleSidebar, toggleNodePool, setSettingsOpen, setCommandPaletteOpen, handleManualSave, domainEditMode, setDomainEditMode, setIsCreatingConnection, setConnectionStartNodeId, setStartPortPreview, setSelectedIds, canUndo, canRedo, undo, redo, addNode, addToast])
+  }, [zoom, currentTool, setCurrentTool, setZoom, setPan, toggleGrid, toggleQuickEditMode, toggleRelationshipHighlightMode, toggleDragMode, toggleMinimap, setEditingId, nodes, groups, selectedIds, addGroup, toggleSidebar, toggleNodePool, setSettingsOpen, setCommandPaletteOpen, handleManualSave, setIsCreatingConnection, setConnectionStartNodeId, setStartPortPreview, setSelectedIds, canUndo, canRedo, undo, redo, addNode, addToast])
 
   // Handle click outside to end group name editing
   useEffect(() => {
@@ -3870,7 +3865,6 @@ export function CanvasPage() {
             {(() => {
               const { connectionInfoMap, sortedConnections } = portDistribution
 
-              // Calculate highlighted connections for relationship mode
               const selectedNodeIds = selectedIds.filter(id => nodes.has(id))
               const highlightedConnectionIds = new Set<string>()
               if (relationshipHighlightMode && selectedNodeIds.length > 0) {
@@ -3881,7 +3875,21 @@ export function CanvasPage() {
                 })
               }
 
-              return sortedConnections.map((conn) => {
+              interface LabelData {
+                connId: string
+                nodeId: string
+                nodeTitle: string
+                port: PortDirection
+                portX: number
+                portY: number
+                index: number
+                total: number
+                opacity: number
+              }
+
+              const allLabels: LabelData[] = []
+
+              const connectionElements = sortedConnections.map((conn) => {
                 const fromNode = nodes.get(conn.fromNodeId)
                 const toNode = nodes.get(conn.toNodeId)
                 if (!fromNode || !toNode) return null
@@ -3895,13 +3903,11 @@ export function CanvasPage() {
                 const fromPort = getConnectionPort(conn, 'start')
                 const toPort = getConnectionPort(conn, 'end')
 
-                // 获取该连线在起点和终点端口的连接信息列表
                 const fromKey = `${conn.fromNodeId}-${fromPort}`
                 const toKey = `${conn.toNodeId}-${toPort}`
                 const fromConnections = connectionInfoMap.get(fromKey) || []
                 const toConnections = connectionInfoMap.get(toKey) || []
 
-                // 使用智能算法计算端口位置
                 const fromPosition = calculateSmartPortPosition(
                   actualFromNode,
                   fromPort,
@@ -3919,10 +3925,34 @@ export function CanvasPage() {
                 const toX = toPosition.x
                 const toY = toPosition.y
 
-                // Calculate opacity for relationship highlight mode
                 let connectionOpacity = 1
                 if (relationshipHighlightMode && selectedNodeIds.length > 0) {
                   connectionOpacity = highlightedConnectionIds.has(conn.id) ? 1 : 0.15
+                }
+
+                if (relationshipHighlightMode && highlightedConnectionIds.has(conn.id)) {
+                  allLabels.push({
+                    connId: conn.id,
+                    nodeId: conn.fromNodeId,
+                    nodeTitle: toNode.title || '未命名',
+                    port: fromPort,
+                    portX: fromX,
+                    portY: fromY,
+                    index: fromPosition.index,
+                    total: fromPosition.total,
+                    opacity: connectionOpacity,
+                  })
+                  allLabels.push({
+                    connId: conn.id,
+                    nodeId: conn.toNodeId,
+                    nodeTitle: fromNode.title || '未命名',
+                    port: toPort,
+                    portX: toX,
+                    portY: toY,
+                    index: toPosition.index,
+                    total: toPosition.total,
+                    opacity: connectionOpacity,
+                  })
                 }
 
                 return (
@@ -3969,15 +3999,12 @@ export function CanvasPage() {
                       opacity={connectionOpacity}
                     />
                     {conn.label && (() => {
-                      // 计算节点拖拽偏移量，用于调整弯曲点坐标
                       const fromOffsetX = fromDraggingPos ? fromDraggingPos.x - fromNode.x : 0
                       const fromOffsetY = fromDraggingPos ? fromDraggingPos.y - fromNode.y : 0
                       const toOffsetX = toDraggingPos ? toDraggingPos.x - toNode.x : 0
                       const toOffsetY = toDraggingPos ? toDraggingPos.y - toNode.y : 0
 
-                      // 弯曲点需要根据起点和终点的偏移量进行插值调整
                       const adjustedBendPoints = conn.bendPoints?.map((bp, index, arr) => {
-                        // 根据弯曲点在连线中的位置，计算插值比例
                         const ratio = (index + 1) / (arr.length + 1)
                         return {
                           x: bp.x + fromOffsetX * (1 - ratio) + toOffsetX * ratio,
@@ -4009,6 +4036,84 @@ export function CanvasPage() {
                   </g>
                 )
               })
+
+              const labelElements = relationshipHighlightMode ? (() => {
+                return allLabels.map((label) => {
+                  const portOffset = getPortOffsetVector(label.port)
+                  const isVertical = label.port === 'top' || label.port === 'bottom'
+
+                  const charCount = label.nodeTitle.length
+                  const charSize = 11
+                  const padding = 8
+
+                  const textWidth = isVertical ? charSize + padding : charCount * charSize + padding
+                  const textHeight = isVertical ? charCount * charSize + padding : charSize + padding
+
+                  const labelOffset = isVertical ? textHeight / 2 + 10 : textWidth / 2 + 10
+                  const textX = label.portX + portOffset.dx * labelOffset
+                  const textY = label.portY + portOffset.dy * labelOffset
+                  return (
+                    <g key={`label-${label.connId}-${label.nodeId}`}>
+                      <rect
+                        x={textX - textWidth / 2}
+                        y={textY - textHeight / 2}
+                        width={textWidth}
+                        height={textHeight}
+                        rx={4}
+                        fill="white"
+                        stroke="#e2e8f0"
+                        strokeWidth={1}
+                        opacity={label.opacity}
+                        style={{ pointerEvents: 'none' }}
+                      />
+                      {isVertical ? (
+                        <text
+                          x={textX}
+                          y={textY - (charCount - 1) * charSize / 2 + 3}
+                          textAnchor="middle"
+                          fontSize={10}
+                          fontWeight="500"
+                          fill="#374151"
+                          opacity={label.opacity}
+                          style={{ pointerEvents: 'none' }}
+                        >
+                          {label.nodeTitle.split('').map((char, i) => (
+                            <tspan
+                              key={i}
+                              x={textX}
+                              dy={i === 0 ? 0 : charSize}
+                              textAnchor="middle"
+                            >
+                              {char}
+                            </tspan>
+                          ))}
+                        </text>
+                      ) : (
+                        <text
+                          x={textX}
+                          y={textY}
+                          textAnchor="middle"
+                          dominantBaseline="middle"
+                          fontSize={10}
+                          fontWeight="500"
+                          fill="#374151"
+                          opacity={label.opacity}
+                          style={{ pointerEvents: 'none' }}
+                        >
+                          {label.nodeTitle}
+                        </text>
+                      )}
+                    </g>
+                  )
+                })
+              })() : null
+
+              return (
+                <>
+                  {connectionElements}
+                  {labelElements}
+                </>
+              )
             })()}
 
             {/* Hovered port preview (before connection starts) - only in connection tool mode */}

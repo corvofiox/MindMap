@@ -19,6 +19,18 @@ export function useCanvasWorker() {
   const workerRef = useRef<Worker | null>(null)
   const pendingRequestsRef = useRef<Map<string, (data: unknown) => void>>(new Map())
   const messageHandlerRef = useRef<WorkerMessageHandler | null>(null)
+  const timeoutIdsRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set())
+
+  const clearTimeouts = useCallback(() => {
+    timeoutIdsRef.current.forEach(id => clearTimeout(id))
+    timeoutIdsRef.current.clear()
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      clearTimeouts()
+    }
+  }, [clearTimeouts])
 
   // 初始化 Worker
   useEffect(() => {
@@ -122,9 +134,11 @@ export function useCanvasWorker() {
         )
 
         // 设置超时处理
-        setTimeout(() => {
+        const timeoutId = setTimeout(() => {
+          timeoutIdsRef.current.delete(timeoutId)
           resolve(results)
         }, 1000)
+        timeoutIdsRef.current.add(timeoutId)
 
         workerRef.current.postMessage({
           type: 'calculatePaths',
@@ -148,13 +162,14 @@ export function useCanvasWorker() {
         const requestId = `bounds-${Date.now()}`
         pendingRequestsRef.current.set(requestId, resolve as (data: unknown) => void)
 
-        // 设置超时
-        setTimeout(() => {
+        const timeoutId = setTimeout(() => {
+          timeoutIdsRef.current.delete(timeoutId)
           if (pendingRequestsRef.current.has(requestId)) {
             pendingRequestsRef.current.delete(requestId)
             resolve(null)
           }
         }, 5000)
+        timeoutIdsRef.current.add(timeoutId)
 
         workerRef.current.postMessage({
           type: 'calculateBounds',

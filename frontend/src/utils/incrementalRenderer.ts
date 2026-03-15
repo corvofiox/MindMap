@@ -27,43 +27,22 @@ export class IncrementalRenderer {
   private options: IncrementalRendererOptions
   private pendingRender = false
   private worker: Worker | null = null
-  private pendingWorkerRequests = new Map<string, (data: unknown) => void>()
+  private workerRequestVersion = 0
 
   constructor(options: IncrementalRendererOptions) {
     this.canvas = options.canvas
     this.options = options
     this.worker = options.worker || null
-
-    if (this.worker) {
-      this.setupWorkerListener()
-    }
   }
 
-  private setupWorkerListener(): void {
-    if (!this.worker) return
-
-    this.worker.addEventListener('message', (event: MessageEvent) => {
-      const { id, type, data, error } = event.data
-
-      if (error) {
-        console.error('Worker error:', error)
-        if (id && this.pendingWorkerRequests.has(id)) {
-          this.pendingWorkerRequests.delete(id)
-        }
-        return
-      }
-
-      // 处理批量路径计算结果
-      if (type === 'pathsResult' && Array.isArray(data)) {
-        data.forEach((item: { id: string; path: string }) => {
-          if (this.pendingWorkerRequests.has(item.id)) {
-            const resolve = this.pendingWorkerRequests.get(item.id)!
-            resolve(item.path)
-            this.pendingWorkerRequests.delete(item.id)
-          }
-        })
-      }
-    })
+  destroy(): void {
+    this.pendingRender = false
+    this.workerRequestVersion = 0
+    this.objectMap.nodes.clear()
+    this.objectMap.connections.clear()
+    this.objectMap.domains.clear()
+    this.objectMap.groups.clear()
+    this.worker = null
   }
 
   // 获取 fabric 对象
@@ -153,9 +132,12 @@ export class IncrementalRenderer {
   private calculateConnectionPath(fromX: number, fromY: number, toX: number, toY: number, type: string): string {
     switch (type) {
       case 'curve': {
-        const dx = Math.abs(toX - fromX)
-        const controlOffset = Math.min(dx * 0.5, 100)
-        return `M ${fromX} ${fromY} C ${fromX + controlOffset} ${fromY}, ${toX - controlOffset} ${toY}, ${toX} ${toY}`
+        const dx = toX - fromX
+        const dy = toY - fromY
+        const distance = Math.sqrt(dx * dx + dy * dy)
+        const controlOffset = Math.min(distance * 0.5, 100)
+        const dirX = dx >= 0 ? 1 : -1
+        return `M ${fromX} ${fromY} C ${fromX + controlOffset * dirX} ${fromY}, ${toX - controlOffset * dirX} ${toY}, ${toX} ${toY}`
       }
       case 'step': {
         const midX = (fromX + toX) / 2
@@ -219,10 +201,15 @@ export class IncrementalRenderer {
 
   // 更新节点（增量）
   updateNode(node: Node): void {
+    this.updateNodeInternal(node)
+    this.requestRender()
+  }
+
+  // 更新节点内部方法（不触发渲染）
+  private updateNodeInternal(node: Node): void {
     const existingObj = this.objectMap.nodes.get(node.id)
 
     if (existingObj) {
-      // 更新现有对象
       existingObj.set({
         left: node.x,
         top: node.y,
@@ -233,15 +220,12 @@ export class IncrementalRenderer {
         evented: !node.locked,
       })
     } else {
-      // 创建新对象
       const newObj = this.createNodeObject(node)
       if (newObj) {
         this.objectMap.nodes.set(node.id, newObj)
         this.canvas.add(newObj)
       }
     }
-
-    this.requestRender()
   }
 
   // 批量更新节点
@@ -249,96 +233,198 @@ export class IncrementalRenderer {
     const currentIds = new Set(nodes.keys())
     const existingIds = new Set(this.objectMap.nodes.keys())
 
-    // 删除不存在的节点
     existingIds.forEach(id => {
       if (!currentIds.has(id)) {
-        this.removeNode(id)
+        this.removeNodeInternal(id)
       }
     })
 
-    // 添加或更新节点
+    let hasChanges = false
+
     nodes.forEach((node, id) => {
       const existingObj = this.objectMap.nodes.get(id)
       if (existingObj) {
-        // 检查是否需要更新
         const needsUpdate = this.nodeNeedsUpdate(existingObj, node)
         if (needsUpdate) {
-          this.updateNode(node)
+          this.updateNodeInternal(node)
+          hasChanges = true
         }
       } else {
-        this.updateNode(node)
+        this.updateNodeInternal(node)
+        hasChanges = true
       }
     })
 
-    this.requestRender()
+    if (hasChanges) {
+      this.requestRender()
+    }
   }
 
   // 检查节点是否需要更新
   private nodeNeedsUpdate(obj: fabric.Object, node: Node): boolean {
+    const fillColor = typeof obj.fill === 'string' ? obj.fill : (obj.fill as any)?.color
     return (
       obj.left !== node.x ||
       obj.top !== node.y ||
       obj.width !== node.width ||
       obj.height !== node.height ||
-      obj.fill !== node.color ||
-      obj.selectable === node.locked
+      fillColor !== node.color ||
+      obj.selectable !== !node.locked
     )
   }
 
   // 删除节点
   removeNode(id: string): void {
+    this.removeNodeInternal(id)
+    this.requestRender()
+  }
+
+  // 删除节点内部方法（不触发渲染）
+  private removeNodeInternal(id: string): void {
     const obj = this.objectMap.nodes.get(id)
     if (obj) {
       this.canvas.remove(obj)
       this.objectMap.nodes.delete(id)
-      this.requestRender()
     }
   }
 
   // 更新连接（增量）
   updateConnection(connection: Connection, nodes: Map<string, Node>): void {
+    this.updateConnectionInternal(connection, nodes)
+    this.requestRender()
+  }
+
+  // 更新连接内部方法（不触发渲染）
+  private updateConnectionInternal(connection: Connection, nodes: Map<string, Node>): void {
     const existingObj = this.objectMap.connections.get(connection.id)
+    const fromNode = nodes.get(connection.fromNodeId)
+    const toNode = nodes.get(connection.toNodeId)
+
+    if (!fromNode || !toNode) {
+      if (existingObj) {
+        this.canvas.remove(existingObj)
+        this.objectMap.connections.delete(connection.id)
+      }
+      return
+    }
+
+    const fromX = fromNode.x + fromNode.width / 2
+    const fromY = fromNode.y + fromNode.height / 2
+    const toX = toNode.x + toNode.width / 2
+    const toY = toNode.y + toNode.height / 2
 
     if (existingObj) {
-      // 删除旧对象，因为路径可能需要完全重绘
+      const needsRebuild = this.connectionNeedsRebuild(existingObj, connection, fromX, fromY, toX, toY)
+
+      if (!needsRebuild) {
+        this.updateConnectionProperties(existingObj, connection)
+        return
+      }
+
       this.canvas.remove(existingObj)
       this.objectMap.connections.delete(connection.id)
     }
 
-    // 创建新对象
     const newObj = this.createConnectionObject(connection, nodes)
     if (newObj) {
       this.objectMap.connections.set(connection.id, newObj)
       this.canvas.add(newObj)
       this.canvas.sendToBack(newObj)
     }
+  }
 
-    this.requestRender()
+  // 检查连接是否需要重建
+  private connectionNeedsRebuild(
+    obj: fabric.Object,
+    connection: Connection,
+    fromX: number,
+    fromY: number,
+    toX: number,
+    toY: number
+  ): boolean {
+    const data = obj.data
+    if (!data || data.type !== 'connection') return true
+
+    if (connection.type === 'straight') {
+      const x1 = (obj as fabric.Line).x1
+      const y1 = (obj as fabric.Line).y1
+      const x2 = (obj as fabric.Line).x2
+      const y2 = (obj as fabric.Line).y2
+      return x1 !== fromX || y1 !== fromY || x2 !== toX || y2 !== toY
+    }
+
+    const pathObj = obj as fabric.Path
+    if (!pathObj.path) return true
+
+    const pathData = this.calculateConnectionPath(fromX, fromY, toX, toY, connection.type)
+    const currentPath = (pathObj.path as unknown as any[][]).map((seg) => seg.join(' ')).join(' ')
+    return currentPath !== pathData
+  }
+
+  // 更新连接属性（不重建对象）
+  private updateConnectionProperties(obj: fabric.Object, connection: Connection): void {
+    const stroke = connection.color || '#6b7280'
+    const strokeWidth = connection.width || 2
+
+    obj.set({
+      stroke,
+      strokeWidth,
+    })
+
+    if (connection.style === 'dashed') {
+      obj.set({ strokeDashArray: [5, 5] })
+    } else if (connection.style === 'dotted') {
+      obj.set({ strokeDashArray: [2, 2] })
+    } else {
+      obj.set({ strokeDashArray: undefined })
+    }
   }
 
   // 批量更新连接（支持 Worker 异步计算）
   async updateConnections(connections: Map<string, Connection>, nodes: Map<string, Node>): Promise<void> {
     const currentIds = new Set(connections.keys())
     const existingIds = new Set(this.objectMap.connections.keys())
+    let hasChanges = false
 
-    // 删除不存在的连接
     existingIds.forEach(id => {
       if (!currentIds.has(id)) {
-        this.removeConnection(id)
+        this.removeConnectionInternal(id)
+        hasChanges = true
       }
     })
 
-    // 如果有 Worker 且连接数量较多，使用 Worker 批量计算
     if (this.worker && connections.size > 10) {
       await this.updateConnectionsWithWorker(connections, nodes)
+      hasChanges = true
     } else {
-      // 添加或更新连接（同步方式）
       connections.forEach((connection) => {
-        this.updateConnection(connection, nodes)
+        const existingObj = this.objectMap.connections.get(connection.id)
+        const fromNode = nodes.get(connection.fromNodeId)
+        const toNode = nodes.get(connection.toNodeId)
+
+        if (existingObj && fromNode && toNode) {
+          const fromX = fromNode.x + fromNode.width / 2
+          const fromY = fromNode.y + fromNode.height / 2
+          const toX = toNode.x + toNode.width / 2
+          const toY = toNode.y + toNode.height / 2
+          const needsRebuild = this.connectionNeedsRebuild(existingObj, connection, fromX, fromY, toX, toY)
+
+          if (!needsRebuild) {
+            this.updateConnectionProperties(existingObj, connection)
+          } else {
+            this.updateConnectionInternal(connection, nodes)
+            hasChanges = true
+          }
+        } else {
+          this.updateConnectionInternal(connection, nodes)
+          hasChanges = true
+        }
       })
     }
 
-    this.requestRender()
+    if (hasChanges) {
+      this.requestRender()
+    }
   }
 
   // 使用 Worker 批量更新连接
@@ -348,52 +434,66 @@ export class IncrementalRenderer {
   ): Promise<void> {
     if (!this.worker) return
 
+    const currentVersion = ++this.workerRequestVersion
     const connectionArray = Array.from(connections.entries())
-    const pathResults = new Map<string, string>()
 
-    // 为每个连接注册回调
-    connectionArray.forEach(([id]) => {
-      this.pendingWorkerRequests.set(
-        id,
-        (path: unknown) => {
-          if (typeof path === 'string') {
-            pathResults.set(id, path)
-          }
-        }
-      )
-    })
-
-    // 发送批量计算请求（将 Map 转换为普通对象以便序列化）
     const nodesObj = Object.fromEntries(nodes)
-    this.worker.postMessage({
-      type: 'calculatePaths',
-      connections: connectionArray.map(([id, conn]) => ({ id, connection: conn })),
-      nodes: nodesObj,
-    })
 
-    // 等待结果（最多 1 秒）
-    await new Promise<void>((resolve) => {
-      const checkInterval = setInterval(() => {
-        if (pathResults.size >= connectionArray.length) {
-          clearInterval(checkInterval)
-          resolve()
-        }
-      }, 10)
+    const pathResults = await this.sendWorkerMessage<{ id: string; path: string }[]>(
+      'calculatePaths',
+      {
+        connections: connectionArray.map(([id, conn]) => ({ id, connection: conn })),
+        nodes: nodesObj,
+      },
+      currentVersion,
+      2000
+    )
 
-      setTimeout(() => {
-        clearInterval(checkInterval)
-        resolve()
-      }, 1000)
-    })
+    if (!pathResults || currentVersion !== this.workerRequestVersion) return
 
-    // 使用计算结果更新连接
+    const pathMap = new Map(pathResults.map(item => [item.id, item.path]))
+
     connectionArray.forEach(([id, connection]) => {
-      const pathData = pathResults.get(id)
+      const pathData = pathMap.get(id)
       if (pathData) {
         this.updateConnectionWithPath(connection, nodes, pathData)
       } else {
-        this.updateConnection(connection, nodes)
+        this.updateConnectionInternal(connection, nodes)
       }
+    })
+  }
+
+  // 发送 Worker 消息并等待响应（Promise 化）
+  private sendWorkerMessage<T>(
+    type: string,
+    data: unknown,
+    version: number,
+    timeout: number = 5000
+  ): Promise<T | null> {
+    return new Promise((resolve) => {
+      if (!this.worker) {
+        resolve(null)
+        return
+      }
+
+      const handleMessage = (event: MessageEvent) => {
+        const response = event.data
+        if (response.type === `${type}Result` || response.type === 'pathsResult') {
+          if (version === this.workerRequestVersion) {
+            this.worker!.removeEventListener('message', handleMessage)
+            resolve(response.data as T)
+          }
+        }
+      }
+
+      this.worker.addEventListener('message', handleMessage)
+
+      this.worker!.postMessage({ type, ...(data as Record<string, unknown>) })
+
+      setTimeout(() => {
+        this.worker!.removeEventListener('message', handleMessage)
+        resolve(null)
+      }, timeout)
     })
   }
 
@@ -455,20 +555,30 @@ export class IncrementalRenderer {
 
   // 删除连接
   removeConnection(id: string): void {
+    this.removeConnectionInternal(id)
+    this.requestRender()
+  }
+
+  // 删除连接内部方法（不触发渲染）
+  private removeConnectionInternal(id: string): void {
     const obj = this.objectMap.connections.get(id)
     if (obj) {
       this.canvas.remove(obj)
       this.objectMap.connections.delete(id)
-      this.requestRender()
     }
   }
 
   // 更新域（增量）
   updateDomain(domain: Domain, isEditable: boolean): void {
+    this.updateDomainInternal(domain, isEditable)
+    this.requestRender()
+  }
+
+  // 更新域内部方法（不触发渲染）
+  private updateDomainInternal(domain: Domain, isEditable: boolean): void {
     const existingObj = this.objectMap.domains.get(domain.id)
 
     if (existingObj) {
-      // 更新现有对象
       existingObj.set({
         left: domain.x,
         top: domain.y,
@@ -481,7 +591,6 @@ export class IncrementalRenderer {
         hasBorders: isEditable,
       })
     } else {
-      // 创建新对象
       const newObj = this.createDomainObject(domain, isEditable)
       if (newObj) {
         this.objectMap.domains.set(domain.id, newObj)
@@ -489,36 +598,38 @@ export class IncrementalRenderer {
         this.canvas.sendToBack(newObj)
       }
     }
-
-    this.requestRender()
   }
 
   // 批量更新域
   updateDomains(domains: Map<string, Domain>, isEditable: boolean): void {
     const currentIds = new Set(domains.keys())
     const existingIds = new Set(this.objectMap.domains.keys())
+    let hasChanges = false
 
-    // 删除不存在的域
     existingIds.forEach(id => {
       if (!currentIds.has(id)) {
-        this.removeDomain(id)
+        this.removeDomainInternal(id)
+        hasChanges = true
       }
     })
 
-    // 添加或更新域
     domains.forEach((domain, id) => {
       const existingObj = this.objectMap.domains.get(id)
       if (existingObj) {
         const needsUpdate = this.domainNeedsUpdate(existingObj, domain, isEditable)
         if (needsUpdate) {
-          this.updateDomain(domain, isEditable)
+          this.updateDomainInternal(domain, isEditable)
+          hasChanges = true
         }
       } else {
-        this.updateDomain(domain, isEditable)
+        this.updateDomainInternal(domain, isEditable)
+        hasChanges = true
       }
     })
 
-    this.requestRender()
+    if (hasChanges) {
+      this.requestRender()
+    }
   }
 
   // 检查域是否需要更新
@@ -535,20 +646,30 @@ export class IncrementalRenderer {
 
   // 删除域
   removeDomain(id: string): void {
+    this.removeDomainInternal(id)
+    this.requestRender()
+  }
+
+  // 删除域内部方法（不触发渲染）
+  private removeDomainInternal(id: string): void {
     const obj = this.objectMap.domains.get(id)
     if (obj) {
       this.canvas.remove(obj)
       this.objectMap.domains.delete(id)
-      this.requestRender()
     }
   }
 
   // 更新组（增量）
   updateGroup(group: NodeGroup): void {
+    this.updateGroupInternal(group)
+    this.requestRender()
+  }
+
+  // 更新组内部方法（不触发渲染）
+  private updateGroupInternal(group: NodeGroup): void {
     const existingObj = this.objectMap.groups.get(group.id)
 
     if (existingObj) {
-      // 更新现有对象
       (existingObj as fabric.Rect).set({
         left: group.x,
         top: group.y,
@@ -561,43 +682,44 @@ export class IncrementalRenderer {
         ry: group.borderRadius || 8,
       })
     } else {
-      // 创建新对象
       const newObj = this.createGroupObject(group)
       if (newObj) {
         this.objectMap.groups.set(group.id, newObj)
         this.canvas.add(newObj)
       }
     }
-
-    this.requestRender()
   }
 
   // 批量更新组
   updateGroups(groups: Map<string, NodeGroup>): void {
     const currentIds = new Set(groups.keys())
     const existingIds = new Set(this.objectMap.groups.keys())
+    let hasChanges = false
 
-    // 删除不存在的组
     existingIds.forEach(id => {
       if (!currentIds.has(id)) {
-        this.removeGroup(id)
+        this.removeGroupInternal(id)
+        hasChanges = true
       }
     })
 
-    // 添加或更新组
     groups.forEach((group, id) => {
       const existingObj = this.objectMap.groups.get(id)
       if (existingObj) {
         const needsUpdate = this.groupNeedsUpdate(existingObj, group)
         if (needsUpdate) {
-          this.updateGroup(group)
+          this.updateGroupInternal(group)
+          hasChanges = true
         }
       } else {
-        this.updateGroup(group)
+        this.updateGroupInternal(group)
+        hasChanges = true
       }
     })
 
-    this.requestRender()
+    if (hasChanges) {
+      this.requestRender()
+    }
   }
 
   // 检查组是否需要更新
@@ -613,11 +735,16 @@ export class IncrementalRenderer {
 
   // 删除组
   removeGroup(id: string): void {
+    this.removeGroupInternal(id)
+    this.requestRender()
+  }
+
+  // 删除组内部方法（不触发渲染）
+  private removeGroupInternal(id: string): void {
     const obj = this.objectMap.groups.get(id)
     if (obj) {
       this.canvas.remove(obj)
       this.objectMap.groups.delete(id)
-      this.requestRender()
     }
   }
 
@@ -661,6 +788,26 @@ export class IncrementalRenderer {
       domains: new Map(this.objectMap.domains),
       connections: new Map(this.objectMap.connections),
     }
+  }
+
+  // 遍历节点对象（避免创建副本）
+  forEachNode(callback: (obj: fabric.Object, id: string) => void): void {
+    this.objectMap.nodes.forEach(callback)
+  }
+
+  // 遍历连接对象（避免创建副本）
+  forEachConnection(callback: (obj: fabric.Object, id: string) => void): void {
+    this.objectMap.connections.forEach(callback)
+  }
+
+  // 遍历域对象（避免创建副本）
+  forEachDomain(callback: (obj: fabric.Object, id: string) => void): void {
+    this.objectMap.domains.forEach(callback)
+  }
+
+  // 遍历组对象（避免创建副本）
+  forEachGroup(callback: (obj: fabric.Object, id: string) => void): void {
+    this.objectMap.groups.forEach(callback)
   }
 
   // 获取对象数量

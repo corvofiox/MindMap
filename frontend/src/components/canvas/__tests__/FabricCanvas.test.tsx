@@ -197,6 +197,7 @@ const mockFabricCanvas = {
   dispose: vi.fn(),
   sendToBack: vi.fn(),
   on: vi.fn(),
+  off: vi.fn(),
   findTarget: vi.fn(),
   viewportTransform: [1, 0, 0, 1, 0, 0],
 }
@@ -208,25 +209,35 @@ class MockFabricCanvasConstructor {
   }
 }
 
+// Create a mock Rect constructor
+class MockFabricRect {
+  constructor(..._args: any[]) {
+    Object.assign(this, {
+      set: vi.fn(),
+      data: {},
+    })
+  }
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
 
-  // Set up global fabric object with constructor
-  ;(globalThis as any).fabric = {
-    Canvas: MockFabricCanvasConstructor as any,
-    Rect: vi.fn(() => ({})),
-  }
+    // Set up global fabric object with constructor
+    ; (globalThis as any).fabric = {
+      Canvas: MockFabricCanvasConstructor as any,
+      Rect: MockFabricRect as any,
+    }
 
   // Default mock store values
   vi.mocked(useCanvasStore).mockReturnValue({
     nodes: new Map(),
     groups: new Map(),
     domains: new Map(),
-    connections: [],
+    connections: new Map(),
     zoom: 1.0,
     panX: 0,
     panY: 0,
-    selectedIds: new Set(),
+    selectedIds: [],
     addNode: vi.fn(),
     addDomain: vi.fn(),
     updateNode: vi.fn(),
@@ -240,8 +251,6 @@ beforeEach(() => {
 
   vi.mocked(useUIStore).mockReturnValue({
     currentTool: 'select',
-    domainEditMode: false,
-    setDomainEditMode: vi.fn(),
   } as any)
 })
 
@@ -286,8 +295,6 @@ describe('FabricCanvas Component', () => {
     it('applies correct CSS classes based on tool', () => {
       vi.mocked(useUIStore).mockReturnValue({
         currentTool: 'node',
-        domainEditMode: false,
-        setDomainEditMode: vi.fn(),
       } as any)
 
       render(<FabricCanvas canvasId={1} width={800} height={600} />)
@@ -299,8 +306,6 @@ describe('FabricCanvas Component', () => {
     it('sets pan cursor when tool is pan', () => {
       vi.mocked(useUIStore).mockReturnValue({
         currentTool: 'pan',
-        domainEditMode: false,
-        setDomainEditMode: vi.fn(),
       } as any)
 
       render(<FabricCanvas canvasId={1} width={800} height={600} />)
@@ -312,8 +317,6 @@ describe('FabricCanvas Component', () => {
     it('sets default cursor for select tool', () => {
       vi.mocked(useUIStore).mockReturnValue({
         currentTool: 'select',
-        domainEditMode: false,
-        setDomainEditMode: vi.fn(),
       } as any)
 
       render(<FabricCanvas canvasId={1} width={800} height={600} />)
@@ -339,15 +342,15 @@ describe('FabricCanvas Component', () => {
     it('loads canvas data from store', () => {
       const mockStore = {
         nodes: new Map([
-          ['node-1', { id: 'node-1', x: 100, y: 100 }],
+          ['node-1', { id: 'node-1', x: 100, y: 100, width: 200, height: 120, color: '#fff', locked: false }],
         ]),
         groups: new Map(),
         domains: new Map(),
-        connections: [],
+        connections: new Map(),
         zoom: 1.0,
         panX: 0,
         panY: 0,
-        selectedIds: new Set(),
+        selectedIds: [],
         addNode: vi.fn(),
         addDomain: vi.fn(),
         updateNode: vi.fn(),
@@ -363,7 +366,6 @@ describe('FabricCanvas Component', () => {
 
       render(<FabricCanvas canvasId={1} width={800} height={600} />)
 
-      expect(mockFabricCanvas.clear).toHaveBeenCalled()
       expect(mockFabricCanvas.renderAll).toHaveBeenCalled()
     })
   })
@@ -393,11 +395,11 @@ describe('FabricCanvas Component', () => {
         nodes: new Map(),
         groups: new Map(),
         domains: new Map(),
-        connections: [],
+        connections: new Map(),
         zoom: 1.0,
         panX: 0,
         panY: 0,
-        selectedIds: new Set(),
+        selectedIds: [],
         addNode: vi.fn(),
         addDomain: vi.fn(),
         updateNode: vi.fn(),
@@ -434,11 +436,11 @@ describe('FabricCanvas Component', () => {
         nodes: new Map(),
         groups: new Map(),
         domains: new Map(),
-        connections: [],
+        connections: new Map(),
         zoom: 1.0,
         panX: 0,
         panY: 0,
-        selectedIds: new Set(['node-1']),
+        selectedIds: ['node-1'],
         addNode: vi.fn(),
         addDomain: vi.fn(),
         updateNode: vi.fn(),
@@ -465,34 +467,6 @@ describe('FabricCanvas Component', () => {
     })
   })
 
-  describe('Domain Edit Mode', () => {
-    it('sets domainEditMode when currentTool changes to domain', () => {
-      const mockSetDomainEditMode = vi.fn()
-      vi.mocked(useUIStore).mockReturnValue({
-        currentTool: 'domain',
-        domainEditMode: false,
-        setDomainEditMode: mockSetDomainEditMode,
-      } as any)
-
-      render(<FabricCanvas canvasId={1} width={800} height={600} />)
-
-      expect(mockSetDomainEditMode).toHaveBeenCalledWith(true)
-    })
-
-    it('clears domainEditMode when tool changes from domain', () => {
-      const mockSetDomainEditMode = vi.fn()
-      vi.mocked(useUIStore).mockReturnValue({
-        currentTool: 'select',
-        domainEditMode: true,
-        setDomainEditMode: mockSetDomainEditMode,
-      } as any)
-
-      render(<FabricCanvas canvasId={1} width={800} height={600} />)
-
-      expect(mockSetDomainEditMode).toHaveBeenCalledWith(false)
-    })
-  })
-
   describe('Double Click Handling', () => {
     it('sets editingId when domain is double-clicked', () => {
       const mockSetEditingId = vi.fn()
@@ -500,11 +474,11 @@ describe('FabricCanvas Component', () => {
         nodes: new Map(),
         groups: new Map(),
         domains: new Map(),
-        connections: [],
+        connections: new Map(),
         zoom: 1.0,
         panX: 0,
         panY: 0,
-        selectedIds: new Set(),
+        selectedIds: [],
         addNode: vi.fn(),
         addDomain: vi.fn(),
         updateNode: vi.fn(),
@@ -538,11 +512,11 @@ describe('FabricCanvas Component', () => {
         nodes: new Map(),
         groups: new Map(),
         domains: new Map(),
-        connections: [],
+        connections: new Map(),
         zoom: 1.0,
         panX: 0,
         panY: 0,
-        selectedIds: new Set(),
+        selectedIds: [],
         addNode: vi.fn(),
         addDomain: vi.fn(),
         updateNode: vi.fn(),

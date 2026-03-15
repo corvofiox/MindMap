@@ -121,6 +121,9 @@ class CollaborationService {
     this.users = []
     this.offlineQueue = []
     this.canvasId = null
+    this.operationHandlers.clear()
+    this.cursorListeners = []
+    this.userListeners = []
   }
 
   isConnected(): boolean {

@@ -16,7 +16,7 @@ const tools: { id: Tool; icon: typeof MousePointer2; label: string; shortcut: st
   { id: 'image', icon: ImageIcon, label: '图片', shortcut: 'I' },
   { id: 'connection', icon: Link, label: '连线', shortcut: 'L' },
   { id: 'group', icon: Layers, label: '分组', shortcut: 'G' },
-  { id: 'domain', icon: Layout, label: '域', shortcut: 'R' },
+  { id: 'domain', icon: Layout, label: '创建域', shortcut: 'R' },
 ]
 
 const toolSeparators = [1, 2]
@@ -646,10 +646,10 @@ export function CanvasToolbar({ onSave, isViewer }: CanvasToolbarProps) {
         </div>
       )}
 
-      {/* 域编辑模式提示 */}
+      {/* 域创建模式提示 */}
       {currentTool === 'domain' && (
         <div className="absolute top-14 left-1/2 transform -translate-x-1/2 bg-blue-500 dark:bg-blue-600 text-white px-4 py-2 rounded-lg shadow-lg z-20">
-          域编辑模式 - 拖拽创建域，点击选中编辑
+          域创建模式 - 拖拽绘制域，右键编辑域属性
         </div>
       )}
     </div>

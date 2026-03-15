@@ -85,10 +85,6 @@ interface UIState {
   toggleRelationshipHighlightMode: () => void
   setRelationshipHighlightMode: (enabled: boolean) => void
 
-  // Domain Edit Mode
-  domainEditMode: boolean
-  setDomainEditMode: (enabled: boolean) => void
-
   // Connection Direction
   connectionDirection: 'directed' | 'bidirectional' | 'undirected'
   setConnectionDirection: (direction: 'directed' | 'bidirectional' | 'undirected') => void
@@ -251,10 +247,6 @@ export const useUIStore = create<UIState>()(
         relationshipHighlightMode: false,
         toggleRelationshipHighlightMode: createToggle('relationshipHighlightMode'),
         setRelationshipHighlightMode: (enabled) => set({ relationshipHighlightMode: enabled }),
-
-        // Domain Edit Mode
-        domainEditMode: false,
-        setDomainEditMode: (enabled) => set({ domainEditMode: enabled }),
 
         // Connection Direction
         connectionDirection: 'directed',

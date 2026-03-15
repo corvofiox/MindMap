@@ -55,5 +55,6 @@ lpt1-lpt9
 
 # Debug and profiling files
 *.heapsnapshot
+*.he
 *.cpuprofile
 *.log

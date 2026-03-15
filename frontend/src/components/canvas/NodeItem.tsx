@@ -60,7 +60,21 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
   const editingTitleRef = useRef<string>('')
   const editingContentRef = useRef<string>('')
   const contextMenuStartRef = useRef({ x: 0, y: 0 })
+  const timerRefsRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set())
+  const imageRef = useRef<HTMLImageElement | null>(null)
   const { addToast } = useUIStore()
+
+  useEffect(() => {
+    return () => {
+      timerRefsRef.current.forEach(timer => clearTimeout(timer))
+      timerRefsRef.current.clear()
+      if (imageRef.current) {
+        imageRef.current.onload = null
+        imageRef.current.onerror = null
+        imageRef.current = null
+      }
+    }
+  }, [])
 
   // Image Upload Handler
   const handleImageUpload = useCallback(async (file: File) => {
@@ -72,6 +86,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
 
       // Load image to get dimensions
       const img = new Image()
+      imageRef.current = img
       img.src = url
       img.onload = () => {
         const aspectRatio = img.width / img.height
@@ -184,7 +199,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
     if (editingField === 'title') {
       editingTitleRef.current = node.title || ''
       document.body.classList.add('allow-text-selection')
-      setTimeout(() => {
+      const timer = setTimeout(() => {
         if (titleRef.current) {
           titleRef.current.innerHTML = textToSafeHtml(editingTitleRef.current)
           titleRef.current.focus()
@@ -201,10 +216,11 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
           selection?.addRange(range)
         }
       }, 0)
+      timerRefsRef.current.add(timer)
     } else if (editingField === 'content') {
       editingContentRef.current = node.content || ''
       document.body.classList.add('allow-text-selection')
-      setTimeout(() => {
+      const timer = setTimeout(() => {
         if (contentRef.current) {
           contentRef.current.innerHTML = textToSafeHtml(editingContentRef.current)
           contentRef.current.focus()
@@ -221,6 +237,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
           selection?.addRange(range)
         }
       }, 0)
+      timerRefsRef.current.add(timer)
     } else {
       document.body.classList.remove('allow-text-selection')
     }
@@ -677,9 +694,10 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
             // 更新 lastSyncedNodeRef 为新位置，防止被覆盖
             lastSyncedNodeRef.current = { x: localPosition.x, y: localPosition.y, width: localSize.width, height: localSize.height }
             // 延迟清除标志，允许 React 状态更新完成
-            setTimeout(() => {
+            const timer = setTimeout(() => {
               justFinishedDragRef.current = false
             }, 200)
+            timerRefsRef.current.add(timer)
             // 触发自定义事件，通知 CanvasPage 结束拖动
             window.dispatchEvent(new CustomEvent('nodeDragEnd', {
               detail: { nodeId: node.id, droppedInNodePool: false }
