@@ -1,5 +1,5 @@
 import { useNavigate } from 'react-router-dom'
-import { Settings, LogOut, User as UserIcon, Users, Sparkles } from 'lucide-react'
+import { Settings, LogOut, User as UserIcon, Users, Sparkles, Search } from 'lucide-react'
 import { useAuthStore } from '@/store/useAuthStore'
 import { useUIStore } from '@/store/useUIStore'
 import { useProjectsStore } from '@/store/useProjectsStore'
@@ -109,6 +109,15 @@ export function Header() {
 
       {/* Right - User and Settings */}
       <div className="flex items-center gap-2">
+        {/* Node Search */}
+        <button
+          onClick={() => useUIStore.getState().setNodeSearchOpen(true)}
+          className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400"
+          title="搜索节点 (Ctrl+F)"
+        >
+          <Search className="w-5 h-5" />
+        </button>
+
         {/* Collaboration */}
         <button
           onClick={() => useUIStore.getState().setCollaborationOpen(true)}

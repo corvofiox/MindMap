@@ -123,6 +123,9 @@ interface UIState {
   collaborationOpen: boolean
   setCollaborationOpen: (open: boolean) => void
 
+  nodeSearchOpen: boolean
+  setNodeSearchOpen: (open: boolean) => void
+
   // Toasts
   toasts: Toast[]
   addToast: (toast: Omit<Toast, 'id'>) => void
@@ -295,6 +298,9 @@ export const useUIStore = create<UIState>()(
 
         collaborationOpen: false,
         setCollaborationOpen: (open) => set({ collaborationOpen: open }),
+
+        nodeSearchOpen: false,
+        setNodeSearchOpen: (open) => set({ nodeSearchOpen: open }),
 
         // Toasts
         toasts: [],

@@ -2942,6 +2942,27 @@ export function CanvasPage() {
     }
   }, [connections, setEditingConnectionLabel, isViewer])
 
+  const handleRelationshipLabelClick = useCallback((nodeId: string) => {
+    const node = nodes.get(nodeId)
+    if (!node) {
+      return
+    }
+
+    const nodeCenterX = node.x + node.width / 2
+    const nodeCenterY = node.y + node.height / 2
+
+    const canvasContainer = document.querySelector('[data-canvas-container]') as HTMLElement
+    const width = canvasContainer?.clientWidth || window.innerWidth
+    const height = canvasContainer?.clientHeight || window.innerHeight
+
+    const newPanX = width / 2 - nodeCenterX
+    const newPanY = height / 2 - nodeCenterY
+
+    setZoom(1)
+    setPan(newPanX, newPanY)
+    setSelectedIds([nodeId])
+  }, [nodes, setZoom, setPan, setSelectedIds])
+
   // Handle canvas click
   const handleCanvasClick = useCallback((e: React.MouseEvent) => {
     // Don't handle click when using pan tool or just finished dragging
@@ -3933,7 +3954,7 @@ export function CanvasPage() {
                 if (relationshipHighlightMode && highlightedConnectionIds.has(conn.id)) {
                   allLabels.push({
                     connId: conn.id,
-                    nodeId: conn.fromNodeId,
+                    nodeId: conn.toNodeId,
                     nodeTitle: toNode.title || '未命名',
                     port: fromPort,
                     portX: fromX,
@@ -3944,7 +3965,7 @@ export function CanvasPage() {
                   })
                   allLabels.push({
                     connId: conn.id,
-                    nodeId: conn.toNodeId,
+                    nodeId: conn.fromNodeId,
                     nodeTitle: fromNode.title || '未命名',
                     port: toPort,
                     portX: toX,
@@ -4053,7 +4074,10 @@ export function CanvasPage() {
                   const textX = label.portX + portOffset.dx * labelOffset
                   const textY = label.portY + portOffset.dy * labelOffset
                   return (
-                    <g key={`label-${label.connId}-${label.nodeId}`}>
+                    <g
+                      key={`label-${label.connId}-${label.nodeId}`}
+                      style={{ pointerEvents: 'auto' }}
+                    >
                       <rect
                         x={textX - textWidth / 2}
                         y={textY - textHeight / 2}
@@ -4061,10 +4085,20 @@ export function CanvasPage() {
                         height={textHeight}
                         rx={4}
                         fill="white"
-                        stroke="#e2e8f0"
+                        stroke="#94a3b8"
                         strokeWidth={1}
                         opacity={label.opacity}
-                        style={{ pointerEvents: 'none' }}
+                        style={{ cursor: 'pointer', pointerEvents: 'all' }}
+                        className="transition-all hover:stroke-blue-400 hover:fill-blue-50"
+                        data-relationship-label="true"
+                        onMouseDown={(e) => {
+                          e.stopPropagation()
+                        }}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          e.preventDefault()
+                          handleRelationshipLabelClick(label.nodeId)
+                        }}
                       />
                       {isVertical ? (
                         <text
@@ -4075,7 +4109,7 @@ export function CanvasPage() {
                           fontWeight="500"
                           fill="#374151"
                           opacity={label.opacity}
-                          style={{ pointerEvents: 'none' }}
+                          className="pointer-events-none"
                         >
                           {label.nodeTitle.split('').map((char, i) => (
                             <tspan
@@ -4098,7 +4132,7 @@ export function CanvasPage() {
                           fontWeight="500"
                           fill="#374151"
                           opacity={label.opacity}
-                          style={{ pointerEvents: 'none' }}
+                          className="pointer-events-none"
                         >
                           {label.nodeTitle}
                         </text>

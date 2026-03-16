@@ -10,6 +10,7 @@ import { ShortcutsDialog } from '../ui/ShortcutsDialog'
 import { SearchPanel } from '../ui/SearchPanel'
 import { NodeDefaultsDialog } from '../ui/NodeDefaultsDialog'
 import { CollaborationDialog } from '../ui/CollaborationDialog'
+import { NodeSearchDialog } from '../ui/NodeSearchDialog'
 import { useUIStore } from '@/store/useUIStore'
 import { useAuthStore } from '@/store/useAuthStore'
 
@@ -55,6 +56,7 @@ export function MainLayout() {
       <NodeDefaultsDialog />
       <SearchPanel />
       <CollaborationDialog />
+      <NodeSearchDialog />
     </div>
   )
 }

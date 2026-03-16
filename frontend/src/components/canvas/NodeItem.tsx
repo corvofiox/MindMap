@@ -26,6 +26,11 @@ interface NodeItemProps {
 
 type EditingField = 'title' | 'content' | null
 
+interface HighlightState {
+  keywords: string[]
+  timestamp: number
+}
+
 export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, groupDragOffset, onNodeContextMenuOpen, onMouseDown, isViewer, opacity = 1 }: NodeItemProps) {
   const {
     updateNode,
@@ -45,6 +50,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
   const [isComposing, setIsComposing] = useState(false)
   const [editingField, setEditingField] = useState<EditingField>(null)
   const [isHovered, setIsHovered] = useState(false)
+  const [highlightState, setHighlightState] = useState<HighlightState | null>(null)
   // 本地状态用于拖动时的实时更新，避免频繁更新全局状态
   const [localPosition, setLocalPosition] = useState({ x: node.x, y: node.y })
   const [localSize, setLocalSize] = useState({ width: node.width, height: node.height })
@@ -75,6 +81,27 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
       }
     }
   }, [])
+
+  useEffect(() => {
+    const handleHighlight = (e: Event) => {
+      const customEvent = e as CustomEvent<{ nodeId: string | null; keywords: string[] }>
+      if (customEvent.detail.nodeId === null) {
+        setHighlightState(null)
+      } else if (customEvent.detail.nodeId === node.id) {
+        setHighlightState({
+          keywords: customEvent.detail.keywords,
+          timestamp: Date.now(),
+        })
+      } else {
+        setHighlightState(null)
+      }
+    }
+
+    window.addEventListener('nodeSearchHighlight', handleHighlight)
+    return () => {
+      window.removeEventListener('nodeSearchHighlight', handleHighlight)
+    }
+  }, [node.id])
 
   // Image Upload Handler
   const handleImageUpload = useCallback(async (file: File) => {
@@ -109,6 +136,17 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
 
   const isEditingTitle = editingField === 'title'
   const isEditingContent = editingField === 'content'
+
+  const highlightKeywords = useCallback((text: string, keywords: string[]): string => {
+    if (!text || keywords.length === 0) return text
+
+    let result = text
+    keywords.forEach(keyword => {
+      const regex = new RegExp(`(${keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi')
+      result = result.replace(regex, '<mark class="bg-yellow-300 dark:bg-yellow-500 px-0.5 rounded">$1</mark>')
+    })
+    return result
+  }, [])
 
   useEffect(() => {
     if (editingField !== null) return
@@ -1276,7 +1314,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
                       whiteSpace: 'pre-wrap',
                     }}
                     onDoubleClick={(e) => handleDoubleClick(e, 'title')}
-                    dangerouslySetInnerHTML={{ __html: node.title || '' }}
+                    dangerouslySetInnerHTML={{ __html: highlightState?.keywords ? highlightKeywords(node.title || '', highlightState.keywords) : node.title || '' }}
                   />
                 )}
               </div>
@@ -1375,7 +1413,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
                       whiteSpace: 'pre-wrap',
                     }}
                     onDoubleClick={(e) => handleDoubleClick(e, 'title')}
-                    dangerouslySetInnerHTML={{ __html: node.title || '' }}
+                    dangerouslySetInnerHTML={{ __html: highlightState?.keywords ? highlightKeywords(node.title || '', highlightState.keywords) : node.title || '' }}
                   />
                 )}
               </div>
@@ -1423,7 +1461,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
                       textAlign: node.contentAlign || node.textAlign,
                     }}
                     onDoubleClick={(e) => handleDoubleClick(e, 'content')}
-                    dangerouslySetInnerHTML={{ __html: node.content || '双击添加内容' }}
+                    dangerouslySetInnerHTML={{ __html: highlightState?.keywords ? highlightKeywords(node.content || '双击添加内容', highlightState.keywords) : node.content || '双击添加内容' }}
                   />
                 )}
               </div>
