@@ -24,8 +24,10 @@ interface DeleteConfirmState {
 export function ProjectsPage() {
   const navigate = useNavigate()
   const { projects, getFilteredProjects, loadProjects, createProject, deleteProject, updateProject, setCurrentProject, restoreCurrentProject, isLoading, loadingMessage, setProjectFilters } = useProjectsStore()
-  const { addToast } = useUIStore()
+  const { addToast, nodePoolOpen, aiSidebarOpen } = useUIStore()
   const { user } = useAuthStore()
+
+  const rightOffset = aiSidebarOpen ? '20.5rem' : nodePoolOpen ? '18.25rem' : '0'
 
   // 使用筛选后的项目列表
   const filteredProjects = getFilteredProjects()
@@ -179,7 +181,10 @@ export function ProjectsPage() {
   }, [contextMenu.project, closeContextMenu])
 
   return (
-    <div className="h-full bg-gray-50 dark:bg-gray-900 flex flex-col">
+    <div
+      className="h-full bg-gray-50 dark:bg-gray-900 flex flex-col transition-all duration-200"
+      style={{ marginRight: rightOffset }}
+    >
       {/* Loading overlay */}
       {isLoading && (
         <div className="absolute inset-0 flex items-center justify-center bg-gray-100/50 dark:bg-gray-900/50 backdrop-blur-sm transition-opacity duration-300" style={{ zIndex: Z_INDEX.DIALOG }}>
