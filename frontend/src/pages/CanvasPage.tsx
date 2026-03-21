@@ -4089,7 +4089,7 @@ export function CanvasPage() {
                         strokeWidth={1}
                         opacity={label.opacity}
                         style={{ cursor: 'pointer', pointerEvents: 'all' }}
-                        className="transition-all hover:stroke-blue-400 hover:fill-blue-50"
+                        className="hover:stroke-blue-400 hover:fill-blue-50"
                         data-relationship-label="true"
                         onMouseDown={(e) => {
                           e.stopPropagation()
