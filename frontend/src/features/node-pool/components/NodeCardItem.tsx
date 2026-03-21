@@ -179,8 +179,8 @@ export const NodeCardItem = memo(function NodeCardItem({
       }
 
       if (isDraggingRef.current) {
-        // 检测是否进入画布区域
         const canvasElement = document.querySelector('[data-canvas-container]')
+        const nodePoolElement = document.querySelector('[data-node-pool="true"]')
 
         if (canvasElement) {
           const rect = canvasElement.getBoundingClientRect()
@@ -189,11 +189,22 @@ export const NodeCardItem = memo(function NodeCardItem({
 
           const { setIsOverCanvas, setPoolDragGhostPosition, isOverCanvas } = useUIStore.getState()
 
-          if (isOver !== isOverCanvas) {
-            setIsOverCanvas(isOver)
+          let isActuallyOverCanvas = isOver
+
+          if (nodePoolElement) {
+            const poolRect = nodePoolElement.getBoundingClientRect()
+            const isOverPool = e.clientX >= poolRect.left && e.clientX <= poolRect.right &&
+                              e.clientY >= poolRect.top && e.clientY <= poolRect.bottom
+            if (isOverPool) {
+              isActuallyOverCanvas = false
+            }
           }
 
-          if (isOver) {
+          if (isActuallyOverCanvas !== isOverCanvas) {
+            setIsOverCanvas(isActuallyOverCanvas)
+          }
+
+          if (isActuallyOverCanvas) {
             setPoolDragGhostPosition({ x: e.clientX, y: e.clientY })
           } else {
             setPoolDragGhostPosition(null)

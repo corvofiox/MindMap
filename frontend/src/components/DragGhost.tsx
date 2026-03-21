@@ -116,6 +116,10 @@ export function DragGhost() {
     const handleNodePoolDragEnd = () => {
       setDraggingCardFromPoolLocal(null)
       setDraggingCardPoolPosition(null)
+      const { setDraggingCardFromPool, setIsOverCanvas, setPoolDragGhostPosition } = useUIStore.getState()
+      setDraggingCardFromPool(null)
+      setIsOverCanvas(false)
+      setPoolDragGhostPosition(null)
     }
 
     document.addEventListener('nodePoolDragStart', handleNodePoolDragStart)
