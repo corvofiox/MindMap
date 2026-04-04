@@ -98,7 +98,16 @@ export function DragGhost() {
     }
   }, [dragGhostCard, dragGhostPosition, handleMouseMove, handleClick, handleContextMenu, handleEscape, cleanup])
 
-  // 监听从节点池拖拽的事件
+  const clearPoolDragState = useCallback(() => {
+    setDraggingCardFromPoolLocal(null)
+    setDraggingCardPoolPosition(null)
+    const { setDraggingCardFromPool, setIsOverCanvas, setPoolDragGhostPosition, setOverFolderId } = useUIStore.getState()
+    setDraggingCardFromPool(null)
+    setIsOverCanvas(false)
+    setPoolDragGhostPosition(null)
+    setOverFolderId(null)
+  }, [])
+
   useEffect(() => {
     const handleNodePoolDragStart = (e: Event) => {
       const customEvent = e as CustomEvent<{ card: NodeCard; clientX: number; clientY: number }>
@@ -114,24 +123,35 @@ export function DragGhost() {
     }
 
     const handleNodePoolDragEnd = () => {
-      setDraggingCardFromPoolLocal(null)
-      setDraggingCardPoolPosition(null)
-      const { setDraggingCardFromPool, setIsOverCanvas, setPoolDragGhostPosition } = useUIStore.getState()
-      setDraggingCardFromPool(null)
-      setIsOverCanvas(false)
-      setPoolDragGhostPosition(null)
+      clearPoolDragState()
+    }
+
+    const handleMouseUp = () => {
+      if (draggingCardFromPoolLocal) {
+        clearPoolDragState()
+      }
+    }
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && draggingCardFromPoolLocal) {
+        clearPoolDragState()
+      }
     }
 
     document.addEventListener('nodePoolDragStart', handleNodePoolDragStart)
     document.addEventListener('mousemove', handleNodePoolDragMove)
     document.addEventListener('nodePoolDragEnd', handleNodePoolDragEnd)
+    document.addEventListener('mouseup', handleMouseUp)
+    document.addEventListener('keydown', handleKeyDown)
 
     return () => {
       document.removeEventListener('nodePoolDragStart', handleNodePoolDragStart)
       document.removeEventListener('mousemove', handleNodePoolDragMove)
       document.removeEventListener('nodePoolDragEnd', handleNodePoolDragEnd)
+      document.removeEventListener('mouseup', handleMouseUp)
+      document.removeEventListener('keydown', handleKeyDown)
     }
-  }, [draggingCardFromPoolLocal])
+  }, [draggingCardFromPoolLocal, clearPoolDragState])
 
   // 处理从节点池拖拽但尚未进入画布时的幽灵效果（节点池内样式 - 与从画布拖拽到节点池的样式一致）
   if (draggingCardFromPoolLocal && !isOverCanvas && draggingCardPoolPosition) {

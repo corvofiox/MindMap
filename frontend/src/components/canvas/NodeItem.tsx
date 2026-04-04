@@ -660,7 +660,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
           const isOver = e.clientX >= rect.left && e.clientX <= rect.right &&
             e.clientY >= rect.top && e.clientY <= rect.bottom
 
-          const { setIsOverNodePool, setCanvasDragGhostPosition, isOverNodePool: currentIsOverNodePool } = useUIStore.getState()
+          const { setIsOverNodePool, setCanvasDragGhostPosition, isOverNodePool: currentIsOverNodePool, setOverFolderId } = useUIStore.getState()
 
           if (isOver !== currentIsOverNodePool) {
             setIsOverNodePool(isOver)
@@ -668,8 +668,28 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
 
           if (isOver) {
             setCanvasDragGhostPosition({ x: e.clientX, y: e.clientY })
+
+            // 检测是否悬停在文件夹上
+            const folderElements = document.querySelectorAll('[data-folder-id]')
+            let foundFolderId: number | null = null
+            for (const el of folderElements) {
+              const folderRect = el.getBoundingClientRect()
+              if (e.clientX >= folderRect.left && e.clientX <= folderRect.right &&
+                e.clientY >= folderRect.top && e.clientY <= folderRect.bottom) {
+                const folderId = el.getAttribute('data-folder-id')
+                if (folderId) {
+                  const parsedId = parseInt(folderId, 10)
+                  if (!isNaN(parsedId)) {
+                    foundFolderId = parsedId
+                    break
+                  }
+                }
+              }
+            }
+            setOverFolderId(foundFolderId)
           } else {
             setCanvasDragGhostPosition(null)
+            setOverFolderId(null)
           }
         }
       }
@@ -710,17 +730,18 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
         // 拖动/调整大小时才更新全局状态
         if (isDragging) {
           // 检查是否在节点池区域释放
-          const { isOverNodePool, setDraggingNodeFromCanvas, setIsOverNodePool, setCanvasDragGhostPosition } = useUIStore.getState()
+          const { isOverNodePool, setDraggingNodeFromCanvas, setIsOverNodePool, setCanvasDragGhostPosition, overFolderId, setOverFolderId } = useUIStore.getState()
 
           if (isOverNodePool) {
             // 在节点池区域释放，触发添加到节点池的事件
             window.dispatchEvent(new CustomEvent('nodeDragEnd', {
-              detail: { nodeId: node.id, droppedInNodePool: true }
+              detail: { nodeId: node.id, droppedInNodePool: true, targetFolderId: overFolderId }
             }))
             // 重置状态
             setDraggingNodeFromCanvas(null)
             setIsOverNodePool(false)
             setCanvasDragGhostPosition(null)
+            setOverFolderId(null)
           } else {
             // 正常释放，更新节点位置
             updateNode(node.id, {

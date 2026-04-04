@@ -69,8 +69,6 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
   const [cardContextMenu, setCardContextMenu] = useState<{ card: NodeCard; position: { x: number; y: number } } | null>(null)
   const [editingCardId, setEditingCardId] = useState<number | null>(null)
   const [editingFolderId, setEditingFolderId] = useState<number | null>(null)
-  const [isRootDragOver, setIsRootDragOver] = useState(false)
-  const [isDragOverFolder, setIsDragOverFolder] = useState(false)
 
   // Sort functionality
   useNodePoolSort({ sortBy, sortOrder })
@@ -295,125 +293,7 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
     updateCard(card.id, { folderId })
   }, [updateCard])
 
-  // Handle drop on folder
-  const handleFolderDrop = useCallback((e: React.DragEvent, folder: NodePoolFolder) => {
-    e.preventDefault()
-    e.stopPropagation()
-
-    const cardData = e.dataTransfer.getData('application/nodepool-card')
-    const canvasNodeData = e.dataTransfer.getData('application/canvas-node')
-
-    if (cardData) {
-      try {
-        const card = JSON.parse(cardData) as NodeCard
-        handleMoveCardToFolder(card, folder.id)
-      } catch (error) {
-        addToast({ type: 'error', title: '解析失败', message: '卡片数据格式错误' })
-      }
-    } else if (canvasNodeData && currentProject) {
-      // 添加新卡片到节点池
-      try {
-        const node = JSON.parse(canvasNodeData) as unknown as Node
-        addCard(currentProject.id, {
-          projectId: currentProject.id,
-          name: node.title || node.content || '未命名',
-          content: JSON.stringify(node),
-          type: node.type || 'text',
-          color: node.color,
-          tags: null,
-          createdBy: user?.id || 1,
-          sortOrder: 0,
-          folderId: folder.id,
-          thumbnail: node.type === 'image' ? (node as any).imageUrl : undefined,
-        }).then(() => {
-          addToast({ type: 'success', title: '已添加到节点池', message: '节点已添加到节点池' })
-        }).catch(error => {
-          addToast({ type: 'error', title: '添加失败', message: error instanceof Error ? error.message : '未知错误' })
-        })
-      } catch (error) {
-        addToast({ type: 'error', title: '解析失败', message: '节点数据格式错误' })
-      }
-    }
-  }, [handleMoveCardToFolder, addToast, currentProject, addCard, user])
-
-  // Handle drop on root (move to root folder)
-  const handleRootDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-
-    setIsRootDragOver(false)
-    const cardData = e.dataTransfer.getData('application/nodepool-card')
-    const canvasNodeData = e.dataTransfer.getData('application/canvas-node')
-
-    if (cardData) {
-      try {
-        const card = JSON.parse(cardData) as NodeCard
-        handleMoveCardToFolder(card, null)
-      } catch (error) {
-        addToast({ type: 'error', title: '解析失败', message: '卡片数据格式错误' })
-      }
-    } else if (canvasNodeData && currentProject) {
-      // 添加新卡片到节点池
-      try {
-        const node = JSON.parse(canvasNodeData) as unknown as Node
-        addCard(currentProject.id, {
-          projectId: currentProject.id,
-          name: node.title || node.content || '未命名',
-          content: JSON.stringify(node),
-          type: node.type || 'text',
-          color: node.color,
-          tags: null,
-          createdBy: user?.id || 1,
-          sortOrder: 0,
-          folderId: null,
-          thumbnail: node.type === 'image' ? (node as any).imageUrl : undefined,
-        }).then(() => {
-          addToast({ type: 'success', title: '已添加到节点池', message: '节点已添加到节点池' })
-        }).catch(error => {
-          addToast({ type: 'error', title: '添加失败', message: error instanceof Error ? error.message : '未知错误' })
-        })
-      } catch (error) {
-        addToast({ type: 'error', title: '解析失败', message: '节点数据格式错误' })
-      }
-    }
-
-    // 处理从画布拖拽节点到节点池
-    const { draggingNodeFromCanvas, setIsOverNodePool, setDraggingNodeFromCanvas, setCanvasDragGhostPosition } = useUIStore.getState()
-    if (draggingNodeFromCanvas) {
-      setIsOverNodePool(true)
-    }
-  }, [handleMoveCardToFolder, addToast, currentProject, addCard, user])
-
-  // Handle drag over root
-  const handleRootDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    if (!isDragOverFolder) {
-      setIsRootDragOver(true)
-    }
-
-    // 处理从画布拖拽节点到节点池
-    const { draggingNodeFromCanvas, setIsOverNodePool, setCanvasDragGhostPosition } = useUIStore.getState()
-    if (draggingNodeFromCanvas) {
-      setIsOverNodePool(true)
-      setCanvasDragGhostPosition({ x: e.clientX, y: e.clientY })
-    }
-  }, [isDragOverFolder])
-
-  // Handle drag leave root
-  const handleRootDragLeave = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    setIsRootDragOver(false)
-
-    // 处理从画布拖拽节点离开节点池
-    const { draggingNodeFromCanvas, setIsOverNodePool, setCanvasDragGhostPosition } = useUIStore.getState()
-    if (draggingNodeFromCanvas) {
-      setIsOverNodePool(false)
-      setCanvasDragGhostPosition(null)
-    }
-  }, [])
-
-  // Filter cards based on search - optimized with useMemo
+  // Handle folder collapse toggle
   const filteredCardsByFolder = useMemo(() => {
     if (!searchQuery.trim()) {
       const result = new Map<number | null, NodeCard[]>()
@@ -523,8 +403,6 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
       return childCards.length > 0 || grandChildren
     })
 
-    const hasContent = cards.length > 0 || children.length > 0
-
     return (
       <FolderItem
         key={folder.id}
@@ -533,22 +411,11 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
         cards={cards}
         children={children}
         searchQuery={searchQuery}
-        isDragOver={false}
-        dragOverPosition={null}
         onToggle={handleToggleFolder}
         onContextMenu={handleFolderContextMenu}
         onCardContextMenu={handleCardContextMenu}
         previewCardId={previewCardId}
         onTogglePreview={setPreviewCardId}
-        onDrop={handleFolderDrop}
-        onDragOver={(e) => {
-          e.preventDefault();
-          setIsDragOverFolder(true);
-          setIsRootDragOver(false);
-        }}
-        onDragLeave={() => {
-          setIsDragOverFolder(false);
-        }}
         onStartEdit={handleStartFolderEdit}
         onSaveEdit={handleSaveFolderName}
         onCancelEdit={handleCancelFolderEdit}
@@ -559,7 +426,7 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
         editingCardId={editingCardId}
       />
     )
-  }, [filteredCardsByFolder, handleToggleFolder, handleFolderContextMenu, handleCardContextMenu, previewCardId, handleFolderDrop, handleStartFolderEdit, handleSaveFolderName, handleCancelFolderEdit, editingFolderId, handleUseCard, handleRemoveCard, handleSaveCardName, editingCardId, searchQuery])
+  }, [filteredCardsByFolder, handleToggleFolder, handleFolderContextMenu, handleCardContextMenu, previewCardId, handleStartFolderEdit, handleSaveFolderName, handleCancelFolderEdit, editingFolderId, handleUseCard, handleRemoveCard, handleSaveCardName, editingCardId, searchQuery])
 
   return (
     <aside
@@ -663,17 +530,7 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
 
       {/* Content */}
       <div
-        className={clsx(
-          'flex-1 overflow-y-auto custom-scrollbar p-3 transition-all duration-200',
-          isRootDragOver && 'bg-blue-50 dark:bg-blue-900/20'
-        )}
-        style={isRootDragOver ? {
-          border: '2px solid rgba(59, 130, 246, 0.5)',
-          borderRadius: '8px'
-        } : {}}
-        onDragOver={handleRootDragOver}
-        onDragLeave={handleRootDragLeave}
-        onDrop={handleRootDrop}
+        className="flex-1 overflow-y-auto custom-scrollbar p-3 transition-all duration-200"
       >
         {/* Render folder tree */}
         {filteredFolderTree.length === 0 && !filteredCardsByFolder.get(null)?.length && !searchQuery.trim() ? (
@@ -720,9 +577,6 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
               <div key={card.id} className="mb-2">
                 <NodeCardItem
                   card={card}
-                  isDragging={false}
-                  isDragOver={false}
-                  dragOverPosition={null}
                   onUse={handleUseCard}
                   onRemove={handleRemoveCard}
                   onSaveName={handleSaveCardName}

@@ -10,11 +10,6 @@ import type { NodeCard, NodePoolFolder, NodePoolSortOption, NodePoolSortOrder } 
 export type { NodeCard, NodePoolFolder }
 
 /**
- * The drop position relative to the target item
- */
-export type DropPosition = 'before' | 'after' | 'inside'
-
-/**
  * Complete drag state
  */
 export interface DragState {
@@ -187,10 +182,6 @@ export interface FolderItemProps {
   cards: NodeCard[]
   /** Child folders */
   children: NodePoolFolder[]
-  /** Whether folder is being dragged over */
-  isDragOver: boolean
-  /** Drag over position */
-  dragOverPosition: DropPosition | null
   /** Search query for highlighting */
   searchQuery?: string
   /** Callback to toggle folder collapse state */
@@ -203,12 +194,6 @@ export interface FolderItemProps {
   previewCardId?: number | null
   /** Callback to toggle preview */
   onTogglePreview?: (cardId: number | null) => void
-  /** Callback when a card is dropped on this folder */
-  onDrop?: (e: React.DragEvent, folder: NodePoolFolder) => void
-  /** Callback when dragging over this folder */
-  onDragOver?: (e: React.DragEvent, folder: NodePoolFolder) => void
-  /** Callback when dragging leaves this folder */
-  onDragLeave?: (e: React.DragEvent, folder: NodePoolFolder) => void
   /** Callback to start editing folder name */
   onStartEdit?: (folder: NodePoolFolder) => void
   /** Callback to save folder name */
@@ -235,12 +220,6 @@ export interface FolderItemProps {
 export interface NodeCardItemProps {
   /** Card data */
   card: NodeCard
-  /** Whether card is being dragged */
-  isDragging: boolean
-  /** Whether card is being dragged over */
-  isDragOver: boolean
-  /** Drag over position */
-  dragOverPosition: DropPosition | null
   /** Search query for highlighting */
   searchQuery?: string
   /** Callback to use the card */

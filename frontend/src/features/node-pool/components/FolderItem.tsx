@@ -5,7 +5,7 @@
  * Supports nested folders and drag and drop.
  */
 
-import { memo, useState, useCallback, useRef, useEffect } from 'react'
+import { memo, useState, useRef, useEffect } from 'react'
 import {
   Folder,
   FolderOpen,
@@ -17,6 +17,7 @@ import {
 import { clsx } from 'clsx'
 import type { FolderItemProps } from '../types/node-pool'
 import { NodeCardItem } from './NodeCardItem'
+import { useUIStore } from '@/store/useUIStore'
 
 /**
  * Folder item component with drag and drop support
@@ -32,9 +33,6 @@ export const FolderItem = memo(function FolderItem({
   onCardContextMenu,
   previewCardId,
   onTogglePreview,
-  onDrop,
-  onDragOver,
-  onDragLeave,
   onStartEdit,
   onSaveEdit,
   onCancelEdit,
@@ -44,9 +42,11 @@ export const FolderItem = memo(function FolderItem({
   onSaveCardName,
   editingCardId,
 }: FolderItemProps) {
-  const [isLocalDragOver, setIsLocalDragOver] = useState(false)
   const [editName, setEditName] = useState(folder.name)
   const inputRef = useRef<HTMLInputElement>(null)
+  const overFolderId = useUIStore(state => state.overFolderId)
+  
+  const isOverThisFolder = overFolderId === folder.id
 
   const isEditing = editingFolderId === folder.id
 
@@ -103,27 +103,6 @@ export const FolderItem = memo(function FolderItem({
     }
   }
 
-  const handleFolderDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    setIsLocalDragOver(true)
-    onDragOver?.(e, folder)
-  }, [folder, onDragOver])
-
-  const handleFolderDragLeave = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    setIsLocalDragOver(false)
-    onDragLeave?.(e, folder)
-  }, [folder, onDragLeave])
-
-  const handleFolderDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    setIsLocalDragOver(false)
-    onDrop?.(e, folder)
-  }, [folder, onDrop])
-
   const isCollapsed = folder.collapsed
 
   return (
@@ -159,23 +138,21 @@ export const FolderItem = memo(function FolderItem({
         </div>
       ) : (
         <div
+          data-folder-id={folder.id}
           style={{ paddingLeft: `${level * 16 + 8}px` }}
           className={clsx(
             'flex items-center gap-1 px-2 py-2.5 rounded-lg cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 transition-all duration-200',
-            isLocalDragOver && 'bg-blue-100 dark:bg-blue-900/40 ring-2 ring-blue-500 ring-opacity-50 scale-[1.02] shadow-sm'
+            isOverThisFolder && 'bg-blue-100 dark:bg-blue-900/40 ring-2 ring-blue-500 ring-opacity-50 scale-[1.02] shadow-sm'
           )}
           onClick={handleToggle}
           onContextMenu={(e) => onContextMenu?.(e, folder)}
-          onDragOver={handleFolderDragOver}
-          onDragLeave={handleFolderDragLeave}
-          onDrop={handleFolderDrop}
         >
           <ExpandCollapseIndicator isCollapsed={isCollapsed} hasContent={children.length > 0 || cards.length > 0} />
-          <FolderIcon isCollapsed={isCollapsed} isLocalDragOver={isLocalDragOver} />
-          <span className={clsx('text-sm font-medium flex-1 truncate', isLocalDragOver ? 'text-blue-700 dark:text-blue-300' : 'text-gray-700 dark:text-gray-300')}>
+          <FolderIcon isCollapsed={isCollapsed} isOverThisFolder={isOverThisFolder} />
+          <span className={clsx('text-sm font-medium flex-1 truncate', isOverThisFolder ? 'text-blue-700 dark:text-blue-300' : 'text-gray-700 dark:text-gray-300')}>
             {folder.name}
           </span>
-          <span className={clsx('text-xs', isLocalDragOver ? 'text-blue-600 dark:text-blue-400' : 'text-gray-500 dark:text-gray-400')}>
+          <span className={clsx('text-xs', isOverThisFolder ? 'text-blue-600 dark:text-blue-400' : 'text-gray-500 dark:text-gray-400')}>
             {cards.length}
           </span>
         </div>
@@ -184,22 +161,17 @@ export const FolderItem = memo(function FolderItem({
       {/* Folder contents (when expanded) */}
       {!isCollapsed && (
         <div
+          data-folder-id={folder.id}
           className={clsx(
             'ml-4 pl-2 border-l border-gray-200 dark:border-gray-700 my-2 space-y-2 rounded-lg transition-all duration-200',
-            isLocalDragOver && 'bg-blue-50 dark:bg-blue-900/30 border-blue-300 dark:border-blue-700 border-l-2'
+            isOverThisFolder && 'bg-blue-50 dark:bg-blue-900/30 border-blue-300 dark:border-blue-700 border-l-2'
           )}
-          onDragOver={handleFolderDragOver}
-          onDragLeave={handleFolderDragLeave}
-          onDrop={handleFolderDrop}
         >
           {/* Cards in this folder */}
           {cards.map((card) => (
             <div key={card.id} className="py-1">
               <NodeCardItem
                 card={card}
-                isDragging={false}
-                isDragOver={false}
-                dragOverPosition={null}
                 onUse={onUseCard || (() => {})}
                 onRemove={onRemoveCard || (() => {})}
                 onSaveName={onSaveCardName || (() => Promise.resolve())}
@@ -217,19 +189,14 @@ export const FolderItem = memo(function FolderItem({
               key={child.id}
               folder={child}
               level={level + 1}
-              cards={[]} // Cards will be passed from parent
+              cards={[]}
               children={child.children || []}
               searchQuery={searchQuery}
-              isDragOver={false}
-              dragOverPosition={null}
               onToggle={onToggle}
               onContextMenu={onContextMenu}
               onCardContextMenu={onCardContextMenu}
               previewCardId={previewCardId}
               onTogglePreview={onTogglePreview}
-              onDrop={onDrop}
-              onDragOver={onDragOver}
-              onDragLeave={onDragLeave}
               onStartEdit={onStartEdit}
               onSaveEdit={onSaveEdit}
               onCancelEdit={onCancelEdit}
@@ -262,11 +229,11 @@ function ExpandCollapseIndicator({ isCollapsed, hasContent }: { isCollapsed: boo
   )
 }
 
-function FolderIcon({ isCollapsed, isLocalDragOver }: { isCollapsed: boolean; isLocalDragOver: boolean }) {
+function FolderIcon({ isCollapsed, isOverThisFolder }: { isCollapsed: boolean; isOverThisFolder: boolean }) {
   return isCollapsed ? (
-    <Folder className={clsx('w-4 h-4', isLocalDragOver ? 'text-blue-500' : 'text-gray-400 dark:text-gray-500')} />
+    <Folder className={clsx('w-4 h-4', isOverThisFolder ? 'text-blue-500' : 'text-gray-400 dark:text-gray-500')} />
   ) : (
-    <FolderOpen className={clsx('w-4 h-4', isLocalDragOver ? 'text-blue-600' : 'text-blue-500')} />
+    <FolderOpen className={clsx('w-4 h-4', isOverThisFolder ? 'text-blue-600' : 'text-blue-500')} />
   )
 }
 

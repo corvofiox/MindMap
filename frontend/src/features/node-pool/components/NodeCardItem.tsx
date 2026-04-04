@@ -42,9 +42,6 @@ function SearchHighlighter({ text, query }: { text: string; query: string }) {
  */
 export const NodeCardItem = memo(function NodeCardItem({
   card,
-  isDragging: isExternalDragging,
-  isDragOver,
-  dragOverPosition,
   onUse: _onUse,
   onRemove,
   onSaveName,
@@ -182,10 +179,30 @@ export const NodeCardItem = memo(function NodeCardItem({
         const canvasElement = document.querySelector('[data-canvas-container]')
         const nodePoolElement = document.querySelector('[data-node-pool="true"]')
 
+        // 检测是否悬停在文件夹上
+        const folderElements = document.querySelectorAll('[data-folder-id]')
+        let foundFolderId: number | null = null
+        for (const el of folderElements) {
+          const rect = el.getBoundingClientRect()
+          if (e.clientX >= rect.left && e.clientX <= rect.right &&
+            e.clientY >= rect.top && e.clientY <= rect.bottom) {
+            const folderId = el.getAttribute('data-folder-id')
+            if (folderId) {
+              const parsedId = parseInt(folderId, 10)
+              if (!isNaN(parsedId)) {
+                foundFolderId = parsedId
+                break
+              }
+            }
+          }
+        }
+        const { setOverFolderId } = useUIStore.getState()
+        setOverFolderId(foundFolderId)
+
         if (canvasElement) {
           const rect = canvasElement.getBoundingClientRect()
           const isOver = e.clientX >= rect.left && e.clientX <= rect.right &&
-                        e.clientY >= rect.top && e.clientY <= rect.bottom
+            e.clientY >= rect.top && e.clientY <= rect.bottom
 
           const { setIsOverCanvas, setPoolDragGhostPosition, isOverCanvas } = useUIStore.getState()
 
@@ -194,10 +211,15 @@ export const NodeCardItem = memo(function NodeCardItem({
           if (nodePoolElement) {
             const poolRect = nodePoolElement.getBoundingClientRect()
             const isOverPool = e.clientX >= poolRect.left && e.clientX <= poolRect.right &&
-                              e.clientY >= poolRect.top && e.clientY <= poolRect.bottom
+              e.clientY >= poolRect.top && e.clientY <= poolRect.bottom
             if (isOverPool) {
               isActuallyOverCanvas = false
             }
+          }
+
+          // 如果悬停在文件夹上，不在画布上
+          if (foundFolderId !== null) {
+            isActuallyOverCanvas = false
           }
 
           if (isActuallyOverCanvas !== isOverCanvas) {
@@ -216,15 +238,28 @@ export const NodeCardItem = memo(function NodeCardItem({
     const handleMouseUp = async (e: MouseEvent) => {
       if (!dragStartRef.current) return
 
+      const cleanup = () => {
+        const { setDraggingCardFromPool, setOverFolderId } = useUIStore.getState()
+        setDraggingCardFromPool(null)
+        setOverFolderId(null)
+
+        const dragEndEvent = new CustomEvent('nodePoolDragEnd')
+        document.dispatchEvent(dragEndEvent)
+
+        setIsDragging(false)
+        isDraggingRef.current = false
+        dragStartRef.current = null
+        mouseDownPos.current = null
+        hasMoved.current = false
+      }
+
       if (isDraggingRef.current) {
-        // 检查是否在画布区域释放
-        const { isOverCanvas, setDraggingCardFromPool, setIsOverCanvas, setPoolDragGhostPosition } = useUIStore.getState()
+        const { isOverCanvas, addToast } = useUIStore.getState()
 
         if (isOverCanvas) {
           // 在画布区域释放，添加节点到画布
           const { currentProject } = useProjectsStore.getState()
           const { moveNodeFromPool } = useCanvasStore.getState()
-          const { addToast } = useUIStore.getState()
 
           if (currentProject) {
             try {
@@ -232,20 +267,15 @@ export const NodeCardItem = memo(function NodeCardItem({
               const canvasRect = document.querySelector('[data-canvas-container]')?.getBoundingClientRect()
               const { zoom, panX, panY } = useCanvasStore.getState()
 
-              // 计算在画布上的位置（考虑画布偏移和缩放）
-              // 鼠标在画布容器中的位置 = 鼠标屏幕位置 - 画布容器位置
               const mouseInCanvasX = canvasRect ? e.clientX - canvasRect.left : e.clientX
               const mouseInCanvasY = canvasRect ? e.clientY - canvasRect.top : e.clientY
 
-              // 转换为画布坐标 = (鼠标位置 - 平移偏移) / 缩放
               const canvasX = (mouseInCanvasX - panX) / zoom
               const canvasY = (mouseInCanvasY - panY) / zoom
 
-              // 节点宽高
               const nodeWidth = nodeData.width || 200
               const nodeHeight = nodeData.height || 120
 
-              // 让节点中心对准鼠标落点，需要偏移半个宽高
               const nodeX = canvasX - nodeWidth / 2
               const nodeY = canvasY - nodeHeight / 2
 
@@ -267,35 +297,28 @@ export const NodeCardItem = memo(function NodeCardItem({
                 ...(nodeData.type === 'image' && { imageUrl: nodeData.imageUrl || card.thumbnail }),
               }
 
-              // 使用 moveNodeFromPool 添加节点到画布（支持撤销/重做）
-              // 方案：通过节点内容匹配来找到并删除/恢复卡片
               moveNodeFromPool(
                 newNode,
                 async () => {
-                  // execute: 从节点池移除卡片
-                  // 通过节点ID匹配找到对应的卡片（支持首次执行和重做）
                   const { cardsMap, removeCard } = useNodePoolStore.getState()
                   const { currentProject } = useProjectsStore.getState()
                   if (!currentProject) return
 
-                  // 查找匹配的卡片（通过项目名称和节点内容匹配）
                   for (const [cardId, poolCard] of cardsMap) {
                     if (poolCard.projectId === currentProject.id) {
                       try {
                         const cardNodeData = JSON.parse(poolCard.content)
-                        // 如果内容中的节点ID匹配，则移除该卡片
                         if (cardNodeData.id === newNode.id || poolCard.id === card.id) {
                           await removeCard(cardId)
                           break
                         }
                       } catch {
-                        // 解析失败，跳过
+                        // JSON parse error - ignore invalid content
                       }
                     }
                   }
                 },
                 async () => {
-                  // undo: 重新添加卡片到节点池
                   const { currentProject } = useProjectsStore.getState()
                   const { addCard } = useNodePoolStore.getState()
                   if (currentProject) {
@@ -315,28 +338,72 @@ export const NodeCardItem = memo(function NodeCardItem({
                 }
               )
 
-              // 显示成功提示
               addToast({ type: 'success', title: '节点已添加', message: '节点已添加到画布' })
             } catch (error) {
               addToast({ type: 'error', title: '添加失败', message: '无法解析节点数据' })
             }
           }
 
-          // 清除拖拽状态
-          setDraggingCardFromPool(null)
-          setIsOverCanvas(false)
-          setPoolDragGhostPosition(null)
+          cleanup()
         } else {
-          // 清除拖拽状态
-          const { setDraggingCardFromPool, setIsOverCanvas, setPoolDragGhostPosition } = useUIStore.getState()
-          setDraggingCardFromPool(null)
-          setIsOverCanvas(false)
-          setPoolDragGhostPosition(null)
+          // 不在画布上释放，检查是否在文件夹上释放
+          const folderElements = document.querySelectorAll('[data-folder-id]')
+          let targetFolderId: number | null = null
+
+          for (const el of folderElements) {
+            const rect = el.getBoundingClientRect()
+            if (e.clientX >= rect.left && e.clientX <= rect.right &&
+              e.clientY >= rect.top && e.clientY <= rect.bottom) {
+              const folderId = el.getAttribute('data-folder-id')
+              if (folderId) {
+                const parsedId = parseInt(folderId, 10)
+                if (!isNaN(parsedId)) {
+                  targetFolderId = parsedId
+                  break
+                }
+              }
+            }
+          }
+
+          // 检测是否在节点池根目录空白区域
+          const nodePoolElement = document.querySelector('[data-node-pool="true"]')
+          let isOverNodePoolRoot = false
+
+          if (nodePoolElement && targetFolderId === null) {
+            const poolRect = nodePoolElement.getBoundingClientRect()
+            const isOverPool = e.clientX >= poolRect.left && e.clientX <= poolRect.right &&
+              e.clientY >= poolRect.top && e.clientY <= poolRect.bottom
+
+            if (isOverPool) {
+              isOverNodePoolRoot = true
+            }
+          }
+
+          if (targetFolderId !== null && targetFolderId !== card.folderId) {
+            // 移动到文件夹
+            const { updateCard } = useNodePoolStore.getState()
+            try {
+              await updateCard(card.id, { folderId: targetFolderId })
+              addToast({ type: 'success', title: '移动成功', message: '卡片已移动到文件夹' })
+            } catch (error) {
+              addToast({ type: 'error', title: '移动失败', message: '无法移动卡片到文件夹' })
+            }
+          } else if (isOverNodePoolRoot && card.folderId !== null) {
+            // 从文件夹移出到根目录
+            const { updateCard } = useNodePoolStore.getState()
+            try {
+              await updateCard(card.id, { folderId: null })
+              addToast({ type: 'success', title: '移出成功', message: '卡片已移出到根目录' })
+            } catch (error) {
+              addToast({ type: 'error', title: '移出失败', message: '无法将卡片移出文件夹' })
+            }
+          }
+
+          cleanup()
         }
       } else {
         // 没有拖拽，处理点击
         if (!hasMoved.current) {
-          // 处理卡片点击
           if (cardRef.current) {
             const rect = cardRef.current.getBoundingClientRect()
             setPreviewPosition({ top: rect.top })
@@ -346,18 +413,9 @@ export const NodeCardItem = memo(function NodeCardItem({
             onTogglePreview(showPreview ? null : card.id)
           }
         }
+
+        cleanup()
       }
-
-      // 触发全局拖拽结束事件
-      const dragEndEvent = new CustomEvent('nodePoolDragEnd')
-      document.dispatchEvent(dragEndEvent)
-
-      // 重置状态
-      setIsDragging(false)
-      isDraggingRef.current = false
-      dragStartRef.current = null
-      mouseDownPos.current = null
-      hasMoved.current = false
     }
 
     if (dragStartRef.current) {
@@ -428,11 +486,6 @@ export const NodeCardItem = memo(function NodeCardItem({
 
   return (
     <>
-      {/* Drop indicator - above */}
-      {isDragOver && dragOverPosition === 'before' && (
-        <div className="h-0.5 bg-blue-500 rounded -mt-1 mb-1" />
-      )}
-
       {/* Card */}
       <div
         ref={cardRef}
@@ -442,9 +495,7 @@ export const NodeCardItem = memo(function NodeCardItem({
           visibility: isDragging ? 'hidden' : 'visible',
         }}
         className={clsx(
-          'p-4 rounded-lg border hover:border-blue-400 dark:hover:border-blue-500 cursor-pointer group relative transition-all duration-200 hover:shadow-md',
-          isExternalDragging && 'opacity-50 rotate-2 scale-105',
-          isDragOver && dragOverPosition === 'inside' && 'ring-2 ring-blue-500'
+          'p-4 rounded-lg border hover:border-blue-400 dark:hover:border-blue-500 cursor-pointer group relative transition-all duration-200 hover:shadow-md'
         )}
         onContextMenu={(e) => onContextMenu?.(e, card)}
         onMouseDown={handleMouseDown}
@@ -569,11 +620,6 @@ export const NodeCardItem = memo(function NodeCardItem({
           </div>
         )}
       </div>
-
-      {/* Drop indicator - below */}
-      {isDragOver && dragOverPosition === 'after' && (
-        <div className="h-0.5 bg-blue-500 rounded -mb-1 mt-1" />
-      )}
     </>
   )
 })

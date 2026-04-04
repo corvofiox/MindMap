@@ -251,7 +251,7 @@ async function setupEnvironmentFiles() {
   }
 
   if (!envCreated) {
-    logWarning('All environment files already exist - no new files created');
+    logSuccess('All environment files already exist');
   }
 
   logSuccess('Environment files module completed');

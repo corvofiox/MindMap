@@ -3160,8 +3160,8 @@ export function CanvasPage() {
     }
 
     const handleNodeDragEnd = (e: Event) => {
-      const customEvent = e as CustomEvent<{ nodeId: string; droppedInNodePool?: boolean }>
-      const { nodeId, droppedInNodePool } = customEvent.detail
+      const customEvent = e as CustomEvent<{ nodeId: string; droppedInNodePool?: boolean; targetFolderId?: number | null }>
+      const { nodeId, droppedInNodePool, targetFolderId } = customEvent.detail
 
       draggingNodePositionsRef.current.delete(nodeId)
       setDragRenderCounter(c => c + 1)
@@ -3194,7 +3194,7 @@ export function CanvasPage() {
                   tags: null,
                   createdBy: 1,
                   sortOrder: 0,
-                  folderId: null,
+                  folderId: targetFolderId ?? null,
                   thumbnail: node.type === 'image' ? (node as any).imageUrl : undefined,
                 })
               },
@@ -3219,7 +3219,8 @@ export function CanvasPage() {
                 }
               }
             )
-            addToast({ type: 'success', title: '已添加到节点池', message: '节点已添加到节点池' })
+            const folderMessage = targetFolderId ? '节点已添加到指定文件夹' : '节点已添加到节点池'
+            addToast({ type: 'success', title: '已添加到节点池', message: folderMessage })
           }
         }
       }

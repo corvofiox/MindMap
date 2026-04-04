@@ -67,9 +67,11 @@ interface UIState {
   draggingCardFromPool: NodeCard | null
   isOverCanvas: boolean
   poolDragGhostPosition: { x: number; y: number } | null
+  overFolderId: number | null
   setDraggingCardFromPool: (card: NodeCard | null) => void
   setIsOverCanvas: (isOver: boolean) => void
   setPoolDragGhostPosition: (position: { x: number; y: number } | null) => void
+  setOverFolderId: (folderId: number | null) => void
 
   // Minimap
   minimapVisible: boolean
@@ -233,9 +235,11 @@ export const useUIStore = create<UIState>()(
         draggingCardFromPool: null,
         isOverCanvas: false,
         poolDragGhostPosition: null,
+        overFolderId: null,
         setDraggingCardFromPool: (card) => set({ draggingCardFromPool: card }),
         setIsOverCanvas: (isOver) => set({ isOverCanvas: isOver }),
         setPoolDragGhostPosition: (position) => set({ poolDragGhostPosition: position }),
+        setOverFolderId: (folderId) => set({ overFolderId: folderId }),
 
         // Minimap
         minimapVisible: true,
