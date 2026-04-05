@@ -68,6 +68,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
   const editingContentRef = useRef<string>('')
   const wasEditingRef = useRef<EditingField>(null)
   const hasInitializedEditRef = useRef<{ title: boolean; content: boolean }>({ title: false, content: false })
+  const domReadyRef = useRef<{ title: boolean; content: boolean }>({ title: false, content: false })
   const contextMenuStartRef = useRef({ x: 0, y: 0 })
   const timerRefsRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set())
   const imageRef = useRef<HTMLImageElement | null>(null)
@@ -264,6 +265,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
           }
           selection?.removeAllRanges()
           selection?.addRange(range)
+          domReadyRef.current.title = true
         }
       }, 0)
       timerRefsRef.current.add(timer)
@@ -291,12 +293,14 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
           }
           selection?.removeAllRanges()
           selection?.addRange(range)
+          domReadyRef.current.content = true
         }
       }, 0)
       timerRefsRef.current.add(timer)
     } else {
       document.body.classList.remove('allow-text-selection')
       hasInitializedEditRef.current = { title: false, content: false }
+      domReadyRef.current = { title: false, content: false }
     }
 
     return () => {
@@ -454,6 +458,10 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
   // 保存标题 - 纯文本处理，移除所有换行
   const saveTitle = useCallback(() => {
     if (titleRef.current && isEditingTitle) {
+      if (!domReadyRef.current.title) {
+        logger.debug('[NodeItem] saveTitle skipped: DOM not ready yet')
+        return
+      }
       const temp = document.createElement('div')
       temp.innerHTML = titleRef.current.innerHTML
       const text = temp.textContent || ''
@@ -469,6 +477,10 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
   // 保存内容 - 保留富文本样式（HTML格式）
   const saveContent = useCallback(() => {
     if (contentRef.current && isEditingContent) {
+      if (!domReadyRef.current.content) {
+        logger.debug('[NodeItem] saveContent skipped: DOM not ready yet')
+        return
+      }
       const cleanedHtml = cleanHtmlContent(contentRef.current.innerHTML)
       // 检查内容是否为空（只包含空白字符或<br>标签）
       const tempDiv = document.createElement('div')
