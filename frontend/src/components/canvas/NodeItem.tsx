@@ -468,12 +468,22 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
       const text = temp.textContent || ''
       const title = text.replace(/\n/g, '').replace(/\u200B/g, '').trim()
 
+      if (!title && editingTitleRef.current && editingTitleRef.current.trim()) {
+        logger.debug('[NodeItem] saveTitle skipped: title appears empty but ref has content, possible initialization issue')
+        return
+      }
+
+      if (!title && node.title && node.title.trim()) {
+        logger.debug('[NodeItem] saveTitle skipped: node title has remote update, not overwriting with empty')
+        return
+      }
+
       if (title !== editingTitleRef.current) {
         updateNode(node.id, { title })
         editingTitleRef.current = title
       }
     }
-  }, [isEditingTitle, node.id, updateNode])
+  }, [isEditingTitle, node.id, node.title, updateNode])
 
   // 保存内容 - 保留富文本样式（HTML格式）
   const saveContent = useCallback(() => {
@@ -483,16 +493,18 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
         return
       }
       const cleanedHtml = cleanHtmlContent(contentRef.current.innerHTML)
-      // 检查内容是否为空（只包含空白字符或<br>标签）
       const tempDiv = document.createElement('div')
       tempDiv.innerHTML = cleanedHtml
       const textContent = tempDiv.textContent || ''
       const isEmpty = !textContent.replace(/[\n\s]+/g, '').trim()
 
-      // 如果内容为空，检查是否是编辑器未初始化导致的
-      // 如果 editingContentRef.current 有内容但当前内容为空，可能是初始化问题，不保存
       if (isEmpty && editingContentRef.current && editingContentRef.current.trim()) {
         logger.debug('[NodeItem] saveContent skipped: content appears empty but ref has content, possible initialization issue')
+        return
+      }
+
+      if (isEmpty && node.content && node.content.trim() && node.content !== '<br>') {
+        logger.debug('[NodeItem] saveContent skipped: node content has remote update, not overwriting with empty')
         return
       }
 
@@ -502,7 +514,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
         editingContentRef.current = trimmedContent
       }
     }
-  }, [isEditingContent, node.id, updateNode, cleanHtmlContent])
+  }, [isEditingContent, node.id, node.content, updateNode, cleanHtmlContent])
 
   // Handle node selection
   const handleMouseDown = useCallback(
