@@ -8,8 +8,8 @@ interface UseCollaborationOptions {
   enabled?: boolean
 }
 
-const currentEditingField = { current: null as 'title' | 'content' | null }
-const editingNodeId = { current: null as string | null }
+export const currentEditingField = { current: null as 'title' | 'content' | null }
+export const editingNodeId = { current: null as string | null }
 
 export function setEditingFieldForCollab(nodeId: string | null, field: 'title' | 'content' | null) {
   editingNodeId.current = nodeId
@@ -24,9 +24,19 @@ export function useCollaboration({ canvasId, enabled = true }: UseCollaborationO
     const handleEditingFieldChange = (e: Event) => {
       if (!(e instanceof CustomEvent)) return
       const { field, nodeId } = e.detail
-      if (field === 'title' || field === 'content' || field === null) {
+      if (field === 'title' || field === 'content') {
+        // Only update if setting a new editing field
         currentEditingField.current = field
         editingNodeId.current = nodeId ?? null
+      } else if (field === null) {
+        // CRITICAL: Only clear if the event is for the currently tracked node.
+        // In quick edit mode, clicking a new node sets refs for the new node,
+        // then the old node's sync effect fires and dispatches a null event.
+        // Clearing unconditionally would wipe out the new node's refs.
+        if (editingNodeId.current === nodeId) {
+          currentEditingField.current = null
+          editingNodeId.current = null
+        }
       }
     }
 

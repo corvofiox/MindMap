@@ -5,7 +5,7 @@ import { snapToGrid } from '@/utils/canvas'
 import { CANVAS_DEFAULTS, Z_INDEX } from '@/constants'
 import { loadApiModule } from '@/utils/moduleLoader'
 import { logger } from '@/utils/logger'
-import { setEditingFieldForCollab } from '@/hooks/useCollaboration'
+import { setEditingFieldForCollab, editingNodeId } from '@/hooks/useCollaboration'
 import type { Node } from '@/types'
 
 // Helper function to check if in default selection mode
@@ -1091,18 +1091,26 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
   // Sync with global editing state
   useEffect(() => {
     if (globalEditingId === node.id && editingField === null) {
+      // Someone else set this node as editing - take over
       setEditingFieldForCollab(node.id, 'content')
       setEditingField('content')
       window.dispatchEvent(new CustomEvent('nodeEditingFieldChange', {
         detail: { field: 'content', nodeId: node.id }
       }))
     } else if (globalEditingId !== node.id && editingField !== null) {
+      // ANOTHER node is now being edited - save and exit
+      // CRITICAL: Only clear the global editing refs if they are set for THIS node.
+      // In quick edit mode, clicking a new node sets refs for the new node BEFORE
+      // this effect fires. Clearing unconditionally would wipe out the new node's refs,
+      // breaking the remote-update protection in useCollaboration.ts.
+      if (editingNodeId.current === node.id) {
+        setEditingFieldForCollab(null, null)
+      }
       if (editingField === 'title') {
         saveTitle()
       } else if (editingField === 'content') {
         saveContent()
       }
-      setEditingFieldForCollab(null, null)
       setEditingField(null)
       window.dispatchEvent(new CustomEvent('nodeEditingFieldChange', {
         detail: { field: null, nodeId: null }
