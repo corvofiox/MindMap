@@ -4,6 +4,7 @@ import { useUIStore } from '@/store/useUIStore'
 import { snapToGrid } from '@/utils/canvas'
 import { CANVAS_DEFAULTS, Z_INDEX } from '@/constants'
 import { loadApiModule } from '@/utils/moduleLoader'
+import { logger } from '@/utils/logger'
 import type { Node } from '@/types'
 
 // Helper function to check if in default selection mode
@@ -464,7 +465,16 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
       const tempDiv = document.createElement('div')
       tempDiv.innerHTML = cleanedHtml
       const textContent = tempDiv.textContent || ''
-      const trimmedContent = textContent.replace(/[\n\s]+/g, '').trim() ? cleanedHtml : ''
+      const isEmpty = !textContent.replace(/[\n\s]+/g, '').trim()
+
+      // 如果内容为空，检查是否是编辑器未初始化导致的
+      // 如果 editingContentRef.current 有内容但当前内容为空，可能是初始化问题，不保存
+      if (isEmpty && editingContentRef.current && editingContentRef.current.trim()) {
+        logger.debug('[NodeItem] saveContent skipped: content appears empty but ref has content, possible initialization issue')
+        return
+      }
+
+      const trimmedContent = isEmpty ? '' : cleanedHtml
       if (trimmedContent !== editingContentRef.current) {
         updateNode(node.id, { content: trimmedContent })
         editingContentRef.current = trimmedContent

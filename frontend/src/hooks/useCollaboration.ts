@@ -10,6 +10,23 @@ interface UseCollaborationOptions {
 
 export function useCollaboration({ canvasId, enabled = true }: UseCollaborationOptions) {
   const isApplyingRemoteChanges = useRef(false)
+  const currentEditingField = useRef<'title' | 'content' | null>(null)
+
+  // 监听编辑字段变化事件
+  useEffect(() => {
+    const handleEditingFieldChange = (e: Event) => {
+      if (!(e instanceof CustomEvent)) return
+      const { field } = e.detail
+      if (field === 'title' || field === 'content' || field === null) {
+        currentEditingField.current = field
+      }
+    }
+
+    window.addEventListener('nodeEditingFieldChange', handleEditingFieldChange)
+    return () => {
+      window.removeEventListener('nodeEditingFieldChange', handleEditingFieldChange)
+    }
+  }, [])
 
   useEffect(() => {
     if (!enabled || !canvasId || canvasId <= 0) return
@@ -30,9 +47,29 @@ export function useCollaboration({ canvasId, enabled = true }: UseCollaborationO
       const { id, updates } = data as { id: string; updates: Partial<Node> }
       const store = useCanvasStore.getState()
       if (store.nodes.has(id)) {
-        isApplyingRemoteChanges.current = true
-        store.updateNode(id, updates)
-        isApplyingRemoteChanges.current = false
+        // 检查是否正在编辑该节点
+        if (store.editingId === id) {
+          // 如果正在编辑，过滤掉正在编辑的字段，避免覆盖本地编辑
+          const filteredUpdates = { ...updates }
+          // 获取当前正在编辑的字段
+          const editingField = currentEditingField.current
+          if (editingField === 'title' && 'title' in filteredUpdates) {
+            delete filteredUpdates.title
+          } else if (editingField === 'content' && 'content' in filteredUpdates) {
+            delete filteredUpdates.content
+          }
+          // 如果过滤后没有更新，则跳过
+          if (Object.keys(filteredUpdates).length === 0) {
+            return
+          }
+          isApplyingRemoteChanges.current = true
+          store.updateNode(id, filteredUpdates)
+          isApplyingRemoteChanges.current = false
+        } else {
+          isApplyingRemoteChanges.current = true
+          store.updateNode(id, updates)
+          isApplyingRemoteChanges.current = false
+        }
       }
     }
 
