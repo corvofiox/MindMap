@@ -65,6 +65,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
   const lastSyncedNodeRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null)
   const editingTitleRef = useRef<string>('')
   const editingContentRef = useRef<string>('')
+  const wasEditingRef = useRef<EditingField>(null)
   const contextMenuStartRef = useRef({ x: 0, y: 0 })
   const timerRefsRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set())
   const imageRef = useRef<HTMLImageElement | null>(null)
@@ -234,6 +235,9 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
 
   // 进入编辑模式时初始化内容
   useEffect(() => {
+    const prevEditingField = wasEditingRef.current
+    wasEditingRef.current = editingField
+
     if (editingField === 'title') {
       editingTitleRef.current = node.title || ''
       document.body.classList.add('allow-text-selection')
@@ -256,11 +260,16 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
       }, 0)
       timerRefsRef.current.add(timer)
     } else if (editingField === 'content') {
-      editingContentRef.current = node.content || ''
+      const isEnteringEdit = prevEditingField !== 'content'
+      if (isEnteringEdit) {
+        editingContentRef.current = node.content || ''
+      }
       document.body.classList.add('allow-text-selection')
       const timer = setTimeout(() => {
         if (contentRef.current) {
-          contentRef.current.innerHTML = textToSafeHtml(editingContentRef.current)
+          if (isEnteringEdit) {
+            contentRef.current.innerHTML = textToSafeHtml(editingContentRef.current)
+          }
           contentRef.current.focus()
           const range = document.createRange()
           const selection = window.getSelection()
@@ -447,19 +456,21 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
     }
   }, [isEditingTitle, node.id, updateNode])
 
-  // 保存内容 - 保留完整换行和空格结构
+  // 保存内容 - 保留富文本样式（HTML格式）
   const saveContent = useCallback(() => {
     if (contentRef.current && isEditingContent) {
       const cleanedHtml = cleanHtmlContent(contentRef.current.innerHTML)
-      const content = htmlToText(cleanedHtml)
-      // 如果内容只有空白字符（换行、空格等），视为空字符串
-      const trimmedContent = content.replace(/[\n\s]+/g, '').trim() ? content : ''
+      // 检查内容是否为空（只包含空白字符或<br>标签）
+      const tempDiv = document.createElement('div')
+      tempDiv.innerHTML = cleanedHtml
+      const textContent = tempDiv.textContent || ''
+      const trimmedContent = textContent.replace(/[\n\s]+/g, '').trim() ? cleanedHtml : ''
       if (trimmedContent !== editingContentRef.current) {
         updateNode(node.id, { content: trimmedContent })
         editingContentRef.current = trimmedContent
       }
     }
-  }, [isEditingContent, node.id, updateNode, cleanHtmlContent, htmlToText])
+  }, [isEditingContent, node.id, updateNode, cleanHtmlContent])
 
   // Handle node selection
   const handleMouseDown = useCallback(
