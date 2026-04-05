@@ -8,34 +8,49 @@ interface UseCollaborationOptions {
   enabled?: boolean
 }
 
-export const currentEditingField = { current: null as 'title' | 'content' | null }
-export const editingNodeId = { current: null as string | null }
+interface EditingState {
+  nodeId: string | null
+  field: 'title' | 'content' | null
+  version: number
+}
+
+const editingState: EditingState = {
+  nodeId: null,
+  field: null,
+  version: 0
+}
 
 export function setEditingFieldForCollab(nodeId: string | null, field: 'title' | 'content' | null) {
-  editingNodeId.current = nodeId
-  currentEditingField.current = field
+  editingState.version++
+  editingState.nodeId = nodeId
+  editingState.field = field
+}
+
+export function getEditingState(): EditingState {
+  return { ...editingState }
 }
 
 export function useCollaboration({ canvasId, enabled = true }: UseCollaborationOptions) {
   const isApplyingRemoteChanges = useRef(false)
 
-  // 监听编辑字段变化事件（作为备用同步机制）
   useEffect(() => {
     const handleEditingFieldChange = (e: Event) => {
       if (!(e instanceof CustomEvent)) return
-      const { field, nodeId } = e.detail
+      const { field, nodeId, version } = e.detail
+
+      if (typeof version === 'number' && version < editingState.version) {
+        return
+      }
+
       if (field === 'title' || field === 'content') {
-        // Only update if setting a new editing field
-        currentEditingField.current = field
-        editingNodeId.current = nodeId ?? null
+        editingState.version++
+        editingState.nodeId = nodeId ?? null
+        editingState.field = field
       } else if (field === null) {
-        // CRITICAL: Only clear if the event is for the currently tracked node.
-        // In quick edit mode, clicking a new node sets refs for the new node,
-        // then the old node's sync effect fires and dispatches a null event.
-        // Clearing unconditionally would wipe out the new node's refs.
-        if (editingNodeId.current === nodeId) {
-          currentEditingField.current = null
-          editingNodeId.current = null
+        if (editingState.nodeId === nodeId) {
+          editingState.version++
+          editingState.nodeId = null
+          editingState.field = null
         }
       }
     }
@@ -65,18 +80,15 @@ export function useCollaboration({ canvasId, enabled = true }: UseCollaborationO
       const { id, updates } = data as { id: string; updates: Partial<Node> }
       const store = useCanvasStore.getState()
       if (store.nodes.has(id)) {
-        // 检查是否正在编辑该节点（使用同步状态而非 store.editingId）
-        if (editingNodeId.current === id && currentEditingField.current !== null) {
-          // 如果正在编辑，过滤掉正在编辑的字段，避免覆盖本地编辑
+        const currentState = getEditingState()
+        if (currentState.nodeId === id && currentState.field !== null) {
           const filteredUpdates = { ...updates }
-          // 获取当前正在编辑的字段
-          const editingField = currentEditingField.current
+          const editingField = currentState.field
           if (editingField === 'title' && 'title' in filteredUpdates) {
             delete filteredUpdates.title
           } else if (editingField === 'content' && 'content' in filteredUpdates) {
             delete filteredUpdates.content
           }
-          // 如果过滤后没有更新，则跳过
           if (Object.keys(filteredUpdates).length === 0) {
             return
           }

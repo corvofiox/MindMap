@@ -20,6 +20,8 @@ interface WebSocketWithUserData extends WebSocket {
   canvasId?: number
   userRole?: 'owner' | 'editor' | 'viewer'
   userInfo?: CanvasActiveUser
+  isAlive?: boolean
+  lastPong?: number
 }
 
 interface CanvasRoom {
@@ -62,6 +64,9 @@ const wsConnectionRates = new Map<string, { count: number; resetTime: number }>(
 const WS_MAX_CONNECTIONS_PER_MINUTE = 100
 const WS_WINDOW_MS = 60 * 1000
 
+const HEARTBEAT_INTERVAL_MS = 30000
+const HEARTBEAT_TIMEOUT_MS = 60000
+
 function checkWsRateLimit(ip: string): boolean {
   const now = Date.now()
   const rateData = wsConnectionRates.get(ip)
@@ -86,7 +91,7 @@ function checkWsRateLimit(ip: string): boolean {
 export function setupWebSocket(wss: WebSocketServer) {
   wss.on('connection', handleConnection)
 
-  setInterval(() => {
+  const heartbeatIntervalId = setInterval(() => {
     const now = Date.now()
 
     for (const [ip, rateData] of wsConnectionRates.entries()) {
@@ -98,9 +103,31 @@ export function setupWebSocket(wss: WebSocketServer) {
     for (const [canvasId, room] of canvasRooms.entries()) {
       if (room.clients.size === 0) {
         canvasRooms.delete(canvasId)
+        continue
+      }
+
+      for (const client of Array.from(room.clients)) {
+        try {
+          if (client.lastPong === undefined || (now - client.lastPong) > HEARTBEAT_TIMEOUT_MS) {
+            handleClientDisconnect(client, room, true)
+            continue
+          }
+          client.isAlive = false
+          client.ping()
+        } catch (error) {
+          logError('Heartbeat error for client', {
+            userId: client.userId,
+            canvasId: client.canvasId,
+            error: error instanceof Error ? error.message : String(error),
+          })
+        }
       }
     }
-  }, 60000)
+  }, HEARTBEAT_INTERVAL_MS)
+
+  wss.on('close', () => {
+    clearInterval(heartbeatIntervalId)
+  })
 }
 
 export function getCanvasActiveUsers(canvasId: number): CanvasActiveUser[] {
@@ -231,6 +258,8 @@ async function handleConnection(ws: WebSocketWithUserData, req: any) {
   ws.canvasId = canvasId
   ws.userRole = userRole as 'owner' | 'editor' | 'viewer'
   ws.userInfo = userInfo
+  ws.isAlive = true
+  ws.lastPong = Date.now()
 
   let room = canvasRooms.get(canvasId)
   if (!room) {
@@ -260,18 +289,13 @@ async function handleConnection(ws: WebSocketWithUserData, req: any) {
     handleMessage(ws, room!, data)
   })
 
+  ws.on('pong', () => {
+    ws.isAlive = true
+    ws.lastPong = Date.now()
+  })
+
   ws.on('close', () => {
-    room!.clients.delete(ws)
-    room!.activeUsers.delete(ws.userId!)
-
-    broadcastToRoom(room!, {
-      type: 'user-leave',
-      user: userInfo,
-    } as UserJoinMessage, null)
-
-    if (room!.clients.size === 0) {
-      canvasRooms.delete(canvasId)
-    }
+    handleClientDisconnect(ws, room!)
   })
 
   ws.on('error', (error) => {
@@ -281,6 +305,7 @@ async function handleConnection(ws: WebSocketWithUserData, req: any) {
       error: error instanceof Error ? error.message : String(error),
       stack: error instanceof Error ? error.stack : undefined,
     })
+    handleClientDisconnect(ws, room!, true)
   })
 }
 
@@ -307,6 +332,32 @@ function handleMessage(ws: WebSocketWithUserData, room: CanvasRoom, data: Buffer
       canvasId: ws.canvasId,
       error: error instanceof Error ? error.message : String(error),
     })
+  }
+}
+
+function handleClientDisconnect(ws: WebSocketWithUserData, room: CanvasRoom, shouldTerminate = false) {
+  if (!room) return
+
+  const wasInRoom = room.clients.delete(ws)
+  if (!wasInRoom) return
+
+  if (ws.userId) {
+    room.activeUsers.delete(ws.userId)
+  }
+
+  if (ws.userInfo) {
+    broadcastToRoom(room, {
+      type: 'user-leave',
+      user: ws.userInfo,
+    } as UserJoinMessage, null)
+  }
+
+  if (room.clients.size === 0) {
+    canvasRooms.delete(room.id)
+  }
+
+  if (shouldTerminate && ws.readyState === 1) {
+    ws.terminate()
   }
 }
 

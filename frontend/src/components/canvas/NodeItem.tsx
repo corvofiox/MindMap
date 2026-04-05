@@ -5,7 +5,7 @@ import { snapToGrid } from '@/utils/canvas'
 import { CANVAS_DEFAULTS, Z_INDEX } from '@/constants'
 import { loadApiModule } from '@/utils/moduleLoader'
 import { logger } from '@/utils/logger'
-import { setEditingFieldForCollab, editingNodeId } from '@/hooks/useCollaboration'
+import { setEditingFieldForCollab, getEditingState } from '@/hooks/useCollaboration'
 import type { Node } from '@/types'
 
 // Helper function to check if in default selection mode
@@ -74,6 +74,14 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
   const timerRefsRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set())
   const imageRef = useRef<HTMLImageElement | null>(null)
   const { addToast } = useUIStore()
+
+  const dispatchEditingFieldChange = useCallback((field: 'title' | 'content' | null, nodeId: string | null) => {
+    setEditingFieldForCollab(nodeId, field)
+    const state = getEditingState()
+    window.dispatchEvent(new CustomEvent('nodeEditingFieldChange', {
+      detail: { field, nodeId, version: state.version }
+    }))
+  }, [])
 
   useEffect(() => {
     return () => {
@@ -559,9 +567,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
             }
             setEditingFieldForCollab(node.id, clickedField)
             setEditingField(clickedField)
-            window.dispatchEvent(new CustomEvent('nodeEditingFieldChange', {
-              detail: { field: clickedField, nodeId: node.id }
-            }))
+            dispatchEditingFieldChange(clickedField, node.id)
             return
           }
         }
@@ -626,9 +632,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
         setEditingFieldForCollab(node.id, field)
         setEditingField(field)
         setEditingId(node.id)
-        window.dispatchEvent(new CustomEvent('nodeEditingFieldChange', {
-          detail: { field, nodeId: node.id }
-        }))
+        dispatchEditingFieldChange(field, node.id)
         return
       }
 
@@ -881,11 +885,9 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
       setEditingFieldForCollab(node.id, field)
       setEditingField(field)
       setEditingId(node.id)
-      window.dispatchEvent(new CustomEvent('nodeEditingFieldChange', {
-        detail: { field, nodeId: node.id }
-      }))
+      dispatchEditingFieldChange(field, node.id)
     },
-    [node.locked, node.title, node.type, isEditingTitle, isEditingContent, saveTitle, saveContent, isViewer, node.id]
+    [node.locked, node.title, node.type, isEditingTitle, isEditingContent, saveTitle, saveContent, isViewer, node.id, dispatchEditingFieldChange]
   )
 
   // 中文输入法开始
@@ -949,9 +951,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
         }
         setEditingFieldForCollab(null, null)
         setEditingField(null)
-        window.dispatchEvent(new CustomEvent('nodeEditingFieldChange', {
-          detail: { field: null, nodeId: null }
-        }))
+        dispatchEditingFieldChange(null, null)
       } else if (e.key === 'Enter') {
         // Shift+Enter 或 Ctrl+Enter/Meta+Enter：换行不退出
         if (e.shiftKey || e.ctrlKey || e.metaKey) {
@@ -968,12 +968,10 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
         }
         setEditingFieldForCollab(null, null)
         setEditingField(null)
-        window.dispatchEvent(new CustomEvent('nodeEditingFieldChange', {
-          detail: { field: null, nodeId: null }
-        }))
+        dispatchEditingFieldChange(null, null)
       }
     },
-    [isComposing, saveTitle, saveContent, insertLineBreakManually]
+    [isComposing, saveTitle, saveContent, insertLineBreakManually, dispatchEditingFieldChange]
   )
 
   // Handle paste - 统一处理 HTML 和纯文本，保留换行格式
@@ -1036,10 +1034,8 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
     setEditingFieldForCollab(null, null)
     setEditingField(null)
     setEditingId(null)
-    window.dispatchEvent(new CustomEvent('nodeEditingFieldChange', {
-      detail: { field: null, nodeId: null }
-    }))
-  }, [isEditingTitle, isEditingContent, saveTitle, saveContent, setEditingId])
+    dispatchEditingFieldChange(null, null)
+  }, [isEditingTitle, isEditingContent, saveTitle, saveContent, setEditingId, dispatchEditingFieldChange])
 
   // Handle wheel event on content area - prevent canvas zoom when content is scrollable
   const handleContentWheel = useCallback((e: React.WheelEvent) => {
@@ -1103,19 +1099,12 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
   // Sync with global editing state
   useEffect(() => {
     if (globalEditingId === node.id && editingField === null) {
-      // Someone else set this node as editing - take over
       setEditingFieldForCollab(node.id, 'content')
       setEditingField('content')
-      window.dispatchEvent(new CustomEvent('nodeEditingFieldChange', {
-        detail: { field: 'content', nodeId: node.id }
-      }))
+      dispatchEditingFieldChange('content', node.id)
     } else if (globalEditingId !== node.id && editingField !== null) {
-      // ANOTHER node is now being edited - save and exit
-      // CRITICAL: Only clear the global editing refs if they are set for THIS node.
-      // In quick edit mode, clicking a new node sets refs for the new node BEFORE
-      // this effect fires. Clearing unconditionally would wipe out the new node's refs,
-      // breaking the remote-update protection in useCollaboration.ts.
-      if (editingNodeId.current === node.id) {
+      const currentState = getEditingState()
+      if (currentState.nodeId === node.id) {
         setEditingFieldForCollab(null, null)
       }
       if (editingField === 'title') {
@@ -1124,11 +1113,9 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
         saveContent()
       }
       setEditingField(null)
-      window.dispatchEvent(new CustomEvent('nodeEditingFieldChange', {
-        detail: { field: null, nodeId: null }
-      }))
+      dispatchEditingFieldChange(null, null)
     }
-  }, [globalEditingId, node.id, editingField, saveTitle, saveContent])
+  }, [globalEditingId, node.id, editingField, saveTitle, saveContent, dispatchEditingFieldChange])
 
   // 检查当前节点是否正在被拖拽到节点池
   const isBeingDraggedToPool = draggingNodeFromCanvas?.nodeId === node.id && isOverNodePool

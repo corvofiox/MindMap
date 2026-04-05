@@ -199,3 +199,111 @@ describe('CollaborationService Offline Queue', () => {
     })
   })
 })
+
+type ConflictType = 'no_conflict' | 'sequential_remote' | 'sequential_local' | 'concurrent' | 'diverged'
+
+function detectConflictType(
+  localVersion: number,
+  remoteVersion: number,
+  lastSyncedVersion: number,
+  hasLocalPendingChanges: boolean
+): ConflictType {
+  if (remoteVersion === localVersion && localVersion === lastSyncedVersion) {
+    if (hasLocalPendingChanges) {
+      return 'concurrent'
+    }
+    return 'no_conflict'
+  }
+
+  if (remoteVersion > localVersion) {
+    if (localVersion > lastSyncedVersion && hasLocalPendingChanges) {
+      return 'diverged'
+    }
+    if (!hasLocalPendingChanges) {
+      return 'sequential_remote'
+    }
+    return 'diverged'
+  }
+
+  if (localVersion > remoteVersion && remoteVersion === lastSyncedVersion) {
+    return 'sequential_local'
+  }
+
+  if (remoteVersion === localVersion && hasLocalPendingChanges) {
+    return 'concurrent'
+  }
+
+  if (remoteVersion > lastSyncedVersion && localVersion > lastSyncedVersion && remoteVersion !== localVersion) {
+    return 'diverged'
+  }
+
+  return 'no_conflict'
+}
+
+describe('detectConflictType - Truth Table Tests', () => {
+  describe('when all versions are equal (L === R === S)', () => {
+    it('should return no_conflict when no pending changes', () => {
+      expect(detectConflictType(5, 5, 5, false)).toBe('no_conflict')
+    })
+
+    it('should return concurrent when has pending changes', () => {
+      expect(detectConflictType(5, 5, 5, true)).toBe('concurrent')
+    })
+  })
+
+  describe('when remoteVersion > localVersion', () => {
+    it('should return sequential_remote when localVersion === lastSyncedVersion and no pending changes', () => {
+      expect(detectConflictType(5, 7, 5, false)).toBe('sequential_remote')
+    })
+
+    it('should return diverged when localVersion === lastSyncedVersion and has pending changes', () => {
+      expect(detectConflictType(5, 7, 5, true)).toBe('diverged')
+    })
+
+    it('should return sequential_remote when localVersion > lastSyncedVersion and no pending changes', () => {
+      expect(detectConflictType(6, 7, 5, false)).toBe('sequential_remote')
+    })
+
+    it('should return diverged when localVersion > lastSyncedVersion and has pending changes', () => {
+      expect(detectConflictType(6, 7, 5, true)).toBe('diverged')
+    })
+  })
+
+  describe('when localVersion > remoteVersion', () => {
+    it('should return sequential_local when remoteVersion === lastSyncedVersion', () => {
+      expect(detectConflictType(7, 5, 5, false)).toBe('sequential_local')
+    })
+
+    it('should return diverged when remoteVersion > lastSyncedVersion', () => {
+      expect(detectConflictType(7, 6, 5, false)).toBe('diverged')
+      expect(detectConflictType(7, 6, 5, true)).toBe('diverged')
+    })
+  })
+
+  describe('when localVersion === remoteVersion > lastSyncedVersion', () => {
+    it('should return concurrent when has pending changes', () => {
+      expect(detectConflictType(6, 6, 5, true)).toBe('concurrent')
+    })
+
+    it('should return no_conflict when no pending changes', () => {
+      expect(detectConflictType(6, 6, 5, false)).toBe('no_conflict')
+    })
+  })
+
+  describe('edge cases', () => {
+    it('should handle version 0 correctly', () => {
+      expect(detectConflictType(0, 0, 0, false)).toBe('no_conflict')
+      expect(detectConflictType(0, 0, 0, true)).toBe('concurrent')
+    })
+
+    it('should handle large version differences', () => {
+      expect(detectConflictType(5, 100, 5, false)).toBe('sequential_remote')
+      expect(detectConflictType(100, 5, 5, false)).toBe('sequential_local')
+    })
+
+    it('should return diverged for complex divergence scenarios', () => {
+      expect(detectConflictType(6, 7, 5, true)).toBe('diverged')
+      expect(detectConflictType(7, 6, 5, false)).toBe('diverged')
+    })
+  })
+})

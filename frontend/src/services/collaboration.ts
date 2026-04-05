@@ -1,5 +1,7 @@
 import { useCanvasStore } from '@/store/useCanvasStore'
 import { useAuthStore } from '@/store/useAuthStore'
+import { getEditingState } from '@/hooks/useCollaboration'
+import { logger } from '@/utils/logger'
 import type { Node, NodeGroup, Domain, Connection } from '@/types'
 
 interface CollabUser {
@@ -35,6 +37,28 @@ interface QueuedOperation {
   timestamp: number
 }
 
+type OperationType = 'create' | 'update' | 'delete' | 'move' | 'resize' | 'style' | 'content' | 'state'
+
+interface FieldChange {
+  field: string
+  oldValue: unknown
+  newValue: unknown
+  operationType: OperationType
+  timestamp: number
+}
+
+interface PendingNodeChanges {
+  nodeId: string
+  baseVersion: number
+  changes: Map<string, FieldChange>
+}
+
+interface ConflictResolutionResult {
+  value: unknown
+  strategy: 'local' | 'remote' | 'merged' | 'conflict'
+  reason: string
+}
+
 class CollaborationService {
   private ws: WebSocket | null = null
   private canvasId: number | null = null
@@ -53,14 +77,25 @@ class CollaborationService {
 
   private offlineQueue: QueuedOperation[] = []
   private maxQueueSize = 100
+  private isFlushingQueue = false
+  private isDestroyed = false
+
+  private pendingNodeChanges = new Map<string, PendingNodeChanges>()
+  private lastSyncedVersions = new Map<string, number>()
+  private conflictResolutionLog: ConflictResolutionResult[] = []
 
   connect(canvasId: number) {
+    if (this.isDestroyed) return
+
     const token = localStorage.getItem('mindmap_token')
-    if (!token) return
+    if (!token) {
+      logger.error('No auth token found, cannot establish WebSocket connection')
+      return
+    }
 
     this.canvasId = canvasId
     this.isIntentionallyClosed = false
-    this.disconnect()
+    this.cleanupWebSocket()
 
     const user = useAuthStore.getState().user
     this.userId = user?.id || null
@@ -73,6 +108,10 @@ class CollaborationService {
       this.ws = new WebSocket(wsUrl)
 
       this.ws.onopen = () => {
+        if (this.isDestroyed || this.isIntentionallyClosed) {
+          this.cleanupWebSocket()
+          return
+        }
         this.reconnectAttempts = 0
         this.reconnectDelay = 2000
         this.requestSync()
@@ -80,11 +119,13 @@ class CollaborationService {
       }
 
       this.ws.onmessage = (event) => {
-        this.handleMessage(event.data)
+        if (!this.isDestroyed) {
+          this.handleMessage(event.data)
+        }
       }
 
       this.ws.onclose = () => {
-        if (!this.isIntentionallyClosed && this.reconnectAttempts < this.maxReconnectAttempts) {
+        if (!this.isDestroyed && !this.isIntentionallyClosed && this.reconnectAttempts < this.maxReconnectAttempts) {
           this.scheduleReconnect(canvasId)
         }
       }
@@ -93,7 +134,7 @@ class CollaborationService {
         // WebSocket error - silently handle
       }
     } catch {
-      if (this.reconnectAttempts < this.maxReconnectAttempts) {
+      if (!this.isDestroyed && this.reconnectAttempts < this.maxReconnectAttempts) {
         this.scheduleReconnect(canvasId)
       }
     }
@@ -107,16 +148,27 @@ class CollaborationService {
     }, this.reconnectDelay)
   }
 
-  disconnect() {
-    this.isIntentionallyClosed = true
+  private cleanupWebSocket() {
     if (this.reconnectTimeout) {
       clearTimeout(this.reconnectTimeout)
       this.reconnectTimeout = null
     }
     if (this.ws) {
-      this.ws.close()
+      this.ws.onopen = null
+      this.ws.onmessage = null
+      this.ws.onclose = null
+      this.ws.onerror = null
+      if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
+        this.ws.close()
+      }
       this.ws = null
     }
+  }
+
+  disconnect() {
+    this.isIntentionallyClosed = true
+    this.isDestroyed = true
+    this.cleanupWebSocket()
     this.cursors.clear()
     this.users = []
     this.offlineQueue = []
@@ -124,6 +176,10 @@ class CollaborationService {
     this.operationHandlers.clear()
     this.cursorListeners = []
     this.userListeners = []
+    this.isFlushingQueue = false
+    this.pendingNodeChanges.clear()
+    this.lastSyncedVersions.clear()
+    this.conflictResolutionLog = []
   }
 
   isConnected(): boolean {
@@ -195,43 +251,467 @@ class CollaborationService {
   }
 
   private handleSync(message: { nodes: Node[]; groups: NodeGroup[]; domains: Domain[]; connections: Connection[] }) {
+    if (this.isDestroyed) return
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return
+
     const store = useCanvasStore.getState()
 
-    // Check if we already have data loaded
     const hasLocalData = store.nodes.size > 0 || store.groups.size > 0 || store.domains.size > 0 || store.connections.size > 0
     const hasRemoteData = message.nodes.length > 0 || message.groups.length > 0 || message.domains.length > 0 || message.connections.length > 0
 
-    // If we have local data but remote is empty, don't overwrite
-    // This can happen when:
-    // 1. We just loaded data from DB/API
-    // 2. WebSocket connects and sends sync-request
-    // 3. Server returns empty data (e.g., data not yet saved to DB)
     if (hasLocalData && !hasRemoteData) {
       return
     }
 
-    // If both have data, we need to merge (for now, prefer the one with more nodes)
-    if (hasLocalData && hasRemoteData) {
-      if (store.nodes.size >= message.nodes.length) {
+    try {
+      if (hasLocalData && hasRemoteData) {
+        const mergedNodes = this.mergeNodes(
+          Array.from(store.nodes.values()),
+          message.nodes
+        )
+        const mergedGroups = this.mergeEntityMaps(
+          Array.from(store.groups.values()),
+          message.groups,
+          (g) => g.id,
+          (g) => g.name
+        )
+        const mergedDomains = this.mergeEntityMaps(
+          Array.from(store.domains.values()),
+          message.domains,
+          (d) => d.id,
+          (d) => d.name
+        )
+        const mergedConnections = this.mergeConnectionsWithVersion(
+          Array.from(store.connections.values()),
+          message.connections
+        )
+
+        store.setCanvasData({
+          nodes: mergedNodes,
+          groups: mergedGroups,
+          domains: mergedDomains,
+          connections: mergedConnections
+        })
         return
+      }
+
+      message.nodes.forEach(node => {
+        this.lastSyncedVersions.set(node.id, node._version || 0)
+      })
+
+      store.setCanvasData({
+        nodes: message.nodes,
+        groups: message.groups,
+        domains: message.domains,
+        connections: message.connections
+      })
+    } catch (error) {
+      console.error('Failed to sync canvas data:', error)
+      store.setCanvasData({
+        nodes: message.nodes,
+        groups: message.groups,
+        domains: message.domains,
+        connections: message.connections
+      })
+    }
+  }
+
+  private mergeEntityMaps<T>(
+    local: T[],
+    remote: T[],
+    getId: (item: T) => string,
+    getTimestamp: (item: T) => number | string | undefined
+  ): T[] {
+    const merged = new Map<string, T>()
+
+    local.forEach((item) => {
+      merged.set(getId(item), item)
+    })
+
+    remote.forEach((remoteItem) => {
+      const id = getId(remoteItem)
+      const localItem = merged.get(id)
+
+      if (!localItem) {
+        merged.set(id, remoteItem)
+      } else {
+        const localTime = getTimestamp(localItem)
+        const remoteTime = getTimestamp(remoteItem)
+
+        const localMs = typeof localTime === 'string' ? new Date(localTime).getTime() : localTime || 0
+        const remoteMs = typeof remoteTime === 'string' ? new Date(remoteTime).getTime() : remoteTime || 0
+
+        if (remoteMs > localMs) {
+          merged.set(id, remoteItem)
+        }
+      }
+    })
+
+    return Array.from(merged.values())
+  }
+
+  private mergeNodes(localNodes: Node[], remoteNodes: Node[]): Node[] {
+    const merged = new Map<string, Node>()
+
+    localNodes.forEach((node) => {
+      merged.set(node.id, node)
+    })
+
+    remoteNodes.forEach((remoteNode) => {
+      const id = remoteNode.id
+      const localNode = merged.get(id)
+
+      if (!localNode) {
+        merged.set(id, remoteNode)
+        this.lastSyncedVersions.set(id, remoteNode._version || 0)
+        return
+      }
+
+      const localVersion = localNode._version || 0
+      const remoteVersion = remoteNode._version || 0
+      const lastSyncedVersion = this.lastSyncedVersions.get(id) || 0
+
+      const hasLocalPendingChanges = this.hasPendingChanges(id)
+      const conflictType = this.detectConflictType(localVersion, remoteVersion, lastSyncedVersion, hasLocalPendingChanges)
+
+      const mergedNode = this.resolveNodeConflict(localNode, remoteNode, conflictType, lastSyncedVersion)
+      merged.set(id, mergedNode)
+
+      this.lastSyncedVersions.set(id, remoteVersion)
+    })
+
+    return Array.from(merged.values())
+  }
+
+  private detectConflictType(
+    localVersion: number,
+    remoteVersion: number,
+    lastSyncedVersion: number,
+    hasLocalPendingChanges: boolean
+  ): 'no_conflict' | 'sequential_remote' | 'sequential_local' | 'concurrent' | 'diverged' {
+    if (remoteVersion === localVersion && localVersion === lastSyncedVersion) {
+      if (hasLocalPendingChanges) {
+        return 'concurrent'
+      }
+      return 'no_conflict'
+    }
+
+    if (remoteVersion > localVersion) {
+      if (localVersion > lastSyncedVersion && hasLocalPendingChanges) {
+        return 'diverged'
+      }
+      if (!hasLocalPendingChanges) {
+        return 'sequential_remote'
+      }
+      return 'diverged'
+    }
+
+    if (localVersion > remoteVersion && remoteVersion === lastSyncedVersion) {
+      return 'sequential_local'
+    }
+
+    if (remoteVersion === localVersion && hasLocalPendingChanges) {
+      return 'concurrent'
+    }
+
+    if (remoteVersion > lastSyncedVersion && localVersion > lastSyncedVersion && remoteVersion !== localVersion) {
+      return 'diverged'
+    }
+
+    return 'no_conflict'
+  }
+
+  private resolveNodeConflict(
+    local: Node,
+    remote: Node,
+    conflictType: 'no_conflict' | 'sequential_remote' | 'sequential_local' | 'concurrent' | 'diverged',
+    lastSyncedVersion: number
+  ): Node {
+    let result: Node
+
+    switch (conflictType) {
+      case 'no_conflict':
+        result = { ...remote }
+        break
+
+      case 'sequential_remote':
+        result = { ...remote }
+        break
+
+      case 'sequential_local':
+        result = { ...local }
+        break
+
+      case 'concurrent':
+      case 'diverged':
+        return this.mergeNodeFieldsWithConflictResolution(local, remote, lastSyncedVersion, conflictType === 'diverged')
+
+      default:
+        result = { ...remote }
+    }
+
+    result._version = Math.max(local._version || 0, remote._version || 0) + 1
+    return result
+  }
+
+  private mergeNodeFieldsWithConflictResolution(
+    local: Node,
+    remote: Node,
+    lastSyncedVersion: number,
+    isDiverged: boolean
+  ): Node {
+    const result: Node = { ...local }
+    const pendingChanges = this.pendingNodeChanges.get(local.id)
+    const editingState = this.getEditingState()
+    const isEditingThisNode = editingState.nodeId === local.id
+
+    const fieldGroups = {
+      content: ['title', 'content'] as const,
+      position: ['x', 'y', 'width', 'height'] as const,
+      style: ['color', 'fontSize', 'textAlign', 'titleAlign', 'contentAlign', 'collapsedTitleAlign'] as const,
+      state: ['collapsed', 'locked', 'expandedHeight'] as const,
+      media: ['type', 'imageUrl', 'aspectRatio'] as const,
+    }
+
+    Object.entries(fieldGroups).forEach(([group, fields]) => {
+      fields.forEach((field) => {
+        const localVal = local[field as keyof Node]
+        const remoteVal = remote[field as keyof Node]
+
+        if (remoteVal === undefined || remoteVal === localVal) {
+          return
+        }
+
+        const resolution = this.resolveFieldConflict(
+          local.id,
+          field,
+          localVal,
+          remoteVal,
+          group as keyof typeof fieldGroups,
+          pendingChanges,
+          isEditingThisNode && editingState.field === field,
+          isDiverged
+        )
+
+        if (resolution.strategy !== 'local') {
+          (result as Record<string, unknown>)[field] = resolution.value
+        }
+
+        this.conflictResolutionLog.push(resolution)
+      })
+    })
+
+    result._version = Math.max(local._version || 0, remote._version || 0) + 1
+
+    if (pendingChanges) {
+      this.pendingNodeChanges.delete(local.id)
+    }
+
+    return result
+  }
+
+  private resolveFieldConflict(
+    nodeId: string,
+    field: string,
+    localValue: unknown,
+    remoteValue: unknown,
+    fieldGroup: 'content' | 'position' | 'style' | 'state' | 'media',
+    pendingChanges: PendingNodeChanges | undefined,
+    isCurrentlyEditing: boolean,
+    isDiverged: boolean
+  ): ConflictResolutionResult {
+    const pendingChange = pendingChanges?.changes.get(field)
+    const hasLocalChange = pendingChange !== undefined
+
+    if (isCurrentlyEditing && fieldGroup === 'content') {
+      return {
+        value: localValue,
+        strategy: 'local',
+        reason: 'User is currently editing this field'
       }
     }
 
-    store.setCanvasData({
-      nodes: message.nodes,
-      groups: message.groups,
-      domains: message.domains,
-      connections: message.connections
+    if (hasLocalChange && fieldGroup === 'content') {
+      if (isDiverged) {
+        return {
+          value: remoteValue,
+          strategy: 'remote',
+          reason: 'Diverged versions - accepting remote for content field'
+        }
+      }
+      return {
+        value: localValue,
+        strategy: 'local',
+        reason: 'Local has pending changes for this content field'
+      }
+    }
+
+    if (fieldGroup === 'position') {
+      if (hasLocalChange) {
+        const localTime = pendingChange.timestamp
+        const now = Date.now()
+        const timeDiff = now - localTime
+
+        if (timeDiff < 5000) {
+          return {
+            value: localValue,
+            strategy: 'local',
+            reason: 'Recent local position change (within 5s)'
+          }
+        }
+      }
+      return {
+        value: remoteValue,
+        strategy: 'remote',
+        reason: 'Position changes use latest remote'
+      }
+    }
+
+    if (fieldGroup === 'style') {
+      if (hasLocalChange) {
+        return {
+          value: localValue,
+          strategy: 'local',
+          reason: 'Local style change pending'
+        }
+      }
+      return {
+        value: remoteValue,
+        strategy: 'remote',
+        reason: 'Style changes use latest remote'
+      }
+    }
+
+    if (fieldGroup === 'state') {
+      if (field === 'collapsed' || field === 'locked') {
+        if (hasLocalChange) {
+          return {
+            value: localValue,
+            strategy: 'local',
+            reason: 'State change by local user takes priority'
+          }
+        }
+      }
+      return {
+        value: remoteValue,
+        strategy: 'remote',
+        reason: 'State changes use latest remote'
+      }
+    }
+
+    if (fieldGroup === 'media') {
+      return {
+        value: remoteValue,
+        strategy: 'remote',
+        reason: 'Media properties always use remote'
+      }
+    }
+
+    return {
+      value: remoteValue,
+      strategy: 'remote',
+      reason: 'Default: accept remote'
+    }
+  }
+
+  private hasPendingChanges(nodeId: string): boolean {
+    const pending = this.pendingNodeChanges.get(nodeId)
+    return pending !== undefined && pending.changes.size > 0
+  }
+
+  trackLocalChange(nodeId: string, field: string, oldValue: unknown, newValue: unknown, operationType: OperationType): void {
+    let pending = this.pendingNodeChanges.get(nodeId)
+
+    if (!pending) {
+      const store = useCanvasStore.getState()
+      const node = store.nodes.get(nodeId)
+      pending = {
+        nodeId,
+        baseVersion: node?._version || 0,
+        changes: new Map()
+      }
+      this.pendingNodeChanges.set(nodeId, pending)
+    }
+
+    pending.changes.set(field, {
+      field,
+      oldValue,
+      newValue,
+      operationType,
+      timestamp: Date.now()
     })
   }
 
+  clearPendingChanges(nodeId: string): void {
+    this.pendingNodeChanges.delete(nodeId)
+  }
+
+  getConflictResolutionLog(): ConflictResolutionResult[] {
+    return [...this.conflictResolutionLog]
+  }
+
+  clearConflictResolutionLog(): void {
+    this.conflictResolutionLog = []
+  }
+
+  private getEditingState(): { nodeId: string | null; field: 'title' | 'content' | null } {
+    const state = getEditingState()
+    return { nodeId: state.nodeId, field: state.field }
+  }
+
+  private mergeConnectionsWithVersion(
+    localConnections: Connection[],
+    remoteConnections: Connection[]
+  ): Connection[] {
+    const merged = new Map<string, Connection>()
+
+    localConnections.forEach((conn) => {
+      merged.set(conn.id, conn)
+    })
+
+    remoteConnections.forEach((remoteConn) => {
+      const id = remoteConn.id
+      const localConn = merged.get(id)
+
+      if (!localConn) {
+        merged.set(id, remoteConn)
+        return
+      }
+
+      const mergedConn = this.mergeConnectionFields(localConn, remoteConn)
+      merged.set(id, mergedConn)
+    })
+
+    return Array.from(merged.values())
+  }
+
+  private mergeConnectionFields(local: Connection, remote: Connection): Connection {
+    const result: Connection = { ...local }
+
+    const geometryFields: (keyof Pick<Connection, 'fromPort' | 'toPort' | 'type' | 'style' | 'color' | 'width' | 'arrowType' | 'direction' | 'label' | 'bendPoints'>)[] = [
+      'fromPort', 'toPort', 'type', 'style', 'color', 'width', 'arrowType', 'direction', 'label', 'bendPoints'
+    ]
+
+    geometryFields.forEach((field) => {
+      const remoteVal = remote[field]
+      if (remoteVal !== undefined) {
+        (result as Record<string, unknown>)[field] = remoteVal
+      }
+    })
+
+    return result
+  }
+
   private requestSync() {
+    if (this.isDestroyed || this.isIntentionallyClosed) return
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({ type: 'sync-request' }))
     }
   }
 
   sendOperation(operation: string, data: unknown) {
+    if (this.isDestroyed || this.isIntentionallyClosed) return
+
     const timestamp = Date.now()
 
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
@@ -253,17 +733,27 @@ class CollaborationService {
   }
 
   private flushOfflineQueue() {
-    if (this.offlineQueue.length === 0) return
+    if (this.offlineQueue.length === 0 || this.isFlushingQueue || this.isDestroyed || this.isIntentionallyClosed) return
 
+    this.isFlushingQueue = true
     const queue = [...this.offlineQueue]
     this.offlineQueue = []
 
-    for (const item of queue) {
-      this.sendOperation(item.operation, item.data)
+    try {
+      for (const item of queue) {
+        if (this.isDestroyed || this.isIntentionallyClosed || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
+          this.offlineQueue.unshift(...queue.slice(queue.indexOf(item)))
+          break
+        }
+        this.sendOperation(item.operation, item.data)
+      }
+    } finally {
+      this.isFlushingQueue = false
     }
   }
 
   sendCursor(x: number, y: number) {
+    if (this.isDestroyed || this.isIntentionallyClosed) return
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return
 
     this.ws.send(JSON.stringify({
