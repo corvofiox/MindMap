@@ -31,6 +31,18 @@ interface MergeTestHelper {
   trackPendingChange: (nodeId: string, field: string, oldValue: unknown, newValue: unknown, operationType: OperationType) => void
   clearPendingChanges: (nodeId: string) => void
   detectConflictType: (localVersion: number, remoteVersion: number, lastSyncedVersion: number, hasLocalPendingChanges: boolean) => string
+  resolveNodeConflict: (local: Node, remote: Node, conflictType: string, lastSyncedVersion: number) => Node
+  mergeNodeFieldsWithConflictResolution: (local: Node, remote: Node, lastSyncedVersion: number, isDiverged: boolean) => Node
+  resolveFieldConflict: (
+    nodeId: string,
+    field: string,
+    localValue: unknown,
+    remoteValue: unknown,
+    fieldGroup: 'content' | 'position' | 'style' | 'state' | 'media',
+    pendingChanges: PendingNodeChanges | undefined,
+    isCurrentlyEditing: boolean,
+    isDiverged: boolean
+  ) => ConflictResolutionResult
 }
 
 function createMergeHelper(): MergeTestHelper {
@@ -214,7 +226,7 @@ function createMergeHelper(): MergeTestHelper {
           )
 
           if (resolution.strategy !== 'local') {
-            (result as Record<string, unknown>)[field] = resolution.value
+            (result as unknown as Record<string, unknown>)[field] = resolution.value
           }
         })
       })
@@ -395,7 +407,7 @@ function createTestConnection(overrides: Partial<Connection> = {}): Connection {
     toNodeId: 'node-2',
     fromPort: 'right',
     toPort: 'left',
-    type: 'Straight',
+    type: 'straight',
     style: 'solid',
     color: '#000000',
     width: 2,

@@ -494,7 +494,7 @@ class CollaborationService {
         )
 
         if (resolution.strategy !== 'local') {
-          (result as Record<string, unknown>)[field] = resolution.value
+          (result as unknown as Record<string, unknown>)[field] = resolution.value
         }
 
         this.conflictResolutionLog.push(resolution)
@@ -695,7 +695,7 @@ class CollaborationService {
     geometryFields.forEach((field) => {
       const remoteVal = remote[field]
       if (remoteVal !== undefined) {
-        (result as Record<string, unknown>)[field] = remoteVal
+        (result as unknown as Record<string, unknown>)[field] = remoteVal
       }
     })
 
