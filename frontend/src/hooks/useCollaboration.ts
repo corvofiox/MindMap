@@ -8,17 +8,25 @@ interface UseCollaborationOptions {
   enabled?: boolean
 }
 
+const currentEditingField = { current: null as 'title' | 'content' | null }
+const editingNodeId = { current: null as string | null }
+
+export function setEditingFieldForCollab(nodeId: string | null, field: 'title' | 'content' | null) {
+  editingNodeId.current = nodeId
+  currentEditingField.current = field
+}
+
 export function useCollaboration({ canvasId, enabled = true }: UseCollaborationOptions) {
   const isApplyingRemoteChanges = useRef(false)
-  const currentEditingField = useRef<'title' | 'content' | null>(null)
 
-  // 监听编辑字段变化事件
+  // 监听编辑字段变化事件（作为备用同步机制）
   useEffect(() => {
     const handleEditingFieldChange = (e: Event) => {
       if (!(e instanceof CustomEvent)) return
-      const { field } = e.detail
+      const { field, nodeId } = e.detail
       if (field === 'title' || field === 'content' || field === null) {
         currentEditingField.current = field
+        editingNodeId.current = nodeId ?? null
       }
     }
 
@@ -47,8 +55,8 @@ export function useCollaboration({ canvasId, enabled = true }: UseCollaborationO
       const { id, updates } = data as { id: string; updates: Partial<Node> }
       const store = useCanvasStore.getState()
       if (store.nodes.has(id)) {
-        // 检查是否正在编辑该节点
-        if (store.editingId === id) {
+        // 检查是否正在编辑该节点（使用同步状态而非 store.editingId）
+        if (editingNodeId.current === id && currentEditingField.current !== null) {
           // 如果正在编辑，过滤掉正在编辑的字段，避免覆盖本地编辑
           const filteredUpdates = { ...updates }
           // 获取当前正在编辑的字段

@@ -5,6 +5,7 @@ import { snapToGrid } from '@/utils/canvas'
 import { CANVAS_DEFAULTS, Z_INDEX } from '@/constants'
 import { loadApiModule } from '@/utils/moduleLoader'
 import { logger } from '@/utils/logger'
+import { setEditingFieldForCollab } from '@/hooks/useCollaboration'
 import type { Node } from '@/types'
 
 // Helper function to check if in default selection mode
@@ -544,9 +545,10 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
             } else if (editingField === 'content') {
               saveContent()
             }
+            setEditingFieldForCollab(node.id, clickedField)
             setEditingField(clickedField)
             window.dispatchEvent(new CustomEvent('nodeEditingFieldChange', {
-              detail: { field: clickedField }
+              detail: { field: clickedField, nodeId: node.id }
             }))
             return
           }
@@ -609,10 +611,11 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
         } else if (isEditingContent) {
           saveContent()
         }
+        setEditingFieldForCollab(node.id, field)
         setEditingField(field)
         setEditingId(node.id)
         window.dispatchEvent(new CustomEvent('nodeEditingFieldChange', {
-          detail: { field }
+          detail: { field, nodeId: node.id }
         }))
         return
       }
@@ -863,13 +866,14 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
         saveContent()
       }
 
+      setEditingFieldForCollab(node.id, field)
       setEditingField(field)
       setEditingId(node.id)
       window.dispatchEvent(new CustomEvent('nodeEditingFieldChange', {
-        detail: { field }
+        detail: { field, nodeId: node.id }
       }))
     },
-    [node.locked, node.title, node.type, isEditingTitle, isEditingContent, saveTitle, saveContent, isViewer]
+    [node.locked, node.title, node.type, isEditingTitle, isEditingContent, saveTitle, saveContent, isViewer, node.id]
   )
 
   // 中文输入法开始
@@ -931,9 +935,10 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
         } else {
           saveContent()
         }
+        setEditingFieldForCollab(null, null)
         setEditingField(null)
         window.dispatchEvent(new CustomEvent('nodeEditingFieldChange', {
-          detail: { field: null }
+          detail: { field: null, nodeId: null }
         }))
       } else if (e.key === 'Enter') {
         // Shift+Enter 或 Ctrl+Enter/Meta+Enter：换行不退出
@@ -949,9 +954,10 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
         } else {
           saveContent()
         }
+        setEditingFieldForCollab(null, null)
         setEditingField(null)
         window.dispatchEvent(new CustomEvent('nodeEditingFieldChange', {
-          detail: { field: null }
+          detail: { field: null, nodeId: null }
         }))
       }
     },
@@ -1015,10 +1021,11 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
       }
     }
 
+    setEditingFieldForCollab(null, null)
     setEditingField(null)
     setEditingId(null)
     window.dispatchEvent(new CustomEvent('nodeEditingFieldChange', {
-      detail: { field: null }
+      detail: { field: null, nodeId: null }
     }))
   }, [isEditingTitle, isEditingContent, saveTitle, saveContent, setEditingId])
 
@@ -1084,9 +1091,10 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
   // Sync with global editing state
   useEffect(() => {
     if (globalEditingId === node.id && editingField === null) {
+      setEditingFieldForCollab(node.id, 'content')
       setEditingField('content')
       window.dispatchEvent(new CustomEvent('nodeEditingFieldChange', {
-        detail: { field: 'content' }
+        detail: { field: 'content', nodeId: node.id }
       }))
     } else if (globalEditingId !== node.id && editingField !== null) {
       if (editingField === 'title') {
@@ -1094,9 +1102,10 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
       } else if (editingField === 'content') {
         saveContent()
       }
+      setEditingFieldForCollab(null, null)
       setEditingField(null)
       window.dispatchEvent(new CustomEvent('nodeEditingFieldChange', {
-        detail: { field: null }
+        detail: { field: null, nodeId: null }
       }))
     }
   }, [globalEditingId, node.id, editingField, saveTitle, saveContent])
