@@ -67,6 +67,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
   const editingTitleRef = useRef<string>('')
   const editingContentRef = useRef<string>('')
   const wasEditingRef = useRef<EditingField>(null)
+  const hasInitializedEditRef = useRef<{ title: boolean; content: boolean }>({ title: false, content: false })
   const contextMenuStartRef = useRef({ x: 0, y: 0 })
   const timerRefsRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set())
   const imageRef = useRef<HTMLImageElement | null>(null)
@@ -240,11 +241,17 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
     wasEditingRef.current = editingField
 
     if (editingField === 'title') {
-      editingTitleRef.current = node.title || ''
+      const isEnteringEdit = !hasInitializedEditRef.current.title
+      if (isEnteringEdit) {
+        editingTitleRef.current = node.title || ''
+        hasInitializedEditRef.current.title = true
+      }
       document.body.classList.add('allow-text-selection')
       const timer = setTimeout(() => {
         if (titleRef.current) {
-          titleRef.current.innerHTML = textToSafeHtml(editingTitleRef.current)
+          if (isEnteringEdit) {
+            titleRef.current.innerHTML = textToSafeHtml(editingTitleRef.current)
+          }
           titleRef.current.focus()
           const range = document.createRange()
           const selection = window.getSelection()
@@ -261,9 +268,10 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
       }, 0)
       timerRefsRef.current.add(timer)
     } else if (editingField === 'content') {
-      const isEnteringEdit = prevEditingField !== 'content'
+      const isEnteringEdit = !hasInitializedEditRef.current.content
       if (isEnteringEdit) {
         editingContentRef.current = node.content || ''
+        hasInitializedEditRef.current.content = true
       }
       document.body.classList.add('allow-text-selection')
       const timer = setTimeout(() => {
@@ -288,12 +296,13 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
       timerRefsRef.current.add(timer)
     } else {
       document.body.classList.remove('allow-text-selection')
+      hasInitializedEditRef.current = { title: false, content: false }
     }
 
     return () => {
       document.body.classList.remove('allow-text-selection')
     }
-  }, [editingField, node.title, node.content, textToSafeHtml])
+  }, [editingField, textToSafeHtml])
 
   const getTitleAlign = useCallback((node: Node, isCollapsed: boolean) => {
     if (isCollapsed) {
