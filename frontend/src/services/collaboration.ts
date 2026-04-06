@@ -2,6 +2,7 @@ import { useCanvasStore } from '@/store/useCanvasStore'
 import { useAuthStore } from '@/store/useAuthStore'
 import { getEditingState } from '@/hooks/useCollaboration'
 import { logger } from '@/utils/logger'
+import { saveCanvasNodesData } from '@/services/api'
 import type { Node, NodeGroup, Domain, Connection } from '@/types'
 
 interface CollabUser {
@@ -166,6 +167,10 @@ class CollaborationService {
   }
 
   disconnect() {
+    if (this.canvasId && !this.isDestroyed) {
+      this.saveCurrentCanvasData()
+    }
+
     this.isIntentionallyClosed = true
     this.isDestroyed = true
     this.cleanupWebSocket()
@@ -180,6 +185,30 @@ class CollaborationService {
     this.pendingNodeChanges.clear()
     this.lastSyncedVersions.clear()
     this.conflictResolutionLog = []
+  }
+
+  private async saveCurrentCanvasData() {
+    if (!this.canvasId) return
+
+    try {
+      const store = useCanvasStore.getState()
+      const nodes = Array.from(store.nodes.values())
+      const groups = Array.from(store.groups.values())
+      const domains = Array.from(store.domains.values())
+      const connections = Array.from(store.connections.values())
+
+      if (nodes.length > 0 || groups.length > 0 || domains.length > 0 || connections.length > 0) {
+        await saveCanvasNodesData(this.canvasId, { nodes, groups, domains, connections })
+        logger.log('Collaboration data saved before disconnect')
+      }
+    } catch (error) {
+      logger.error('Failed to save collaboration data before disconnect', error)
+    }
+  }
+
+  private async handleForceSave(projectId: number) {
+    logger.log('Received force-save notification for project', projectId)
+    await this.saveCurrentCanvasData()
   }
 
   isConnected(): boolean {
@@ -208,6 +237,9 @@ class CollaborationService {
           break
         case 'sync':
           this.handleSync(message)
+          break
+        case 'force-save':
+          this.handleForceSave(message.projectId)
           break
       }
     } catch {

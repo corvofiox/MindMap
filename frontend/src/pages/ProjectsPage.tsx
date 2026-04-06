@@ -21,6 +21,12 @@ interface DeleteConfirmState {
   name: string
 }
 
+interface CollaborativeSwitchState {
+  id: number | null
+  name: string
+  isSwitchingToPrivate: boolean
+}
+
 export function ProjectsPage() {
   const navigate = useNavigate()
   const { projects, getFilteredProjects, loadProjects, createProject, deleteProject, updateProject, setCurrentProject, restoreCurrentProject, isLoading, loadingMessage, setProjectFilters } = useProjectsStore()
@@ -38,6 +44,7 @@ export function ProjectsPage() {
   const [newProjectCollaborative, setNewProjectCollaborative] = useState(false)
   const [editState, setEditState] = useState<EditState>({ id: null, name: '', description: '', isCollaborative: false })
   const [deleteConfirm, setDeleteConfirm] = useState<DeleteConfirmState>({ id: null, name: '' })
+  const [collaborativeSwitchConfirm, setCollaborativeSwitchConfirm] = useState<CollaborativeSwitchState>({ id: null, name: '', isSwitchingToPrivate: false })
 
   // 右键菜单状态
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; project: Project | null }>({ x: 0, y: 0, project: null })
@@ -92,6 +99,23 @@ export function ProjectsPage() {
       return
     }
 
+    const originalProject = projects.find(p => p.id === projectId)
+    const wasCollaborative = originalProject?.isCollaborative || false
+    const willBeCollaborative = editState.isCollaborative
+
+    if (wasCollaborative && !willBeCollaborative) {
+      setCollaborativeSwitchConfirm({
+        id: projectId,
+        name: editState.name,
+        isSwitchingToPrivate: true
+      })
+      return
+    }
+
+    await performUpdateProject(projectId)
+  }
+
+  const performUpdateProject = async (projectId: number) => {
     try {
       await updateProject(projectId, {
         name: editState.name,
@@ -103,6 +127,27 @@ export function ProjectsPage() {
     } catch (error) {
       addToast({ type: 'error', title: '更新失败', message: error instanceof Error ? error.message : '未知错误' })
     }
+  }
+
+  const handleConfirmCollaborativeSwitch = async () => {
+    if (!collaborativeSwitchConfirm.id) return
+
+    try {
+      await updateProject(collaborativeSwitchConfirm.id, {
+        name: editState.name,
+        description: editState.description || null,
+        isCollaborative: false,
+      })
+      setEditState({ id: null, name: '', description: '', isCollaborative: false })
+      setCollaborativeSwitchConfirm({ id: null, name: '', isSwitchingToPrivate: false })
+      addToast({ type: 'success', title: '项目已更新', message: '项目已切换为私人项目，协作期间的数据已保留' })
+    } catch (error) {
+      addToast({ type: 'error', title: '更新失败', message: error instanceof Error ? error.message : '未知错误' })
+    }
+  }
+
+  const handleCancelCollaborativeSwitch = () => {
+    setCollaborativeSwitchConfirm({ id: null, name: '', isSwitchingToPrivate: false })
   }
 
   const handleCancelEdit = () => {
@@ -515,6 +560,52 @@ export function ProjectsPage() {
                 className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium transition-colors"
               >
                 确认删除
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {collaborativeSwitchConfirm.isSwitchingToPrivate && (
+        <div className="fixed inset-0 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" style={{ zIndex: Z_INDEX.DIALOG }}>
+          <div
+            className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl max-w-md w-full p-6 animate-in fade-in zoom-in duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-4 mb-4">
+              <div className="w-12 h-12 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center flex-shrink-0">
+                <Lock className="w-6 h-6 text-amber-600 dark:text-amber-400" />
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white">切换为私人项目</h3>
+                <p className="text-gray-600 dark:text-gray-400">协作功能将被关闭</p>
+              </div>
+            </div>
+            <div className="mb-6 space-y-3">
+              <p className="text-gray-700 dark:text-gray-300">
+                确定要将项目 <span className="font-semibold text-gray-900 dark:text-white">"{collaborativeSwitchConfirm.name}"</span> 切换为私人项目吗？
+              </p>
+              <div className="bg-amber-50 dark:bg-amber-900/20 rounded-lg p-3 text-sm text-amber-700 dark:text-amber-300">
+                <p className="font-medium mb-1">注意事项：</p>
+                <ul className="list-disc list-inside space-y-1 text-xs">
+                  <li>协作成员将无法继续编辑此项目</li>
+                  <li>协作期间编辑的内容将被保留</li>
+                  <li>如需再次协作，可随时切换回协作模式</li>
+                </ul>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-3">
+              <button
+                onClick={handleCancelCollaborativeSwitch}
+                className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg font-medium transition-colors"
+              >
+                取消
+              </button>
+              <button
+                onClick={handleConfirmCollaborativeSwitch}
+                className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-medium transition-colors"
+              >
+                确认切换
               </button>
             </div>
           </div>

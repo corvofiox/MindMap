@@ -146,6 +146,21 @@ export function getProjectActiveUsers(_projectId: number): Map<number, CanvasAct
   return result
 }
 
+export function notifyProjectCollaboratorsToSave(projectId: number): void {
+  const message = JSON.stringify({
+    type: 'force-save',
+    projectId,
+  })
+
+  for (const [canvasId, room] of canvasRooms.entries()) {
+    for (const client of room.clients) {
+      if (client.readyState === 1) {
+        client.send(message)
+      }
+    }
+  }
+}
+
 async function handleConnection(ws: WebSocketWithUserData, req: any) {
   const clientIp = (req.socket.remoteAddress || (req.headers['x-forwarded-for'] as string) || 'unknown')
 
