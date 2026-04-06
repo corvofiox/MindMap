@@ -3415,7 +3415,8 @@ export function CanvasPage() {
           style={{
             left: 0,
             top: 0,
-            transform: `translate(${panX}px, ${panY}px) scale(${zoom})`,
+            zoom: zoom,
+            transform: `translate(${panX / zoom}px, ${panY / zoom}px)`,
             transformOrigin: '0 0',
           }}
           onMouseDown={() => {

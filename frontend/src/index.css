@@ -54,6 +54,22 @@ textarea,
   -ms-user-select: text !important;
 }
 
+/* Fix text-decoration and caret visibility under transform scale */
+[contenteditable] {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+[contenteditable]::selection {
+  background-color: rgba(59, 130, 246, 0.3);
+}
+
+/* Ensure caret is visible under scale transforms */
+[contenteditable]:focus {
+  caret-color: auto;
+}
+
 /* Dot grid background for canvas */
 @layer components {
   .dot-grid {
