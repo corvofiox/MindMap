@@ -170,18 +170,40 @@ async function setupEnvironmentFiles() {
   const backendDistPath = path.join(__dirname, 'backend', 'dist', 'backend', '.env');
   const backendDevPath = path.join(__dirname, 'backend', '.env');
   const backendExamplePath = path.join(__dirname, 'backend', '.env.example');
+  const backendDevExamplePath = path.join(__dirname, 'backend', '.env.development');
   const backendTargetPath = (isDocker || isProd) ? backendDistPath : backendDevPath;
+
+  // 根据环境选择模板文件
+  const backendTemplatePath = (isDocker || isProd) ? backendExamplePath : 
+    (fs.existsSync(backendDevExamplePath) ? backendDevExamplePath : backendExamplePath);
 
   // Frontend环境文件配置
   const frontendTargetPath = path.join(__dirname, 'frontend', '.env');
   const frontendExamplePath = path.join(__dirname, 'frontend', '.env.example');
 
+  // 验证 .env 文件是否包含必要配置
+  const REQUIRED_ENV_KEYS = ['PORT', 'NODE_ENV', 'JWT_SECRET', 'CSRF_SECRET'];
+  function validateEnvFile(envPath) {
+    if (!fs.existsSync(envPath)) return false;
+    const content = fs.readFileSync(envPath, 'utf-8');
+    return REQUIRED_ENV_KEYS.every(key => {
+      const regex = new RegExp(`^${key}=`, 'm');
+      return regex.test(content);
+    });
+  }
+
   // 处理Backend .env
-  if (fs.existsSync(backendExamplePath)) {
-    if (!fs.existsSync(backendTargetPath)) {
+  if (fs.existsSync(backendTemplatePath)) {
+    const envExists = fs.existsSync(backendTargetPath);
+    const envValid = envExists && validateEnvFile(backendTargetPath);
+    
+    if (!envExists || !envValid) {
+      if (envExists && !envValid) {
+        logWarning(`Backend .env file exists but missing required keys - regenerating`);
+      }
       logStep('CREATE', `Creating .env file for Backend at ${backendTargetPath}...`);
       ensureDirectoryExists(path.dirname(backendTargetPath));
-      copyEnvFile(backendExamplePath, backendTargetPath);
+      copyEnvFile(backendTemplatePath, backendTargetPath);
       logSuccess(`Created .env file for Backend`);
       envCreated = true;
     } else {

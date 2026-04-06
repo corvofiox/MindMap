@@ -123,11 +123,11 @@ export async function runMigrations(sqlite: any) {
         )
       `)
 
-      // Create node_cards table
+      // Create node_cards table (user-specific)
       sqlite.run(`
         CREATE TABLE node_cards (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
-          project_id INTEGER NOT NULL REFERENCES projects(id),
+          user_id INTEGER NOT NULL REFERENCES users(id),
           name TEXT NOT NULL,
           content TEXT NOT NULL,
           type TEXT NOT NULL DEFAULT 'text',
@@ -143,11 +143,11 @@ export async function runMigrations(sqlite: any) {
         )
       `)
 
-      // Create node_pool_folders table
+      // Create node_pool_folders table (user-specific)
       sqlite.run(`
         CREATE TABLE node_pool_folders (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
-          project_id INTEGER NOT NULL REFERENCES projects(id),
+          user_id INTEGER NOT NULL REFERENCES users(id),
           name TEXT NOT NULL,
           parent_id INTEGER REFERENCES node_pool_folders(id),
           sort_order INTEGER NOT NULL DEFAULT 0,
@@ -261,6 +261,111 @@ export async function runMigrations(sqlite: any) {
         CREATE UNIQUE INDEX ai_conversations_canvas_user_idx ON ai_conversations (canvas_id, user_id)
       `)
       log('ai_conversations table created successfully')
+    }
+
+    // Migrate node_cards and node_pool_folders from project_id to user_id
+    const nodeCardsTableInfo = sqlite.exec('PRAGMA table_info(node_cards)')
+    if (nodeCardsTableInfo.length > 0) {
+      const nodeCardsColumns = nodeCardsTableInfo[0].values.map((row: any) => row[1])
+
+      // Check if user_id column exists (new schema)
+      if (!nodeCardsColumns.includes('user_id') && nodeCardsColumns.includes('project_id')) {
+        log('Migrating node_cards from project_id to user_id')
+
+        // Create new node_pool_folders table with user_id (without self-referencing FK)
+        sqlite.run(`
+          CREATE TABLE node_pool_folders_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            parent_id INTEGER,
+            sort_order INTEGER DEFAULT 0 NOT NULL,
+            collapsed INTEGER DEFAULT 0 NOT NULL,
+            created_at INTEGER DEFAULT (strftime('%s', 'now')),
+            FOREIGN KEY (user_id) REFERENCES users(id)
+          )
+        `)
+
+        // Create new node_cards table with user_id
+        sqlite.run(`
+          CREATE TABLE node_cards_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            content TEXT NOT NULL,
+            type TEXT DEFAULT 'text' NOT NULL,
+            color TEXT DEFAULT '#ffffff' NOT NULL,
+            tags TEXT,
+            use_count INTEGER DEFAULT 0 NOT NULL,
+            created_by INTEGER NOT NULL,
+            folder_id INTEGER,
+            description TEXT,
+            thumbnail TEXT,
+            sort_order INTEGER DEFAULT 0 NOT NULL,
+            created_at INTEGER DEFAULT (strftime('%s', 'now')),
+            FOREIGN KEY (user_id) REFERENCES users(id),
+            FOREIGN KEY (created_by) REFERENCES users(id)
+          )
+        `)
+
+        // Migrate node_pool_folders data
+        sqlite.run(`
+          INSERT INTO node_pool_folders_new (id, user_id, name, parent_id, sort_order, collapsed, created_at)
+          SELECT 
+            npf.id,
+            COALESCE(p.owner_id, (
+              SELECT nc.created_by 
+              FROM node_cards nc 
+              WHERE nc.folder_id = npf.id 
+              LIMIT 1
+            )) as user_id,
+            npf.name,
+            npf.parent_id,
+            npf.sort_order,
+            npf.collapsed,
+            npf.created_at
+          FROM node_pool_folders npf
+          LEFT JOIN projects p ON npf.project_id = p.id
+          WHERE COALESCE(p.owner_id, (
+            SELECT nc.created_by 
+            FROM node_cards nc 
+            WHERE nc.folder_id = npf.id 
+            LIMIT 1
+          )) IS NOT NULL
+        `)
+
+        // Migrate node_cards data
+        sqlite.run(`
+          INSERT INTO node_cards_new (id, user_id, name, content, type, color, tags, use_count, created_by, folder_id, description, thumbnail, sort_order, created_at)
+          SELECT 
+            nc.id,
+            COALESCE(p.owner_id, nc.created_by) as user_id,
+            nc.name,
+            nc.content,
+            nc.type,
+            nc.color,
+            nc.tags,
+            nc.use_count,
+            nc.created_by,
+            nc.folder_id,
+            nc.description,
+            nc.thumbnail,
+            nc.sort_order,
+            nc.created_at
+          FROM node_cards nc
+          LEFT JOIN projects p ON nc.project_id = p.id
+        `)
+
+        // Drop old tables
+        sqlite.run('DROP TABLE node_cards')
+        sqlite.run('DROP TABLE node_pool_folders')
+
+        // Rename new tables
+        sqlite.run('ALTER TABLE node_cards_new RENAME TO node_cards')
+        sqlite.run('ALTER TABLE node_pool_folders_new RENAME TO node_pool_folders')
+
+        log('node_cards and node_pool_folders migrated to user_id successfully')
+      }
     }
 
     log('Migrations completed successfully')

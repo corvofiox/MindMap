@@ -117,8 +117,16 @@ async function start() {
       console.log(`WebSocket Server sharing port with HTTP Server (${PORT}) at path /ws`)
     } else {
       // 开发环境：WebSocket 使用独立端口
-      wsServer = new WebSocketServer({ port: WS_PORT, host: '0.0.0.0' })
-      console.log(`WebSocket Server running on port ${WS_PORT}`)
+      // 创建独立的 HTTP Server 用于 WebSocket
+      const wsHttpServer = createServer()
+      // Windows 上需要启用端口重用
+      wsHttpServer.on('error', (err: Error) => {
+        console.error('WebSocket server error:', err.message)
+      })
+      wsHttpServer.listen({ port: WS_PORT, host: '0.0.0.0', exclusive: false }, () => {
+        console.log(`WebSocket Server running on port ${WS_PORT}`)
+      })
+      wsServer = new WebSocketServer({ server: wsHttpServer })
     }
 
     setupWebSocket(wsServer)
