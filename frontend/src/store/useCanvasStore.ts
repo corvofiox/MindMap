@@ -5,8 +5,20 @@ import { CANVAS_DEFAULTS } from '@/constants'
 interface Command {
   type: string
   timestamp: number
+  userId?: number
   execute: () => Partial<CanvasState>
   undo: () => Partial<CanvasState>
+}
+
+function getCurrentUserId(): number | null {
+  try {
+    const authData = localStorage.getItem('mindmap-auth')
+    if (!authData) return null
+    const parsed = JSON.parse(authData)
+    return parsed?.state?.user?.id ?? null
+  } catch {
+    return null
+  }
 }
 
 interface HistoryState {
@@ -100,7 +112,8 @@ interface CanvasState {
   setDirty: (dirty: boolean) => void
 
   // Undo/Redo actions
-  executeCommand: (command: Command) => void
+  executeCommand: (command: Command, skipHistory?: boolean) => void
+  executeCommandWithoutHistory: (command: Command) => void
   undo: () => void
   redo: () => void
   canUndo: () => boolean
@@ -788,24 +801,31 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   },
 
   // Undo/Redo actions
-  executeCommand: (command) =>
+  executeCommand: (command, skipHistory = false) => {
+    const currentUserId = getCurrentUserId()
+    const commandWithUser = { ...command, userId: currentUserId ?? undefined }
+
+    if (skipHistory) {
+      const commandResult = commandWithUser.execute()
+      set({ ...commandResult, isDirty: true })
+      return
+    }
+
     set((state) => {
       const newCommands = state.history.commands.slice(0, state.history.currentIndex + 1)
 
-      // Remove old commands if exceeding max size
       if (newCommands.length >= state.history.maxHistorySize) {
         newCommands.shift()
       }
 
-      // Remove commands older than max days
       const now = Date.now()
       const maxAge = state.history.maxHistoryDays * 24 * 60 * 60 * 1000
       while (newCommands.length > 0 && now - newCommands[0].timestamp > maxAge) {
         newCommands.shift()
       }
 
-      newCommands.push(command)
-      const commandResult = command.execute()
+      newCommands.push(commandWithUser)
+      const commandResult = commandWithUser.execute()
 
       return {
         ...commandResult,
@@ -816,20 +836,37 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         },
         isDirty: true,
       }
-    }),
+    })
+  },
+
+  executeCommandWithoutHistory: (command) => {
+    const commandResult = command.execute()
+    set({ ...commandResult, isDirty: true })
+  },
 
   undo: () => {
     const state = get()
-    if (!state.canUndo()) return
+    const currentUserId = getCurrentUserId()
 
-    const command = state.history.commands[state.history.currentIndex]
+    let targetIndex = state.history.currentIndex
+    while (targetIndex >= 0) {
+      const cmd = state.history.commands[targetIndex]
+      if (cmd.userId === currentUserId || cmd.userId === undefined) {
+        break
+      }
+      targetIndex--
+    }
+
+    if (targetIndex < 0) return
+
+    const command = state.history.commands[targetIndex]
     const commandResult = command.undo()
 
     set((state) => ({
       ...commandResult,
       history: {
         ...state.history,
-        currentIndex: state.history.currentIndex - 1,
+        currentIndex: targetIndex - 1,
       },
       isDirty: true,
     }))
@@ -837,16 +874,27 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
   redo: () => {
     const state = get()
-    if (!state.canRedo()) return
+    const currentUserId = getCurrentUserId()
 
-    const command = state.history.commands[state.history.currentIndex + 1]
+    let targetIndex = state.history.currentIndex + 1
+    while (targetIndex < state.history.commands.length) {
+      const cmd = state.history.commands[targetIndex]
+      if (cmd.userId === currentUserId || cmd.userId === undefined) {
+        break
+      }
+      targetIndex++
+    }
+
+    if (targetIndex >= state.history.commands.length) return
+
+    const command = state.history.commands[targetIndex]
     const commandResult = command.execute()
 
     set((state) => ({
       ...commandResult,
       history: {
         ...state.history,
-        currentIndex: state.history.currentIndex + 1,
+        currentIndex: targetIndex,
       },
       isDirty: true,
     }))
@@ -854,22 +902,45 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
   canUndo: () => {
     const state = get()
-    return state.history.currentIndex >= 0
+    const currentUserId = getCurrentUserId()
+
+    for (let i = state.history.currentIndex; i >= 0; i--) {
+      const cmd = state.history.commands[i]
+      if (cmd.userId === currentUserId || cmd.userId === undefined) {
+        return true
+      }
+    }
+    return false
   },
 
   canRedo: () => {
     const state = get()
-    return state.history.currentIndex < state.history.commands.length - 1
+    const currentUserId = getCurrentUserId()
+
+    for (let i = state.history.currentIndex + 1; i < state.history.commands.length; i++) {
+      const cmd = state.history.commands[i]
+      if (cmd.userId === currentUserId || cmd.userId === undefined) {
+        return true
+      }
+    }
+    return false
   },
 
   clearHistory: () =>
-    set((state) => ({
-      history: {
-        ...state.history,
-        commands: [],
-        currentIndex: -1,
-      },
-    })),
+    set((state) => {
+      const currentUserId = getCurrentUserId()
+      const filteredCommands = state.history.commands.filter(
+        cmd => cmd.userId !== currentUserId && cmd.userId !== undefined
+      )
+
+      return {
+        history: {
+          ...state.history,
+          commands: filteredCommands,
+          currentIndex: filteredCommands.length - 1,
+        },
+      }
+    }),
 
   // Bulk actions
   setCanvasData: (data) =>

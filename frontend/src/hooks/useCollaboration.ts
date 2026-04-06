@@ -71,7 +71,20 @@ export function useCollaboration({ canvasId, enabled = true }: UseCollaborationO
       const store = useCanvasStore.getState()
       if (!store.nodes.has(node.id)) {
         isApplyingRemoteChanges.current = true
-        store.addNode(node)
+        store.executeCommand({
+          type: 'addNode',
+          timestamp: Date.now(),
+          execute: () => {
+            const nodes = new Map(useCanvasStore.getState().nodes)
+            nodes.set(node.id, node)
+            return { nodes, isDirty: true }
+          },
+          undo: () => {
+            const nodes = new Map(useCanvasStore.getState().nodes)
+            nodes.delete(node.id)
+            return { nodes, isDirty: true }
+          },
+        }, true)
         isApplyingRemoteChanges.current = false
       }
     }
@@ -93,11 +106,11 @@ export function useCollaboration({ canvasId, enabled = true }: UseCollaborationO
             return
           }
           isApplyingRemoteChanges.current = true
-          store.updateNode(id, filteredUpdates)
+          store.updateNodeWithoutHistory(id, filteredUpdates)
           isApplyingRemoteChanges.current = false
         } else {
           isApplyingRemoteChanges.current = true
-          store.updateNode(id, updates)
+          store.updateNodeWithoutHistory(id, updates)
           isApplyingRemoteChanges.current = false
         }
       }
@@ -106,9 +119,41 @@ export function useCollaboration({ canvasId, enabled = true }: UseCollaborationO
     const handleRemoveNode = (data: unknown) => {
       const { id } = data as { id: string }
       const store = useCanvasStore.getState()
-      isApplyingRemoteChanges.current = true
-      store.removeNode(id)
-      isApplyingRemoteChanges.current = false
+      const node = store.nodes.get(id)
+      if (node) {
+        const removedConnections: Connection[] = []
+        for (const [, conn] of store.connections) {
+          if (conn.fromNodeId === id || conn.toNodeId === id) {
+            removedConnections.push(conn)
+          }
+        }
+        isApplyingRemoteChanges.current = true
+        store.executeCommand({
+          type: 'removeNode',
+          timestamp: Date.now(),
+          execute: () => {
+            const state = useCanvasStore.getState()
+            const nodes = new Map(state.nodes)
+            nodes.delete(id)
+            const connections = new Map(state.connections)
+            for (const conn of removedConnections) {
+              connections.delete(conn.id)
+            }
+            return { nodes, connections, isDirty: true }
+          },
+          undo: () => {
+            const state = useCanvasStore.getState()
+            const nodes = new Map(state.nodes)
+            const connections = new Map(state.connections)
+            nodes.set(id, node)
+            for (const conn of removedConnections) {
+              connections.set(conn.id, conn)
+            }
+            return { nodes, connections, isDirty: true }
+          },
+        }, true)
+        isApplyingRemoteChanges.current = false
+      }
     }
 
     const handleAddGroup = (data: unknown) => {
@@ -116,7 +161,20 @@ export function useCollaboration({ canvasId, enabled = true }: UseCollaborationO
       const store = useCanvasStore.getState()
       if (!store.groups.has(group.id)) {
         isApplyingRemoteChanges.current = true
-        store.addGroup(group)
+        store.executeCommand({
+          type: 'addGroup',
+          timestamp: Date.now(),
+          execute: () => {
+            const groups = new Map(useCanvasStore.getState().groups)
+            groups.set(group.id, group)
+            return { groups, isDirty: true }
+          },
+          undo: () => {
+            const groups = new Map(useCanvasStore.getState().groups)
+            groups.delete(group.id)
+            return { groups, isDirty: true }
+          },
+        }, true)
         isApplyingRemoteChanges.current = false
       }
     }
@@ -126,7 +184,7 @@ export function useCollaboration({ canvasId, enabled = true }: UseCollaborationO
       const store = useCanvasStore.getState()
       if (store.groups.has(id)) {
         isApplyingRemoteChanges.current = true
-        store.updateGroup(id, updates)
+        store.updateGroupWithoutHistory(id, updates)
         isApplyingRemoteChanges.current = false
       }
     }
@@ -134,9 +192,25 @@ export function useCollaboration({ canvasId, enabled = true }: UseCollaborationO
     const handleRemoveGroup = (data: unknown) => {
       const { id } = data as { id: string }
       const store = useCanvasStore.getState()
-      isApplyingRemoteChanges.current = true
-      store.removeGroup(id)
-      isApplyingRemoteChanges.current = false
+      const group = store.groups.get(id)
+      if (group) {
+        isApplyingRemoteChanges.current = true
+        store.executeCommand({
+          type: 'removeGroup',
+          timestamp: Date.now(),
+          execute: () => {
+            const groups = new Map(useCanvasStore.getState().groups)
+            groups.delete(id)
+            return { groups, isDirty: true }
+          },
+          undo: () => {
+            const groups = new Map(useCanvasStore.getState().groups)
+            groups.set(id, group)
+            return { groups, isDirty: true }
+          },
+        }, true)
+        isApplyingRemoteChanges.current = false
+      }
     }
 
     const handleAddDomain = (data: unknown) => {
@@ -144,7 +218,20 @@ export function useCollaboration({ canvasId, enabled = true }: UseCollaborationO
       const store = useCanvasStore.getState()
       if (!store.domains.has(domain.id)) {
         isApplyingRemoteChanges.current = true
-        store.addDomain(domain)
+        store.executeCommand({
+          type: 'addDomain',
+          timestamp: Date.now(),
+          execute: () => {
+            const domains = new Map(useCanvasStore.getState().domains)
+            domains.set(domain.id, domain)
+            return { domains, isDirty: true }
+          },
+          undo: () => {
+            const domains = new Map(useCanvasStore.getState().domains)
+            domains.delete(domain.id)
+            return { domains, isDirty: true }
+          },
+        }, true)
         isApplyingRemoteChanges.current = false
       }
     }
@@ -153,18 +240,61 @@ export function useCollaboration({ canvasId, enabled = true }: UseCollaborationO
       const { id, updates } = data as { id: string; updates: Partial<Domain> }
       const store = useCanvasStore.getState()
       if (store.domains.has(id)) {
-        isApplyingRemoteChanges.current = true
-        store.updateDomain(id, updates)
-        isApplyingRemoteChanges.current = false
+        const domain = store.domains.get(id)
+        if (domain) {
+          const originalValues = Object.keys(updates).reduce((acc, key) => {
+            return { ...acc, [key]: (domain as Domain)[key as keyof Domain] }
+          }, {} as Record<string, unknown>)
+          isApplyingRemoteChanges.current = true
+          store.executeCommand({
+            type: 'updateDomain',
+            timestamp: Date.now(),
+            execute: () => {
+              const domains = new Map(useCanvasStore.getState().domains)
+              const d = domains.get(id)
+              if (d) {
+                domains.set(id, { ...d, ...updates })
+                return { domains, isDirty: true }
+              }
+              return {}
+            },
+            undo: () => {
+              const domains = new Map(useCanvasStore.getState().domains)
+              const d = domains.get(id)
+              if (d) {
+                domains.set(id, { ...d, ...originalValues })
+                return { domains, isDirty: true }
+              }
+              return {}
+            },
+          }, true)
+          isApplyingRemoteChanges.current = false
+        }
       }
     }
 
     const handleRemoveDomain = (data: unknown) => {
       const { id } = data as { id: string }
       const store = useCanvasStore.getState()
-      isApplyingRemoteChanges.current = true
-      store.removeDomain(id)
-      isApplyingRemoteChanges.current = false
+      const domain = store.domains.get(id)
+      if (domain) {
+        isApplyingRemoteChanges.current = true
+        store.executeCommand({
+          type: 'removeDomain',
+          timestamp: Date.now(),
+          execute: () => {
+            const domains = new Map(useCanvasStore.getState().domains)
+            domains.delete(id)
+            return { domains, isDirty: true }
+          },
+          undo: () => {
+            const domains = new Map(useCanvasStore.getState().domains)
+            domains.set(id, domain)
+            return { domains, isDirty: true }
+          },
+        }, true)
+        isApplyingRemoteChanges.current = false
+      }
     }
 
     const handleAddConnection = (data: unknown) => {
@@ -172,7 +302,20 @@ export function useCollaboration({ canvasId, enabled = true }: UseCollaborationO
       const store = useCanvasStore.getState()
       if (!store.connections.has(connection.id)) {
         isApplyingRemoteChanges.current = true
-        store.addConnection(connection)
+        store.executeCommand({
+          type: 'addConnection',
+          timestamp: Date.now(),
+          execute: () => {
+            const connections = new Map(useCanvasStore.getState().connections)
+            connections.set(connection.id, connection)
+            return { connections, isDirty: true }
+          },
+          undo: () => {
+            const connections = new Map(useCanvasStore.getState().connections)
+            connections.delete(connection.id)
+            return { connections, isDirty: true }
+          },
+        }, true)
         isApplyingRemoteChanges.current = false
       }
     }
@@ -181,18 +324,61 @@ export function useCollaboration({ canvasId, enabled = true }: UseCollaborationO
       const { id, updates } = data as { id: string; updates: Partial<Connection> }
       const store = useCanvasStore.getState()
       if (store.connections.has(id)) {
-        isApplyingRemoteChanges.current = true
-        store.updateConnection(id, updates)
-        isApplyingRemoteChanges.current = false
+        const connection = store.connections.get(id)
+        if (connection) {
+          const originalValues = Object.keys(updates).reduce((acc, key) => {
+            return { ...acc, [key]: (connection as Connection)[key as keyof Connection] }
+          }, {} as Record<string, unknown>)
+          isApplyingRemoteChanges.current = true
+          store.executeCommand({
+            type: 'updateConnection',
+            timestamp: Date.now(),
+            execute: () => {
+              const connections = new Map(useCanvasStore.getState().connections)
+              const c = connections.get(id)
+              if (c) {
+                connections.set(id, { ...c, ...updates })
+                return { connections, isDirty: true }
+              }
+              return {}
+            },
+            undo: () => {
+              const connections = new Map(useCanvasStore.getState().connections)
+              const c = connections.get(id)
+              if (c) {
+                connections.set(id, { ...c, ...originalValues })
+                return { connections, isDirty: true }
+              }
+              return {}
+            },
+          }, true)
+          isApplyingRemoteChanges.current = false
+        }
       }
     }
 
     const handleRemoveConnection = (data: unknown) => {
       const { id } = data as { id: string }
       const store = useCanvasStore.getState()
-      isApplyingRemoteChanges.current = true
-      store.removeConnection(id)
-      isApplyingRemoteChanges.current = false
+      const connection = store.connections.get(id)
+      if (connection) {
+        isApplyingRemoteChanges.current = true
+        store.executeCommand({
+          type: 'removeConnection',
+          timestamp: Date.now(),
+          execute: () => {
+            const connections = new Map(useCanvasStore.getState().connections)
+            connections.delete(id)
+            return { connections, isDirty: true }
+          },
+          undo: () => {
+            const connections = new Map(useCanvasStore.getState().connections)
+            connections.set(id, connection)
+            return { connections, isDirty: true }
+          },
+        }, true)
+        isApplyingRemoteChanges.current = false
+      }
     }
 
     collabService.onOperation('add-node', handleAddNode)
