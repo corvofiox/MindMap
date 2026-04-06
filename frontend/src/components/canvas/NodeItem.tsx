@@ -451,10 +451,17 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
     // 移除空的 span 标签
     result = result.replace(/<span[^>]*>\s*<\/span>/g, '')
 
-    // 规范化：所有块级换行元素统一为 <br>
+    // 规范化：将块级换行元素转换为 <br>
+    // 重要：先处理结束标签转换为换行，再移除开始标签
     result = result
-      .replace(/<(?:div|p)[^>]*>/gi, '')
-      .replace(/<\/(?:div|p)>/gi, '')
+      .replace(/<\/(?:div|p)>/gi, '<br>')  // 结束标签转换为换行
+      .replace(/<(?:div|p)[^>]*>/gi, '')   // 移除开始标签
+
+    // 清理多余的连续换行（保留最多一个）
+    result = result.replace(/(<br\s*\/?>\s*){2,}/gi, '<br>')
+
+    // 清理开头和结尾的换行
+    result = result.replace(/^<br\s*\/?>\s*/i, '').replace(/<br\s*\/?>\s*$/i, '<br>')
 
     // 确保非空内容有换行标记
     if (result && !result.includes('<br>')) {
