@@ -199,7 +199,7 @@ class CollaborationService {
 
       if (nodes.length > 0 || groups.length > 0 || domains.length > 0 || connections.length > 0) {
         await saveCanvasNodesData(this.canvasId, { nodes, groups, domains, connections })
-        logger.log('Collaboration data saved before disconnect')
+        logger.info('Collaboration data saved before disconnect')
       }
     } catch (error) {
       logger.error('Failed to save collaboration data before disconnect', error)
@@ -207,7 +207,7 @@ class CollaborationService {
   }
 
   private async handleForceSave(projectId: number) {
-    logger.log('Received force-save notification for project', projectId)
+    logger.info('Received force-save notification for project', projectId)
     await this.saveCurrentCanvasData()
   }
 

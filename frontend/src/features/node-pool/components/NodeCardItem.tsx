@@ -301,40 +301,31 @@ export const NodeCardItem = memo(function NodeCardItem({
                 newNode,
                 async () => {
                   const { cardsMap, removeCard } = useNodePoolStore.getState()
-                  const { currentProject } = useProjectsStore.getState()
-                  if (!currentProject) return
 
                   for (const [cardId, poolCard] of cardsMap) {
-                    if (poolCard.projectId === currentProject.id) {
-                      try {
-                        const cardNodeData = JSON.parse(poolCard.content)
-                        if (cardNodeData.id === newNode.id || poolCard.id === card.id) {
-                          await removeCard(cardId)
-                          break
-                        }
-                      } catch {
-                        // JSON parse error - ignore invalid content
+                    try {
+                      const cardNodeData = JSON.parse(poolCard.content)
+                      if (cardNodeData.id === newNode.id || poolCard.id === card.id) {
+                        await removeCard(cardId)
+                        break
                       }
+                    } catch {
+                      // JSON parse error - ignore invalid content
                     }
                   }
                 },
                 async () => {
-                  const { currentProject } = useProjectsStore.getState()
                   const { addCard } = useNodePoolStore.getState()
-                  if (currentProject) {
-                    await addCard(currentProject.id, {
-                      projectId: currentProject.id,
-                      name: card.name,
-                      content: JSON.stringify(newNode),
-                      type: card.type,
-                      color: card.color,
-                      tags: card.tags,
-                      createdBy: card.createdBy,
-                      sortOrder: card.sortOrder,
-                      folderId: card.folderId,
-                      thumbnail: card.thumbnail,
-                    })
-                  }
+                  await addCard({
+                    name: card.name,
+                    content: JSON.stringify(newNode),
+                    type: card.type,
+                    color: card.color,
+                    tags: card.tags,
+                    sortOrder: card.sortOrder,
+                    folderId: card.folderId,
+                    thumbnail: card.thumbnail,
+                  })
                 }
               )
 

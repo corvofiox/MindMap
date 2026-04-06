@@ -36,8 +36,8 @@ interface ProjectsState {
   loadCanvases: (projectId: number) => Promise<void>
   refreshCanvasesSilent: (projectId: number) => Promise<void>  // 静默刷新画布列表
   loadFolders: (projectId: number) => Promise<void>
-  loadNodePool: (projectId: number) => Promise<void>
-  loadNodePoolFolders: (projectId: number) => Promise<void>
+  loadNodePool: () => Promise<void>
+  loadNodePoolFolders: () => Promise<void>
   createProject: (data: Omit<Project, 'id' | 'createdAt' | 'updatedAt'>) => Promise<void>
   updateProject: (id: number, data: Partial<Project>) => Promise<void>
   deleteProject: (id: number) => Promise<void>
@@ -53,16 +53,16 @@ interface ProjectsState {
   updateFolder: (id: number, data: Partial<Folder>) => Promise<void>
   deleteFolder: (id: number) => Promise<void>
 
-  // Node pool actions
-  addToNodePool: (projectId: number, data: Omit<NodeCard, 'id' | 'createdAt' | 'useCount'>) => Promise<NodeCard>
+  // Node pool actions (User-specific)
+  addToNodePool: (data: Omit<NodeCard, 'id' | 'createdAt' | 'useCount' | 'userId'>) => Promise<NodeCard>
   removeFromNodePool: (id: number) => Promise<void>
   updateNodeCard: (id: number, data: Partial<NodeCard>) => Promise<void>
   incrementNodeCardUseCount: (id: number) => Promise<void>
   setNodePoolSortBy: (sortBy: NodePoolSortOption) => void
   setNodePoolSortOrder: (order: NodePoolSortOrder) => void
 
-  // Node pool folder actions
-  createNodePoolFolder: (projectId: number, data: Omit<NodePoolFolder, 'id' | 'createdAt' | 'children'>) => Promise<void>
+  // Node pool folder actions (User-specific)
+  createNodePoolFolder: (data: Omit<NodePoolFolder, 'id' | 'createdAt' | 'children' | 'userId'>) => Promise<void>
   updateNodePoolFolder: (id: number, data: Partial<NodePoolFolder>) => Promise<void>
   deleteNodePoolFolder: (id: number) => Promise<void>
   toggleNodePoolFolderCollapsed: (id: number) => void
@@ -188,8 +188,11 @@ export const useProjectsStore = create<ProjectsState>()(
             await Promise.all([
               get().loadCanvases(project.id),
               get().loadFolders(project.id),
-              get().loadNodePool(project.id),
-              get().loadNodePoolFolders(project.id),
+            ])
+            // Node pool is user-specific, load separately
+            await Promise.all([
+              get().loadNodePool(),
+              get().loadNodePoolFolders(),
             ])
           }
         },
@@ -233,20 +236,20 @@ export const useProjectsStore = create<ProjectsState>()(
           }
         },
 
-        loadNodePoolFolders: async (projectId) => {
+        loadNodePoolFolders: async () => {
           set({ isLoading: true, loadingMessage: '正在加载节点池...', error: null })
           try {
-            const folders = await api.getNodePoolFolders(projectId)
+            const folders = await api.getNodePoolFolders()
             set({ nodePoolFolders: folders, isLoading: false, loadingMessage: '' })
           } catch (error) {
             handleError(error, '加载节点池文件夹失败')
           }
         },
 
-        loadNodePool: async (projectId) => {
+        loadNodePool: async () => {
           set({ isLoading: true, loadingMessage: '正在加载节点池...', error: null })
           try {
-            const nodePool = await api.getNodePool(projectId)
+            const nodePool = await api.getNodePool()
             set({ nodePool, isLoading: false, loadingMessage: '' })
           } catch (error) {
             handleError(error, '加载节点池失败')
@@ -516,15 +519,15 @@ export const useProjectsStore = create<ProjectsState>()(
           }
         },
 
-        addToNodePool: async (projectId, data) => {
+        addToNodePool: async (data) => {
           // 生成临时ID
           const tempId = -Date.now()
 
           // 创建临时节点卡片对象
           const tempCard = {
             id: tempId,
+            userId: 0, // Will be set by server
             ...data,
-            projectId,
             createdAt: new Date().toISOString(),
             useCount: 0
           }
@@ -536,7 +539,7 @@ export const useProjectsStore = create<ProjectsState>()(
 
           try {
             // 后台执行API请求
-            const card = await api.addToNodePool(projectId, data)
+            const card = await api.addToNodePool(data)
 
             // 用真实数据替换临时卡片
             set((state) => ({
@@ -608,10 +611,10 @@ export const useProjectsStore = create<ProjectsState>()(
 
         setNodePoolSortOrder: (order) => set({ nodePoolSortOrder: order }),
 
-        createNodePoolFolder: async (projectId, data) => {
+        createNodePoolFolder: async (data) => {
           set({ isLoading: true, loadingMessage: '正在创建节点池文件夹...', error: null })
           try {
-            const folder = await api.createNodePoolFolder(projectId, data)
+            const folder = await api.createNodePoolFolder(data)
             set((state) => ({
               nodePoolFolders: [...state.nodePoolFolders, folder],
               isLoading: false,

@@ -100,10 +100,10 @@ export const canvasRecycleBin = sqliteTable('canvas_recycle_bin', {
   expiresAt: integer('expires_at').notNull(),
 })
 
-// Node Pool (Node Cards)
+// Node Pool (Node Cards) - User-specific, independent of projects
 export const nodeCards = sqliteTable('node_cards', {
   id: integer('id').primaryKey({ autoIncrement: true }),
-  projectId: integer('project_id').notNull().references(() => projects.id),
+  userId: integer('user_id').notNull().references(() => users.id),
   name: text('name').notNull(),
   content: text('content').notNull(), // JSON string
   type: text('type').notNull().default('text'),
@@ -118,10 +118,10 @@ export const nodeCards = sqliteTable('node_cards', {
   createdAt: integer('created_at').default(sql`strftime('%s', 'now')`),
 })
 
-// Node Pool Folders
+// Node Pool Folders - User-specific, independent of projects
 export const nodePoolFolders = sqliteTable('node_pool_folders', {
   id: integer('id').primaryKey({ autoIncrement: true }),
-  projectId: integer('project_id').notNull().references(() => projects.id),
+  userId: integer('user_id').notNull().references(() => users.id),
   name: text('name').notNull(),
   parentId: integer('parent_id').references(() => nodePoolFolders.id),
   sortOrder: integer('sort_order').notNull().default(0),

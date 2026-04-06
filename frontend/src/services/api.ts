@@ -253,16 +253,15 @@ export async function deleteFolder(id: number): Promise<void> {
   return await apiClient.delete<void>(`/api/canvases/folders/${id}`)
 }
 
-// Node Pool API
-export async function getNodePool(projectId: number): Promise<NodeCard[]> {
-  return await apiClient.get<NodeCard[]>(API_ENDPOINTS.NODE_POOL(projectId))
+// Node Pool API (User-specific)
+export async function getNodePool(): Promise<NodeCard[]> {
+  return await apiClient.get<NodeCard[]>(API_ENDPOINTS.NODE_POOL)
 }
 
 export async function addToNodePool(
-  projectId: number,
-  data: Omit<NodeCard, 'id' | 'createdAt' | 'useCount'>
+  data: Omit<NodeCard, 'id' | 'createdAt' | 'useCount' | 'userId' | 'createdBy'>
 ): Promise<NodeCard> {
-  return await apiClient.post<NodeCard>(API_ENDPOINTS.NODE_POOL(projectId), data)
+  return await apiClient.post<NodeCard>(API_ENDPOINTS.NODE_POOL, data)
 }
 
 export async function removeFromNodePool(id: number): Promise<void> {
@@ -270,31 +269,30 @@ export async function removeFromNodePool(id: number): Promise<void> {
 }
 
 export async function updateNodeCard(id: number, data: Partial<NodeCard>): Promise<NodeCard> {
-  return await apiClient.put<NodeCard>(`/api/projects/node-pool/${id}`, data)
+  return await apiClient.put<NodeCard>(API_ENDPOINTS.NODE_POOL_UPDATE(id), data)
 }
 
 export async function incrementNodeCardUseCount(id: number): Promise<NodeCard> {
-  return await apiClient.post<NodeCard>(`/api/projects/node-pool/${id}/increment-use`)
+  return await apiClient.post<NodeCard>(API_ENDPOINTS.NODE_POOL_INCREMENT_USE(id))
 }
 
-// Node Pool Folders API
-export async function getNodePoolFolders(projectId: number): Promise<NodePoolFolder[]> {
-  return await apiClient.get<NodePoolFolder[]>(`/api/projects/${projectId}/node-pool-folders`)
+// Node Pool Folders API (User-specific)
+export async function getNodePoolFolders(): Promise<NodePoolFolder[]> {
+  return await apiClient.get<NodePoolFolder[]>(API_ENDPOINTS.NODE_POOL_FOLDERS)
 }
 
 export async function createNodePoolFolder(
-  projectId: number,
-  data: Omit<NodePoolFolder, 'id' | 'createdAt' | 'children'>
+  data: Omit<NodePoolFolder, 'id' | 'createdAt' | 'children' | 'userId'>
 ): Promise<NodePoolFolder> {
-  return await apiClient.post<NodePoolFolder>(`/api/projects/${projectId}/node-pool-folders`, data)
+  return await apiClient.post<NodePoolFolder>(API_ENDPOINTS.NODE_POOL_FOLDERS, data)
 }
 
 export async function updateNodePoolFolder(id: number, data: Partial<NodePoolFolder>): Promise<NodePoolFolder> {
-  return await apiClient.put<NodePoolFolder>(`/api/projects/node-pool-folders/${id}`, data)
+  return await apiClient.put<NodePoolFolder>(API_ENDPOINTS.NODE_POOL_FOLDER_BY_ID(id), data)
 }
 
 export async function deleteNodePoolFolder(id: number): Promise<void> {
-  return await apiClient.delete<void>(`/api/projects/node-pool-folders/${id}`)
+  return await apiClient.delete<void>(API_ENDPOINTS.NODE_POOL_FOLDER_BY_ID(id))
 }
 
 // AI Conversation API

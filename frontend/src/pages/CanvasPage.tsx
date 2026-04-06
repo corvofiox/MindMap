@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useCanvasStore } from '@/store/useCanvasStore'
 import { useProjectsStore } from '@/store/useProjectsStore'
 import { useUIStore } from '@/store/useUIStore'
+import { useAuthStore } from '@/store/useAuthStore'
 import { useNodePoolStore } from '@/features/node-pool/stores/useNodePoolStore'
 import { useCollaboration } from '@/hooks/useCollaboration'
 import { CanvasToolbar } from '@/components/canvas/CanvasToolbar'
@@ -905,6 +906,7 @@ export function CanvasPage() {
   }, [addNode, addToast, panX, panY, zoom])
 
   const { loadProjects, restoreCurrentProject, canvases, updateCanvas: updateCanvasInStore, currentMemberRole } = useProjectsStore()
+  const { user } = useAuthStore()
 
   const canEdit = currentMemberRole === 'owner' || currentMemberRole === 'editor'
   const isViewer = currentMemberRole === 'viewer'
@@ -3175,53 +3177,47 @@ export function CanvasPage() {
           const { moveNodeToPool } = useCanvasStore.getState()
           const { addToast } = useUIStore.getState()
 
-          if (currentProject) {
-            const node = draggingNodeFromCanvas.nodeData as Node
-            // 使用 moveNodeToPool 将节点移动到节点池（支持撤销/重做）
-            // onExecute: 添加卡片到节点池
-            // onUndo: 从节点池移除卡片
-            moveNodeToPool(
-              nodeId,
-              node,
-              async () => {
-                // execute: 添加卡片到节点池
-                await addCard(currentProject.id, {
-                  projectId: currentProject.id,
-                  name: node.title || node.content || '未命名',
-                  content: JSON.stringify(node),
-                  type: node.type || 'text',
-                  color: node.color,
-                  tags: null,
-                  createdBy: 1,
-                  sortOrder: 0,
-                  folderId: targetFolderId ?? null,
-                  thumbnail: node.type === 'image' ? (node as any).imageUrl : undefined,
-                })
-              },
-              async () => {
-                // undo: 需要从节点池找到并移除对应的卡片
-                // 由于卡片ID是后端生成的，我们需要通过内容匹配来找到它
-                const { cardsMap, removeCard } = useNodePoolStore.getState()
-                // 查找匹配的卡片（通过项目名称和内容匹配）
-                for (const [cardId, card] of cardsMap) {
-                  if (card.projectId === currentProject.id) {
-                    try {
-                      const cardNodeData = JSON.parse(card.content)
-                      // 如果内容匹配，则移除该卡片
-                      if (cardNodeData.id === node.id) {
-                        await removeCard(cardId)
-                        break
-                      }
-                    } catch {
-                      // 解析失败，跳过
-                    }
+          const node = draggingNodeFromCanvas.nodeData as Node
+          // 使用 moveNodeToPool 将节点移动到节点池（支持撤销/重做）
+          // onExecute: 添加卡片到节点池
+          // onUndo: 从节点池移除卡片
+          moveNodeToPool(
+            nodeId,
+            node,
+            async () => {
+              // execute: 添加卡片到节点池
+              await addCard({
+                name: node.title || node.content || '未命名',
+                content: JSON.stringify(node),
+                type: node.type || 'text',
+                color: node.color,
+                tags: null,
+                sortOrder: 0,
+                folderId: targetFolderId ?? null,
+                thumbnail: node.type === 'image' ? (node as any).imageUrl : undefined,
+              })
+            },
+            async () => {
+              // undo: 需要从节点池找到并移除对应的卡片
+              // 由于卡片ID是后端生成的，我们需要通过内容匹配来找到它
+              const { cardsMap, removeCard } = useNodePoolStore.getState()
+              // 查找匹配的卡片（通过内容匹配）
+              for (const [cardId, card] of cardsMap) {
+                try {
+                  const cardNodeData = JSON.parse(card.content)
+                  // 如果内容匹配，则移除该卡片
+                  if (cardNodeData.id === node.id) {
+                    await removeCard(cardId)
+                    break
                   }
+                } catch {
+                  // 解析失败，跳过
                 }
               }
-            )
-            const folderMessage = targetFolderId ? '节点已添加到指定文件夹' : '节点已添加到节点池'
-            addToast({ type: 'success', title: '已添加到节点池', message: folderMessage })
-          }
+            }
+          )
+          const folderMessage = targetFolderId ? '节点已添加到指定文件夹' : '节点已添加到节点池'
+          addToast({ type: 'success', title: '已添加到节点池', message: folderMessage })
         }
       }
     }

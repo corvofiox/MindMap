@@ -154,10 +154,10 @@ export interface Connection {
   bendPoints?: ConnectionBendPoint[]
 }
 
-// Node Pool types
+// Node Pool types (User-specific)
 export interface NodeCard {
   id: number
-  projectId: number
+  userId: number
   name: string
   content: string
   type: string
@@ -176,10 +176,10 @@ export interface NodeCard {
   _markedForDeletion?: boolean
 }
 
-// Node Pool Folder types
+// Node Pool Folder types (User-specific)
 export interface NodePoolFolder {
   id: number
-  projectId: number
+  userId: number
   name: string
   parentId: number | null
   sortOrder: number

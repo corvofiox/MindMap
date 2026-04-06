@@ -31,10 +31,13 @@ export const API_ENDPOINTS = {
   CANVAS_DETAIL: (id: number) => `/api/canvases/detail/${id}`,
   CANVAS_RESTORE: (id: number) => `/api/canvases/${id}/restore`,
 
-  // Node Pool
-  NODE_POOL: (projectId: number) => `/api/projects/${projectId}/node-pool`,
-  NODE_POOL_DELETE: (id: number) => `/api/projects/node-pool/${id}`,
-  NODE_POOL_UPDATE: (id: number) => `/api/projects/node-pool/${id}`,
+  // Node Pool (User-specific)
+  NODE_POOL: '/api/users/node-pool',
+  NODE_POOL_DELETE: (id: number) => `/api/users/node-pool/${id}`,
+  NODE_POOL_UPDATE: (id: number) => `/api/users/node-pool/${id}`,
+  NODE_POOL_INCREMENT_USE: (id: number) => `/api/users/node-pool/${id}/increment-use`,
+  NODE_POOL_FOLDERS: '/api/users/node-pool-folders',
+  NODE_POOL_FOLDER_BY_ID: (id: number) => `/api/users/node-pool-folders/${id}`,
 
   // Collaboration
   COLLABORATION_PROJECT_MEMBERS: (projectId: number) => `/api/collaboration/projects/${projectId}/members`,

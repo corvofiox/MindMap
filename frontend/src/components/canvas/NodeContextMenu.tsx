@@ -144,13 +144,11 @@ export function NodeContextMenu({ nodeId, position, onClose }: NodeContextMenuPr
     }
 
     const cardData = {
-      projectId: currentProject.id,
       name: node.title || node.content || '未命名',
       content: JSON.stringify(node),
       type: node.type || 'text',
       color: node.type === 'image' ? undefined : node.color,
       tags: null,
-      createdBy: user?.id || 1,
       sortOrder: 0,
       thumbnail: node.type === 'image' ? node.imageUrl : undefined,
     }
@@ -158,7 +156,7 @@ export function NodeContextMenu({ nodeId, position, onClose }: NodeContextMenuPr
     onClose()
 
     try {
-      await addCard(currentProject.id, cardData)
+      await addCard(cardData)
       // 从画布中移除原始节点
       removeNode(nodeId)
       addToast({ type: 'success', title: '已添加到节点池', message: '节点已添加到节点池并从画布移除' })

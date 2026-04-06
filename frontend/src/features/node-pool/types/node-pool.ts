@@ -79,8 +79,8 @@ export interface TemporaryCard {
   // Card actions
   getCard: (id: number) => NodeCard | undefined
   setCards: (cards: NodeCard[]) => void
-  loadNodePool: (projectId: number) => Promise<void>
-  addCard: (projectId: number, data: Omit<NodeCard, 'id' | 'createdAt' | 'useCount'>) => Promise<NodeCard>
+  loadNodePool: () => Promise<void>
+  addCard: (data: Omit<NodeCard, 'id' | 'createdAt' | 'useCount' | 'userId' | 'createdBy'>) => Promise<NodeCard>
   updateCard: (id: number, data: Partial<NodeCard>) => Promise<void>
   removeCard: (id: number) => Promise<void>
   useCard: (card: NodeCard, addNodeToCanvas: (node: any) => void) => Promise<void>
@@ -89,7 +89,7 @@ export interface TemporaryCard {
   // Folder actions
   getFolder: (id: number) => NodePoolFolder | undefined
   setFolders: (folders: NodePoolFolder[]) => void
-  addFolder: (folder: Omit<NodePoolFolder, 'id' | 'createdAt'>) => Promise<NodePoolFolder>
+  addFolder: (folder: Omit<NodePoolFolder, 'id' | 'createdAt' | 'userId'>) => Promise<NodePoolFolder>
   updateFolder: (id: number, data: Partial<NodePoolFolder>) => Promise<void>
   removeFolder: (id: number) => Promise<void>
   reorderFolders: (updates: Array<{ id: number; sortOrder: number }>) => Promise<void>

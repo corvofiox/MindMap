@@ -73,12 +73,10 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
   // Sort functionality
   useNodePoolSort({ sortBy, sortOrder })
 
-  // Load node pool data when project changes
+  // Load node pool data on mount (user-specific, not project-specific)
   useEffect(() => {
-    if (currentProject) {
-      loadNodePool(currentProject.id)
-    }
-  }, [currentProject, loadNodePool])
+    loadNodePool()
+  }, [loadNodePool])
 
   // Handle add selected nodes to pool
   const handleAddToPool = useCallback(async () => {
@@ -100,14 +98,12 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
       if (!node) continue
 
       try {
-        await addCard(currentProject.id, {
-          projectId: currentProject.id,
+        await addCard({
           name: node.title || node.content || '未命名',
           content: JSON.stringify(node),
           type: node.type || 'text',
           color: node.color,
           tags: null,
-          createdBy: user?.id || 1,
           sortOrder: 0,
           thumbnail: node.type === 'image' ? (node as any).imageUrl : undefined,
         })
@@ -262,14 +258,8 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
       return
     }
 
-    if (!currentProject) {
-      addToast({ type: 'error', title: '项目未加载', message: '请先选择一个项目' })
-      return
-    }
-
     try {
       await addFolder({
-        projectId: currentProject.id,
         name,
         parentId: null,
         sortOrder: 0,
@@ -282,7 +272,7 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
     } catch (error) {
       addToast({ type: 'error', title: '创建失败', message: error instanceof Error ? error.message : '未知错误' })
     }
-  }, [newFolderName, currentProject, addFolder, addToast])
+  }, [newFolderName, addFolder, addToast])
 
   // Handle move card to folder
   const handleMoveCardToFolder = useCallback((card: NodeCard, folderId: number | null) => {

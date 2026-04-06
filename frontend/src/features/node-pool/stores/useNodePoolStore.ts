@@ -169,12 +169,12 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
     set({ cardsMap })
   },
 
-  // Load node pool data for current project
-  loadNodePool: async (projectId: number) => {
+  // Load node pool data for current user
+  loadNodePool: async () => {
     set({ isLoading: true, error: null })
     try {
-      const cards = await api.getNodePool(projectId)
-      const folders = await api.getNodePoolFolders(projectId)
+      const cards = await api.getNodePool()
+      const folders = await api.getNodePoolFolders()
 
       set({
         cardsMap: new Map(cards.map(card => [card.id, card])),
@@ -188,14 +188,15 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
   },
 
   // Add card to node pool with operation queue
-  addCard: async (projectId: number, data: Omit<NodeCard, 'id' | 'createdAt' | 'useCount'>) => {
+  addCard: async (data: Omit<NodeCard, 'id' | 'createdAt' | 'useCount' | 'userId' | 'createdBy'>) => {
     const operationId = generateOperationId()
     const tempId = generateTempId()
 
     const tempCard: NodeCard = {
       id: tempId,
+      userId: 0,
+      createdBy: 0,
       ...data,
-      projectId,
       createdAt: new Date().toISOString(),
       useCount: 0
     }
@@ -253,7 +254,7 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
       })
 
       // Call API
-      const created = await api.addToNodePool(projectId, data)
+      const created = await api.addToNodePool(data)
 
       // Update state with real card
       set((state) => {
@@ -661,11 +662,12 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
   },
 
   // Add folder with optimistic update
-  addFolder: async (folder: Omit<NodePoolFolder, 'id' | 'createdAt'>) => {
+  addFolder: async (folder: Omit<NodePoolFolder, 'id' | 'createdAt' | 'userId'>) => {
     const tempId = generateTempId()
 
     const tempFolder = {
       id: tempId,
+      userId: 0, // Will be set by server
       ...folder,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -679,7 +681,7 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
     })
 
     try {
-      const created = await api.createNodePoolFolder(folder.projectId, folder)
+      const created = await api.createNodePoolFolder(folder)
 
       set((state) => {
         const newFoldersMap = new Map(state.foldersMap)
