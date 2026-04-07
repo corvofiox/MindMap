@@ -476,8 +476,9 @@ export function CanvasMinimap({
     if (hasDraggedRef.current) return
 
     const rect = e.currentTarget.getBoundingClientRect()
-    const x = e.clientX - rect.left - 4 // Subtract margin
-    const y = e.clientY - rect.top - 4
+    // getBoundingClientRect() 返回的边界不包括 margin，所以不需要减去 margin
+    const x = e.clientX - rect.left
+    const y = e.clientY - rect.top
 
     // Recalculate scale and offset
     const scaleX = minimapSize.width / contentBounds.width
@@ -490,8 +491,13 @@ export function CanvasMinimap({
     const canvasX = (x - offsetX) / newScale + contentBounds.x
     const canvasY = (y - offsetY) / newScale + contentBounds.y
 
+    // 计算右侧侧边栏占用的宽度（与绘制视口矩形时保持一致）
+    const sidebarWidth = aiSidebarOpen ? 320 : nodePoolOpen ? 288 : 0
+    const effectiveWidth = containerWidth - sidebarWidth
+
     // Center the viewport on the clicked position
-    const newPanX = -canvasX * zoom + containerWidth / 2
+    // 使用有效宽度（减去侧边栏）来计算中心点
+    const newPanX = -canvasX * zoom + effectiveWidth / 2
     const newPanY = -canvasY * zoom + containerHeight / 2
 
     onViewportChange(newPanX, newPanY)
