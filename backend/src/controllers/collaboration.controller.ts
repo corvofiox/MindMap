@@ -149,8 +149,6 @@ collaborationRouter.post('/projects/:projectId/invite', authenticate, asyncHandl
 
   const { userId, role } = req.body
 
-  console.log('[Invite] projectId:', projectId, 'userId:', userId, 'role:', role, 'inviter:', req.user!.id)
-
   if (!userId) {
     return res.status(400).json({
       success: false,

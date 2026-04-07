@@ -688,7 +688,6 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
 
         // If temporary folder was removed while API call was in flight, discard the real folder
         if (!newFoldersMap.has(tempId)) {
-          console.log(`[NodePool] 临时文件夹已移除，丢弃新创建的文件夹：${created.name}`)
           api.deleteNodePoolFolder(created.id).catch(err => {
             console.error(`[NodePool] 删除已丢弃文件夹失败: ${created.name}`, err)
           })
@@ -900,10 +899,6 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
           newProcessingOps.delete(opId)
           fixes.push(`Cleared stuck processing operation: ${opId}`)
         }
-      }
-
-      if (fixes.length > 0) {
-        console.log('[NodePoolStore] State fixes applied:', fixes)
       }
 
       return {

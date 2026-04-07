@@ -4,6 +4,7 @@ import { db } from '../database/connection.js'
 import { users } from '../database/schema.js'
 import { eq } from 'drizzle-orm'
 import { getValidatedEnv } from '../utils/env.js'
+import { logError } from '../utils/logger.js'
 
 export interface AuthRequest extends Request {
   user?: {
@@ -35,7 +36,7 @@ export async function authenticate(req: AuthRequest, res: Response, next: NextFu
       } else if (jwtError instanceof jwt.JsonWebTokenError) {
         return res.status(401).json({ success: false, error: '无效的令牌签名' })
       } else {
-        console.error('JWT verification error:', jwtError)
+        logError('JWT verification error', jwtError)
         return res.status(401).json({ success: false, error: '令牌格式错误' })
       }
     }
@@ -57,7 +58,7 @@ export async function authenticate(req: AuthRequest, res: Response, next: NextFu
 
     next()
   } catch (error) {
-    console.error('Authentication error:', error)
+    logError('Authentication error', error)
     return res.status(401).json({ success: false, error: '认证失败，请重新登录' })
   }
 }

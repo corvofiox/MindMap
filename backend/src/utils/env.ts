@@ -15,13 +15,6 @@ export interface EnvVars {
   NODE_ENV?: string
 }
 
-/**
- * Get environment variable with validation
- * @param name - Environment variable name
- * @param required - Whether to variable is required (default: true)
- * @returns The environment variable value
- * @throws Error if required variable is missing
- */
 export function getEnv(
   name: keyof EnvVars,
   required?: boolean
@@ -39,20 +32,8 @@ export function getEnv(
   return value
 }
 
-/**
- * Validate all required environment variables on startup
- * Call this at the beginning of your application initialization
- */
 export function validateEnvVars(): void {
   getEnv('JWT_SECRET', true)
-
-  // Warn about optional vars if not set
-  const jwtExpiresIn = getEnv('JWT_EXPIRES_IN')
-  if (!jwtExpiresIn) {
-    console.warn('Warning: JWT_EXPIRES_IN not set, using default (7d)')
-  }
-
-  // DB_FILE is optional, DATABASE_URL is not required
 }
 
 /**

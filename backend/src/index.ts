@@ -29,6 +29,7 @@ import { errorHandler } from './middleware/error.middleware.js'
 import { initDatabase } from './database/init.js'
 import { initializeDb } from './database/connection.js'
 import { getValidatedEnv } from './utils/env.js'
+import { log, logError } from './utils/logger.js'
 
 const app = express()
 const server = createServer(app)
@@ -92,15 +93,8 @@ const isProduction = env.NODE_ENV === 'production'
 // Start servers
 async function start() {
   try {
-    // Initialize database
-    console.log('Initializing application...')
     await initDatabase()
-
-    // Initialize db instance for controllers
-    console.log('Initializing database connection...')
     await initializeDb()
-
-    console.log('Application initialization complete')
 
     // WebSocket server configuration
     // 生产环境：WebSocket 绑定到 HTTP Server（共享端口）
@@ -109,37 +103,33 @@ async function start() {
     let wsServer: WebSocketServer
 
     if (isProduction) {
-      // 生产环境：WebSocket 绑定到 HTTP Server，共享端口，只处理 /ws 路径
       wsServer = new WebSocketServer({
         server,
         path: '/ws'
       })
-      console.log(`WebSocket Server sharing port with HTTP Server (${PORT}) at path /ws`)
+      log('WebSocket Server sharing port with HTTP Server', { port: PORT, path: '/ws' })
     } else {
-      // 开发环境：WebSocket 使用独立端口
-      // 创建独立的 HTTP Server 用于 WebSocket
       const wsHttpServer = createServer()
-      // Windows 上需要启用端口重用
       wsHttpServer.on('error', (err: Error) => {
-        console.error('WebSocket server error:', err.message)
+        logError('WebSocket server error', err.message)
       })
       wsHttpServer.listen({ port: WS_PORT, host: '0.0.0.0', exclusive: false }, () => {
-        console.log(`WebSocket Server running on port ${WS_PORT}`)
+        log('WebSocket Server running', { port: WS_PORT })
       })
       wsServer = new WebSocketServer({ server: wsHttpServer })
     }
 
     setupWebSocket(wsServer)
 
-    // HTTP server - 监听0.0.0.0以允许外部访问
     server.listen(PORT, '0.0.0.0', () => {
-      console.log(`HTTP Server running on port ${PORT}`)
-      console.log(`Environment: ${process.env.NODE_ENV || 'development'}`)
-      console.log(`Application ready at http://localhost:${PORT}`)
-      console.log(`CORS configured with ALLOWED_ORIGINS: ${process.env.ALLOWED_ORIGINS || 'localhost'}`)
+      log('HTTP Server started', {
+        port: PORT,
+        environment: process.env.NODE_ENV || 'development',
+        corsOrigins: process.env.ALLOWED_ORIGINS || 'localhost'
+      })
     })
   } catch (error) {
-    console.error('Failed to start server:', error)
+    logError('Failed to start server', error)
     process.exit(1)
   }
 }

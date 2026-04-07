@@ -405,5 +405,5 @@ export async function runMigration() {
 
 // Only run migration directly if this file is executed as main
 if (import.meta.url === `file://${process.argv[1]}`) {
-  runMigration().catch(console.error)
+  runMigration().catch((err) => logError('Migration failed', err))
 }

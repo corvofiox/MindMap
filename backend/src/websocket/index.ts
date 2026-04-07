@@ -4,7 +4,7 @@ import { db } from '../database/connection.js'
 import { canvases, projects, projectMembers, users } from '../database/schema.js'
 import { eq, and } from 'drizzle-orm'
 import { getValidatedEnv } from '../utils/env.js'
-import { logError } from '../utils/logger.js'
+import { log, logError } from '../utils/logger.js'
 
 interface CanvasActiveUser {
   userId: number
@@ -80,7 +80,7 @@ function checkWsRateLimit(ip: string): boolean {
   }
 
   if (rateData.count >= WS_MAX_CONNECTIONS_PER_MINUTE) {
-    console.warn(`WebSocket rate limit exceeded for IP: ${ip}`)
+    log('WebSocket rate limit exceeded', { ip })
     return false
   }
 

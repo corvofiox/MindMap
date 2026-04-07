@@ -978,12 +978,9 @@ export function CanvasPage() {
       thumbnailWorkerRef.current = new Worker(new URL('@/workers/thumbnail.worker.ts', import.meta.url), {
         type: 'module',
       })
-      console.log('[CanvasPage] Thumbnail worker initialized successfully')
 
-      // Set up worker message handler
       thumbnailWorkerRef.current.onmessage = (event) => {
         const { id, type, data, error } = event.data
-        console.log(`[CanvasPage] Received worker message: ${type} for ${id}`)
         const resolve = pendingThumbnailRequests.current.get(id)
         if (resolve) {
           resolve(data)
@@ -994,7 +991,6 @@ export function CanvasPage() {
         }
       }
 
-      // Handle worker errors
       thumbnailWorkerRef.current.onerror = (error) => {
         console.error('[CanvasPage] Thumbnail worker error:', error)
       }
@@ -1177,35 +1173,24 @@ export function CanvasPage() {
   }, [canvasId, zoom, panX, panY, hasInitializedCamera])
 
   const generateThumbnail = useCallback(async (canvasId: number) => {
-    console.log(`[CanvasPage] Starting thumbnail generation for canvas ${canvasId}`)
-
-    // Check if thumbnail worker is available
     if (!thumbnailWorkerRef.current) {
       console.warn('[CanvasPage] Thumbnail worker not available, skipping thumbnail generation')
       return
     }
 
     try {
-      // Get latest state from store to ensure we have current data
       const currentStore = useCanvasStore.getState()
 
-      // CRITICAL: Check if we're still on the same canvas before generating thumbnail
       if (currentStore.canvasId !== canvasId) {
-        console.log(`[CanvasPage] Canvas changed, skipping thumbnail generation. Expected: ${canvasId}, Got: ${currentStore.canvasId}`)
         return
       }
 
-      // Convert Maps to arrays for serialization
       const nodesArray = Array.from(currentStore.nodes.values())
       const connectionsArray = Array.from(currentStore.connections.values())
       const groupsArray = Array.from(currentStore.groups.values())
       const domainsArray = Array.from(currentStore.domains.values())
 
-      console.log(`[CanvasPage] Sending thumbnail request: nodes=${nodesArray.length}, connections=${connectionsArray.length}, groups=${groupsArray.length}, domains=${domainsArray.length}`)
-
-      // Check if canvas is empty
       if (nodesArray.length === 0 && groupsArray.length === 0 && domainsArray.length === 0) {
-        // Generate blank thumbnail
         const canvas = document.createElement('canvas')
         canvas.width = THUMBNAIL.WIDTH
         canvas.height = THUMBNAIL.HEIGHT
@@ -1219,10 +1204,8 @@ export function CanvasPage() {
         return
       }
 
-      // Generate unique request ID
       const requestId = `thumb-${canvasId}-${Date.now()}`
 
-      // Send data to worker
       thumbnailWorkerRef.current.postMessage({
         type: 'generateThumbnail',
         id: requestId,
@@ -1237,11 +1220,9 @@ export function CanvasPage() {
         padding: THUMBNAIL.PADDING,
       })
 
-      // Wait for worker response
       const thumbnailDataUrl = await new Promise<string | null>((resolve) => {
         pendingThumbnailRequests.current.set(requestId, resolve)
 
-        // Timeout after 30 seconds (increased for large canvases)
         setTimeout(() => {
           if (pendingThumbnailRequests.current.has(requestId)) {
             console.warn(`Thumbnail generation timeout for request ${requestId}`)

@@ -1,5 +1,6 @@
 import cors from 'cors'
 import type { EnvVars } from '../utils/env.js'
+import { log } from '../utils/logger.js'
 
 /**
  * CORS Configuration Middleware
@@ -57,11 +58,9 @@ export const createCorsMiddleware = (env: EnvVars) => {
         return callback(null, true)
       }
 
-      // 记录CORS拒绝日志
       const errorMsg = `Origin ${origin} not allowed by CORS`
-      console.warn(errorMsg)
+      log('CORS rejected', { origin, allowedOrigins })
 
-      // 返回详细的错误信息
       return callback(new Error(errorMsg))
     },
     credentials: true,

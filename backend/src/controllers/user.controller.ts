@@ -539,7 +539,8 @@ userRouter.put('/node-pool/:id', authenticate, asyncHandler(async (req: AuthRequ
     })
   }
 
-  if (node.userId !== userId) {
+  const nodeUserId = (node as any).user_id ?? node.userId
+  if (nodeUserId !== userId) {
     return res.status(403).json({
       success: false,
       error: '无权修改此节点',
@@ -591,7 +592,8 @@ userRouter.delete('/node-pool/:id', authenticate, asyncHandler(async (req: AuthR
     })
   }
 
-  if (node.userId !== userId) {
+  const nodeUserId = (node as any).user_id ?? node.userId
+  if (nodeUserId !== userId) {
     return res.status(403).json({
       success: false,
       error: '无权删除此节点',
@@ -630,7 +632,8 @@ userRouter.post('/node-pool/:id/increment-use', authenticate, asyncHandler(async
     })
   }
 
-  if (node.userId !== userId) {
+  const nodeUserId = (node as any).user_id ?? node.userId
+  if (nodeUserId !== userId) {
     return res.status(403).json({
       success: false,
       error: '无权操作此节点',

@@ -282,15 +282,8 @@ async function generateThumbnail(
     padding,
   } = request
 
-  console.log('[Worker] Starting thumbnail generation...')
-
-  // Calculate bounding box (only nodes and groups, not domains)
-  console.log('[Worker] Calculating bounding box...')
   const bounds = calculateBoundingBox(nodes, groups)
-  console.log('[Worker] Bounding box calculated:', bounds)
   if (!bounds) {
-    // Empty canvas - return blank thumbnail
-    console.log('[Worker] Empty canvas, generating blank thumbnail...')
     const canvas = new OffscreenCanvas(targetWidth, targetHeight)
     const ctx = canvas.getContext('2d')
     if (!ctx) return null
@@ -305,7 +298,6 @@ async function generateThumbnail(
       reader.onerror = reject
       reader.readAsDataURL(blob)
     })
-    console.log('[Worker] Blank thumbnail generated')
     return dataUrl
   }
 
@@ -335,8 +327,6 @@ async function generateThumbnail(
   ctx.translate(offsetX, offsetY)
   ctx.scale(scale, scale)
 
-  // Draw domains (background layer)
-  console.log('[Worker] Drawing domains...')
   domains.forEach(domain => {
     const x = domain.x - minX + padding
     const y = domain.y - minY + padding
@@ -361,8 +351,6 @@ async function generateThumbnail(
     }
   })
 
-  // Draw groups (middle layer)
-  console.log('[Worker] Drawing groups...')
   groups.forEach(group => {
     const x = group.x - minX + padding
     const y = group.y - minY + padding
@@ -387,8 +375,6 @@ async function generateThumbnail(
     ctx.fillText(group.name, x + 8, y - 20)
   })
 
-  // Draw connections (before nodes so they appear behind)
-  console.log('[Worker] Drawing connections...')
   connections.forEach(conn => {
     const fromNode = nodes.find(n => n.id === conn.fromNodeId)
     const toNode = nodes.find(n => n.id === conn.toNodeId)
@@ -495,8 +481,6 @@ async function generateThumbnail(
     }
   })
 
-  // Draw nodes (top layer)
-  console.log('[Worker] Drawing nodes...')
   nodes.forEach(node => {
     const x = node.x - minX + padding
     const y = node.y - minY + padding
@@ -570,15 +554,9 @@ async function generateThumbnail(
   })
 
   ctx.restore()
-  console.log('[Worker] Context restored, converting to blob...')
 
-  // Convert to data URL
-  console.log('[Worker] Converting to blob...')
   const blob = await canvas.convertToBlob({ type: 'image/jpeg', quality })
-  console.log('[Worker] Blob created, size:', blob.size)
 
-  // Convert blob to data URL using FileReader
-  console.log('[Worker] Converting blob to data URL...')
   try {
     const reader = new FileReader()
     const dataUrl = await new Promise<string>((resolve, reject) => {
@@ -586,7 +564,6 @@ async function generateThumbnail(
       reader.onerror = () => reject(new Error('FileReader error'))
       reader.readAsDataURL(blob)
     })
-    console.log('[Worker] Data URL created, length:', dataUrl.length)
     return dataUrl
   } catch (error) {
     console.error('[Worker] Failed to convert blob to data URL:', error)
@@ -598,15 +575,10 @@ async function generateThumbnail(
 self.onmessage = async (event: MessageEvent<ThumbnailRequest>) => {
   const request = event.data
 
-  console.log(`[Worker] Received thumbnail request: ${request.id}, nodes: ${request.nodes.length}, connections: ${request.connections.length}`)
-
   try {
     switch (request.type) {
       case 'generateThumbnail': {
-        const startTime = performance.now()
         const dataUrl = await generateThumbnail(request)
-        const endTime = performance.now()
-        console.log(`[Worker] Thumbnail generated in ${(endTime - startTime).toFixed(2)}ms: ${request.id}`)
 
         const response: ThumbnailResponse = {
           id: request.id,
