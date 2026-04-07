@@ -75,6 +75,8 @@ export interface TemporaryCard {
    temporaryCards: Map<number, TemporaryCard>
    /** IDs of operations currently being processed */
    processingOperations: Set<string>
+   /** Pending updates for temporary cards, applied when addCard completes */
+   pendingUpdates: Map<number, Partial<NodeCard>>
 
   // Card actions
   getCard: (id: number) => NodeCard | undefined

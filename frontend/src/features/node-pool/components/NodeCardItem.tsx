@@ -300,12 +300,36 @@ export const NodeCardItem = memo(function NodeCardItem({
               moveNodeFromPool(
                 newNode,
                 async () => {
-                  const { cardsMap, removeCard } = useNodePoolStore.getState()
+                  const { cardsMap, removeCard, temporaryCards, operationQueue } = useNodePoolStore.getState()
 
+                  // 首先尝试直接移除当前卡片（处理临时卡片的情况）
+                  const cardToRemove = cardsMap.get(card.id) || temporaryCards.get(card.id)?.card
+                  if (cardToRemove) {
+                    await removeCard(card.id)
+                    return
+                  }
+
+                  // 如果直接移除失败（临时卡片可能已被替换），检查 temporaryCards 映射
+                  const tempCardInfo = temporaryCards.get(card.id)
+                  if (tempCardInfo?.realCardId) {
+                    // 临时卡片已被替换为真实卡片，使用真实ID移除
+                    await removeCard(tempCardInfo.realCardId)
+                    return
+                  }
+
+                  // 检查 operationQueue 中是否有该临时卡片的操作记录
+                  for (const [, op] of operationQueue) {
+                    if (op.cardId === card.id && op.realCardId) {
+                      await removeCard(op.realCardId)
+                      return
+                    }
+                  }
+
+                  // 最后尝试通过内容匹配查找卡片
                   for (const [cardId, poolCard] of cardsMap) {
                     try {
                       const cardNodeData = JSON.parse(poolCard.content)
-                      if (cardNodeData.id === newNode.id || poolCard.id === card.id) {
+                      if (cardNodeData.id === newNode.id) {
                         await removeCard(cardId)
                         break
                       }

@@ -33,6 +33,25 @@ function generateOperationId(): string {
   return `op-${Date.now()}-${operationIdCounter++}`
 }
 
+function resolveRealCardId(id: number): number | null {
+  if (id > 0) return id
+
+  const state = useNodePoolStore.getState()
+
+  const tempCard = state.temporaryCards.get(id)
+  if (tempCard?.realCardId) {
+    return tempCard.realCardId
+  }
+
+  for (const [, op] of state.operationQueue) {
+    if (op.cardId === id && op.realCardId) {
+      return op.realCardId
+    }
+  }
+
+  return null
+}
+
 export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
   // Initial state
   cardsMap: new Map(),
@@ -45,6 +64,7 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
   operationQueue: new Map<string, Operation>(),
   temporaryCards: new Map<number, TemporaryCard>(),
   processingOperations: new Set<string>(),
+  pendingUpdates: new Map<number, Partial<NodeCard>>(),
 
   // ========== Card Actions ==========
 
@@ -59,10 +79,16 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
 
     const tempCard = state.temporaryCards.get(cardId)
     const realCard = state.cardsMap.get(cardId)
+    const resolvedRealId = resolveRealCardId(cardId)
 
-    const actualCard = tempCard?.card || realCard
+    const actualCard = realCard || tempCard?.card
 
-    if (!actualCard) {
+    if (!actualCard && !resolvedRealId) {
+      return
+    }
+
+    const effectiveCard = actualCard || state.cardsMap.get(resolvedRealId!)
+    if (!effectiveCard) {
       return
     }
 
@@ -73,7 +99,7 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
       type: 'remove',
       status: 'pending',
       cardId: cardId,
-      realCardId: cardId > 0 ? cardId : null,
+      realCardId: resolvedRealId,
       timestamp: Date.now(),
       retryCount: 0
     }
@@ -86,7 +112,7 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
 
       let nodeData
       try {
-        nodeData = JSON.parse(actualCard.content)
+        nodeData = JSON.parse(effectiveCard.content)
       } catch {
         throw new Error('Failed to parse card content')
       }
@@ -100,46 +126,68 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
 
       addNodeToCanvas(newNode)
 
-      const newOperationQueue = new Map(state.operationQueue)
-      const newProcessingOps = new Set(state.processingOperations)
-      newOperationQueue.set(operationId, operation)
-      newProcessingOps.add(operationId)
+      let latestRealId: number | null = resolvedRealId
 
-      const newCardsMap = new Map(state.cardsMap)
-      const newPendingCardIds = new Set(state.pendingCardIds)
-      const newTemporaryCards = new Map(state.temporaryCards)
+      set((state) => {
+        const newCardsMap = new Map(state.cardsMap)
+        const newPendingCardIds = new Set(state.pendingCardIds)
+        const newOperationQueue = new Map(state.operationQueue)
+        const newTemporaryCards = new Map(state.temporaryCards)
+        const newProcessingOps = new Set(state.processingOperations)
+        const newPendingUpdates = new Map(state.pendingUpdates)
 
-      newCardsMap.delete(cardId)
-      newPendingCardIds.delete(cardId)
+        newCardsMap.delete(cardId)
 
-      if (tempCard) {
-        const updatedTempCard = { ...tempCard.card, _markedForDeletion: true }
-        newTemporaryCards.set(cardId, { ...tempCard, card: updatedTempCard })
-      } else {
-        newTemporaryCards.delete(cardId)
-      }
+        const currentTempCard = newTemporaryCards.get(cardId)
+        const currentRealId = currentTempCard?.realCardId || resolvedRealId
+        if (currentRealId) {
+          newCardsMap.delete(currentRealId)
+          latestRealId = currentRealId
+        }
 
-      set({
-        cardsMap: newCardsMap,
-        pendingCardIds: newPendingCardIds,
-        operationQueue: newOperationQueue,
-        temporaryCards: newTemporaryCards,
-        processingOperations: newProcessingOps
+        newPendingCardIds.delete(cardId)
+        newPendingUpdates.delete(cardId)
+
+        if (currentTempCard) {
+          newTemporaryCards.set(cardId, {
+            ...currentTempCard,
+            card: { ...currentTempCard.card, _markedForDeletion: true }
+          })
+        } else {
+          newTemporaryCards.delete(cardId)
+        }
+
+        newOperationQueue.set(operationId, operation)
+        newProcessingOps.add(operationId)
+
+        return {
+          cardsMap: newCardsMap,
+          pendingCardIds: newPendingCardIds,
+          operationQueue: newOperationQueue,
+          temporaryCards: newTemporaryCards,
+          processingOperations: newProcessingOps,
+          pendingUpdates: newPendingUpdates
+        }
       })
 
-      const cardToRemove = tempCard || { card: actualCard }
-
-      if (cardToRemove?.card?.id > 0) {
-        await api.removeFromNodePool(cardToRemove.card.id)
+      if (!latestRealId) {
+        latestRealId = resolveRealCardId(cardId)
+      }
+      const apiCardId = latestRealId || (cardId > 0 ? cardId : null)
+      if (apiCardId) {
+        await api.removeFromNodePool(apiCardId)
       }
 
       set(() => {
-        const updatedOp = newOperationQueue.get(operationId)
+        const currentOpQueue = new Map(useNodePoolStore.getState().operationQueue)
+        const currentProcessingOps = new Set(useNodePoolStore.getState().processingOperations)
+
+        const updatedOp = currentOpQueue.get(operationId)
         if (updatedOp) {
-          newOperationQueue.set(operationId, { ...updatedOp, status: 'completed' })
+          currentOpQueue.set(operationId, { ...updatedOp, status: 'completed' })
         }
 
-        newProcessingOps.delete(operationId)
+        currentProcessingOps.delete(operationId)
 
         setTimeout(() => {
           set((state) => {
@@ -150,8 +198,8 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
         }, 5000)
 
         return {
-          operationQueue: newOperationQueue,
-          processingOperations: newProcessingOps
+          operationQueue: currentOpQueue,
+          processingOperations: currentProcessingOps
         }
       })
     } catch (error) {
@@ -261,6 +309,7 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
         const newOperationQueue = new Map(state.operationQueue)
         const newTemporaryCards = new Map(state.temporaryCards)
         const newProcessingOps = new Set(state.processingOperations)
+        const newPendingUpdates = new Map(state.pendingUpdates)
 
         const tempCardData = newTemporaryCards.get(tempId)
 
@@ -272,6 +321,7 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
         // If should delete, discard the real card
         if (shouldDelete) {
           newTemporaryCards.delete(tempId)
+          newPendingUpdates.delete(tempId)
           // Update operation status as completed
           const updatedOp = newOperationQueue.get(operationId)
           if (updatedOp) {
@@ -305,7 +355,8 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
             pendingCardIds: newPendingCardIds,
             operationQueue: newOperationQueue,
             temporaryCards: newTemporaryCards,
-            processingOperations: newProcessingOps
+            processingOperations: newProcessingOps,
+            pendingUpdates: newPendingUpdates
           }
         } else {
           // Add real card
@@ -318,6 +369,14 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
               }
             })
           }
+
+          // Apply pending updates that were queued while card was being created
+          const pendingUpdate = newPendingUpdates.get(tempId)
+          if (pendingUpdate) {
+            Object.assign(finalCard, pendingUpdate)
+            newPendingUpdates.delete(tempId)
+          }
+
           newCardsMap.set(created.id, finalCard)
 
           // Update temporary card with realCardId for updateCard to find
@@ -354,12 +413,20 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
             })
           }, 10000)
 
+          // Sync pending updates with server
+          if (pendingUpdate) {
+            api.updateNodeCard(created.id, pendingUpdate).catch(() => {
+              // Silently ignore sync errors - client state is already correct
+            })
+          }
+
           return {
             cardsMap: newCardsMap,
             pendingCardIds: newPendingCardIds,
             operationQueue: newOperationQueue,
             temporaryCards: newTemporaryCards,
-            processingOperations: newProcessingOps
+            processingOperations: newProcessingOps,
+            pendingUpdates: newPendingUpdates
           }
         }
       })
@@ -373,11 +440,13 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
         const newOperationQueue = new Map(state.operationQueue)
         const newTemporaryCards = new Map(state.temporaryCards)
         const newProcessingOps = new Set(state.processingOperations)
+        const newPendingUpdates = new Map(state.pendingUpdates)
 
         // Remove temporary card
         newCardsMap.delete(tempId)
         newPendingCardIds.delete(tempId)
         newTemporaryCards.delete(tempId)
+        newPendingUpdates.delete(tempId)
 
         // Update operation status
         const updatedOp = newOperationQueue.get(operationId)
@@ -406,7 +475,8 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
           pendingCardIds: newPendingCardIds,
           operationQueue: newOperationQueue,
           temporaryCards: newTemporaryCards,
-          processingOperations: newProcessingOps
+          processingOperations: newProcessingOps,
+          pendingUpdates: newPendingUpdates
         }
       })
 
@@ -421,6 +491,12 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
     const originalCard = get().cardsMap.get(id)
 
     if (!originalCard) {
+      if (id < 0) {
+        const resolvedId = resolveRealCardId(id)
+        if (resolvedId) {
+          return get().updateCard(resolvedId, data)
+        }
+      }
       return
     }
 
@@ -429,56 +505,36 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
       return
     }
 
-    // 如果是临时卡片且已有 realCardId，使用真实卡片 ID 进行更新
     if (id < 0 && tempCard?.realCardId) {
       return get().updateCard(tempCard.realCardId, data)
     }
 
-    // 如果是临时卡片但 tempCard 不存在（可能正在被替换），等待或查找映射
-    if (id < 0 && !tempCard) {
-      // 尝试在 operationQueue 中查找对应的操作
-      for (const [, op] of get().operationQueue) {
-        if (op.cardId === id && op.realCardId) {
-          return get().updateCard(op.realCardId, data)
-        }
-      }
-      return
-    }
-
     if (isPendingCard) {
-      let retries = 0
-      const maxRetries = 20
+      set((state) => {
+        const newCardsMap = new Map(state.cardsMap)
+        const updatedCard = { ...originalCard, ...data }
+        newCardsMap.set(id, updatedCard)
 
-      while (retries < maxRetries && get().pendingCardIds.has(id)) {
-        await new Promise(resolve => setTimeout(resolve, 100))
-        retries++
-      }
-
-      if (get().pendingCardIds.has(id)) {
-        return
-      }
-
-      // 等待完成后，检查卡片是否还在 cardsMap 中
-      const newCard = get().cardsMap.get(id)
-      if (!newCard) {
-        // 卡片可能已经从临时 ID 替换为真实 ID
-        // 检查 temporaryCards 中是否有这个临时 ID 的映射
-        if (id < 0) {
-          const currentTempCard = get().temporaryCards.get(id)
-          if (currentTempCard?.realCardId) {
-            return get().updateCard(currentTempCard.realCardId, data)
-          }
+        const newTemporaryCards = new Map(state.temporaryCards)
+        const existingTempCard = newTemporaryCards.get(id)
+        if (existingTempCard) {
+          newTemporaryCards.set(id, {
+            ...existingTempCard,
+            card: { ...existingTempCard.card, ...data }
+          })
         }
-        return
-      }
 
-      if (id < 0) {
-        const currentTempCard = get().temporaryCards.get(id)
-        if (currentTempCard?.realCardId) {
-          return get().updateCard(currentTempCard.realCardId, data)
+        const newPendingUpdates = new Map(state.pendingUpdates)
+        const existingUpdates = newPendingUpdates.get(id)
+        newPendingUpdates.set(id, { ...existingUpdates, ...data })
+
+        return {
+          cardsMap: newCardsMap,
+          temporaryCards: newTemporaryCards,
+          pendingUpdates: newPendingUpdates
         }
-        return
-      }
+      })
+      return
     }
 
     set((state) => {
@@ -492,7 +548,6 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
       const updated = await api.updateNodeCard(id, data)
 
       set((state) => {
-        // If card was removed from store while API call was in flight, do not re-add it
         if (!state.cardsMap.has(id)) return state
 
         const newCardsMap = new Map(state.cardsMap)
@@ -517,10 +572,14 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
 
     const originalCard = state.cardsMap.get(id)
     const temporaryCard = state.temporaryCards.get(id)
+    const resolvedRealId = resolveRealCardId(id)
 
-    if (!originalCard && !temporaryCard) {
+    if (!originalCard && !temporaryCard && !resolvedRealId) {
       return
     }
+
+    const effectiveRealId = resolvedRealId
+    const realCard = effectiveRealId ? state.cardsMap.get(effectiveRealId) : null
 
     const operationId = generateOperationId()
 
@@ -529,20 +588,40 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
       type: 'remove',
       status: 'pending',
       cardId: id,
-      realCardId: id > 0 ? id : null,
+      realCardId: effectiveRealId || (id > 0 ? id : null),
       timestamp: Date.now(),
       retryCount: 0
     }
+
+    let latestRealId: number | null = effectiveRealId
 
     set((prevState) => {
       const newCardsMap = new Map(prevState.cardsMap)
       const newPendingCardIds = new Set(prevState.pendingCardIds)
       const newOperationQueue = new Map(prevState.operationQueue)
       const newTemporaryCards = new Map(prevState.temporaryCards)
+      const newPendingUpdates = new Map(prevState.pendingUpdates)
 
       newCardsMap.delete(id)
+
+      const currentTempCard = newTemporaryCards.get(id)
+      const currentRealId = currentTempCard?.realCardId || effectiveRealId
+      if (currentRealId) {
+        newCardsMap.delete(currentRealId)
+        latestRealId = currentRealId
+      }
+
       newPendingCardIds.delete(id)
-      newTemporaryCards.delete(id)
+      newPendingUpdates.delete(id)
+
+      if (currentTempCard) {
+        newTemporaryCards.set(id, {
+          ...currentTempCard,
+          card: { ...currentTempCard.card, _markedForDeletion: true }
+        })
+      } else {
+        newTemporaryCards.delete(id)
+      }
 
       newOperationQueue.set(operationId, operation)
 
@@ -550,7 +629,8 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
         cardsMap: newCardsMap,
         pendingCardIds: newPendingCardIds,
         operationQueue: newOperationQueue,
-        temporaryCards: newTemporaryCards
+        temporaryCards: newTemporaryCards,
+        pendingUpdates: newPendingUpdates
       }
     })
 
@@ -572,10 +652,12 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
         }
       })
 
-      const cardToRemove = temporaryCard || { card: originalCard }
-
-      if (cardToRemove?.card?.id > 0) {
-        await api.removeFromNodePool(cardToRemove.card.id)
+      if (!latestRealId) {
+        latestRealId = resolveRealCardId(id)
+      }
+      const apiCardId = latestRealId || (id > 0 ? id : null)
+      if (apiCardId) {
+        await api.removeFromNodePool(apiCardId)
       }
 
       set((prevState) => {
@@ -607,9 +689,22 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
         const newCardsMap = new Map(prevState.cardsMap)
         const newOperationQueue = new Map(prevState.operationQueue)
         const newProcessingOps = new Set(prevState.processingOperations)
+        const newTemporaryCards = new Map(prevState.temporaryCards)
 
         if (!newCardsMap.has(id) && originalCard) {
           newCardsMap.set(id, originalCard)
+        }
+        if (latestRealId && !newCardsMap.has(latestRealId) && realCard) {
+          newCardsMap.set(latestRealId, realCard)
+        }
+
+        const currentTempCard = newTemporaryCards.get(id)
+        if (currentTempCard?.card._markedForDeletion) {
+          const { _markedForDeletion, ...cardWithoutFlag } = currentTempCard.card as any
+          newTemporaryCards.set(id, {
+            ...currentTempCard,
+            card: cardWithoutFlag as NodeCard
+          })
         }
 
         const updatedOp = newOperationQueue.get(operationId)
@@ -634,7 +729,8 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
         return {
           cardsMap: newCardsMap,
           operationQueue: newOperationQueue,
-          processingOperations: newProcessingOps
+          processingOperations: newProcessingOps,
+          temporaryCards: newTemporaryCards
         }
       })
 
@@ -875,6 +971,7 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
       operationQueue: new Map(),
       temporaryCards: new Map(),
       processingOperations: new Set(),
+      pendingUpdates: new Map(),
     })
   },
 
@@ -888,6 +985,7 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
       const newPendingCardIds = new Set(prevState.pendingCardIds)
       const newTemporaryCards = new Map(prevState.temporaryCards)
       const newOperationQueue = new Map(prevState.operationQueue)
+      const newPendingUpdates = new Map(prevState.pendingUpdates)
 
       // Fix 1: Remove cards that are in pending but not in cardsMap
       for (const id of newPendingCardIds) {
@@ -911,6 +1009,7 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
           newCardsMap.delete(id)
           newTemporaryCards.delete(id)
           newPendingCardIds.delete(id)
+          newPendingUpdates.delete(id)
           fixes.push(`Removed orphaned temporary card: ${id}`)
         }
       }
@@ -934,12 +1033,21 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
         }
       }
 
+      // Fix 6: Remove pending updates for temp IDs that no longer exist
+      for (const [id] of newPendingUpdates) {
+        if (!newTemporaryCards.has(id) && !newCardsMap.has(id)) {
+          newPendingUpdates.delete(id)
+          fixes.push(`Removed stale pending update for: ${id}`)
+        }
+      }
+
       return {
         cardsMap: newCardsMap,
         pendingCardIds: newPendingCardIds,
         temporaryCards: newTemporaryCards,
         operationQueue: newOperationQueue,
-        processingOperations: newProcessingOps
+        processingOperations: newProcessingOps,
+        pendingUpdates: newPendingUpdates
       }
     })
   },
