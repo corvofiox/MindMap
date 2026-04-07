@@ -168,7 +168,6 @@ collaborationRouter.post('/projects/:projectId/invite', authenticate, asyncHandl
   }
 
   const projectOwnerId = getProperty<number>(project, 'owner_id', 'ownerId') || project.ownerId
-  console.log('[Invite] projectOwnerId:', projectOwnerId, 'project:', project)
 
   if (req.user!.id !== projectOwnerId) {
     return res.status(403).json({
@@ -191,8 +190,6 @@ collaborationRouter.post('/projects/:projectId/invite', authenticate, asyncHandl
     ),
   })
 
-  console.log('[Invite] existingMember:', existingMember)
-
   if (existingMember && existingMember.id !== undefined) {
     return res.status(400).json({
       success: false,
@@ -208,8 +205,6 @@ collaborationRouter.post('/projects/:projectId/invite', authenticate, asyncHandl
     ),
   })
 
-  console.log('[Invite] existingInvitation:', existingInvitation)
-
   if (existingInvitation && existingInvitation.id !== undefined) {
     return res.status(400).json({
       success: false,
@@ -224,7 +219,6 @@ collaborationRouter.post('/projects/:projectId/invite', authenticate, asyncHandl
       .update(projects)
       .set({ isCollaborative: true })
       .where(eq(projects.id, projectId))
-    console.log('[Invite] Project marked as collaborative')
   }
 
   const [invitation] = await db
@@ -463,8 +457,6 @@ collaborationRouter.delete('/invitations/:id', authenticate, asyncHandler(async 
   const invitation = await db.query.projectInvitations.findFirst({
     where: eq(projectInvitations.id, invitationId),
   })
-
-  console.log('[CancelInvitation] invitationId:', invitationId, 'invitation:', invitation)
 
   if (!invitation || invitation.id === undefined) {
     return res.status(404).json({

@@ -1,6 +1,15 @@
 import { transformDateFields, transformDateFieldsArray } from './dateTransform.js'
 
 /**
+ * 安全获取 userId，兼容 snake_case 和 camelCase
+ * 用于处理 Drizzle ORM 返回数据可能的字段命名不一致问题
+ */
+export function getUserId(obj: Record<string, any> | null | undefined): number | undefined {
+  if (!obj) return undefined
+  return obj.userId ?? obj.user_id
+}
+
+/**
  * 将下划线命名转换为驼峰命名
  */
 function toCamelCase(obj: Record<string, any>): Record<string, any> {

@@ -175,8 +175,8 @@ export function AiSidebar({ open }: AiSidebarProps) {
           ])
           setContextDividerIndex(-1)
         }
-      } catch (error) {
-        console.error('[AI Sidebar] Failed to load conversation:', error)
+      } catch {
+        // Failed to load conversation, continue with empty state
       } finally {
         isLoadingConversationRef.current = false
       }
@@ -214,8 +214,8 @@ export function AiSidebar({ open }: AiSidebarProps) {
           messages: currentMessages,
           contextDividerIndex: contextDividerIndexRef.current,
         })
-      } catch (error) {
-        console.error('[AI Sidebar] Failed to save conversation:', error)
+      } catch {
+        // Failed to save conversation, will retry on next change
       }
     }, 1000) // 1秒防抖
 
@@ -446,8 +446,8 @@ export function AiSidebar({ open }: AiSidebarProps) {
       await navigator.clipboard.writeText(content)
       setCopiedId(id)
       setTimeout(() => setCopiedId(null), 2000)
-    } catch (err) {
-      console.error('Copy failed:', err)
+    } catch {
+      // Copy failed, ignore
     }
   }
 
@@ -635,8 +635,8 @@ export function AiSidebar({ open }: AiSidebarProps) {
       if (canvasId) {
         try {
           await deleteAIConversation(canvasId)
-        } catch (error) {
-          console.error('[AI Sidebar] Failed to delete conversation:', error)
+        } catch {
+          // Failed to delete conversation, ignore
         }
       }
     }
@@ -772,8 +772,7 @@ export function AiSidebar({ open }: AiSidebarProps) {
           const base64 = await fileToBase64(file)
           attachment.data = base64
           attachment.url = URL.createObjectURL(file)
-        } catch (error) {
-          console.error('Failed to convert image to base64:', error)
+        } catch {
           continue
         }
       } else if (isTextFile(file)) {
@@ -781,8 +780,7 @@ export function AiSidebar({ open }: AiSidebarProps) {
         try {
           const content = await readTextFile(file)
           attachment.data = content
-        } catch (error) {
-          console.error('Failed to read text file:', error)
+        } catch {
           continue
         }
       }

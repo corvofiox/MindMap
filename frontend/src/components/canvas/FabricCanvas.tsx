@@ -308,8 +308,7 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
       workerRef.current = new Worker(new URL('@/workers/canvas.worker.ts', import.meta.url), {
         type: 'module',
       })
-    } catch (error) {
-      console.warn('Failed to initialize Web Worker:', error)
+    } catch {
       workerRef.current = null
     }
 
@@ -391,8 +390,8 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
     if (!renderer) return
 
     // 异步更新连接（支持 Worker）
-    renderer.updateConnections(connections, nodes).catch((error) => {
-      console.error('Failed to update connections:', error)
+    renderer.updateConnections(connections, nodes).catch(() => {
+      // Connection update failed silently
     })
   }, [connections, nodes])
 

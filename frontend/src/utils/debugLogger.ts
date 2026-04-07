@@ -2,9 +2,11 @@ class DebugLogger {
   private logsDir: string
   private logs: string[] = []
   private logEntries: any[] = []
+  private isDev: boolean
 
   constructor() {
     this.logsDir = '/logs'
+    this.isDev = import.meta.env.DEV
   }
 
   private ensureLogsDir() {
@@ -12,6 +14,8 @@ class DebugLogger {
   }
 
   log(type: 'info' | 'error' | 'warn' | 'debug', category: string, message: string, data?: any) {
+    // Only log in development mode
+    if (!this.isDev) return
     const timestamp = new Date().toISOString()
     const logEntry = {
       timestamp,

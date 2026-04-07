@@ -81,15 +81,13 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
     try {
       const freshTempCard = get().temporaryCards.get(cardId)
       if (freshTempCard?.card._markedForDeletion) {
-        console.warn(`[NodePool] useCard aborted: card ${cardId} marked for deletion`)
         return
       }
 
       let nodeData
       try {
         nodeData = JSON.parse(actualCard.content)
-      } catch (error) {
-        console.error(`[NodePool] Failed to parse card content for card ${cardId}:`, error)
+      } catch {
         throw new Error('Failed to parse card content')
       }
 
@@ -264,22 +262,16 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
         const newTemporaryCards = new Map(state.temporaryCards)
         const newProcessingOps = new Set(state.processingOperations)
 
-        // Get temporary card data to check deletion status
         const tempCardData = newTemporaryCards.get(tempId)
 
-        // Determine if we should delete the real card:
-        // 1. If tempCardData exists and is marked for deletion
-        // 2. If tempCard no longer exists in temporaryCards
-        // This ensures that when card is dragged, real card is always discarded
-        const shouldDelete = tempCardData?.card?._markedForDeletion || !newTemporaryCards.has(tempId) || !newCardsMap.has(tempId)
+        const shouldDelete = tempCardData?.card?._markedForDeletion === true
 
-        // Remove temporary card if it still exists
         newCardsMap.delete(tempId)
         newPendingCardIds.delete(tempId)
-        newTemporaryCards.delete(tempId)
 
         // If should delete, discard the real card
         if (shouldDelete) {
+          newTemporaryCards.delete(tempId)
           // Update operation status as completed
           const updatedOp = newOperationQueue.get(operationId)
           if (updatedOp) {
@@ -295,8 +287,8 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
           newProcessingOps.delete(operationId)
 
           // Delete the real card from server
-          api.removeFromNodePool(created.id).catch(error => {
-            console.error(`[NodePool] 删除已丢弃卡片失败: ${created.name}`, error)
+          api.removeFromNodePool(created.id).catch(() => {
+            // Silently ignore cleanup errors
           })
 
           // Clean up completed operation after delay
@@ -328,6 +320,15 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
           }
           newCardsMap.set(created.id, finalCard)
 
+          // Update temporary card with realCardId for updateCard to find
+          if (tempCardData) {
+            newTemporaryCards.set(tempId, {
+              ...tempCardData,
+              realCardId: created.id,
+              status: 'created'
+            })
+          }
+
           // Update operation status
           const updatedOp = newOperationQueue.get(operationId)
           if (updatedOp) {
@@ -342,14 +343,16 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
           // Remove from processing
           newProcessingOps.delete(operationId)
 
-          // Clean up completed operation after delay
+          // Clean up completed operation and temporary card after delay
           setTimeout(() => {
             set((state) => {
               const newOps = new Map(state.operationQueue)
               newOps.delete(operationId)
-              return { operationQueue: newOps }
+              const newTemps = new Map(state.temporaryCards)
+              newTemps.delete(tempId)
+              return { operationQueue: newOps, temporaryCards: newTemps }
             })
-          }, 5000)
+          }, 10000)
 
           return {
             cardsMap: newCardsMap,
@@ -416,30 +419,64 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
   updateCard: async (id: number, data: Partial<NodeCard>) => {
     const isPendingCard = get().pendingCardIds.has(id)
     const originalCard = get().cardsMap.get(id)
+
     if (!originalCard) {
-      console.warn(`[NodePool] updateCard skipped: card ${id} not found`)
       return
     }
 
     const tempCard = get().temporaryCards.get(id)
     if (tempCard?.card._markedForDeletion) {
-      console.warn(`[NodePool] updateCard skipped: card ${id} marked for deletion`)
+      return
+    }
+
+    // 如果是临时卡片且已有 realCardId，使用真实卡片 ID 进行更新
+    if (id < 0 && tempCard?.realCardId) {
+      return get().updateCard(tempCard.realCardId, data)
+    }
+
+    // 如果是临时卡片但 tempCard 不存在（可能正在被替换），等待或查找映射
+    if (id < 0 && !tempCard) {
+      // 尝试在 operationQueue 中查找对应的操作
+      for (const [, op] of get().operationQueue) {
+        if (op.cardId === id && op.realCardId) {
+          return get().updateCard(op.realCardId, data)
+        }
+      }
       return
     }
 
     if (isPendingCard) {
-      // 等待卡片创建完成后再更新
       let retries = 0
-      const maxRetries = 20  // 最多重试20次（2秒）
+      const maxRetries = 20
 
       while (retries < maxRetries && get().pendingCardIds.has(id)) {
         await new Promise(resolve => setTimeout(resolve, 100))
         retries++
       }
 
-      // 如果重试后仍是pending，可能卡片已被删除或失败
       if (get().pendingCardIds.has(id)) {
-        console.warn(`[NodePool] updateCard aborted: card ${id} still pending after retries`)
+        return
+      }
+
+      // 等待完成后，检查卡片是否还在 cardsMap 中
+      const newCard = get().cardsMap.get(id)
+      if (!newCard) {
+        // 卡片可能已经从临时 ID 替换为真实 ID
+        // 检查 temporaryCards 中是否有这个临时 ID 的映射
+        if (id < 0) {
+          const currentTempCard = get().temporaryCards.get(id)
+          if (currentTempCard?.realCardId) {
+            return get().updateCard(currentTempCard.realCardId, data)
+          }
+        }
+        return
+      }
+
+      if (id < 0) {
+        const currentTempCard = get().temporaryCards.get(id)
+        if (currentTempCard?.realCardId) {
+          return get().updateCard(currentTempCard.realCardId, data)
+        }
         return
       }
     }
@@ -688,8 +725,8 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
 
         // If temporary folder was removed while API call was in flight, discard the real folder
         if (!newFoldersMap.has(tempId)) {
-          api.deleteNodePoolFolder(created.id).catch(err => {
-            console.error(`[NodePool] 删除已丢弃文件夹失败: ${created.name}`, err)
+          api.deleteNodePoolFolder(created.id).catch(() => {
+            // Silently ignore cleanup errors
           })
           return state
         }
@@ -734,14 +771,11 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
   },
 
   removeFolder: async (id: number) => {
-    // Get original folder for rollback and project ID
     const originalFolder = get().foldersMap.get(id)
     if (!originalFolder) return
 
-    // Save original state for rollback
     const originalFoldersMap = new Map(get().foldersMap)
 
-    // Optimistic update
     set((state) => {
       const newFoldersMap = new Map(state.foldersMap)
       newFoldersMap.delete(id)
@@ -749,14 +783,13 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
     })
 
     try {
-      // Call API to remove folder
       await api.deleteNodePoolFolder(id)
     } catch (error) {
-      // Rollback on error
       set({ foldersMap: originalFoldersMap })
 
       const errorMessage = error instanceof Error ? error.message : '移除文件夹失败'
       set({ error: errorMessage })
+      throw error
     }
   },
 

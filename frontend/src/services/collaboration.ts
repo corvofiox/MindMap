@@ -337,8 +337,7 @@ class CollaborationService {
         domains: message.domains,
         connections: message.connections
       })
-    } catch (error) {
-      console.error('Failed to sync canvas data:', error)
+    } catch {
       store.setCanvasData({
         nodes: message.nodes,
         groups: message.groups,

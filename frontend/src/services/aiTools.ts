@@ -777,7 +777,6 @@ function generateMindMapFromJSON(args: Record<string, unknown>): ToolCallResult 
           nodes.find((n) => n.title === connData.to)?.id
 
         if (!fromNodeId || !toNodeId) {
-          console.warn(`连接 skipped: 找不到节点 from="${connData.from}" to="${connData.to}"`)
           return
         }
 

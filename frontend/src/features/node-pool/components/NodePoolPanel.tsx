@@ -111,9 +111,8 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
         // 从画布中移除原始节点
         removeNode(nodeId)
         successCount++
-      } catch (error) {
+      } catch {
         failCount++
-        console.error(`Failed to add node ${nodeId} to pool:`, error)
       }
     }
 

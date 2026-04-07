@@ -987,15 +987,15 @@ export function CanvasPage() {
           pendingThumbnailRequests.current.delete(id)
         }
         if (error) {
-          console.error('Thumbnail worker error:', error)
+          // Worker error handled silently
         }
       }
 
-      thumbnailWorkerRef.current.onerror = (error) => {
-        console.error('[CanvasPage] Thumbnail worker error:', error)
+      thumbnailWorkerRef.current.onerror = () => {
+        // Worker error handled silently
       }
-    } catch (error) {
-      console.warn('Failed to initialize thumbnail worker:', error)
+    } catch {
+      // Failed to initialize worker, continue without it
       thumbnailWorkerRef.current = null
     }
 
@@ -1174,7 +1174,6 @@ export function CanvasPage() {
 
   const generateThumbnail = useCallback(async (canvasId: number) => {
     if (!thumbnailWorkerRef.current) {
-      console.warn('[CanvasPage] Thumbnail worker not available, skipping thumbnail generation')
       return
     }
 
@@ -1225,7 +1224,6 @@ export function CanvasPage() {
 
         setTimeout(() => {
           if (pendingThumbnailRequests.current.has(requestId)) {
-            console.warn(`Thumbnail generation timeout for request ${requestId}`)
             pendingThumbnailRequests.current.delete(requestId)
             resolve(null)
           }
@@ -1235,8 +1233,8 @@ export function CanvasPage() {
       if (thumbnailDataUrl) {
         await updateCanvasInStore(canvasId, { thumbnail: thumbnailDataUrl }, true)
       }
-    } catch (error) {
-      console.error('Thumbnail generation failed:', error)
+    } catch {
+      // Thumbnail generation failed silently
     }
   }, [])
 
@@ -1276,7 +1274,6 @@ export function CanvasPage() {
       const state = useCanvasStore.getState()
       // CRITICAL: Check if we're still on the same canvas before saving to cache
       if (state.canvasId !== id) {
-        console.warn(`[CacheSave] Canvas ID mismatch. Expected: ${id}, Got: ${state.canvasId}. Skipping cache save.`)
         return
       }
       const { nodes, groups, domains, connections } = collectCanvasData(state)
@@ -1298,7 +1295,6 @@ export function CanvasPage() {
       // CRITICAL: Check if we're still on the same canvas before saving
       // This prevents saving the wrong canvas's data when switching between canvases
       if (currentState.canvasId !== id) {
-        console.warn(`[AutoSave] Canvas ID mismatch. Expected: ${id}, Got: ${currentState.canvasId}. Skipping save.`)
         return
       }
 

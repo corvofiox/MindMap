@@ -45,7 +45,6 @@ export function useCanvasWorker() {
       const { id, type, data, error } = event.data
 
       if (error) {
-        console.error('Worker error:', error)
         if (id && pendingRequestsRef.current.has(id)) {
           pendingRequestsRef.current.delete(id)
         }

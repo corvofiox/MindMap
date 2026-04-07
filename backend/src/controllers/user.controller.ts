@@ -7,7 +7,7 @@ import { authenticate, type AuthRequest } from '../middleware/auth.middleware.js
 import { asyncHandler } from '../middleware/error.middleware.js'
 import { logError } from '../utils/logger.js'
 import { SHARED_NODE_DEFAULTS, NODE_DEFAULTS_VALIDATION } from 'mindmap-shared'
-import { transformResponse, transformResponseArray } from '../utils/transformResponse.js'
+import { transformResponse, transformResponseArray, getUserId } from '../utils/transformResponse.js'
 
 export const userRouter = Router()
 
@@ -539,15 +539,14 @@ userRouter.put('/node-pool/:id', authenticate, asyncHandler(async (req: AuthRequ
     })
   }
 
-  const nodeUserId = (node as any).user_id ?? node.userId
-  if (nodeUserId !== userId) {
+  if (getUserId(node) !== userId) {
     return res.status(403).json({
       success: false,
       error: '无权修改此节点',
     })
   }
 
-  const nodeSortOrder = (node as any).sort_order || node.sortOrder || 0
+  const nodeSortOrder = node.sortOrder || 0
 
   const [updatedNode] = await db
     .update(nodeCards)
@@ -592,8 +591,7 @@ userRouter.delete('/node-pool/:id', authenticate, asyncHandler(async (req: AuthR
     })
   }
 
-  const nodeUserId = (node as any).user_id ?? node.userId
-  if (nodeUserId !== userId) {
+  if (getUserId(node) !== userId) {
     return res.status(403).json({
       success: false,
       error: '无权删除此节点',
@@ -632,15 +630,14 @@ userRouter.post('/node-pool/:id/increment-use', authenticate, asyncHandler(async
     })
   }
 
-  const nodeUserId = (node as any).user_id ?? node.userId
-  if (nodeUserId !== userId) {
+  if (getUserId(node) !== userId) {
     return res.status(403).json({
       success: false,
       error: '无权操作此节点',
     })
   }
 
-  const currentUseCount = (node as any).use_count || node.useCount || 0
+  const currentUseCount = node.useCount || 0
 
   const [updatedNode] = await db
     .update(nodeCards)
@@ -731,7 +728,7 @@ userRouter.put('/node-pool-folders/:id', authenticate, asyncHandler(async (req: 
     })
   }
 
-  if (folder.userId !== userId) {
+  if (getUserId(folder) !== userId) {
     return res.status(403).json({
       success: false,
       error: '无权修改此文件夹',
@@ -750,7 +747,7 @@ userRouter.put('/node-pool-folders/:id', authenticate, asyncHandler(async (req: 
       })
     }
 
-    if (parentFolder.userId !== userId) {
+    if (getUserId(parentFolder) !== userId) {
       return res.status(403).json({
         success: false,
         error: '无权使用此父文件夹',
@@ -785,6 +782,7 @@ userRouter.put('/node-pool-folders/:id', authenticate, asyncHandler(async (req: 
 userRouter.delete('/node-pool-folders/:id', authenticate, asyncHandler(async (req: AuthRequest, res) => {
   const userId = req.user!.id
   const folderId = parseInt(req.params.id, 10)
+
   if (isNaN(folderId)) {
     return res.status(400).json({
       success: false,
@@ -803,7 +801,7 @@ userRouter.delete('/node-pool-folders/:id', authenticate, asyncHandler(async (re
     })
   }
 
-  if (folder.userId !== userId) {
+  if (getUserId(folder) !== userId) {
     return res.status(403).json({
       success: false,
       error: '无权删除此文件夹',

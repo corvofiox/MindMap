@@ -49,8 +49,7 @@ export function importCanvas(jsonString: string): ExportData['data'] | null {
     }
 
     return data.data
-  } catch (error) {
-    console.error('Import failed:', error)
+  } catch {
     return null
   }
 }

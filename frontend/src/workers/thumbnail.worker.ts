@@ -565,8 +565,7 @@ async function generateThumbnail(
       reader.readAsDataURL(blob)
     })
     return dataUrl
-  } catch (error) {
-    console.error('[Worker] Failed to convert blob to data URL:', error)
+  } catch {
     return null
   }
 }
@@ -598,7 +597,6 @@ self.onmessage = async (event: MessageEvent<ThumbnailRequest>) => {
         } as ThumbnailResponse)
     }
   } catch (error) {
-    console.error(`[Worker] Thumbnail generation failed: ${request.id}`, error)
     const response: ThumbnailResponse = {
       id: request.id,
       type: 'thumbnailError',
