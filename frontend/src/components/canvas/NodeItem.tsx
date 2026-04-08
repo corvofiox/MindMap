@@ -448,8 +448,11 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
     // 简化换行处理
     let result = temp.innerHTML
 
-    // 移除空的 span 标签
-    result = result.replace(/<span[^>]*>\s*<\/span>/g, '')
+    // 移除零宽空格（用于光标定位的辅助字符，不应保存）
+    result = result.replace(/\u200B/g, '')
+
+    // 移除真正空的 span 标签（不包含任何内容），但保留只含空格的 span
+    result = result.replace(/<span[^>]*><\/span>/g, '')
 
     // 规范化：将块级换行元素转换为 <br>
     // 重要：先处理结束标签转换为换行，再移除开始标签
@@ -457,11 +460,11 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
       .replace(/<\/(?:div|p)>/gi, '<br>')  // 结束标签转换为换行
       .replace(/<(?:div|p)[^>]*>/gi, '')   // 移除开始标签
 
-    // 清理多余的连续换行（保留最多一个）
-    result = result.replace(/(<br\s*\/?>\s*){2,}/gi, '<br>')
+    // 清理连续换行之间的多余空白字符，但保留用户输入的换行数量
+    result = result.replace(/(<br\s*\/?>)[ \t]+(?=<br\s*\/?>)/gi, '$1')
 
-    // 清理开头和结尾的换行
-    result = result.replace(/^<br\s*\/?>\s*/i, '').replace(/<br\s*\/?>\s*$/i, '<br>')
+    // 清理开头换行（保留用户在开头的换行意图），只清理结尾多余换行保留一个
+    result = result.replace(/(<br\s*\/?>\s*)+$/i, '<br>')
 
     // 确保非空内容有换行标记
     if (result && !result.includes('<br>')) {
@@ -511,7 +514,9 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
       const tempDiv = document.createElement('div')
       tempDiv.innerHTML = cleanedHtml
       const textContent = tempDiv.textContent || ''
-      const isEmpty = !textContent.replace(/[\n\s]+/g, '').trim()
+      const hasVisibleContent = textContent.replace(/\s+/g, '').trim().length > 0
+      const hasLineBreaks = cleanedHtml.includes('<br')
+      const isEmpty = !hasVisibleContent && !hasLineBreaks
 
       if (isEmpty && editingContentRef.current && editingContentRef.current.trim()) {
         logger.debug('[NodeItem] saveContent skipped: content appears empty but ref has content, possible initialization issue')
