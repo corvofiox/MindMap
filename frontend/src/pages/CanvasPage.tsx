@@ -22,6 +22,7 @@ import { ConnectionLine } from '@/components/canvas/ConnectionLine'
 import { CONNECTION_DEFAULTS, Z_INDEX } from '@/constants'
 import { generateId, colorToHex, hexToRgba, calculateCurveControlPoints, getCurveThroughPoints, getStepPath, pointsToPath, calculateSmartPortPosition, buildConnectionInfoMap, getPortOffsetVector, type PortDirection, type ConnectionInfo } from '@/utils/canvas'
 import { saveToCache, loadFromCache } from '@/utils/nodeCache'
+import { execFormatCommand } from '@/utils/richTextCommands'
 import { saveCanvasNodesData, loadCanvasNodesData } from '@/services/api'
 import type { Node, Connection } from '@/types'
 import html2canvas from 'html2canvas-pro'
@@ -3218,10 +3219,39 @@ export function CanvasPage() {
         const rect = containerRef.current.getBoundingClientRect()
         const nodeX = node.x * zoom + panX
         const nodeY = node.y * zoom + panY + node.height * zoom
-        setRichTextToolbarPosition({
-          x: rect.left + nodeX + (node.width * zoom) / 2,
-          y: rect.top + nodeY,
-        })
+
+        // 工具栏尺寸估算
+        const toolbarWidth = 280
+        const toolbarHeight = 50
+        const padding = 10
+
+        // 计算初始位置
+        let x = rect.left + nodeX + (node.width * zoom) / 2
+        let y = rect.top + nodeY
+
+        // 边界检查：确保工具栏不超出视口
+        const viewportWidth = window.innerWidth
+        const viewportHeight = window.innerHeight
+
+        // 水平边界检查
+        if (x - toolbarWidth / 2 < padding) {
+          x = toolbarWidth / 2 + padding
+        } else if (x + toolbarWidth / 2 > viewportWidth - padding) {
+          x = viewportWidth - toolbarWidth / 2 - padding
+        }
+
+        // 垂直边界检查：优先显示在节点下方，如果空间不足则显示在上方
+        if (y + toolbarHeight > viewportHeight - padding) {
+          // 显示在节点上方
+          y = rect.top + nodeY - node.height * zoom - toolbarHeight - 10
+        }
+
+        // 确保不超出顶部
+        if (y < padding) {
+          y = padding
+        }
+
+        setRichTextToolbarPosition({ x, y })
         setRichTextToolbarVisible(true)
       }
     } else {
@@ -4829,24 +4859,8 @@ export function CanvasPage() {
         visible={richTextToolbarVisible}
         position={richTextToolbarPosition}
         onCommand={(command, value) => {
-          if (editingId) {
-            const nodeElement = document.querySelector(`[data-node-id="${editingId}"]`)
-            if (nodeElement) {
-              const contentEditable = nodeElement.querySelector('[contenteditable="true"]') as HTMLElement
-              if (contentEditable) {
-                contentEditable.focus()
-                if (savedSelectionRef.current) {
-                  const selection = window.getSelection()
-                  if (selection) {
-                    selection.removeAllRanges()
-                    selection.addRange(savedSelectionRef.current)
-                  }
-                }
-              }
-            }
-          }
           if (!['fontSize', 'justifyLeft', 'justifyCenter', 'justifyRight'].includes(command)) {
-            document.execCommand(command, false, value)
+            execFormatCommand(command, value)
           }
         }}
         onClose={() => setRichTextToolbarVisible(false)}
@@ -4860,7 +4874,6 @@ export function CanvasPage() {
                 if (selection && selection.rangeCount > 0) {
                   savedSelectionRef.current = selection.getRangeAt(0).cloneRange()
                 }
-                contentEditable.focus()
               }
             }
           }

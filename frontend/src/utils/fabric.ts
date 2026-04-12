@@ -33,7 +33,7 @@ export function createFabricNode(node: Node): any | null {
   if (node.content) {
     const text = new fabric.Text(node.content, {
       fontSize: node.fontSize,
-      fill: '#333',
+      fill: '#000000',
       textAlign: node.textAlign,
       selectable: false,
       data: {

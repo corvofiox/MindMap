@@ -5,6 +5,7 @@ import { snapToGrid } from '@/utils/canvas'
 import { CANVAS_DEFAULTS, Z_INDEX } from '@/constants'
 import { loadApiModule } from '@/utils/moduleLoader'
 import { logger } from '@/utils/logger'
+import { execFormatCommand } from '@/utils/richTextCommands'
 import { setEditingFieldForCollab, getEditingState } from '@/hooks/useCollaboration'
 import type { Node } from '@/types'
 
@@ -950,7 +951,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
       if (e.key === 'Tab') {
         e.preventDefault()
         e.stopPropagation()
-        document.execCommand('insertText', false, '  ')
+        execFormatCommand('insertText', '  ')
         return
       }
 
@@ -1336,8 +1337,6 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
                 style={{
                   fontSize: node.fontSize + 2,
                   ...getTitleAlign(node, true),
-                  color: '#1f2937',
-                  caretColor: '#1f2937',
                   outline: 'none',
                 }}
                 onInput={handleInputChange}
@@ -1350,12 +1349,10 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
               />
             ) : (
               <div
-                className="w-full h-full flex items-center px-3 text-sm truncate cursor-text"
+                className="w-full h-full flex items-center px-3 text-sm truncate cursor-text font-semibold"
                 style={{
                   fontSize: node.fontSize + 2,
                   ...getTitleAlign(node, true),
-                  color: '#1f2937',
-                  fontWeight: '600',
                 }}
                 onDoubleClick={(e) => handleDoubleClick(e, 'title')}
                 title={node.title?.replace(/<[^>]*>/g, '') || node.content?.replace(/<[^>]*>/g, '')}
@@ -1379,9 +1376,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
                     suppressContentEditableWarning
                     className="font-semibold"
                     style={{
-                      color: '#111827',
                       minHeight: '24px',
-                      caretColor: '#111827',
                       outline: 'none',
                       fontSize: `${node.fontSize + 2}px`,
                       textAlign: node.titleAlign || node.textAlign,
@@ -1398,7 +1393,6 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
                   <div
                     className="font-semibold"
                     style={{
-                      color: '#111827',
                       minHeight: '24px',
                       fontSize: `${node.fontSize + 2}px`,
                       textAlign: node.titleAlign || node.textAlign,
@@ -1477,9 +1471,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
                     suppressContentEditableWarning
                     className="font-semibold"
                     style={{
-                      color: '#111827',
                       minHeight: '24px',
-                      caretColor: '#111827',
                       outline: 'none',
                       fontSize: `${node.fontSize + 2}px`,
                       textAlign: node.titleAlign || node.textAlign,
@@ -1497,7 +1489,6 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
                   <div
                     className="font-semibold"
                     style={{
-                      color: '#111827',
                       minHeight: '24px',
                       fontSize: `${node.fontSize + 2}px`,
                       textAlign: node.titleAlign || node.textAlign,
@@ -1522,9 +1513,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
                     contentEditable
                     suppressContentEditableWarning
                     style={{
-                      color: '#4b5563',
                       minHeight: '60px',
-                      caretColor: '#4b5563',
                       outline: 'none',
                       fontSize: `${node.fontSize}px`,
                       textAlign: node.contentAlign || node.textAlign,
@@ -1543,7 +1532,6 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
                 ) : (
                   <div
                     style={{
-                      color: '#4b5563',
                       minHeight: '40px',
                       wordBreak: 'break-word',
                       lineHeight: '1.6',
