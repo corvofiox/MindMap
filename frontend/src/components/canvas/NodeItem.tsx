@@ -6,7 +6,8 @@ import { CANVAS_DEFAULTS, Z_INDEX } from '@/constants'
 import { loadApiModule } from '@/utils/moduleLoader'
 import { logger } from '@/utils/logger'
 import { execFormatCommand } from '@/utils/richTextCommands'
-import { setEditingFieldForCollab, getEditingState } from '@/hooks/useCollaboration'
+import { setEditingFieldForCollab, getEditingState, setLocalEditingUpdate } from '@/hooks/useCollaboration'
+import { collabService } from '@/services/collaboration'
 import type { Node } from '@/types'
 
 // Helper function to check if in default selection mode
@@ -37,6 +38,8 @@ interface HighlightState {
 export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, groupDragOffset, onNodeContextMenuOpen, onMouseDown, isViewer, opacity = 1 }: NodeItemProps) {
   const {
     updateNode,
+    updateNodeWithoutHistory,
+    updateNodeWithOriginal,
     setSelectedIds,
     removeNode,
     addToSelection,
@@ -74,6 +77,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
   const contextMenuStartRef = useRef({ x: 0, y: 0 })
   const timerRefsRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set())
   const imageRef = useRef<HTMLImageElement | null>(null)
+  const inputSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const { addToast } = useUIStore()
 
   const dispatchEditingFieldChange = useCallback((field: 'title' | 'content' | null, nodeId: string | null) => {
@@ -88,6 +92,10 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
     return () => {
       timerRefsRef.current.forEach(timer => clearTimeout(timer))
       timerRefsRef.current.clear()
+      if (inputSyncTimerRef.current) {
+        clearTimeout(inputSyncTimerRef.current)
+        inputSyncTimerRef.current = null
+      }
       if (imageRef.current) {
         imageRef.current.onload = null
         imageRef.current.onerror = null
@@ -477,6 +485,11 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
 
   // 保存标题 - 纯文本处理，移除所有换行
   const saveTitle = useCallback(() => {
+    if (inputSyncTimerRef.current) {
+      clearTimeout(inputSyncTimerRef.current)
+      inputSyncTimerRef.current = null
+    }
+
     if (titleRef.current && isEditingTitle) {
       if (!domReadyRef.current.title) {
         logger.debug('[NodeItem] saveTitle skipped: DOM not ready yet')
@@ -498,14 +511,21 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
       }
 
       if (title !== editingTitleRef.current) {
-        updateNode(node.id, { title })
+        const originalTitle = editingTitleRef.current
+        updateNodeWithOriginal(node.id, { title }, { title: originalTitle })
+        collabService.sendOperation('update-node', { id: node.id, updates: { title } })
         editingTitleRef.current = title
       }
     }
-  }, [isEditingTitle, node.id, node.title, updateNode])
+  }, [isEditingTitle, node.id, node.title, updateNodeWithOriginal])
 
   // 保存内容 - 保留富文本样式（HTML格式）
   const saveContent = useCallback(() => {
+    if (inputSyncTimerRef.current) {
+      clearTimeout(inputSyncTimerRef.current)
+      inputSyncTimerRef.current = null
+    }
+
     if (contentRef.current && isEditingContent) {
       if (!domReadyRef.current.content) {
         logger.debug('[NodeItem] saveContent skipped: DOM not ready yet')
@@ -531,11 +551,13 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
 
       const trimmedContent = isEmpty ? '' : cleanedHtml
       if (trimmedContent !== editingContentRef.current) {
-        updateNode(node.id, { content: trimmedContent })
+        const originalContent = editingContentRef.current
+        updateNodeWithOriginal(node.id, { content: trimmedContent }, { content: originalContent })
+        collabService.sendOperation('update-node', { id: node.id, updates: { content: trimmedContent } })
         editingContentRef.current = trimmedContent
       }
     }
-  }, [isEditingContent, node.id, node.content, updateNode, cleanHtmlContent])
+  }, [isEditingContent, node.id, node.content, updateNodeWithOriginal, cleanHtmlContent])
 
   // Handle node selection
   const handleMouseDown = useCallback(
@@ -914,7 +936,44 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
   }, [])
 
   // 不做状态更新，避免光标跳动
-  const handleInputChange = useCallback(() => { }, [])
+  const handleInputChange = useCallback(() => {
+    if (inputSyncTimerRef.current) {
+      clearTimeout(inputSyncTimerRef.current)
+    }
+
+    inputSyncTimerRef.current = setTimeout(() => {
+      const currentField = editingField
+      if (!currentField) return
+
+      if (currentField === 'title' && titleRef.current) {
+        const temp = document.createElement('div')
+        temp.innerHTML = titleRef.current.innerHTML
+        const text = temp.textContent || ''
+        const title = text.replace(/\n/g, '').replace(/\u200B/g, '').trim()
+        if (title && title !== editingTitleRef.current) {
+          setLocalEditingUpdate(true)
+          updateNodeWithoutHistory(node.id, { title })
+          collabService.sendOperation('update-node', { id: node.id, updates: { title } })
+          setLocalEditingUpdate(false)
+        }
+      } else if (currentField === 'content' && contentRef.current) {
+        const cleanedHtml = cleanHtmlContent(contentRef.current.innerHTML)
+        const tempDiv = document.createElement('div')
+        tempDiv.innerHTML = cleanedHtml
+        const textContent = tempDiv.textContent || ''
+        const hasVisibleContent = textContent.replace(/\s+/g, '').trim().length > 0
+        const hasLineBreaks = cleanedHtml.includes('<br')
+        const isEmpty = !hasVisibleContent && !hasLineBreaks
+        const content = isEmpty ? '' : cleanedHtml
+        if (content !== editingContentRef.current) {
+          setLocalEditingUpdate(true)
+          updateNodeWithoutHistory(node.id, { content })
+          collabService.sendOperation('update-node', { id: node.id, updates: { content } })
+          setLocalEditingUpdate(false)
+        }
+      }
+    }, 300)
+  }, [editingField, node.id, updateNodeWithoutHistory, cleanHtmlContent])
 
   // 手动插入换行，确保光标位置正确
   const insertLineBreakManually = useCallback(() => {

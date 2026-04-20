@@ -64,6 +64,7 @@ interface CanvasState {
   addNode: (node: Node) => void
   updateNode: (id: string, updates: Partial<Node>) => void
   updateNodeWithoutHistory: (id: string, updates: Partial<Node>) => void
+  updateNodeWithOriginal: (id: string, updates: Partial<Node>, originalValues: Partial<Node>) => void
   removeNode: (id: string) => void
   duplicateNode: (id: string) => void
 
@@ -223,6 +224,31 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         return { nodes: currentNodes, isDirty: true }
       }
       return {}
+    })
+  },
+
+  updateNodeWithOriginal: (id, updates, originalValues) => {
+    get().executeCommand({
+      type: 'updateNode',
+      timestamp: Date.now(),
+      execute: () => {
+        const nodes = new Map(get().nodes)
+        const node = nodes.get(id)
+        if (node) {
+          nodes.set(id, { ...node, ...updates })
+          return { nodes, isDirty: true }
+        }
+        return {}
+      },
+      undo: () => {
+        const nodes = new Map(get().nodes)
+        const node = nodes.get(id)
+        if (node) {
+          nodes.set(id, { ...node, ...originalValues })
+          return { nodes, isDirty: true }
+        }
+        return {}
+      },
     })
   },
 

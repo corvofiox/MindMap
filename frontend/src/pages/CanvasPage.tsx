@@ -24,6 +24,7 @@ import { generateId, colorToHex, hexToRgba, calculateCurveControlPoints, getCurv
 import { saveToCache, loadFromCache } from '@/utils/nodeCache'
 import { execFormatCommand } from '@/utils/richTextCommands'
 import { saveCanvasNodesData, loadCanvasNodesData } from '@/services/api'
+import { collabService } from '@/services/collaboration'
 import type { Node, Connection } from '@/types'
 import html2canvas from 'html2canvas-pro'
 
@@ -1311,7 +1312,21 @@ export function CanvasPage() {
       }
 
       try {
-        const { nodes, groups, domains, connections } = collectCanvasData(currentState)
+        const syncedData = await collabService.syncBeforeSave()
+        let nodes: Node[], groups: import('@/types').NodeGroup[], domains: import('@/types').Domain[], connections: import('@/types').Connection[]
+
+        if (syncedData) {
+          nodes = syncedData.nodes
+          groups = syncedData.groups
+          domains = syncedData.domains
+          connections = syncedData.connections
+        } else {
+          const collectedData = collectCanvasData(useCanvasStore.getState())
+          nodes = collectedData.nodes
+          groups = collectedData.groups
+          domains = collectedData.domains
+          connections = collectedData.connections
+        }
 
         await saveCanvasNodesData(id, { nodes, groups, domains, connections })
 
@@ -1373,8 +1388,22 @@ export function CanvasPage() {
       return
     }
 
-    const currentState = useCanvasStore.getState()
-    const { nodes, groups, domains, connections } = collectCanvasData(currentState)
+    const syncedData = await collabService.syncBeforeSave()
+    let nodes: Node[], groups: import('@/types').NodeGroup[], domains: import('@/types').Domain[], connections: import('@/types').Connection[]
+
+    if (syncedData) {
+      nodes = syncedData.nodes
+      groups = syncedData.groups
+      domains = syncedData.domains
+      connections = syncedData.connections
+    } else {
+      const currentState = useCanvasStore.getState()
+      const collectedData = collectCanvasData(currentState)
+      nodes = collectedData.nodes
+      groups = collectedData.groups
+      domains = collectedData.domains
+      connections = collectedData.connections
+    }
 
     await saveCanvasNodesData(id, { nodes, groups, domains, connections })
 

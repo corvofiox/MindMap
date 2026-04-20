@@ -20,6 +20,16 @@ const editingState: EditingState = {
   version: 0
 }
 
+let localEditingUpdateFlag = false
+
+export function setLocalEditingUpdate(value: boolean) {
+  localEditingUpdateFlag = value
+}
+
+export function isLocalEditingUpdate(): boolean {
+  return localEditingUpdateFlag
+}
+
 export function setEditingFieldForCollab(nodeId: string | null, field: 'title' | 'content' | null) {
   editingState.version++
   editingState.nodeId = nodeId
@@ -396,6 +406,7 @@ export function useCollaboration({ canvasId, enabled = true }: UseCollaborationO
 
     const unsubscribe = useCanvasStore.subscribe((state, prevState) => {
       if (isApplyingRemoteChanges.current) return
+      if (isLocalEditingUpdate()) return
 
       if (state.nodes !== prevState.nodes) {
         const addedNodes: Node[] = []

@@ -843,6 +843,82 @@ class CollaborationService {
   getCursors(): Map<number, CursorData> {
     return new Map(this.cursors)
   }
+
+  async syncBeforeSave(): Promise<{
+    nodes: Node[]
+    groups: NodeGroup[]
+    domains: Domain[]
+    connections: Connection[]
+  } | null> {
+    if (!this.canvasId) return null
+
+    try {
+      const response = await fetch(`/api/canvases/detail/${this.canvasId}`, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('mindmap_token')}`,
+        },
+      })
+
+      if (!response.ok) return null
+
+      const result = await response.json()
+      const canvas = result.data
+
+      if (!canvas || !canvas.yjsData) {
+        return null
+      }
+
+      const binaryString = atob(canvas.yjsData)
+      const utf8Bytes = new Uint8Array(binaryString.length)
+      for (let i = 0; i < binaryString.length; i++) {
+        utf8Bytes[i] = binaryString.charCodeAt(i)
+      }
+      const jsonString = new TextDecoder().decode(utf8Bytes)
+      const remoteData = JSON.parse(jsonString)
+
+      const remoteNodes: Node[] = remoteData.nodes || []
+      const remoteGroups: NodeGroup[] = remoteData.groups || []
+      const remoteDomains: Domain[] = remoteData.domains || []
+      const remoteConnections: Connection[] = remoteData.connections || []
+
+      const store = useCanvasStore.getState()
+      const localNodes = Array.from(store.nodes.values())
+      const localGroups = Array.from(store.groups.values())
+      const localDomains = Array.from(store.domains.values())
+      const localConnections = Array.from(store.connections.values())
+
+      const mergedNodes = this.mergeNodes(localNodes, remoteNodes)
+      const mergedGroups = this.mergeEntityMaps(
+        localGroups,
+        remoteGroups,
+        (g) => g.id,
+        (g) => g.name
+      )
+      const mergedDomains = this.mergeEntityMaps(
+        localDomains,
+        remoteDomains,
+        (d) => d.id,
+        (d) => d.name
+      )
+      const mergedConnections = this.mergeConnectionsWithVersion(localConnections, remoteConnections)
+
+      store.setCanvasData({
+        nodes: mergedNodes,
+        groups: mergedGroups,
+        domains: mergedDomains,
+        connections: mergedConnections,
+      })
+
+      return {
+        nodes: mergedNodes,
+        groups: mergedGroups,
+        domains: mergedDomains,
+        connections: mergedConnections,
+      }
+    } catch {
+      return null
+    }
+  }
 }
 
 export const collabService = new CollaborationService()
