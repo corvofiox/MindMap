@@ -1,6 +1,6 @@
 import { useCanvasStore } from '@/store/useCanvasStore'
 import { useAuthStore } from '@/store/useAuthStore'
-import { getEditingState } from '@/hooks/useCollaboration'
+import { getEditingState } from '@/hooks/useCollabEditing'
 import { logger } from '@/utils/logger'
 import { saveCanvasNodesData } from '@/services/api'
 import type { Node, NodeGroup, Domain, Connection } from '@/types'
@@ -38,7 +38,10 @@ interface QueuedOperation {
   timestamp: number
 }
 
-type OperationType = 'create' | 'update' | 'delete' | 'move' | 'resize' | 'style' | 'content' | 'state'
+export type OperationType = 'create' | 'update' | 'delete' | 'move' | 'resize' | 'style' | 'content' | 'state'
+
+const DEFAULT_POSITION_WINDOW_MS = 2000
+const DEFAULT_NODE_FIELD_WINDOW_MS = 3000
 
 interface FieldChange {
   field: string
@@ -68,6 +71,7 @@ class CollaborationService {
   private maxReconnectAttempts = 5
   private reconnectDelay = 2000
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null
+  private cleanupInterval: ReturnType<typeof setInterval> | null = null
   private userId: number | null = null
 
   private users: CollabUser[] = []
@@ -84,6 +88,8 @@ class CollaborationService {
   private pendingNodeChanges = new Map<string, PendingNodeChanges>()
   private lastSyncedVersions = new Map<string, number>()
   private conflictResolutionLog: ConflictResolutionResult[] = []
+  private recentPositionChanges = new Map<string, number>()
+  private recentNodeUpdates = new Map<string, Map<string, number>>()
 
   connect(canvasId: number) {
     if (this.isDestroyed) return
@@ -117,6 +123,7 @@ class CollaborationService {
         this.reconnectDelay = 2000
         this.requestSync()
         this.flushOfflineQueue()
+        this.startCleanupInterval()
       }
 
       this.ws.onmessage = (event) => {
@@ -149,11 +156,26 @@ class CollaborationService {
     }, this.reconnectDelay)
   }
 
+  private startCleanupInterval(): void {
+    if (this.cleanupInterval) return
+    this.cleanupInterval = setInterval(() => {
+      this.cleanupRecentChanges()
+    }, 10000)
+  }
+
+  private stopCleanupInterval(): void {
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval)
+      this.cleanupInterval = null
+    }
+  }
+
   private cleanupWebSocket() {
     if (this.reconnectTimeout) {
       clearTimeout(this.reconnectTimeout)
       this.reconnectTimeout = null
     }
+    this.stopCleanupInterval()
     if (this.ws) {
       this.ws.onopen = null
       this.ws.onmessage = null
@@ -185,6 +207,8 @@ class CollaborationService {
     this.pendingNodeChanges.clear()
     this.lastSyncedVersions.clear()
     this.conflictResolutionLog = []
+    this.recentPositionChanges.clear()
+    this.recentNodeUpdates.clear()
   }
 
   private async saveCurrentCanvasData() {
@@ -675,6 +699,53 @@ class CollaborationService {
 
   clearPendingChanges(nodeId: string): void {
     this.pendingNodeChanges.delete(nodeId)
+  }
+
+  trackPositionChange(nodeId: string): void {
+    this.recentPositionChanges.set(nodeId, Date.now())
+  }
+
+  isRecentPositionChange(nodeId: string, windowMs: number = DEFAULT_POSITION_WINDOW_MS): boolean {
+    const timestamp = this.recentPositionChanges.get(nodeId)
+    if (!timestamp) return false
+    return Date.now() - timestamp < windowMs
+  }
+
+  trackNodeFieldUpdate(nodeId: string, field: string): void {
+    let fields = this.recentNodeUpdates.get(nodeId)
+    if (!fields) {
+      fields = new Map()
+      this.recentNodeUpdates.set(nodeId, fields)
+    }
+    fields.set(field, Date.now())
+  }
+
+  isRecentNodeFieldUpdate(nodeId: string, field: string, windowMs: number = DEFAULT_NODE_FIELD_WINDOW_MS): boolean {
+    const fields = this.recentNodeUpdates.get(nodeId)
+    if (!fields) return false
+    const timestamp = fields.get(field)
+    if (!timestamp) return false
+    return Date.now() - timestamp < windowMs
+  }
+
+  private cleanupRecentChanges(): void {
+    const now = Date.now()
+    const maxAge = Math.max(DEFAULT_POSITION_WINDOW_MS, DEFAULT_NODE_FIELD_WINDOW_MS)
+    for (const [nodeId, timestamp] of this.recentPositionChanges) {
+      if (now - timestamp > maxAge) {
+        this.recentPositionChanges.delete(nodeId)
+      }
+    }
+    for (const [nodeId, fields] of this.recentNodeUpdates) {
+      for (const [field, timestamp] of fields) {
+        if (now - timestamp > maxAge) {
+          fields.delete(field)
+        }
+      }
+      if (fields.size === 0) {
+        this.recentNodeUpdates.delete(nodeId)
+      }
+    }
   }
 
   getConflictResolutionLog(): ConflictResolutionResult[] {

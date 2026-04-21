@@ -6,7 +6,7 @@ import { CANVAS_DEFAULTS, Z_INDEX } from '@/constants'
 import { loadApiModule } from '@/utils/moduleLoader'
 import { logger } from '@/utils/logger'
 import { execFormatCommand } from '@/utils/richTextCommands'
-import { setEditingFieldForCollab, getEditingState, setLocalEditingUpdate } from '@/hooks/useCollaboration'
+import { setEditingFieldForCollab, getEditingState, setLocalEditingUpdate } from '@/hooks/useCollabEditing'
 import { collabService } from '@/services/collaboration'
 import type { Node } from '@/types'
 

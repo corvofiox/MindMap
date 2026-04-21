@@ -2,42 +2,18 @@ import { useEffect, useRef, useCallback } from 'react'
 import { collabService } from '@/services/collaboration'
 import { useCanvasStore } from '@/store/useCanvasStore'
 import type { Node, NodeGroup, Domain, Connection } from '@/types'
+import {
+  setLocalEditingUpdate,
+  isLocalEditingUpdate,
+  setEditingFieldForCollab,
+  getEditingState,
+  dispatchEditingFieldChange,
+} from '@/hooks/useCollabEditing'
+import type { OperationType } from '@/services/collaboration'
 
 interface UseCollaborationOptions {
   canvasId: number
   enabled?: boolean
-}
-
-interface EditingState {
-  nodeId: string | null
-  field: 'title' | 'content' | null
-  version: number
-}
-
-const editingState: EditingState = {
-  nodeId: null,
-  field: null,
-  version: 0
-}
-
-let localEditingUpdateFlag = false
-
-export function setLocalEditingUpdate(value: boolean) {
-  localEditingUpdateFlag = value
-}
-
-export function isLocalEditingUpdate(): boolean {
-  return localEditingUpdateFlag
-}
-
-export function setEditingFieldForCollab(nodeId: string | null, field: 'title' | 'content' | null) {
-  editingState.version++
-  editingState.nodeId = nodeId
-  editingState.field = field
-}
-
-export function getEditingState(): EditingState {
-  return { ...editingState }
 }
 
 export function useCollaboration({ canvasId, enabled = true }: UseCollaborationOptions) {
@@ -47,20 +23,17 @@ export function useCollaboration({ canvasId, enabled = true }: UseCollaborationO
     const handleEditingFieldChange = (e: Event) => {
       if (!(e instanceof CustomEvent)) return
       const { field, nodeId, version } = e.detail
+      const state = getEditingState()
 
-      if (typeof version === 'number' && version < editingState.version) {
+      if (typeof version === 'number' && version < state.version) {
         return
       }
 
       if (field === 'title' || field === 'content') {
-        editingState.version++
-        editingState.nodeId = nodeId ?? null
-        editingState.field = field
+        setEditingFieldForCollab(nodeId ?? null, field)
       } else if (field === null) {
-        if (editingState.nodeId === nodeId) {
-          editingState.version++
-          editingState.nodeId = null
-          editingState.field = null
+        if (state.nodeId === nodeId) {
+          setEditingFieldForCollab(null, null)
         }
       }
     }
@@ -104,25 +77,27 @@ export function useCollaboration({ canvasId, enabled = true }: UseCollaborationO
       const store = useCanvasStore.getState()
       if (store.nodes.has(id)) {
         const currentState = getEditingState()
-        if (currentState.nodeId === id && currentState.field !== null) {
-          const filteredUpdates = { ...updates }
-          const editingField = currentState.field
-          if (editingField === 'title' && 'title' in filteredUpdates) {
-            delete filteredUpdates.title
-          } else if (editingField === 'content' && 'content' in filteredUpdates) {
-            delete filteredUpdates.content
-          }
-          if (Object.keys(filteredUpdates).length === 0) {
-            return
-          }
-          isApplyingRemoteChanges.current = true
-          store.updateNodeWithoutHistory(id, filteredUpdates)
-          isApplyingRemoteChanges.current = false
-        } else {
-          isApplyingRemoteChanges.current = true
-          store.updateNodeWithoutHistory(id, updates)
-          isApplyingRemoteChanges.current = false
+        const filteredUpdates = { ...updates }
+
+        if (collabService.isRecentPositionChange(id)) {
+          delete filteredUpdates.x
+          delete filteredUpdates.y
         }
+
+        const finalUpdates = Object.fromEntries(
+          Object.entries(filteredUpdates).filter(([field]) => {
+            return !(
+              collabService.isRecentNodeFieldUpdate(id, field) ||
+              (currentState.nodeId === id && currentState.field === field)
+            )
+          })
+        ) as Partial<Node>
+        if (Object.keys(finalUpdates).length === 0) {
+          return
+        }
+        isApplyingRemoteChanges.current = true
+        store.updateNodeWithoutHistory(id, finalUpdates)
+        isApplyingRemoteChanges.current = false
       }
     }
 
@@ -438,7 +413,27 @@ export function useCollaboration({ canvasId, enabled = true }: UseCollaborationO
         })
 
         addedNodes.forEach(node => collabService.sendOperation('add-node', node))
-        updatedNodes.forEach(({ id, updates }) => collabService.sendOperation('update-node', { id, updates }))
+        updatedNodes.forEach(({ id, updates }) => {
+          collabService.sendOperation('update-node', { id, updates })
+          if ('x' in updates || 'y' in updates) {
+            collabService.trackPositionChange(id)
+          }
+          Object.keys(updates).forEach((field) => {
+            collabService.trackNodeFieldUpdate(id, field)
+          })
+          const prevNode = prevState.nodes.get(id)
+          if (prevNode) {
+            Object.entries(updates).forEach(([field, newValue]) => {
+              const oldValue = (prevNode as unknown as Record<string, unknown>)[field]
+              const opType: OperationType =
+                (field === 'x' || field === 'y') ? 'move' :
+                (field === 'width' || field === 'height') ? 'resize' :
+                (field === 'title' || field === 'content') ? 'content' :
+                (field === 'color' || field === 'fontSize') ? 'style' : 'update'
+              collabService.trackLocalChange(id, field, oldValue, newValue, opType)
+            })
+          }
+        })
         removedNodeIds.forEach(id => collabService.sendOperation('remove-node', { id }))
       }
 
