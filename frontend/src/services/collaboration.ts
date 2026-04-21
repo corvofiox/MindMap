@@ -545,7 +545,8 @@ class CollaborationService {
           group as keyof typeof fieldGroups,
           pendingChanges,
           isEditingThisNode && editingState.field === field,
-          isDiverged
+          isDiverged,
+          isEditingThisNode
         )
 
         if (resolution.strategy !== 'local') {
@@ -573,16 +574,18 @@ class CollaborationService {
     fieldGroup: 'content' | 'position' | 'style' | 'state' | 'media',
     pendingChanges: PendingNodeChanges | undefined,
     isCurrentlyEditing: boolean,
-    isDiverged: boolean
+    isDiverged: boolean,
+    isEditingThisNode: boolean
   ): ConflictResolutionResult {
     const pendingChange = pendingChanges?.changes.get(field)
     const hasLocalChange = pendingChange !== undefined
 
-    if (isCurrentlyEditing && fieldGroup === 'content') {
+    // 当用户正在编辑该节点的任何 content 字段时，保留所有 content 字段的本地值
+    if (fieldGroup === 'content' && isEditingThisNode) {
       return {
         value: localValue,
         strategy: 'local',
-        reason: 'User is currently editing this field'
+        reason: 'User is currently editing this node'
       }
     }
 
@@ -958,7 +961,8 @@ class CollaborationService {
       const localDomains = Array.from(store.domains.values())
       const localConnections = Array.from(store.connections.values())
 
-      const mergedNodes = this.mergeNodes(localNodes, remoteNodes)
+      // 保存前同步：优先保留本地数据，特别是有 pending changes 的节点
+      const mergedNodes = this.mergeNodesForSave(localNodes, remoteNodes)
       const mergedGroups = this.mergeEntityMaps(
         localGroups,
         remoteGroups,
@@ -989,6 +993,77 @@ class CollaborationService {
     } catch {
       return null
     }
+  }
+
+  // 专用于保存前的合并：优先保留本地数据，但避免版本号竞争
+  private mergeNodesForSave(localNodes: Node[], remoteNodes: Node[]): Node[] {
+    const merged = new Map<string, Node>()
+
+    localNodes.forEach((node) => {
+      merged.set(node.id, node)
+    })
+
+    remoteNodes.forEach((remoteNode) => {
+      const id = remoteNode.id
+      const localNode = merged.get(id)
+
+      if (!localNode) {
+        // 本地没有，添加远程节点
+        merged.set(id, remoteNode)
+        return
+      }
+
+      // 本地有该节点，检查是否有 pending changes
+      const hasPendingChanges = this.hasPendingChanges(id)
+      const editingState = this.getEditingState()
+      const isEditingThisNode = editingState.nodeId === id
+      const localVersion = localNode._version || 0
+      const remoteVersion = remoteNode._version || 0
+
+      // 检查远程是否有更新（远程版本号大于本地）
+      const hasRemoteUpdate = remoteVersion > localVersion
+
+      if (isEditingThisNode) {
+        // 如果正在编辑该节点，优先保留本地内容，但合并其他字段的远程更新
+        const mergedNode = this.mergeNodeContentWithRemoteFields(localNode, remoteNode)
+        merged.set(id, mergedNode)
+      } else if (hasPendingChanges && hasRemoteUpdate) {
+        // 有 pending changes 且远程有更新：使用字段级合并策略
+        // 保留本地 content 字段，接受远程的其他字段更新
+        const mergedNode = this.mergeNodeContentWithRemoteFields(localNode, remoteNode)
+        merged.set(id, mergedNode)
+      } else if (hasPendingChanges) {
+        // 只有 pending changes，没有远程更新：保留本地节点
+        // 不递增版本号，因为数据没有冲突
+        merged.set(id, localNode)
+      } else {
+        // 没有 pending changes，使用正常的合并逻辑
+        const lastSyncedVersion = this.lastSyncedVersions.get(id) || 0
+        const conflictType = this.detectConflictType(localVersion, remoteVersion, lastSyncedVersion, false)
+        const mergedNode = this.resolveNodeConflict(localNode, remoteNode, conflictType, lastSyncedVersion)
+        merged.set(id, mergedNode)
+      }
+    })
+
+    return Array.from(merged.values())
+  }
+
+  // 合并节点：保留本地 content，接受远程的其他字段
+  private mergeNodeContentWithRemoteFields(local: Node, remote: Node): Node {
+    const result: Node = { ...remote }
+
+    // 保留本地的 content 相关字段
+    if (local.title !== undefined) {
+      result.title = local.title
+    }
+    if (local.content !== undefined) {
+      result.content = local.content
+    }
+
+    // 版本号使用最大值，避免版本号竞争
+    result._version = Math.max(local._version || 0, remote._version || 0)
+
+    return result
   }
 }
 
