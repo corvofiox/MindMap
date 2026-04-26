@@ -19,6 +19,7 @@ interface Message {
   content: string
   timestamp: number
   reasoningContent?: string  // 思维链内容
+  hasToolCalls?: boolean     // 是否包含工具调用（DeepSeek 思考模式下需回传 reasoning_content）
   isInterrupted?: boolean    // 是否被中断
   attachments?: Attachment[] // 附件（图片/文件）
 }
@@ -248,7 +249,9 @@ export function AiSidebar({ open }: AiSidebarProps) {
       }
 
       // 构建消息历史（只包含分隔线以下的消息）
-      // DeepSeek 思考模式优化：在新一轮对话中只传入上一轮的 content，忽略 reasoning_content
+      // DeepSeek 思考模式要求：
+      // - 无工具调用轮次：reasoning_content 无需参与上下文拼接
+      // - 有工具调用轮次：reasoning_content 必须参与上下文拼接
       const startIndex = contextDividerIndex >= 0 ? contextDividerIndex : 0
       const messageHistory = messages
         .slice(startIndex)
@@ -284,8 +287,16 @@ export function AiSidebar({ open }: AiSidebarProps) {
             }
           }
 
+          // assistant 消息：有工具调用时必须回传 reasoning_content
+          if (m.role === 'assistant' && m.hasToolCalls && m.reasoningContent) {
+            return {
+              role: m.role,
+              content: m.content,
+              reasoning_content: m.reasoningContent,
+            }
+          }
+
           // 普通文本消息 - 只返回 content，不返回 reasoning_content
-          // 这是 DeepSeek 思考模式的要求：多轮对话中只保留 content
           return {
             role: m.role,
             content: m.content,
@@ -325,6 +336,15 @@ export function AiSidebar({ open }: AiSidebarProps) {
             prev.map((m) =>
               m.id === assistantMessageId
                 ? { ...m, content: m.content + chunk }
+                : m
+            )
+          )
+        },
+        onToolCall: () => {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantMessageId
+                ? { ...m, hasToolCalls: true }
                 : m
             )
           )
@@ -477,10 +497,20 @@ export function AiSidebar({ open }: AiSidebarProps) {
       const messageHistory = messages
         .slice(Math.max(startIndex, 0), userMessageIndex)
         .filter((m) => m.id !== 'welcome' && m.role !== 'divider')
-        .map((m) => ({
-          role: m.role,
-          content: m.content,
-        }))
+        .map((m) => {
+          // assistant 消息：有工具调用时必须回传 reasoning_content
+          if (m.role === 'assistant' && m.hasToolCalls && m.reasoningContent) {
+            return {
+              role: m.role,
+              content: m.content,
+              reasoning_content: m.reasoningContent,
+            }
+          }
+          return {
+            role: m.role,
+            content: m.content,
+          }
+        })
 
       // 添加系统提示
       const systemMessage = {
@@ -515,6 +545,15 @@ export function AiSidebar({ open }: AiSidebarProps) {
             prev.map((m) =>
               m.id === assistantMessageId
                 ? { ...m, content: m.content + chunk }
+                : m
+            )
+          )
+        },
+        onToolCall: () => {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantMessageId
+                ? { ...m, hasToolCalls: true }
                 : m
             )
           )

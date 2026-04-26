@@ -351,7 +351,7 @@ export function AIConfigDialog({ open, onClose }: AIConfigDialogProps) {
               <input
                 type="number"
                 min={100}
-                max={8192}
+                max={65536}
                 step={100}
                 value={localConfig.maxTokens}
                 onChange={(e) =>

@@ -44,7 +44,7 @@ const defaultProviderConfig: ProviderConfig = {
   baseUrl: '',
   model: '',
   temperature: 0.7,
-  maxTokens: 2048,
+  maxTokens: 4096,
 }
 
 // 获取默认配置，包含各提供商的默认地址

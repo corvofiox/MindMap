@@ -31,6 +31,7 @@ export interface AIConfig {
   temperature: number
   maxTokens: number
   enableThinking?: boolean  // DeepSeek/GLM 思考模式
+  reasoningEffort?: 'high' | 'max'  // DeepSeek 思考强度控制
   responseFormat?: 'text' | 'json_object'  // DeepSeek/GLM/Moonshot JSON Output 模式
   // GLM 特有配置
   glmConfig?: {
@@ -118,11 +119,24 @@ export const AI_PROVIDERS: AIProvider[] = [
       const data = response as { data: Array<{ id: string }> }
       return data.data
         .filter((m) => m.id.includes('deepseek'))
-        .map((m) => ({
-          id: m.id,
-          name: m.id,
-          description: m.id.includes('reasoner') ? 'DeepSeek 思考模型' : 'DeepSeek 模型',
-        }))
+        .map((m) => {
+          const isReasoner = m.id.includes('reasoner')
+          const isV4Pro = m.id.includes('v4-pro') || m.id.includes('v3')
+          const isChat = m.id.includes('chat')
+          let description = 'DeepSeek 模型'
+          if (isReasoner) {
+            description = 'DeepSeek 思考模型（默认启用思考模式）'
+          } else if (isV4Pro) {
+            description = 'DeepSeek 模型（支持思考模式、工具调用）'
+          } else if (isChat) {
+            description = 'DeepSeek 对话模型'
+          }
+          return {
+            id: m.id,
+            name: m.id,
+            description,
+          }
+        })
     },
     parseChatResponse: (response: unknown) => {
       const data = response as {
@@ -444,7 +458,12 @@ export async function sendChatMessageWithTools(
     }
   } else {
     // OpenAI 兼容格式（支持工具调用）
-    url = `${baseUrl}${provider.chatEndpoint}`
+    let effectiveBaseUrl = baseUrl
+    // DeepSeek strict 模式需要使用 Beta 端点
+    if (providerId === 'deepseek' && useStrict) {
+      effectiveBaseUrl = baseUrl.replace(/\/beta$/, '').replace(/\/$/, '') + '/beta'
+    }
+    url = `${effectiveBaseUrl}${provider.chatEndpoint}`
     body = {
       model: config.model,
       messages: messages,
@@ -454,11 +473,15 @@ export async function sendChatMessageWithTools(
 
     // DeepSeek 特殊处理
     if (providerId === 'deepseek') {
-      // 思考模式：deepseek-reasoner 模型自动启用思考模式
-      // 其他模型可以通过 thinking 参数启用
-      if (config.model === 'deepseek-reasoner') {
-        // 思考模式下不支持的参数
+      const isThinkingEnabled = config.enableThinking !== false &&
+        (config.model === 'deepseek-reasoner' || config.enableThinking === true)
+
+      // 思考模式下不支持 temperature、top_p、presence_penalty、frequency_penalty
+      if (isThinkingEnabled) {
         delete (body as Record<string, unknown>).temperature
+        delete (body as Record<string, unknown>).top_p
+        delete (body as Record<string, unknown>).presence_penalty
+        delete (body as Record<string, unknown>).frequency_penalty
       }
 
       // JSON Output 模式
@@ -471,6 +494,15 @@ export async function sendChatMessageWithTools(
         (body as Record<string, unknown>).extra_body = {
           thinking: { type: 'enabled' }
         }
+      }
+
+      // 思考强度控制（通过 extra_body 传入）
+      if (isThinkingEnabled && config.reasoningEffort) {
+        const existingExtraBody = (body as Record<string, unknown>).extra_body as Record<string, unknown> || {}
+          ; (body as Record<string, unknown>).extra_body = {
+            ...existingExtraBody,
+          }
+          ; (body as Record<string, unknown>).reasoning_effort = config.reasoningEffort
       }
     }
 
@@ -562,6 +594,7 @@ export async function sendChatMessageWithTools(
     }
 
     const data = await response.json()
+    const rawMessage = (data as { choices: Array<{ message: Record<string, unknown> }> }).choices?.[0]?.message
     const { content, reasoningContent, toolCalls } = provider.parseChatResponse(data)
 
     // 执行工具调用
@@ -573,18 +606,46 @@ export async function sendChatMessageWithTools(
       }
 
       // 将工具结果返回给 AI 继续处理
+      // 使用标准 OpenAI tool_calls + role:tool 格式
       if (toolResults.length > 0) {
-        const toolResultMessage = {
-          role: 'tool',
-          content: JSON.stringify(toolResults),
+        const assistantMessage: Record<string, unknown> = {
+          role: 'assistant',
+          content: content || '',
         }
+
+        // DeepSeek 思考模式要求：工具调用轮次必须回传 reasoning_content
+        if (reasoningContent) {
+          assistantMessage.reasoning_content = reasoningContent
+        }
+
+        // 从原始响应中提取 tool_calls（包含 id）
+        const rawToolCalls = (rawMessage?.tool_calls as Array<{
+          id: string
+          type: string
+          function: { name: string; arguments: string }
+        }>) || []
+
+        assistantMessage.tool_calls = rawToolCalls.length > 0
+          ? rawToolCalls
+          : toolCalls.map((tc, idx) => ({
+            id: `call_${idx}`,
+            type: 'function',
+            function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
+          }))
+
+        // 构建 role:tool 消息（每条工具调用对应一条 tool 消息）
+        const toolResultMessages = toolCalls.map((tc, idx) => ({
+          role: 'tool',
+          tool_call_id: rawToolCalls[idx]?.id || `call_${idx}`,
+          content: JSON.stringify(toolResults[idx]?.result),
+        }))
 
         // 递归调用获取最终响应
         const finalResponse = await sendChatMessageWithTools(
           providerId,
           config,
-          [...messages, { role: 'assistant', content }, { role: 'user', content: `工具执行结果：${JSON.stringify(toolResults, null, 2)}\n\n请根据这些结果继续回答。` }],
-          false // 不再启用工具调用，避免循环
+          [...messages, assistantMessage, ...toolResultMessages],
+          true
         )
 
         // 合并思维链内容
@@ -710,7 +771,12 @@ export async function sendStreamChatMessage(
     headers = provider.headers(config.apiKey)
   } else {
     // OpenAI 兼容格式
-    url = `${baseUrl}${provider.chatEndpoint}`
+    let effectiveBaseUrl = baseUrl
+    // DeepSeek strict 模式需要使用 Beta 端点
+    if (providerId === 'deepseek' && useStrict) {
+      effectiveBaseUrl = baseUrl.replace(/\/beta$/, '').replace(/\/$/, '') + '/beta'
+    }
+    url = `${effectiveBaseUrl}${provider.chatEndpoint}`
     body = {
       model: config.model,
       messages: messages,
@@ -721,10 +787,15 @@ export async function sendStreamChatMessage(
 
     // DeepSeek 特殊处理
     if (providerId === 'deepseek') {
-      // 思考模式：deepseek-reasoner 模型自动启用思考模式
-      // 思考模式下不支持 temperature、top_p 等参数
-      if (config.model === 'deepseek-reasoner') {
-        delete (body as Record<string, unknown>).temperature
+      const isThinkingEnabled = config.enableThinking !== false &&
+        (config.model === 'deepseek-reasoner' || config.enableThinking === true)
+
+      // 思考模式下不支持 temperature、top_p、presence_penalty、frequency_penalty
+      if (isThinkingEnabled) {
+        delete body.temperature
+        delete body.top_p
+        delete body.presence_penalty
+        delete body.frequency_penalty
       }
 
       // JSON Output 模式
@@ -737,6 +808,11 @@ export async function sendStreamChatMessage(
         body.extra_body = {
           thinking: { type: 'enabled' }
         }
+      }
+
+      // 思考强度控制
+      if (isThinkingEnabled && config.reasoningEffort) {
+        body.reasoning_effort = config.reasoningEffort
       }
     }
 
