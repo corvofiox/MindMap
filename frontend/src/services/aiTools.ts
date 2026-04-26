@@ -1498,11 +1498,40 @@ export function getToolsForAI(useStrict: boolean = false): Array<{
       type: 'object'
       properties: Record<string, unknown>
       required?: string[]
+      additionalProperties?: boolean
     }
   }
 }> {
+  const applyStrictSchema = (schema: Record<string, unknown>): Record<string, unknown> => {
+    const result = { ...schema }
+    if (result.type === 'object') {
+      result.additionalProperties = false
+      if (result.properties && typeof result.properties === 'object') {
+        const allKeys = Object.keys(result.properties as Record<string, unknown>)
+        result.required = allKeys
+        const strictProps: Record<string, unknown> = {}
+        for (const [k, v] of Object.entries(result.properties as Record<string, unknown>)) {
+          if (typeof v === 'object' && v !== null) {
+            strictProps[k] = applyStrictSchema(v as Record<string, unknown>)
+          } else {
+            strictProps[k] = v
+          }
+        }
+        result.properties = strictProps
+      }
+    }
+    if (result.items && typeof result.items === 'object') {
+      result.items = applyStrictSchema(result.items as Record<string, unknown>)
+    }
+    if (result.anyOf && Array.isArray(result.anyOf)) {
+      result.anyOf = result.anyOf.map((s: unknown) =>
+        typeof s === 'object' && s !== null ? applyStrictSchema(s as Record<string, unknown>) : s
+      )
+    }
+    return result
+  }
+
   return AI_TOOLS.map((tool) => {
-    // 从 parameters 中提取 required 字段（标记为 required: true 的参数）
     const properties: Record<string, unknown> = {}
     const required: string[] = []
 
@@ -1514,8 +1543,8 @@ export function getToolsForAI(useStrict: boolean = false): Array<{
           description: param.description,
           ...(param.enum && { enum: param.enum }),
           ...(param.items && { items: param.items }),
+          ...(param.properties && { properties: param.properties }),
         }
-        // 如果参数标记为 required: true，则加入 required 数组
         if (param.required === true) {
           required.push(key)
         }
@@ -1532,6 +1561,7 @@ export function getToolsForAI(useStrict: boolean = false): Array<{
           type: 'object'
           properties: Record<string, unknown>
           required?: string[]
+          additionalProperties?: boolean
         }
       }
     } = {
@@ -1547,10 +1577,11 @@ export function getToolsForAI(useStrict: boolean = false): Array<{
       },
     }
 
-    // 只有明确请求时才启用 strict 模式（DeepSeek 等支持）
-    // GLM 等模型不支持 strict，添加后可能影响指令遵循能力
     if (useStrict) {
       toolDef.function.strict = true
+      toolDef.function.parameters = applyStrictSchema(
+        toolDef.function.parameters as Record<string, unknown>
+      ) as typeof toolDef.function.parameters
     }
 
     return toolDef

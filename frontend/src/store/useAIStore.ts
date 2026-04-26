@@ -9,6 +9,9 @@ export interface ProviderConfig {
   model: string
   temperature: number
   maxTokens: number
+  enableThinking?: boolean
+  reasoningEffort?: 'high' | 'max'
+  responseFormat?: 'text' | 'json_object'
 }
 
 // 所有提供商的配置集合

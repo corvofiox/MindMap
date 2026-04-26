@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { X, Check, RefreshCw, AlertCircle, Settings } from 'lucide-react'
+import { X, Check, RefreshCw, AlertCircle, Settings, Brain, Braces } from 'lucide-react'
 import { AI_PROVIDERS, fetchModels, validateApiKey } from '@/services/aiService'
 import { useAIStore, type ProviderConfig } from '@/store/useAIStore'
 
@@ -183,7 +183,7 @@ export function AIConfigDialog({ open, onClose }: AIConfigDialogProps) {
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-md mx-4">
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-md mx-4 max-h-[90vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-700">
           <div className="flex items-center gap-2">
@@ -201,7 +201,7 @@ export function AIConfigDialog({ open, onClose }: AIConfigDialogProps) {
         </div>
 
         {/* Content */}
-        <div className="px-6 py-4 space-y-4">
+        <div className="px-6 py-4 space-y-4 overflow-y-auto flex-1">
           {/* 提供商选择 */}
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
@@ -364,6 +364,147 @@ export function AIConfigDialog({ open, onClose }: AIConfigDialogProps) {
               />
             </div>
           </div>
+
+          {/* DeepSeek 思考模式设置 */}
+          {localProvider === 'deepseek' && (
+            <div className="space-y-3 p-3 bg-purple-50 dark:bg-purple-900/20 rounded-lg border border-purple-200 dark:border-purple-800">
+              <div className="flex items-center gap-2 text-sm font-medium text-purple-700 dark:text-purple-300">
+                <Brain className="w-4 h-4" />
+                思考模式
+              </div>
+              <div className="flex items-center justify-between">
+                <label className="text-sm text-gray-600 dark:text-gray-400">
+                  启用思考模式
+                </label>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={localConfig.enableThinking !== false}
+                  onClick={() =>
+                    setLocalConfig((prev) => ({
+                      ...prev,
+                      enableThinking: prev.enableThinking === false ? true : false,
+                    }))
+                  }
+                  className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                    localConfig.enableThinking !== false
+                      ? 'bg-purple-500'
+                      : 'bg-gray-300 dark:bg-gray-600'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                      localConfig.enableThinking !== false ? 'translate-x-4' : 'translate-x-0.5'
+                    }`}
+                  />
+                </button>
+              </div>
+              {localConfig.enableThinking !== false && (
+                <div className="flex items-center justify-between">
+                  <label className="text-sm text-gray-600 dark:text-gray-400">
+                    思考强度
+                  </label>
+                  <select
+                    value={localConfig.reasoningEffort || 'high'}
+                    onChange={(e) =>
+                      setLocalConfig((prev) => ({
+                        ...prev,
+                        reasoningEffort: e.target.value as 'high' | 'max',
+                      }))
+                    }
+                    className="px-2 py-1 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-sm text-gray-900 dark:text-white focus:ring-2 focus:ring-purple-500 focus:outline-none"
+                  >
+                    <option value="high">High（默认）</option>
+                    <option value="max">Max（深度推理）</option>
+                  </select>
+                </div>
+              )}
+              {localConfig.enableThinking !== false && (
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  思考模式下不支持温度、top_p 等参数
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* GLM 思考模式设置 */}
+          {localProvider === 'zhipu' && (
+            <div className="space-y-3 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+              <div className="flex items-center gap-2 text-sm font-medium text-blue-700 dark:text-blue-300">
+                <Brain className="w-4 h-4" />
+                深度思考
+              </div>
+              <div className="flex items-center justify-between">
+                <label className="text-sm text-gray-600 dark:text-gray-400">
+                  启用深度思考
+                </label>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={localConfig.enableThinking !== false}
+                  onClick={() =>
+                    setLocalConfig((prev) => ({
+                      ...prev,
+                      enableThinking: prev.enableThinking === false ? true : false,
+                    }))
+                  }
+                  className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                    localConfig.enableThinking !== false
+                      ? 'bg-blue-500'
+                      : 'bg-gray-300 dark:bg-gray-600'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                      localConfig.enableThinking !== false ? 'translate-x-4' : 'translate-x-0.5'
+                    }`}
+                  />
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* JSON Output 模式（DeepSeek/GLM/Moonshot） */}
+          {['deepseek', 'zhipu', 'moonshot'].includes(localProvider) && (
+            <div className="space-y-3 p-3 bg-amber-50 dark:bg-amber-900/20 rounded-lg border border-amber-200 dark:border-amber-800">
+              <div className="flex items-center gap-2 text-sm font-medium text-amber-700 dark:text-amber-300">
+                <Braces className="w-4 h-4" />
+                输出格式
+              </div>
+              <div className="flex items-center justify-between">
+                <label className="text-sm text-gray-600 dark:text-gray-400">
+                  JSON Output 模式
+                </label>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={localConfig.responseFormat === 'json_object'}
+                  onClick={() =>
+                    setLocalConfig((prev) => ({
+                      ...prev,
+                      responseFormat: prev.responseFormat === 'json_object' ? 'text' : 'json_object',
+                    }))
+                  }
+                  className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                    localConfig.responseFormat === 'json_object'
+                      ? 'bg-amber-500'
+                      : 'bg-gray-300 dark:bg-gray-600'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                      localConfig.responseFormat === 'json_object' ? 'translate-x-4' : 'translate-x-0.5'
+                    }`}
+                  />
+                </button>
+              </div>
+              {localConfig.responseFormat === 'json_object' && (
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  启用后模型将输出 JSON 格式，需在提示词中说明 JSON 结构
+                </p>
+              )}
+            </div>
+          )}
 
           {/* 错误提示 */}
           {error && (

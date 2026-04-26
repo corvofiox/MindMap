@@ -121,7 +121,7 @@ export const AI_PROVIDERS: AIProvider[] = [
         .filter((m) => m.id.includes('deepseek'))
         .map((m) => {
           const isReasoner = m.id.includes('reasoner')
-          const isV4Pro = m.id.includes('v4-pro') || m.id.includes('v3')
+          const isV4Pro = m.id.includes('v4-pro') || m.id === 'deepseek-v3'
           const isChat = m.id.includes('chat')
           let description = 'DeepSeek 模型'
           if (isReasoner) {
@@ -473,8 +473,9 @@ export async function sendChatMessageWithTools(
 
     // DeepSeek 特殊处理
     if (providerId === 'deepseek') {
-      const isThinkingEnabled = config.enableThinking !== false &&
-        (config.model === 'deepseek-reasoner' || config.enableThinking === true)
+      const supportsThinking = config.model === 'deepseek-reasoner' ||
+        config.model.includes('v4-pro') || config.model === 'deepseek-v3'
+      const isThinkingEnabled = supportsThinking && config.enableThinking !== false
 
       // 思考模式下不支持 temperature、top_p、presence_penalty、frequency_penalty
       if (isThinkingEnabled) {
@@ -489,20 +490,18 @@ export async function sendChatMessageWithTools(
         (body as Record<string, unknown>).response_format = { type: 'json_object' }
       }
 
-      // 非 reasoner 模型的思考模式（通过 extra_body 传入）
-      if (config.enableThinking && config.model !== 'deepseek-reasoner') {
-        (body as Record<string, unknown>).extra_body = {
-          thinking: { type: 'enabled' }
-        }
+      // 思考模式控制（顶级参数，非 extra_body）
+      if (config.enableThinking === false) {
+        // 明确禁用思考（适用于所有模型）
+        (body as Record<string, unknown>).thinking = { type: 'disabled' }
+      } else if (supportsThinking && config.model !== 'deepseek-reasoner') {
+        // 支持思考的非 reasoner 模型，默认启用思考
+        (body as Record<string, unknown>).thinking = { type: 'enabled' }
       }
 
-      // 思考强度控制（通过 extra_body 传入）
+      // 思考强度控制（顶级参数）
       if (isThinkingEnabled && config.reasoningEffort) {
-        const existingExtraBody = (body as Record<string, unknown>).extra_body as Record<string, unknown> || {}
-          ; (body as Record<string, unknown>).extra_body = {
-            ...existingExtraBody,
-          }
-          ; (body as Record<string, unknown>).reasoning_effort = config.reasoningEffort
+        (body as Record<string, unknown>).reasoning_effort = config.reasoningEffort
       }
     }
 
@@ -787,8 +786,9 @@ export async function sendStreamChatMessage(
 
     // DeepSeek 特殊处理
     if (providerId === 'deepseek') {
-      const isThinkingEnabled = config.enableThinking !== false &&
-        (config.model === 'deepseek-reasoner' || config.enableThinking === true)
+      const supportsThinking = config.model === 'deepseek-reasoner' ||
+        config.model.includes('v4-pro') || config.model === 'deepseek-v3'
+      const isThinkingEnabled = supportsThinking && config.enableThinking !== false
 
       // 思考模式下不支持 temperature、top_p、presence_penalty、frequency_penalty
       if (isThinkingEnabled) {
@@ -803,17 +803,22 @@ export async function sendStreamChatMessage(
         body.response_format = { type: 'json_object' }
       }
 
-      // 非 reasoner 模型的思考模式（通过 extra_body 传入）
-      if (config.enableThinking && config.model !== 'deepseek-reasoner') {
-        body.extra_body = {
-          thinking: { type: 'enabled' }
-        }
+      // 思考模式控制（顶级参数，非 extra_body）
+      if (config.enableThinking === false) {
+        // 明确禁用思考（适用于所有模型）
+        body.thinking = { type: 'disabled' }
+      } else if (supportsThinking && config.model !== 'deepseek-reasoner') {
+        // 支持思考的非 reasoner 模型，默认启用思考
+        body.thinking = { type: 'enabled' }
       }
 
-      // 思考强度控制
+      // 思考强度控制（顶级参数）
       if (isThinkingEnabled && config.reasoningEffort) {
         body.reasoning_effort = config.reasoningEffort
       }
+
+      // 流式输出包含 usage 信息
+      body.stream_options = { include_usage: true }
     }
 
     // GLM 特殊处理
