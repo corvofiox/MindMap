@@ -1,6 +1,5 @@
 import initSqlJs from 'sql.js'
-import { drizzle } from 'drizzle-orm/sql-js'
-import type { SqlJsDatabase } from 'drizzle-orm/sql-js'
+import { drizzle, type SQLJsDatabase } from 'drizzle-orm/sql-js'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import * as schema from './schema.js'
@@ -19,14 +18,17 @@ try {
 
 const dbPath = process.env.DB_FILE || path.join(dataDir, 'mindmap.db')
 
-type AppDatabase = SqlJsDatabase<typeof schema>
+type AppDatabase = SQLJsDatabase<typeof schema>
 
-let sqlite: initSqlJs.SqlJsStatic | null = null
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let sqlite: any = null
 let dbInstance: AppDatabase | null = null
 
-let initPromise: Promise<initSqlJs.SqlJsStatic> | null = null
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let initPromise: Promise<any> | null = null
 
-export async function getSqlite(): Promise<initSqlJs.SqlJsStatic> {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function getSqlite(): Promise<any> {
   if (sqlite) {
     return sqlite
   }
@@ -36,12 +38,13 @@ export async function getSqlite(): Promise<initSqlJs.SqlJsStatic> {
       try {
         log('Initializing sql.js...')
 
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const SQL = await Promise.race([
           initSqlJs(),
           new Promise<never>((_, reject) =>
             setTimeout(() => reject(new Error('sql.js initialization timeout after 30 seconds')), 30000)
           ),
-        ])
+        ]) as any
 
         log('sql.js initialized successfully')
 

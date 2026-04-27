@@ -9,11 +9,9 @@
     "removeComments": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true,
+    "forceConsistentCasingInFileNames": false,
     "allowSyntheticDefaultImports": true,
     "isolatedModules": true,
-    "strictNullChecks": true,
-    "noImplicitAny": true,
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true

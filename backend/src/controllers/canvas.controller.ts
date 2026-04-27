@@ -176,7 +176,7 @@ canvasRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, res
       })
     }
 
-    const canvasProjectId = getProperty(canvas, 'project_id', 'projectId') || canvas.projectId
+    const canvasProjectId = getProperty<number>(canvas, 'project_id', 'projectId') || canvas.projectId
 
     const access = await checkProjectAccess(canvasProjectId, req.user!.id)
 
@@ -268,7 +268,7 @@ canvasRouter.delete('/:id', authenticate, asyncHandler(async (req: AuthRequest, 
     })
   }
 
-  const canvasProjectId = getProperty(canvas, 'project_id', 'projectId') || canvas.projectId
+  const canvasProjectId = getProperty<number>(canvas, 'project_id', 'projectId') || canvas.projectId
 
   log('DELETE canvas - Canvas found', { canvasId, projectId: canvasProjectId, canvas: JSON.stringify(canvas) })
 
@@ -330,7 +330,7 @@ canvasRouter.post('/:id/data', authenticate, asyncHandler(async (req: AuthReques
     })
   }
 
-  const canvasProjectId = getProperty(canvas, 'project_id', 'projectId') || canvas.projectId
+  const canvasProjectId = getProperty<number>(canvas, 'project_id', 'projectId') || canvas.projectId
 
   const access = await checkProjectAccess(canvasProjectId, req.user!.id)
 
@@ -468,7 +468,7 @@ canvasRouter.put(
       })
     }
 
-    const folderProjectId = getProperty(folder, 'project_id', 'projectId') || folder.projectId
+    const folderProjectId = getProperty<number>(folder, 'project_id', 'projectId') || folder.projectId
 
     const access = await checkProjectAccess(folderProjectId, req.user!.id)
 
@@ -529,7 +529,7 @@ canvasRouter.delete(
       })
     }
 
-    const folderProjectId = getProperty(folder, 'project_id', 'projectId') || folder.projectId
+    const folderProjectId = getProperty<number>(folder, 'project_id', 'projectId') || folder.projectId
 
     const access = await checkProjectAccess(folderProjectId, req.user!.id)
 

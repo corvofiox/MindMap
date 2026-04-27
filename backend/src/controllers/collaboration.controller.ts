@@ -456,6 +456,12 @@ collaborationRouter.delete('/invitations/:id', authenticate, asyncHandler(async 
   }
 
   const invitationProjectId = getProperty<number>(invitation, 'project_id', 'projectId')
+  if (!invitationProjectId) {
+    return res.status(404).json({
+      success: false,
+      error: '邀请数据异常',
+    })
+  }
 
   const project = await db.query.projects.findFirst({
     where: eq(projects.id, invitationProjectId),

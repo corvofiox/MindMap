@@ -76,7 +76,7 @@ projectRouter.get('/:id', authenticate, asyncHandler(async (req: AuthRequest, re
     })
   }
 
-  const projectOwnerId = getProperty(project, 'owner_id', 'ownerId') || project.ownerId
+  const projectOwnerId = getProperty<number>(project, 'owner_id', 'ownerId') || project.ownerId
   const isOwner = projectOwnerId === req.user!.id
 
   const member = await db.query.projectMembers.findFirst({
@@ -159,7 +159,7 @@ projectRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, re
     })
   }
 
-  const projectOwnerId = getProperty(project, 'owner_id', 'ownerId') || project.ownerId
+  const projectOwnerId = getProperty<number>(project, 'owner_id', 'ownerId') || project.ownerId
 
   if (projectOwnerId !== req.user!.id) {
     return res.status(403).json({
@@ -224,7 +224,7 @@ projectRouter.delete('/:id', authenticate, asyncHandler(async (req: AuthRequest,
     })
   }
 
-  const projectOwnerId = getProperty(project, 'owner_id', 'ownerId') || project.ownerId
+  const projectOwnerId = getProperty<number>(project, 'owner_id', 'ownerId') || project.ownerId
 
   if (projectOwnerId !== req.user!.id) {
     return res.status(403).json({
@@ -263,7 +263,7 @@ projectRouter.post(
       where: eq(projects.id, projectId),
     })
 
-    const projectOwnerId = getProperty(project, 'owner_id', 'ownerId') || project.ownerId
+    const projectOwnerId = getProperty<number>(project, 'owner_id', 'ownerId') || project.ownerId
 
     if (!project || projectOwnerId !== req.user!.id) {
       return res.status(403).json({

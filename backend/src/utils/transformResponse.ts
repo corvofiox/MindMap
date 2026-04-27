@@ -6,7 +6,7 @@ import { transformDateFields, transformDateFieldsArray } from './dateTransform.j
  *
  * @example getProperty<number>(project, 'owner_id', 'ownerId')
  */
-export function getProperty<T>(obj: Record<string, unknown> | null | undefined, ...keys: string[]): T | undefined {
+export function getProperty<T>(obj: any, ...keys: string[]): T | undefined {
   if (!obj) return undefined
   for (const key of keys) {
     const value = obj[key]
@@ -20,7 +20,7 @@ export function getProperty<T>(obj: Record<string, unknown> | null | undefined, 
 /**
  * 安全获取 userId，兼容 snake_case 和 camelCase
  */
-export function getUserId(obj: Record<string, unknown> | null | undefined): number | undefined {
+export function getUserId(obj: Record<string, any> | null | undefined): number | undefined {
   if (!obj) return undefined
   return obj.userId ?? obj.user_id
 }
@@ -57,27 +57,27 @@ function toCamelCase(obj: Record<string, any>): Record<string, any> {
  * 1. 将下划线命名转换为驼峰命名
  * 2. 转换时间戳字段为 ISO 字符串
  */
-export function transformResponse<T extends Record<string, unknown>>(
+export function transformResponse<T extends Record<string, any>>(
   obj: T,
   dateFields: string[] = []
 ): T {
   const camelCased = toCamelCase(obj)
   if (dateFields.length > 0) {
-    return transformDateFields(camelCased, dateFields) as unknown as T
+    return transformDateFields(camelCased, dateFields as any) as T
   }
-  return camelCased as unknown as T
+  return camelCased as T
 }
 
 /**
  * 批量转换响应数据数组
  */
-export function transformResponseArray<T extends Record<string, unknown>>(
+export function transformResponseArray<T extends Record<string, any>>(
   arr: T[],
   dateFields: string[] = []
 ): T[] {
   const camelCased = arr.map(item => toCamelCase(item))
   if (dateFields.length > 0) {
-    return transformDateFieldsArray(camelCased, dateFields) as unknown as T[]
+    return transformDateFieldsArray(camelCased, dateFields as any) as T[]
   }
-  return camelCased as unknown as T[]
+  return camelCased as T[]
 }
