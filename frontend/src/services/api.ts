@@ -296,7 +296,7 @@ export async function deleteNodePoolFolder(id: number): Promise<void> {
 }
 
 // AI Conversation API
-interface Message {
+interface ConversationMessage {
   id: string
   role: 'user' | 'assistant' | 'divider'
   content: string
@@ -305,11 +305,10 @@ interface Message {
   hasToolCalls?: boolean
   toolExchangeMessages?: Array<Record<string, unknown>>
   isInterrupted?: boolean
-  attachments?: Array<{ id: string; type: string; name: string; mimeType: string; size: number; data?: string; url?: string }>
 }
 
 interface ConversationData {
-  messages: Message[]
+  messages: ConversationMessage[]
   contextDividerIndex: number
 }
 

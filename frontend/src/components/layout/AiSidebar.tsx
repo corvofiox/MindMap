@@ -159,7 +159,7 @@ export function AiSidebar({ open }: AiSidebarProps) {
         const data = await getAIConversation(canvasId)
         const { messages: savedMessages, contextDividerIndex: savedIndex } = data
         if (savedMessages && savedMessages.length > 0) {
-          setMessages(savedMessages)
+          setMessages(savedMessages as Message[])
           // 校验 divider index 在有效范围内
           const dividerIndex = savedIndex ?? -1
           setContextDividerIndex(
@@ -276,6 +276,8 @@ export function AiSidebar({ open }: AiSidebarProps) {
     setAttachedFiles([])
     setIsLoading(true)
 
+    let assistantMessageId = ''
+
     // 调用真实 AI API
     try {
       if (!isConnected || !config.model) {
@@ -350,7 +352,7 @@ export function AiSidebar({ open }: AiSidebarProps) {
       }
 
       // 创建助手消息占位符
-      const assistantMessageId = crypto.randomUUID()
+      assistantMessageId = crypto.randomUUID()
       const assistantMessage: Message = {
         id: assistantMessageId,
         role: 'assistant',
@@ -533,6 +535,8 @@ export function AiSidebar({ open }: AiSidebarProps) {
     setMessages((prev) => prev.slice(0, messageIndex))
     setIsLoading(true)
 
+    let assistantMessageId = ''
+
     try {
       if (!isConnected || !config.model) {
         throw new Error('请先配置 AI 服务')
@@ -570,7 +574,7 @@ export function AiSidebar({ open }: AiSidebarProps) {
       }
 
       // 创建助手消息占位符
-      const assistantMessageId = crypto.randomUUID()
+      assistantMessageId = crypto.randomUUID()
       const assistantMessage: Message = {
         id: assistantMessageId,
         role: 'assistant',
