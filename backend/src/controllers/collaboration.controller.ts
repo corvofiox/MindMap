@@ -4,19 +4,9 @@ import { projects, projectMembers, projectInvitations, users } from '../database
 import { eq, and, or } from 'drizzle-orm'
 import { authenticate, type AuthRequest } from '../middleware/auth.middleware.js'
 import { asyncHandler } from '../middleware/error.middleware.js'
-import { transformResponse } from '../utils/transformResponse.js'
+import { transformResponse, getProperty } from '../utils/transformResponse.js'
 
 export const collaborationRouter = Router()
-
-function getProperty<T>(obj: Record<string, unknown>, ...keys: string[]): T | undefined {
-  for (const key of keys) {
-    const value = obj[key]
-    if (value !== undefined) {
-      return value as T
-    }
-  }
-  return undefined
-}
 
 // Get project members with invitation status
 collaborationRouter.get('/projects/:projectId/members', authenticate, asyncHandler(async (req: AuthRequest, res) => {

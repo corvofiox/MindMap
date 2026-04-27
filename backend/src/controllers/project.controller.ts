@@ -4,19 +4,8 @@ import { projects, projectMembers } from '../database/schema.js'
 import { eq, and } from 'drizzle-orm'
 import { authenticate, type AuthRequest } from '../middleware/auth.middleware.js'
 import { asyncHandler } from '../middleware/error.middleware.js'
-import { transformResponse, transformResponseArray } from '../utils/transformResponse.js'
+import { transformResponse, transformResponseArray, getProperty } from '../utils/transformResponse.js'
 import { notifyProjectCollaboratorsToSave } from '../websocket/index.js'
-
-// Helper function to safely get property from Drizzle result (handles both snake_case and camelCase)
-function getProperty<T>(obj: any, ...keys: string[]): T | undefined {
-  for (const key of keys) {
-    const value = obj[key]
-    if (value !== undefined) {
-      return value
-    }
-  }
-  return undefined
-}
 
 export const projectRouter = Router()
 

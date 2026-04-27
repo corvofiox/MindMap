@@ -1,5 +1,6 @@
 import initSqlJs from 'sql.js'
 import { drizzle } from 'drizzle-orm/sql-js'
+import type { SqlJsDatabase } from 'drizzle-orm/sql-js'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import * as schema from './schema.js'
@@ -18,35 +19,32 @@ try {
 
 const dbPath = process.env.DB_FILE || path.join(dataDir, 'mindmap.db')
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let sqlite: any = null
-let dbInstance: any = null
+type AppDatabase = SqlJsDatabase<typeof schema>
 
-// Initialization lock to prevent concurrent initialization
-let initPromise: Promise<any> | null = null
+let sqlite: initSqlJs.SqlJsStatic | null = null
+let dbInstance: AppDatabase | null = null
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export async function getSqlite() {
+let initPromise: Promise<initSqlJs.SqlJsStatic> | null = null
+
+export async function getSqlite(): Promise<initSqlJs.SqlJsStatic> {
   if (sqlite) {
     return sqlite
   }
 
-  // Use initialization lock to prevent concurrent initialization
   if (!initPromise) {
     initPromise = (async () => {
       try {
         log('Initializing sql.js...')
-        
-        // Add timeout protection for sql.js initialization
+
         const SQL = await Promise.race([
-          initSqlJs() as any,
-          new Promise((_, reject) => 
+          initSqlJs(),
+          new Promise<never>((_, reject) =>
             setTimeout(() => reject(new Error('sql.js initialization timeout after 30 seconds')), 30000)
-          )
-        ]) as any
-        
+          ),
+        ])
+
         log('sql.js initialized successfully')
-        
+
         let dbData: Uint8Array | null = null
         try {
           const dbFile = await fs.readFile(dbPath)
@@ -58,10 +56,10 @@ export async function getSqlite() {
           }
           dbData = null
         }
-        
+
         sqlite = new SQL.Database(dbData)
         log('Database instance created')
-        
+
         return sqlite
       } catch (error) {
         logError('Failed to initialize sqlite database', error)
@@ -74,25 +72,22 @@ export async function getSqlite() {
   return initPromise
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export async function getDb() {
+export async function getDb(): Promise<AppDatabase> {
   if (!dbInstance) {
     const sqliteDb = await getSqlite()
-    dbInstance = drizzle(sqliteDb as any, { schema })
+    dbInstance = drizzle(sqliteDb, { schema }) as AppDatabase
   }
   return dbInstance
 }
 
-// Export db as null initially, will be initialized by index.ts on startup
-// This prevents top-level await blocking
-export let db: any = null
+// Lazily-initialized database instance - call initializeDb() on startup
+// Controllers access db directly (typed as AppDatabase, not any)
+// Using definite assignment assertion (!) - initialized by initializeDb() before any requests
+export let db!: AppDatabase
 
-// Initialize db instance - call this on app startup
-export async function initializeDb() {
-  if (!db) {
-    db = await getDb()
-    log('Database initialized and ready for use')
-  }
+export async function initializeDb(): Promise<AppDatabase> {
+  db = await getDb()
+  log('Database initialized and ready for use')
   return db
 }
 

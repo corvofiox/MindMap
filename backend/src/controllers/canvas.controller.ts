@@ -4,21 +4,11 @@ import { canvases, folders, projects, projectMembers } from '../database/schema.
 import { eq, inArray, and } from 'drizzle-orm'
 import { authenticate, type AuthRequest } from '../middleware/auth.middleware.js'
 import { asyncHandler } from '../middleware/error.middleware.js'
-import { transformResponse, transformResponseArray } from '../utils/transformResponse.js'
+import { transformResponse, transformResponseArray, getProperty } from '../utils/transformResponse.js'
 import { log } from '../utils/logger.js'
 import { getCanvasActiveUsers } from '../websocket/index.js'
 
 export const canvasRouter = Router()
-
-function getProperty<T>(obj: any, ...keys: string[]): T | undefined {
-  for (const key of keys) {
-    const value = obj[key]
-    if (value !== undefined) {
-      return value
-    }
-  }
-  return undefined
-}
 
 async function checkProjectAccess(projectId: number, userId: number): Promise<{ isOwner: boolean; isMember: boolean; canEdit: boolean; role: string | null }> {
   const project = await db.query.projects.findFirst({

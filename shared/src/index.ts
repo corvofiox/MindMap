@@ -1,7 +1,7 @@
 // Shared types between frontend and backend
 export * from './constants.js'
 
-export interface APIResponse<T = any> {
+export interface APIResponse<T = unknown> {
   success: boolean
   data?: T
   error?: string
@@ -34,7 +34,7 @@ export interface Canvas {
   name: string
   project_id: number
   folder_id: number | null
-  yjs_data?: Buffer
+  yjs_data?: string
   preview_text?: string
   thumbnail: string | null
   sort_order: number
@@ -104,7 +104,7 @@ export interface Connection {
 // WebSocket message types
 export interface WSMessage {
   type: 'connected' | 'sync' | 'update' | 'awareness'
-  data?: any
+  data?: unknown
   canvasId?: number
   userId?: number
   senderId?: number

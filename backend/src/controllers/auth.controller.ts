@@ -58,8 +58,7 @@ authRouter.post('/register', authLimiter(), asyncHandler(async (req, res) => {
     env.JWT_SECRET,
     {
       expiresIn: env.JWT_EXPIRES_IN || '7d',
-      algorithm: 'HS256',
-    } as any
+    }
   )
 
   // Save database immediately
@@ -116,8 +115,7 @@ authRouter.post('/login', authLimiter(), asyncHandler(async (req, res) => {
     env.JWT_SECRET,
     {
       expiresIn: env.JWT_EXPIRES_IN || '7d',
-      algorithm: 'HS256',
-    } as any
+    }
   )
 
   res.json({
@@ -177,8 +175,7 @@ authRouter.post('/refresh', authLimiter(), asyncHandler(async (req, res) => {
       env.JWT_SECRET,
       {
         expiresIn: env.JWT_EXPIRES_IN || '7d',
-        algorithm: 'HS256',
-      } as any
+      }
     )
 
     res.json({

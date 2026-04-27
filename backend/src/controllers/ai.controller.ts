@@ -5,8 +5,8 @@ import { Router } from 'express'
 import { db } from '../database/connection.js'
 import { aiConversations } from '../database/schema.js'
 import { eq, and } from 'drizzle-orm'
-import { logError } from '../utils/logger.js'
-import { authenticate } from '../middleware/auth.middleware.js'
+import { authenticate, type AuthRequest } from '../middleware/auth.middleware.js'
+import { asyncHandler } from '../middleware/error.middleware.js'
 
 // Message type matching frontend
 interface Message {
@@ -18,9 +18,24 @@ interface Message {
   isInterrupted?: boolean
 }
 
-// Get conversation for a canvas
-export async function getConversation(req, res) {
+function safeJsonParse(messages: string): Message[] {
   try {
+    return JSON.parse(messages) as Message[]
+  } catch {
+    return []
+  }
+}
+
+// Create router
+const router = Router()
+
+// All routes require authentication
+router.use(authenticate)
+
+// Get conversation for a canvas
+router.get(
+  '/conversation/:canvasId',
+  asyncHandler(async (req: AuthRequest, res) => {
     const userId = req.user?.id
     const canvasId = parseInt(req.params.canvasId)
 
@@ -35,8 +50,6 @@ export async function getConversation(req, res) {
       ),
     })
 
-    // Check if conversation exists and has valid data
-    // Drizzle ORM may return an object with undefined fields instead of null
     if (!conversation || !conversation.id || !conversation.messages) {
       return res.json({
         success: true,
@@ -50,19 +63,17 @@ export async function getConversation(req, res) {
     return res.json({
       success: true,
       data: {
-        messages: JSON.parse(conversation.messages),
+        messages: safeJsonParse(conversation.messages),
         contextDividerIndex: conversation.contextDividerIndex ?? -1,
       },
     })
-  } catch (error) {
-    logError('Failed to get AI conversation:', error)
-    return res.status(500).json({ success: false, error: 'Failed to get conversation' })
-  }
-}
+  })
+)
 
 // Save or update conversation for a canvas
-export async function saveConversation(req, res) {
-  try {
+router.post(
+  '/conversation/:canvasId',
+  asyncHandler(async (req: AuthRequest, res) => {
     const userId = req.user?.id
     const canvasId = parseInt(req.params.canvasId)
     const { messages, contextDividerIndex } = req.body
@@ -75,7 +86,6 @@ export async function saveConversation(req, res) {
       return res.status(400).json({ success: false, error: 'Invalid messages format' })
     }
 
-    // Check if conversation exists
     const existing = await db.query.aiConversations.findFirst({
       where: and(
         eq(aiConversations.canvasId, canvasId),
@@ -83,9 +93,7 @@ export async function saveConversation(req, res) {
       ),
     })
 
-    // Check if conversation exists and has valid data
     if (existing && existing.id) {
-      // Update existing conversation
       await db
         .update(aiConversations)
         .set({
@@ -95,7 +103,6 @@ export async function saveConversation(req, res) {
         })
         .where(eq(aiConversations.id, existing.id))
     } else {
-      // Create new conversation
       await db.insert(aiConversations).values({
         canvasId,
         userId,
@@ -106,15 +113,13 @@ export async function saveConversation(req, res) {
     }
 
     return res.json({ success: true })
-  } catch (error) {
-    logError('Failed to save AI conversation:', error)
-    return res.status(500).json({ success: false, error: 'Failed to save conversation' })
-  }
-}
+  })
+)
 
 // Delete conversation for a canvas
-export async function deleteConversation(req, res) {
-  try {
+router.delete(
+  '/conversation/:canvasId',
+  asyncHandler(async (req: AuthRequest, res) => {
     const userId = req.user?.id
     const canvasId = parseInt(req.params.canvasId)
 
@@ -132,15 +137,13 @@ export async function deleteConversation(req, res) {
       )
 
     return res.json({ success: true })
-  } catch (error) {
-    logError('Failed to delete AI conversation:', error)
-    return res.status(500).json({ success: false, error: 'Failed to delete conversation' })
-  }
-}
+  })
+)
 
 // Clear all conversations for a user (optional cleanup)
-export async function clearAllConversations(req, res) {
-  try {
+router.delete(
+  '/conversations/all',
+  asyncHandler(async (req: AuthRequest, res) => {
     const userId = req.user?.id
 
     if (!userId) {
@@ -150,28 +153,7 @@ export async function clearAllConversations(req, res) {
     await db.delete(aiConversations).where(eq(aiConversations.userId, userId))
 
     return res.json({ success: true })
-  } catch (error) {
-    logError('Failed to clear AI conversations:', error)
-    return res.status(500).json({ success: false, error: 'Failed to clear conversations' })
-  }
-}
-
-// Create router
-const router = Router()
-
-// All routes require authentication
-router.use(authenticate)
-
-// Get conversation for a canvas
-router.get('/conversation/:canvasId', getConversation)
-
-// Save conversation for a canvas
-router.post('/conversation/:canvasId', saveConversation)
-
-// Delete conversation for a canvas
-router.delete('/conversation/:canvasId', deleteConversation)
-
-// Clear all conversations for current user
-router.delete('/conversations/all', clearAllConversations)
+  })
+)
 
 export { router as aiRouter }
