@@ -59,6 +59,7 @@ export const AI_PROVIDERS: AIProvider[] = [
     headers: (apiKey) => ({
       'Authorization': `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
+      'Accept': 'application/json',
     }),
     parseModels: (response: unknown) => {
       const data = response as { data: Array<{ id: string; owned_by?: string }> }
@@ -92,10 +93,15 @@ export const AI_PROVIDERS: AIProvider[] = [
         }>
       }
       const message = data.choices[0]?.message
-      const toolCalls = message?.tool_calls?.map((tc) => ({
-        name: tc.function.name,
-        arguments: JSON.parse(tc.function.arguments),
-      }))
+      const toolCalls = message?.tool_calls?.map((tc) => {
+        let args: Record<string, unknown> = {}
+        try {
+          args = JSON.parse(tc.function.arguments)
+        } catch {
+          /* malformed JSON from model */
+        }
+        return { name: tc.function.name, arguments: args }
+      })
       return {
         content: message?.content || '',
         reasoningContent: message?.reasoning_content,
@@ -120,16 +126,13 @@ export const AI_PROVIDERS: AIProvider[] = [
       return data.data
         .filter((m) => m.id.includes('deepseek'))
         .map((m) => {
-          const isReasoner = m.id.includes('reasoner')
-          const isV4Pro = m.id.includes('v4-pro') || m.id === 'deepseek-v3'
-          const isChat = m.id.includes('chat')
-          let description = 'DeepSeek 模型'
-          if (isReasoner) {
-            description = 'DeepSeek 思考模型（默认启用思考模式）'
-          } else if (isV4Pro) {
-            description = 'DeepSeek 模型（支持思考模式、工具调用）'
-          } else if (isChat) {
-            description = 'DeepSeek 对话模型'
+          const isV4Pro = m.id.includes('v4-pro')
+          const isV4Flash = m.id.includes('v4-flash')
+          let description = 'DeepSeek 模型（支持思考模式、工具调用）'
+          if (isV4Pro) {
+            description = 'DeepSeek V4 Pro（旗舰模型）'
+          } else if (isV4Flash) {
+            description = 'DeepSeek V4 Flash（快速模型）'
           }
           return {
             id: m.id,
@@ -153,10 +156,15 @@ export const AI_PROVIDERS: AIProvider[] = [
         }>
       }
       const message = data.choices[0]?.message
-      const toolCalls = message?.tool_calls?.map((tc) => ({
-        name: tc.function.name,
-        arguments: JSON.parse(tc.function.arguments),
-      }))
+      const toolCalls = message?.tool_calls?.map((tc) => {
+        let args: Record<string, unknown> = {}
+        try {
+          args = JSON.parse(tc.function.arguments)
+        } catch {
+          /* malformed JSON from model */
+        }
+        return { name: tc.function.name, arguments: args }
+      })
       return {
         content: message?.content || '',
         reasoningContent: message?.reasoning_content,
@@ -210,10 +218,15 @@ export const AI_PROVIDERS: AIProvider[] = [
         }>
       }
       const message = data.choices[0]?.message
-      const toolCalls = message?.tool_calls?.map((tc) => ({
-        name: tc.function.name,
-        arguments: JSON.parse(tc.function.arguments),
-      }))
+      const toolCalls = message?.tool_calls?.map((tc) => {
+        let args: Record<string, unknown> = {}
+        try {
+          args = JSON.parse(tc.function.arguments)
+        } catch {
+          /* malformed JSON from model */
+        }
+        return { name: tc.function.name, arguments: args }
+      })
       return {
         content: message?.content || '',
         reasoningContent: message?.reasoning_content,
@@ -337,10 +350,15 @@ export const AI_PROVIDERS: AIProvider[] = [
         }>
       }
       const message = data.choices[0]?.message
-      const toolCalls = message?.tool_calls?.map((tc) => ({
-        name: tc.function.name,
-        arguments: JSON.parse(tc.function.arguments),
-      }))
+      const toolCalls = message?.tool_calls?.map((tc) => {
+        let args: Record<string, unknown> = {}
+        try {
+          args = JSON.parse(tc.function.arguments)
+        } catch {
+          /* malformed JSON from model */
+        }
+        return { name: tc.function.name, arguments: args }
+      })
       return {
         content: message?.content || '',
         reasoningContent: message?.reasoning_content,
@@ -395,6 +413,7 @@ export async function sendChatMessageWithTools(
   abortCurrentRequest() // 先中断之前的请求
   currentAbortController = new AbortController()
   const signal = currentAbortController.signal
+  const controller = currentAbortController
 
   const provider = AI_PROVIDERS.find((p) => p.id === providerId)
   if (!provider) {
@@ -434,17 +453,6 @@ export async function sendChatMessageWithTools(
         parts: [{ text: systemMessage.content }],
       }
     }
-  } else if (providerId === 'anthropic') {
-    url = `${baseUrl}${provider.chatEndpoint}`
-    body = {
-      model: config.model,
-      max_tokens: config.maxTokens,
-      temperature: config.temperature,
-      messages: messages.map((m) => ({
-        role: m.role === 'system' ? 'user' : m.role,
-        content: m.content,
-      })),
-    }
   } else if (providerId === 'ollama') {
     url = `${baseUrl}${provider.chatEndpoint}`
     body = {
@@ -473,8 +481,7 @@ export async function sendChatMessageWithTools(
 
     // DeepSeek 特殊处理
     if (providerId === 'deepseek') {
-      const supportsThinking = config.model === 'deepseek-reasoner' ||
-        config.model.includes('v4-pro') || config.model === 'deepseek-v3'
+      const supportsThinking = config.model.includes('deepseek')
       const isThinkingEnabled = supportsThinking && config.enableThinking !== false
 
       // 思考模式下不支持 temperature、top_p、presence_penalty、frequency_penalty
@@ -491,11 +498,9 @@ export async function sendChatMessageWithTools(
       }
 
       // 思考模式控制（顶级参数，非 extra_body）
-      if (config.enableThinking === false) {
-        // 明确禁用思考（适用于所有模型）
+      if (supportsThinking && config.enableThinking === false) {
         (body as Record<string, unknown>).thinking = { type: 'disabled' }
-      } else if (supportsThinking && config.model !== 'deepseek-reasoner') {
-        // 支持思考的非 reasoner 模型，默认启用思考
+      } else if (supportsThinking) {
         (body as Record<string, unknown>).thinking = { type: 'enabled' }
       }
 
@@ -662,7 +667,9 @@ export async function sendChatMessageWithTools(
     }
     throw error
   } finally {
-    currentAbortController = null
+    if (currentAbortController === controller) {
+      currentAbortController = null
+    }
   }
 }
 
@@ -671,6 +678,8 @@ export interface StreamCallbacks {
   onReasoningChunk?: (chunk: string) => void
   onContentChunk?: (chunk: string) => void
   onToolCall?: (toolCall: { name: string; arguments: Record<string, unknown> }) => void
+  /** 工具调用完成后回调，传入中间 assistant+tool 消息，需持久化用于后续多轮对话 */
+  onToolExchange?: (messages: Array<Record<string, unknown>>) => void
   onComplete?: () => void
   onError?: (error: Error) => void
 }
@@ -687,6 +696,7 @@ export async function sendStreamChatMessage(
   abortCurrentRequest()
   currentAbortController = new AbortController()
   const signal = currentAbortController.signal
+  const controller = currentAbortController
 
   const provider = AI_PROVIDERS.find((p) => p.id === providerId)
   if (!provider) {
@@ -786,8 +796,7 @@ export async function sendStreamChatMessage(
 
     // DeepSeek 特殊处理
     if (providerId === 'deepseek') {
-      const supportsThinking = config.model === 'deepseek-reasoner' ||
-        config.model.includes('v4-pro') || config.model === 'deepseek-v3'
+      const supportsThinking = config.model.includes('deepseek')
       const isThinkingEnabled = supportsThinking && config.enableThinking !== false
 
       // 思考模式下不支持 temperature、top_p、presence_penalty、frequency_penalty
@@ -804,11 +813,9 @@ export async function sendStreamChatMessage(
       }
 
       // 思考模式控制（顶级参数，非 extra_body）
-      if (config.enableThinking === false) {
-        // 明确禁用思考（适用于所有模型）
+      if (supportsThinking && config.enableThinking === false) {
         body.thinking = { type: 'disabled' }
-      } else if (supportsThinking && config.model !== 'deepseek-reasoner') {
-        // 支持思考的非 reasoner 模型，默认启用思考
+      } else if (supportsThinking) {
         body.thinking = { type: 'enabled' }
       }
 
@@ -935,7 +942,6 @@ export async function sendStreamChatMessage(
     let isDone = false
     let assistantContent = ''
     let assistantReasoningContent = ''
-    const geminiThoughtSignatures: string[] = [] // 存储 Gemini 的 thoughtSignature
     const toolCalls: Array<{
       id: string
       type: string
@@ -986,10 +992,6 @@ export async function sendStreamChatMessage(
                   // 处理 Gemini 工具调用
                   if (part.functionCall) {
                     const fc = part.functionCall
-                    // 保存 thoughtSignature 用于后续函数调用
-                    if (fc.thoughtSignature) {
-                      geminiThoughtSignatures.push(fc.thoughtSignature)
-                    }
                     toolCalls.push({
                       id: fc.name,
                       type: 'function',
@@ -1041,9 +1043,15 @@ export async function sendStreamChatMessage(
                 }
                 // 通知 UI
                 if (tc.function?.name) {
+                  let args: Record<string, unknown> = {}
+                  try {
+                    args = JSON.parse(tc.function.arguments || '{}')
+                  } catch {
+                    /* partial streaming arguments, will be completed later */
+                  }
                   callbacks.onToolCall?.({
                     name: tc.function.name,
-                    arguments: JSON.parse(tc.function.arguments || '{}'),
+                    arguments: args,
                   })
                 }
               }
@@ -1057,12 +1065,22 @@ export async function sendStreamChatMessage(
 
     // 如果有工具调用，执行工具并将结果返回给 AI
     if (toolCalls.length > 0) {
+      // 压缩稀疏数组（流式 tool_calls 的 index 可能不连续）
+      const calls = toolCalls.filter(() => true)
+      // 用户已中断则跳过工具执行
+      if (signal.aborted) return
       const toolResults: Array<{ tool: string; result: unknown }> = []
 
-      for (const tc of toolCalls) {
+      for (const tc of calls) {
+        let args: Record<string, unknown> = {}
+        try {
+          args = JSON.parse(tc.function.arguments || '{}')
+        } catch {
+          /* accumulated arguments malformed, fall back to empty */
+        }
         const result = await executeToolCall(
           tc.function.name,
-          JSON.parse(tc.function.arguments || '{}')
+          args
         )
         toolResults.push({ tool: tc.function.name, result })
       }
@@ -1071,13 +1089,13 @@ export async function sendStreamChatMessage(
       if (providerId === 'gemini') {
         // Gemini 工具结果格式
         // functionResponse 的 response 需要是一个对象，包含 content 或其他字段
-        const toolResultParts = toolResults.map((tr, index) => ({
+        const toolResultParts = calls.map((tc, index) => ({
           functionResponse: {
-            name: toolCalls[index].function.name,
+            name: tc.function.name,
             response: {
               // Gemini 要求 response 对象包含特定字段
               // 将工具结果作为 JSON 字符串放入 content 字段
-              content: JSON.stringify(tr.result)
+              content: JSON.stringify(toolResults[index]?.result)
             }
           }
         }))
@@ -1087,12 +1105,12 @@ export async function sendStreamChatMessage(
           ...messages,
           {
             role: 'model',
-            parts: toolCalls.map(tc => {
+            parts: calls.map(tc => {
               const part: Record<string, unknown> = {
-                functionCall: {
-                  name: tc.function.name,
-                  args: JSON.parse(tc.function.arguments || '{}')
-                }
+              functionCall: {
+                name: tc.function.name,
+                args: (() => { try { return JSON.parse(tc.function.arguments || '{}') } catch { return {} } })(),
+              }
               }
               // 添加 thoughtSignature 如果有的话
               if (tc.thoughtSignature) {
@@ -1135,7 +1153,7 @@ export async function sendStreamChatMessage(
       }
 
       // 添加 tool_calls
-      assistantMessage.tool_calls = toolCalls.map(tc => ({
+      assistantMessage.tool_calls = calls.map(tc => ({
         id: tc.id,
         type: 'function',
         function: {
@@ -1145,11 +1163,14 @@ export async function sendStreamChatMessage(
       }))
 
       // 构建 tool 结果消息
-      const toolResultMessages = toolCalls.map((tc, index) => ({
+      const toolResultMessages = calls.map((tc, index) => ({
         role: 'tool',
         tool_call_id: tc.id,
         content: JSON.stringify(toolResults[index]?.result)
       }))
+
+      // 通知调用方持久化本轮工具交换消息，用于后续多轮对话上下文拼接
+      callbacks.onToolExchange?.([assistantMessage, ...toolResultMessages])
 
       // 递归调用获取最终响应
       // 注意：思考模式下模型可能需要多轮工具调用，所以保持 enableTools=true
@@ -1172,7 +1193,9 @@ export async function sendStreamChatMessage(
       callbacks.onError?.(error instanceof Error ? error : new Error(String(error)))
     }
   } finally {
-    currentAbortController = null
+    if (currentAbortController === controller) {
+      currentAbortController = null
+    }
   }
 }
 

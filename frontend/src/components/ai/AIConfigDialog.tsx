@@ -517,7 +517,7 @@ export function AIConfigDialog({ open, onClose }: AIConfigDialogProps) {
         {/* Footer */}
         <div className="flex items-center justify-between px-6 py-4 border-t border-gray-200 dark:border-gray-700">
           <button
-            onClick={resetConfig}
+            onClick={() => { if (confirm('确定要重置所有 AI 配置吗？此操作不可撤销。')) resetConfig() }}
             className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"
           >
             重置配置

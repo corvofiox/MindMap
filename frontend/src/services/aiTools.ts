@@ -1612,6 +1612,7 @@ export function getToolsForGemini(): Array<{
           description: param.description,
           ...(param.enum && { enum: param.enum }),
           ...(param.items && { items: param.items }),
+          ...(param.properties && { properties: param.properties }),
         }
         if (param.required === true) {
           required.push(key)

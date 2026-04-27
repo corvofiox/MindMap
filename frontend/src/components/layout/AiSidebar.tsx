@@ -20,6 +20,8 @@ interface Message {
   timestamp: number
   reasoningContent?: string  // 思维链内容
   hasToolCalls?: boolean     // 是否包含工具调用（DeepSeek 思考模式下需回传 reasoning_content）
+  /** 工具调用产生的中间消息（assistant+tool），需在后续多轮对话中回传给 API */
+  toolExchangeMessages?: Array<Record<string, unknown>>
   isInterrupted?: boolean    // 是否被中断
   attachments?: Attachment[] // 附件（图片/文件）
 }
@@ -74,9 +76,9 @@ export function AiSidebar({ open }: AiSidebarProps) {
   const dragStartYRef = useRef(0)
   const dragStartHeightRef = useRef(0)
 
-  // 自动滚动到底部
+  // 自动滚动到底部（流式输出时用 auto 避免 smooth 动画叠加抖动）
   const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    messagesEndRef.current?.scrollIntoView({ behavior: 'auto' })
   }
 
   useEffect(() => {
@@ -90,31 +92,30 @@ export function AiSidebar({ open }: AiSidebarProps) {
     }
   }, [open])
 
-  // 自动验证并恢复已保存的连接状态
+  // 自动验证并恢复已保存的连接状态（侧边栏每次打开时执行）
   useEffect(() => {
     const autoValidateConnection = async () => {
-      const provider = AI_PROVIDERS.find((p) => p.id === currentProvider)
+      const { currentProvider: cp, providerConfigs: pcs, isConnected: ic } = useAIStore.getState()
+      const provider = AI_PROVIDERS.find((p) => p.id === cp)
       if (!provider) return
 
-      // 检查配置是否完整
-      const hasApiKey = !provider.apiKeyRequired || config.apiKey
-      const hasBaseUrl = config.baseUrl || provider.baseUrl
+      const cfg = pcs[cp]
+      const hasApiKey = !provider.apiKeyRequired || cfg?.apiKey
+      const hasBaseUrl = cfg?.baseUrl || provider.baseUrl
 
       if (!hasApiKey || !hasBaseUrl) {
-        // 配置不完整，标记为未连接
-        if (isConnected) {
+        if (ic) {
           useAIStore.getState().setIsConnected(false)
         }
         return
       }
 
-      // 如果已经标记为连接，验证是否仍然有效
-      if (isConnected) {
+      if (ic) {
         try {
           const isValid = await validateApiKey(
             provider,
-            config.apiKey,
-            config.baseUrl || undefined
+            cfg.apiKey,
+            cfg.baseUrl || undefined
           )
           if (!isValid) {
             useAIStore.getState().setIsConnected(false)
@@ -125,10 +126,8 @@ export function AiSidebar({ open }: AiSidebarProps) {
       }
     }
 
-    // 组件加载时执行验证
     autoValidateConnection()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []) // 只在组件加载时执行
+  }, [open]) // 每次打开侧边栏时重新验证
 
   // 监听画布ID变化，重置加载状态
   useEffect(() => {
@@ -161,7 +160,11 @@ export function AiSidebar({ open }: AiSidebarProps) {
         const { messages: savedMessages, contextDividerIndex: savedIndex } = data
         if (savedMessages && savedMessages.length > 0) {
           setMessages(savedMessages)
-          setContextDividerIndex(savedIndex ?? -1)
+          // 校验 divider index 在有效范围内
+          const dividerIndex = savedIndex ?? -1
+          setContextDividerIndex(
+            dividerIndex >= 0 && dividerIndex < savedMessages.length ? dividerIndex : -1
+          )
         } else {
           // 如果没有保存的对话，显示欢迎消息
           setMessages([
@@ -177,14 +180,19 @@ export function AiSidebar({ open }: AiSidebarProps) {
           setContextDividerIndex(-1)
         }
       } catch {
-        // Failed to load conversation, continue with empty state
+        // 加载失败时显示恢复错误提示
+        setMessages((prev) =>
+          prev.length === 1 && prev[0]?.id === 'welcome'
+            ? [{ id: 'welcome', role: 'assistant', content: '⚠️ 对话历史加载失败，将使用全新对话。你可以继续与 AI 交流。', timestamp: Date.now() }]
+            : prev
+        )
       } finally {
         isLoadingConversationRef.current = false
       }
     }
 
     loadConversation()
-  }, [canvasId])
+  }, [canvasId, isConnected])
 
   // 保存对话历史到服务器（防抖）
   const messagesRef = useRef(messages)
@@ -200,11 +208,20 @@ export function AiSidebar({ open }: AiSidebarProps) {
   }, [contextDividerIndex])
 
   // 使用 ref 进行保存，避免循环依赖
+  const pendingSaveRef = useRef(false)
   useEffect(() => {
     if (!canvasId) return
 
+    pendingSaveRef.current = true
     const timeoutId = setTimeout(async () => {
+      pendingSaveRef.current = false
       const currentMessages = messagesRef.current
+      // 剥离 base64 图片数据以减小存储体积
+      const strippedMessages = currentMessages.map((m) =>
+        m.attachments?.some((a) => a.type === 'image' && a.data)
+          ? { ...m, attachments: m.attachments.map((a) => (a.type === 'image' ? { ...a, data: undefined } : a)) }
+          : m
+      )
       // 只保存非空的对话（超过欢迎消息）
       if (currentMessages.length <= 1 && currentMessages[0]?.id === 'welcome') {
         return
@@ -212,7 +229,7 @@ export function AiSidebar({ open }: AiSidebarProps) {
 
       try {
         await saveAIConversation(canvasId, {
-          messages: currentMessages,
+          messages: strippedMessages,
           contextDividerIndex: contextDividerIndexRef.current,
         })
       } catch {
@@ -220,7 +237,24 @@ export function AiSidebar({ open }: AiSidebarProps) {
       }
     }, 1000) // 1秒防抖
 
-    return () => clearTimeout(timeoutId)
+    return () => {
+      clearTimeout(timeoutId)
+      // 组件卸载时 flush 待保存内容
+      if (pendingSaveRef.current) {
+        const currentMessages = messagesRef.current
+        if (!(currentMessages.length <= 1 && currentMessages[0]?.id === 'welcome')) {
+          const strippedMessages = currentMessages.map((m) =>
+            m.attachments?.some((a) => a.type === 'image' && a.data)
+              ? { ...m, attachments: m.attachments.map((a) => (a.type === 'image' ? { ...a, data: undefined } : a)) }
+              : m
+          )
+          saveAIConversation(canvasId, {
+            messages: strippedMessages,
+            contextDividerIndex: contextDividerIndexRef.current,
+          }).catch(() => {})
+        }
+      }
+    }
   }, [canvasId, messages, contextDividerIndex])
 
   const handleSend = async () => {
@@ -230,7 +264,7 @@ export function AiSidebar({ open }: AiSidebarProps) {
     const content = input.trim()
 
     const userMessage: Message = {
-      id: Date.now().toString(),
+      id: crypto.randomUUID(),
       role: 'user',
       content: content,
       timestamp: Date.now(),
@@ -252,11 +286,17 @@ export function AiSidebar({ open }: AiSidebarProps) {
       // DeepSeek 思考模式要求：
       // - 无工具调用轮次：reasoning_content 无需参与上下文拼接
       // - 有工具调用轮次：reasoning_content 必须参与上下文拼接
+      // - 工具调用产生的中间 assistant+tool 消息必须完整回传
       const startIndex = contextDividerIndex >= 0 ? contextDividerIndex : 0
       const messageHistory = messages
         .slice(startIndex)
         .filter((m) => m.id !== 'welcome' && m.role !== 'divider')
-        .map((m) => {
+        .flatMap((m) => {
+          // Assistant 消息有工具交换：先输出中间消息，再输出最终 assistant
+          if (m.role === 'assistant' && m.toolExchangeMessages && m.toolExchangeMessages.length > 0) {
+            return [...m.toolExchangeMessages, { role: 'assistant', content: m.content }]
+          }
+
           // 如果有图片附件，使用多模态格式
           if (m.attachments && m.attachments.some(a => a.type === 'image' && a.data)) {
             const imageAttachments = m.attachments.filter(a => a.type === 'image' && a.data)
@@ -310,7 +350,7 @@ export function AiSidebar({ open }: AiSidebarProps) {
       }
 
       // 创建助手消息占位符
-      const assistantMessageId = (Date.now() + 1).toString()
+      const assistantMessageId = crypto.randomUUID()
       const assistantMessage: Message = {
         id: assistantMessageId,
         role: 'assistant',
@@ -349,6 +389,15 @@ export function AiSidebar({ open }: AiSidebarProps) {
             )
           )
         },
+        onToolExchange: (messages) => {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantMessageId
+                ? { ...m, toolExchangeMessages: [...(m.toolExchangeMessages || []), ...messages] }
+                : m
+            )
+          )
+        },
         onComplete: () => {
           setIsLoading(false)
           // 如果内容为空，显示提示信息
@@ -366,11 +415,7 @@ export function AiSidebar({ open }: AiSidebarProps) {
             setMessages((prev) =>
               prev.map((m) =>
                 m.id === assistantMessageId
-                  ? {
-                    ...m,
-                    content: m.content || '',
-                    isInterrupted: true,
-                  }
+                  ? { ...m, content: m.content + '\n\n⏹️ 回答已中断', isInterrupted: true }
                   : m
               )
             )
@@ -446,7 +491,7 @@ export function AiSidebar({ open }: AiSidebarProps) {
       const errorMessage = error instanceof Error ? error.message : '未知错误'
       setMessages((prev) =>
         prev.map((m) =>
-          m.id === (Date.now() + 1).toString()
+          m.id === assistantMessageId
             ? { ...m, content: `❌ 请求失败：${errorMessage}\n\n请检查：\n1. AI 服务配置是否正确\n2. API 密钥是否有效\n3. 网络连接是否正常` }
             : m
         )
@@ -462,6 +507,7 @@ export function AiSidebar({ open }: AiSidebarProps) {
   }
 
   const handleCopy = async (content: string, id: string) => {
+    if (!navigator.clipboard) return
     try {
       await navigator.clipboard.writeText(content)
       setCopiedId(id)
@@ -497,7 +543,12 @@ export function AiSidebar({ open }: AiSidebarProps) {
       const messageHistory = messages
         .slice(Math.max(startIndex, 0), userMessageIndex)
         .filter((m) => m.id !== 'welcome' && m.role !== 'divider')
-        .map((m) => {
+        .flatMap((m) => {
+          // Assistant 消息有工具交换：先输出中间消息，再输出最终 assistant
+          if (m.role === 'assistant' && m.toolExchangeMessages && m.toolExchangeMessages.length > 0) {
+            return [...m.toolExchangeMessages, { role: 'assistant', content: m.content }]
+          }
+
           // assistant 消息：有工具调用时必须回传 reasoning_content
           if (m.role === 'assistant' && m.hasToolCalls && m.reasoningContent) {
             return {
@@ -519,7 +570,7 @@ export function AiSidebar({ open }: AiSidebarProps) {
       }
 
       // 创建助手消息占位符
-      const assistantMessageId = (Date.now() + 1).toString()
+      const assistantMessageId = crypto.randomUUID()
       const assistantMessage: Message = {
         id: assistantMessageId,
         role: 'assistant',
@@ -554,6 +605,15 @@ export function AiSidebar({ open }: AiSidebarProps) {
             prev.map((m) =>
               m.id === assistantMessageId
                 ? { ...m, hasToolCalls: true }
+                : m
+            )
+          )
+        },
+        onToolExchange: (messages) => {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantMessageId
+                ? { ...m, toolExchangeMessages: [...(m.toolExchangeMessages || []), ...messages] }
                 : m
             )
           )
@@ -648,7 +708,7 @@ export function AiSidebar({ open }: AiSidebarProps) {
       const errorMessage = error instanceof Error ? error.message : '未知错误'
       setMessages((prev) =>
         prev.map((m) =>
-          m.id === (Date.now() + 1).toString()
+          m.id === assistantMessageId
             ? { ...m, content: `❌ 请求失败：${errorMessage}\n\n请检查：\n1. AI 服务配置是否正确\n2. API 密钥是否有效\n3. 网络连接是否正常` }
             : m
         )
@@ -792,8 +852,12 @@ export function AiSidebar({ open }: AiSidebarProps) {
 
     const newFiles = Array.from(files)
 
-    // 处理每个文件
+    // 处理每个文件（最大 10MB）
+    const MAX_FILE_SIZE = 10 * 1024 * 1024
     for (const file of newFiles) {
+      if (file.size > MAX_FILE_SIZE) {
+        continue
+      }
       const isImage = file.type.startsWith('image/')
       const attachmentId = `attach-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
 
@@ -913,6 +977,7 @@ export function AiSidebar({ open }: AiSidebarProps) {
           <button
             onClick={() => setAiSidebarOpen(false)}
             className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400"
+            aria-label="关闭 AI 侧边栏"
           >
             <X className="w-4 h-4" />
           </button>
@@ -1295,6 +1360,7 @@ export function AiSidebar({ open }: AiSidebarProps) {
                     ? 'text-gray-300 cursor-not-allowed'
                     : 'text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
                     }`}
+                  aria-label="添加附件"
                 >
                   <Plus className="w-4 h-4" />
                 </button>
@@ -1336,6 +1402,7 @@ export function AiSidebar({ open }: AiSidebarProps) {
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder="输入消息..."
+                aria-label="AI 对话输入"
                 className="w-full h-full px-10 py-2 bg-gray-100 dark:bg-gray-700 border-0 rounded-lg resize-none text-sm text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-purple-500 focus:outline-none"
                 disabled={isLoading}
               />
@@ -1356,6 +1423,7 @@ export function AiSidebar({ open }: AiSidebarProps) {
                 <button
                   onClick={handleSend}
                   disabled={!input.trim() && attachedFiles.length === 0}
+                  aria-label="发送消息"
                   className={`absolute right-6 bottom-4 p-1.5 rounded-lg transition-colors z-10 ${(input.trim() || attachedFiles.length > 0)
                     ? 'bg-purple-500 text-white hover:bg-purple-600'
                     : 'bg-gray-300 dark:bg-gray-600 text-gray-500 cursor-not-allowed'

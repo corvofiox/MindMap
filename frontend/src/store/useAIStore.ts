@@ -12,6 +12,15 @@ export interface ProviderConfig {
   enableThinking?: boolean
   reasoningEffort?: 'high' | 'max'
   responseFormat?: 'text' | 'json_object'
+  glmConfig?: {
+    thinking?: { type: 'enabled' | 'disabled' }
+    toolStream?: boolean
+    clearThinking?: boolean
+  }
+  moonshotConfig?: {
+    partial?: boolean
+    name?: string
+  }
 }
 
 // 所有提供商的配置集合

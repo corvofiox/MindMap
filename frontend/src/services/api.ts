@@ -302,7 +302,10 @@ interface Message {
   content: string
   timestamp: number
   reasoningContent?: string
+  hasToolCalls?: boolean
+  toolExchangeMessages?: Array<Record<string, unknown>>
   isInterrupted?: boolean
+  attachments?: Array<{ id: string; type: string; name: string; mimeType: string; size: number; data?: string; url?: string }>
 }
 
 interface ConversationData {
