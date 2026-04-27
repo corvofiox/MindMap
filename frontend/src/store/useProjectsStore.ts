@@ -664,6 +664,7 @@ export const useProjectsStore = create<ProjectsState>()(
         },
 
         reorderNodePoolFolders: async (updates) => {
+          const originalFolders = get().nodePoolFolders
           const folders = get().nodePoolFolders
           const updatedFolders = folders.map(f => {
             const update = updates.find(u => u.id === f.id)
@@ -676,11 +677,13 @@ export const useProjectsStore = create<ProjectsState>()(
               updates.map(u => api.updateNodePoolFolder(u.id, { sortOrder: u.sortOrder }))
             )
           } catch (error) {
+            set({ nodePoolFolders: originalFolders })
             handleError(error, '重新排序节点池文件夹失败')
           }
         },
 
         reorderNodeCards: async (updates) => {
+          const originalNodePool = get().nodePool
           const nodePool = get().nodePool
           const updatedCards = nodePool.map(c => {
             const update = updates.find(u => u.id === c.id)
@@ -693,6 +696,7 @@ export const useProjectsStore = create<ProjectsState>()(
               updates.map(u => api.updateNodeCard(u.id, { sortOrder: u.sortOrder }))
             )
           } catch (error) {
+            set({ nodePool: originalNodePool })
             handleError(error, '重新排序节点卡片失败')
           }
         },

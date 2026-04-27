@@ -57,6 +57,11 @@ interface PendingNodeChanges {
   changes: Map<string, FieldChange>
 }
 
+interface PendingConnectionChanges {
+  connectionId: string
+  changes: Map<string, FieldChange>
+}
+
 interface ConflictResolutionResult {
   value: unknown
   strategy: 'local' | 'remote' | 'merged' | 'conflict'
@@ -86,6 +91,7 @@ class CollaborationService {
   private isDestroyed = false
 
   private pendingNodeChanges = new Map<string, PendingNodeChanges>()
+  private pendingConnectionChanges = new Map<string, PendingConnectionChanges>()
   private lastSyncedVersions = new Map<string, number>()
   private conflictResolutionLog: ConflictResolutionResult[] = []
   private recentPositionChanges = new Map<string, number>()
@@ -205,6 +211,7 @@ class CollaborationService {
     this.userListeners = []
     this.isFlushingQueue = false
     this.pendingNodeChanges.clear()
+    this.pendingConnectionChanges.clear()
     this.lastSyncedVersions.clear()
     this.conflictResolutionLog = []
     this.recentPositionChanges.clear()
@@ -215,18 +222,18 @@ class CollaborationService {
     if (!this.canvasId) return
 
     try {
-      const store = useCanvasStore.getState()
-      const nodes = Array.from(store.nodes.values())
-      const groups = Array.from(store.groups.values())
-      const domains = Array.from(store.domains.values())
-      const connections = Array.from(store.connections.values())
+      const syncedData = await this.syncBeforeSave()
+      if (!syncedData) return
 
-      if (nodes.length > 0 || groups.length > 0 || domains.length > 0 || connections.length > 0) {
-        await saveCanvasNodesData(this.canvasId, { nodes, groups, domains, connections })
-        logger.info('Collaboration data saved before disconnect')
-      }
+      await saveCanvasNodesData(this.canvasId, {
+        nodes: syncedData.nodes,
+        groups: syncedData.groups,
+        domains: syncedData.domains,
+        connections: syncedData.connections,
+      })
+      logger.info('Collaboration data merged and saved')
     } catch (error) {
-      logger.error('Failed to save collaboration data before disconnect', error)
+      logger.error('Failed to save collaboration data', error)
     }
   }
 
@@ -316,6 +323,7 @@ class CollaborationService {
     const hasRemoteData = message.nodes.length > 0 || message.groups.length > 0 || message.domains.length > 0 || message.connections.length > 0
 
     if (hasLocalData && !hasRemoteData) {
+      this.saveCurrentCanvasData()
       return
     }
 
@@ -677,6 +685,31 @@ class CollaborationService {
     return pending !== undefined && pending.changes.size > 0
   }
 
+  trackLocalConnectionChange(connectionId: string, field: string, oldValue: unknown, newValue: unknown, operationType: OperationType): void {
+    let pending = this.pendingConnectionChanges.get(connectionId)
+
+    if (!pending) {
+      pending = {
+        connectionId,
+        changes: new Map()
+      }
+      this.pendingConnectionChanges.set(connectionId, pending)
+    }
+
+    pending.changes.set(field, {
+      field,
+      oldValue,
+      newValue,
+      operationType,
+      timestamp: Date.now()
+    })
+  }
+
+  private hasPendingConnectionChanges(connectionId: string): boolean {
+    const pending = this.pendingConnectionChanges.get(connectionId)
+    return pending !== undefined && pending.changes.size > 0
+  }
+
   trackLocalChange(nodeId: string, field: string, oldValue: unknown, newValue: unknown, operationType: OperationType): void {
     let pending = this.pendingNodeChanges.get(nodeId)
 
@@ -783,15 +816,21 @@ class CollaborationService {
         return
       }
 
-      const mergedConn = this.mergeConnectionFields(localConn, remoteConn)
+      const hasPending = this.hasPendingConnectionChanges(id)
+      const mergedConn = this.mergeConnectionFields(localConn, remoteConn, hasPending)
       merged.set(id, mergedConn)
     })
 
     return Array.from(merged.values())
   }
 
-  private mergeConnectionFields(local: Connection, remote: Connection): Connection {
+  private mergeConnectionFields(local: Connection, remote: Connection, hasPendingChanges: boolean): Connection {
+    if (!hasPendingChanges) {
+      return { ...remote }
+    }
+
     const result: Connection = { ...local }
+    const pending = this.pendingConnectionChanges.get(local.id)
 
     const geometryFields: (keyof Pick<Connection, 'fromPort' | 'toPort' | 'type' | 'style' | 'color' | 'width' | 'arrowType' | 'direction' | 'label' | 'bendPoints'>)[] = [
       'fromPort', 'toPort', 'type', 'style', 'color', 'width', 'arrowType', 'direction', 'label', 'bendPoints'
@@ -799,9 +838,17 @@ class CollaborationService {
 
     geometryFields.forEach((field) => {
       const remoteVal = remote[field]
-      if (remoteVal !== undefined) {
-        (result as unknown as Record<string, unknown>)[field] = remoteVal
+      if (remoteVal === undefined) return
+      const localVal = local[field]
+
+      if (JSON.stringify(remoteVal) === JSON.stringify(localVal)) return
+
+      const localChange = pending?.changes.get(field)
+      if (localChange) {
+        return
       }
+
+      (result as unknown as Record<string, unknown>)[field] = remoteVal
     })
 
     return result
@@ -995,7 +1042,7 @@ class CollaborationService {
     }
   }
 
-  // 专用于保存前的合并：优先保留本地数据，但避免版本号竞争
+  // 专用于保存前的合并：逐字段三向合并，利用 pendingChanges 精确保护本地修改
   private mergeNodesForSave(localNodes: Node[], remoteNodes: Node[]): Node[] {
     const merged = new Map<string, Node>()
 
@@ -1008,62 +1055,46 @@ class CollaborationService {
       const localNode = merged.get(id)
 
       if (!localNode) {
-        // 本地没有，添加远程节点
         merged.set(id, remoteNode)
         return
       }
 
-      // 本地有该节点，检查是否有 pending changes
       const hasPendingChanges = this.hasPendingChanges(id)
       const editingState = this.getEditingState()
       const isEditingThisNode = editingState.nodeId === id
       const localVersion = localNode._version || 0
       const remoteVersion = remoteNode._version || 0
+      const lastSyncedVersion = this.lastSyncedVersions.get(id) || 0
 
-      // 检查远程是否有更新（远程版本号大于本地）
-      const hasRemoteUpdate = remoteVersion > localVersion
+      // 如果没有任何冲突迹象，直接接受远程（远程更新了而我们没改过）
+      if (!hasPendingChanges && !isEditingThisNode && remoteVersion > localVersion) {
+        merged.set(id, { ...remoteNode })
+        this.lastSyncedVersions.set(id, remoteVersion)
+        return
+      }
 
-      if (isEditingThisNode) {
-        // 如果正在编辑该节点，优先保留本地内容，但合并其他字段的远程更新
-        const mergedNode = this.mergeNodeContentWithRemoteFields(localNode, remoteNode)
-        merged.set(id, mergedNode)
-      } else if (hasPendingChanges && hasRemoteUpdate) {
-        // 有 pending changes 且远程有更新：使用字段级合并策略
-        // 保留本地 content 字段，接受远程的其他字段更新
-        const mergedNode = this.mergeNodeContentWithRemoteFields(localNode, remoteNode)
-        merged.set(id, mergedNode)
-      } else if (hasPendingChanges) {
-        // 只有 pending changes，没有远程更新：保留本地节点
-        // 不递增版本号，因为数据没有冲突
-        merged.set(id, localNode)
+      // 有本地修改或正在编辑 — 使用逐字段合并（和 sync 路径一致）
+      // pendingNodeChanges 记录了哪些字段被本地修改过
+      // 没被修改的字段接受远程，被修改的字段保留本地
+      const conflictType = this.detectConflictType(
+        localVersion, remoteVersion, lastSyncedVersion, hasPendingChanges
+      )
+
+      if (conflictType === 'sequential_remote') {
+        merged.set(id, { ...remoteNode })
+      } else if (conflictType === 'sequential_local') {
+        merged.set(id, { ...localNode })
       } else {
-        // 没有 pending changes，使用正常的合并逻辑
-        const lastSyncedVersion = this.lastSyncedVersions.get(id) || 0
-        const conflictType = this.detectConflictType(localVersion, remoteVersion, lastSyncedVersion, false)
-        const mergedNode = this.resolveNodeConflict(localNode, remoteNode, conflictType, lastSyncedVersion)
+        const mergedNode = this.mergeNodeFieldsWithConflictResolution(
+          localNode, remoteNode, lastSyncedVersion, conflictType === 'diverged'
+        )
         merged.set(id, mergedNode)
       }
+
+      this.lastSyncedVersions.set(id, Math.max(localVersion, remoteVersion))
     })
 
     return Array.from(merged.values())
-  }
-
-  // 合并节点：保留本地 content，接受远程的其他字段
-  private mergeNodeContentWithRemoteFields(local: Node, remote: Node): Node {
-    const result: Node = { ...remote }
-
-    // 保留本地的 content 相关字段
-    if (local.title !== undefined) {
-      result.title = local.title
-    }
-    if (local.content !== undefined) {
-      result.content = local.content
-    }
-
-    // 版本号使用最大值，避免版本号竞争
-    result._version = Math.max(local._version || 0, remote._version || 0)
-
-    return result
   }
 }
 

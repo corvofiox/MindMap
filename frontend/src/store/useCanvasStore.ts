@@ -81,11 +81,13 @@ interface CanvasState {
   // Domain actions
   addDomain: (domain: Domain) => void
   updateDomain: (id: string, updates: Partial<Domain>) => void
+  updateDomainWithoutHistory: (id: string, updates: Partial<Domain>) => void
   removeDomain: (id: string) => void
 
   // Connection actions
   addConnection: (connection: Connection) => void
   updateConnection: (id: string, updates: Partial<Connection>) => void
+  updateConnectionWithoutHistory: (id: string, updates: Partial<Connection>) => void
   removeConnection: (id: string) => void
 
   // Bend point actions
@@ -453,6 +455,18 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     })
   },
 
+  updateDomainWithoutHistory: (id, updates) => {
+    set((state) => {
+      const domains = new Map(state.domains)
+      const domain = domains.get(id)
+      if (domain) {
+        domains.set(id, { ...domain, ...updates })
+        return { domains, isDirty: true }
+      }
+      return {}
+    })
+  },
+
   removeDomain: (id) => {
     const state = get()
     const domain = state.domains.get(id)
@@ -527,6 +541,18 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         }
         return {}
       },
+    })
+  },
+
+  updateConnectionWithoutHistory: (id, updates) => {
+    set((state) => {
+      const connections = new Map(state.connections)
+      const connection = connections.get(id)
+      if (connection) {
+        connections.set(id, { ...connection, ...updates })
+        return { connections, isDirty: true }
+      }
+      return {}
     })
   },
 
@@ -785,7 +811,11 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           connections.delete(conn.id)
         }
         // 异步添加卡片到节点池
-        onExecute?.()
+        if (onExecute) {
+          onExecute().catch(() => {
+            // Logged by caller
+          })
+        }
         return { nodes, connections, selectedIds: [], isDirty: true }
       },
       undo: () => {
@@ -797,7 +827,11 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           connections.set(conn.id, conn)
         }
         // 异步从节点池移除卡片（撤销时）
-        onUndo?.()
+        if (onUndo) {
+          onUndo().catch(() => {
+            // Silently handle undo callback errors
+          })
+        }
         return { nodes, connections, isDirty: true }
       },
     })
@@ -812,7 +846,11 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         const nodes = new Map(state.nodes)
         nodes.set(node.id, node)
         // 异步从节点池移除卡片
-        onExecute?.()
+        if (onExecute) {
+          onExecute().catch(() => {
+            // Logged by caller
+          })
+        }
         return { nodes, selectedIds: [node.id], isDirty: true }
       },
       undo: () => {
@@ -820,7 +858,11 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         const nodes = new Map(state.nodes)
         nodes.delete(node.id)
         // 异步添加卡片到节点池（撤销时）
-        onUndo?.()
+        if (onUndo) {
+          onUndo().catch(() => {
+            // Silently handle undo callback errors
+          })
+        }
         return { nodes, selectedIds: [], isDirty: true }
       },
     })
@@ -971,6 +1013,10 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   // Bulk actions
   setCanvasData: (data) =>
     set((state) => {
+      const currentUserId = getCurrentUserId()
+      const ownCommands = state.history.commands.filter(
+        cmd => cmd.userId === currentUserId || cmd.userId === undefined
+      )
       return {
         nodes: data.nodes ? new Map(data.nodes.map((n) => [n.id, n])) : state.nodes,
         groups: data.groups ? new Map(data.groups.map((g) => [g.id, g])) : state.groups,
@@ -984,8 +1030,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           : state.connections,
         history: {
           ...state.history,
-          commands: [],
-          currentIndex: -1,
+          commands: ownCommands,
+          currentIndex: ownCommands.length - 1,
         },
       }
     }),

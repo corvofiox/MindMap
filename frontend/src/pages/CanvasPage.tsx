@@ -1312,29 +1312,22 @@ export function CanvasPage() {
       }
 
       try {
-        const syncedData = await collabService.syncBeforeSave()
-        let nodes: Node[], groups: import('@/types').NodeGroup[], domains: import('@/types').Domain[], connections: import('@/types').Connection[]
+        await collabService.syncBeforeSave()
+        // Re-read store after merge to capture any concurrent WebSocket updates
+        const collectedData = collectCanvasData(useCanvasStore.getState())
 
-        if (syncedData) {
-          nodes = syncedData.nodes
-          groups = syncedData.groups
-          domains = syncedData.domains
-          connections = syncedData.connections
-        } else {
-          const collectedData = collectCanvasData(useCanvasStore.getState())
-          nodes = collectedData.nodes
-          groups = collectedData.groups
-          domains = collectedData.domains
-          connections = collectedData.connections
-        }
-
-        await saveCanvasNodesData(id, { nodes, groups, domains, connections })
+        await saveCanvasNodesData(id, {
+          nodes: collectedData.nodes,
+          groups: collectedData.groups,
+          domains: collectedData.domains,
+          connections: collectedData.connections,
+        })
 
         lastSaveTimeRef.current = now
         setDirty(false)
 
         // Generate thumbnail after successful auto-save
-        if (hasCanvasContent(nodes, domains)) {
+        if (hasCanvasContent(collectedData.nodes, collectedData.domains)) {
           await triggerThumbnailGeneration(id)
         }
       } catch (error) {
@@ -1388,31 +1381,23 @@ export function CanvasPage() {
       return
     }
 
-    const syncedData = await collabService.syncBeforeSave()
-    let nodes: Node[], groups: import('@/types').NodeGroup[], domains: import('@/types').Domain[], connections: import('@/types').Connection[]
+    await collabService.syncBeforeSave()
+    const currentState = useCanvasStore.getState()
+    const collectedData = collectCanvasData(currentState)
 
-    if (syncedData) {
-      nodes = syncedData.nodes
-      groups = syncedData.groups
-      domains = syncedData.domains
-      connections = syncedData.connections
-    } else {
-      const currentState = useCanvasStore.getState()
-      const collectedData = collectCanvasData(currentState)
-      nodes = collectedData.nodes
-      groups = collectedData.groups
-      domains = collectedData.domains
-      connections = collectedData.connections
-    }
-
-    await saveCanvasNodesData(id, { nodes, groups, domains, connections })
+    await saveCanvasNodesData(id, {
+      nodes: collectedData.nodes,
+      groups: collectedData.groups,
+      domains: collectedData.domains,
+      connections: collectedData.connections,
+    })
 
     const now = Date.now()
     lastSaveTimeRef.current = now
     setDirty(false)
 
     // Generate thumbnail immediately when manually saving
-    if (hasCanvasContent(nodes, domains)) {
+    if (hasCanvasContent(collectedData.nodes, collectedData.domains)) {
       await generateThumbnail(id)
     }
   }, [canvasId, setDirty, generateThumbnail])
@@ -1431,16 +1416,17 @@ export function CanvasPage() {
         e.preventDefault()
         e.returnValue = ''
 
-        const { nodes, groups, domains, connections } = collectCanvasData(state)
+        const canvasData = collectCanvasData(state)
 
         try {
-          saveToCache(id, { nodes, groups, domains, connections })
+          saveToCache(id, canvasData)
         } catch (error) {
           // Silently fail for cache save errors
         }
 
         try {
           const token = localStorage.getItem('mindmap_token')
+          const body = JSON.stringify(canvasData)
 
           fetch(`/api/canvases/${id}/data`, {
             method: 'POST',
@@ -1448,7 +1434,7 @@ export function CanvasPage() {
               'Content-Type': 'application/json',
               'Authorization': `Bearer ${token}`,
             },
-            body: JSON.stringify({ nodes, groups, domains, connections }),
+            body,
             keepalive: true,
           }).catch(() => {
             // Silently fail for fetch errors

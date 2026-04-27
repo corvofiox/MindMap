@@ -225,36 +225,9 @@ export function useCollaboration({ canvasId, enabled = true }: UseCollaborationO
       const { id, updates } = data as { id: string; updates: Partial<Domain> }
       const store = useCanvasStore.getState()
       if (store.domains.has(id)) {
-        const domain = store.domains.get(id)
-        if (domain) {
-          const originalValues = Object.keys(updates).reduce((acc, key) => {
-            return { ...acc, [key]: (domain as Domain)[key as keyof Domain] }
-          }, {} as Record<string, unknown>)
-          isApplyingRemoteChanges.current = true
-          store.executeCommand({
-            type: 'updateDomain',
-            timestamp: Date.now(),
-            execute: () => {
-              const domains = new Map(useCanvasStore.getState().domains)
-              const d = domains.get(id)
-              if (d) {
-                domains.set(id, { ...d, ...updates })
-                return { domains, isDirty: true }
-              }
-              return {}
-            },
-            undo: () => {
-              const domains = new Map(useCanvasStore.getState().domains)
-              const d = domains.get(id)
-              if (d) {
-                domains.set(id, { ...d, ...originalValues })
-                return { domains, isDirty: true }
-              }
-              return {}
-            },
-          }, true)
-          isApplyingRemoteChanges.current = false
-        }
+        isApplyingRemoteChanges.current = true
+        store.updateDomainWithoutHistory(id, updates)
+        isApplyingRemoteChanges.current = false
       }
     }
 
@@ -309,36 +282,9 @@ export function useCollaboration({ canvasId, enabled = true }: UseCollaborationO
       const { id, updates } = data as { id: string; updates: Partial<Connection> }
       const store = useCanvasStore.getState()
       if (store.connections.has(id)) {
-        const connection = store.connections.get(id)
-        if (connection) {
-          const originalValues = Object.keys(updates).reduce((acc, key) => {
-            return { ...acc, [key]: (connection as Connection)[key as keyof Connection] }
-          }, {} as Record<string, unknown>)
-          isApplyingRemoteChanges.current = true
-          store.executeCommand({
-            type: 'updateConnection',
-            timestamp: Date.now(),
-            execute: () => {
-              const connections = new Map(useCanvasStore.getState().connections)
-              const c = connections.get(id)
-              if (c) {
-                connections.set(id, { ...c, ...updates })
-                return { connections, isDirty: true }
-              }
-              return {}
-            },
-            undo: () => {
-              const connections = new Map(useCanvasStore.getState().connections)
-              const c = connections.get(id)
-              if (c) {
-                connections.set(id, { ...c, ...originalValues })
-                return { connections, isDirty: true }
-              }
-              return {}
-            },
-          }, true)
-          isApplyingRemoteChanges.current = false
-        }
+        isApplyingRemoteChanges.current = true
+        store.updateConnectionWithoutHistory(id, updates)
+        isApplyingRemoteChanges.current = false
       }
     }
 
@@ -535,7 +481,12 @@ export function useCollaboration({ canvasId, enabled = true }: UseCollaborationO
         })
 
         addedConnections.forEach(connection => collabService.sendOperation('add-connection', connection))
-        updatedConnections.forEach(({ id, updates }) => collabService.sendOperation('update-connection', { id, updates }))
+        updatedConnections.forEach(({ id, updates }) => {
+          collabService.sendOperation('update-connection', { id, updates })
+          Object.keys(updates).forEach((field) => {
+            collabService.trackLocalConnectionChange(id, field, undefined, (updates as Record<string, unknown>)[field], 'update')
+          })
+        })
         removedConnectionIds.forEach(id => collabService.sendOperation('remove-connection', { id }))
       }
     })

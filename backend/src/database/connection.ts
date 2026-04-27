@@ -96,7 +96,9 @@ export async function initializeDb(): Promise<AppDatabase> {
 
 let saveTimeout: NodeJS.Timeout | null = null
 let lastSaveTime = Date.now()
+let firstScheduleTime = 0
 const SAVE_INTERVAL = 5000
+const MAX_SAVE_DELAY = 15000
 
 async function saveToDisk() {
   try {
@@ -111,14 +113,24 @@ async function saveToDisk() {
 }
 
 export function scheduleSave() {
+  const now = Date.now()
   if (saveTimeout) {
     clearTimeout(saveTimeout)
   }
+
+  if (firstScheduleTime === 0) {
+    firstScheduleTime = now
+  }
+
   const elapsed = Date.now() - lastSaveTime
-  const delay = Math.max(0, SAVE_INTERVAL - elapsed)
+  const sinceFirstSchedule = now - firstScheduleTime
+  const maxRemaining = Math.max(0, MAX_SAVE_DELAY - sinceFirstSchedule)
+  const delay = Math.min(Math.max(0, SAVE_INTERVAL - elapsed), maxRemaining)
+
   saveTimeout = setTimeout(() => {
     saveToDisk()
     saveTimeout = null
+    firstScheduleTime = 0
   }, delay || 100)
 }
 
