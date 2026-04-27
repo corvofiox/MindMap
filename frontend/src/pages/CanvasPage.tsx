@@ -1444,7 +1444,7 @@ export function CanvasPage() {
         }
 
         // Generate thumbnail when page is being unloaded
-        if (hasCanvasContent(nodes, domains)) {
+        if (hasCanvasContent(canvasData.nodes, canvasData.domains)) {
           triggerThumbnailGeneration(id)
         }
       }
