@@ -1312,26 +1312,16 @@ export function CanvasPage() {
       }
 
       try {
-        const syncedData = await collabService.syncBeforeSave()
-        if (!syncedData) {
-          dbSaveTimeoutRef.current = setTimeout(saveToDatabase, AUTO_SAVE_INTERVAL)
-          return
-        }
-
-        await saveCanvasNodesData(id, {
-          nodes: syncedData.nodes,
-          groups: syncedData.groups,
-          domains: syncedData.domains,
-          connections: syncedData.connections,
-        })
+        // Server now handles auto-persistence via WebSocket
+        // Client just needs to generate thumbnail periodically
+        const state = useCanvasStore.getState()
+        const canvasData = collectCanvasData(state)
 
         lastSaveTimeRef.current = now
-        // 只清除 merge 开始前已有的 pendingChanges，merge 开始后新产生的保留
-        collabService.clearPendingChangesBefore(syncedData.mergeTimestamp)
-        setDirty(collabService.hasPendingChangesAfter(syncedData.mergeTimestamp))
+        setDirty(false)
 
         // Generate thumbnail after successful auto-save
-        if (hasCanvasContent(syncedData.nodes, syncedData.domains)) {
+        if (hasCanvasContent(canvasData.nodes, canvasData.domains)) {
           await triggerThumbnailGeneration(id)
         }
       } catch (error) {
@@ -1385,23 +1375,17 @@ export function CanvasPage() {
       return
     }
 
-    const syncedData = await collabService.syncBeforeSave()
-    if (!syncedData) return
-
-    await saveCanvasNodesData(id, {
-      nodes: syncedData.nodes,
-      groups: syncedData.groups,
-      domains: syncedData.domains,
-      connections: syncedData.connections,
-    })
+    // Server now handles persistence via WebSocket
+    // Manual save just triggers thumbnail generation
+    const state = useCanvasStore.getState()
+    const canvasData = collectCanvasData(state)
 
     const now = Date.now()
     lastSaveTimeRef.current = now
-    collabService.clearPendingChangesBefore(syncedData.mergeTimestamp)
-    setDirty(collabService.hasPendingChangesAfter(syncedData.mergeTimestamp))
+    setDirty(false)
 
     // Generate thumbnail immediately when manually saving
-    if (hasCanvasContent(syncedData.nodes, syncedData.domains)) {
+    if (hasCanvasContent(canvasData.nodes, canvasData.domains)) {
       await generateThumbnail(id)
     }
   }, [canvasId, setDirty, generateThumbnail])

@@ -5,9 +5,7 @@ import type { Node, NodeGroup, Domain, Connection } from '@/types'
 import {
   setLocalEditingUpdate,
   isLocalEditingUpdate,
-  setEditingFieldForCollab,
   getEditingState,
-  dispatchEditingFieldChange,
 } from '@/hooks/useCollabEditing'
 import type { OperationType } from '@/services/collaboration'
 
@@ -20,35 +18,11 @@ export function useCollaboration({ canvasId, enabled = true }: UseCollaborationO
   const isApplyingRemoteChanges = useRef(false)
 
   useEffect(() => {
-    const handleEditingFieldChange = (e: Event) => {
-      if (!(e instanceof CustomEvent)) return
-      const { field, nodeId, version } = e.detail
-      const state = getEditingState()
-
-      if (typeof version === 'number' && version < state.version) {
-        return
-      }
-
-      if (field === 'title' || field === 'content') {
-        setEditingFieldForCollab(nodeId ?? null, field)
-      } else if (field === null) {
-        if (state.nodeId === nodeId) {
-          setEditingFieldForCollab(null, null)
-        }
-      }
-    }
-
-    window.addEventListener('nodeEditingFieldChange', handleEditingFieldChange)
-    return () => {
-      window.removeEventListener('nodeEditingFieldChange', handleEditingFieldChange)
-    }
-  }, [])
-
-  useEffect(() => {
     if (!enabled || !canvasId || canvasId <= 0) return
 
     collabService.connect(canvasId)
 
+    // Remote operation handlers - directly apply server-authorized changes
     const handleAddNode = (data: unknown) => {
       const node = data as Node
       const store = useCanvasStore.getState()
@@ -77,26 +51,31 @@ export function useCollaboration({ canvasId, enabled = true }: UseCollaborationO
       const store = useCanvasStore.getState()
       if (store.nodes.has(id)) {
         const currentState = getEditingState()
-        const filteredUpdates = { ...updates }
 
-        if (collabService.isRecentPositionChange(id)) {
-          delete filteredUpdates.x
-          delete filteredUpdates.y
+        // Type-safe field filtering: skip updates for fields the user is currently editing
+        const validNodeFields: Array<keyof Node> = [
+          'id', 'x', 'y', 'width', 'height', 'title', 'content', 'color',
+          'fontSize', 'textAlign', 'titleAlign', 'collapsedTitleAlign', 'contentAlign',
+          'collapsed', 'locked', 'expandedHeight', 'type', 'imageUrl', 'aspectRatio', '_version'
+        ]
+
+        const filteredUpdates: Partial<Node> = {}
+        for (const [key, value] of Object.entries(updates)) {
+          // Skip the field the user is currently editing
+          if (currentState.nodeId === id && currentState.field && key === currentState.field) {
+            continue
+          }
+          // Only include valid Node fields
+          if (validNodeFields.includes(key as keyof Node)) {
+            (filteredUpdates as Record<string, unknown>)[key] = value
+          }
         }
 
-        const finalUpdates = Object.fromEntries(
-          Object.entries(filteredUpdates).filter(([field]) => {
-            return !(
-              collabService.isRecentNodeFieldUpdate(id, field) ||
-              (currentState.nodeId === id && currentState.field === field)
-            )
-          })
-        ) as Partial<Node>
-        if (Object.keys(finalUpdates).length === 0) {
+        if (Object.keys(filteredUpdates).length === 0) {
           return
         }
         isApplyingRemoteChanges.current = true
-        store.updateNodeWithoutHistory(id, finalUpdates)
+        store.updateNodeWithoutHistory(id, filteredUpdates)
         isApplyingRemoteChanges.current = false
       }
     }
@@ -325,6 +304,7 @@ export function useCollaboration({ canvasId, enabled = true }: UseCollaborationO
     collabService.onOperation('update-connection', handleUpdateConnection)
     collabService.onOperation('remove-connection', handleRemoveConnection)
 
+    // Local change detection -> send to server
     const unsubscribe = useCanvasStore.subscribe((state, prevState) => {
       if (isApplyingRemoteChanges.current) return
       if (isLocalEditingUpdate()) return

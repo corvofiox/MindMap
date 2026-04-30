@@ -5,6 +5,7 @@ import { CANVAS_DEFAULTS, DOMAIN_DEFAULTS } from '@/constants'
 import { screenToCanvas, generateId, clamp } from '@/utils/canvas'
 import { snapToGridFabric } from '@/utils/fabric'
 import { IncrementalRenderer, createIncrementalRenderer } from '@/utils/incrementalRenderer'
+import { collabService } from '@/services/collaboration'
 
 interface FabricCanvasProps {
   canvasId: number
@@ -57,6 +58,30 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
     setSelectedIds([])
   }, [setSelectedIds])
 
+  // Track active object interactions for collaboration protection
+  const activeObjectRef = useRef<string | null>(null)
+  const interactionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const startObjectInteraction = useCallback((nodeId: string) => {
+    if (interactionTimeoutRef.current) {
+      clearTimeout(interactionTimeoutRef.current)
+    }
+    activeObjectRef.current = nodeId
+    collabService.startInteraction(nodeId, 'position')
+  }, [])
+
+  const endObjectInteraction = useCallback(() => {
+    if (interactionTimeoutRef.current) {
+      clearTimeout(interactionTimeoutRef.current)
+    }
+    interactionTimeoutRef.current = setTimeout(() => {
+      if (activeObjectRef.current) {
+        collabService.endInteraction(activeObjectRef.current)
+        activeObjectRef.current = null
+      }
+    }, 100)
+  }, [])
+
   // Object modification handlers
   const handleObjectMoved = useCallback((e: any) => {
     // Only allow left mouse button to move objects
@@ -72,9 +97,13 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
 
     // 域不可移动，只处理节点
     if (data.type === 'node') {
+      // Mark interaction start on first move
+      if (activeObjectRef.current !== data.id) {
+        startObjectInteraction(data.id)
+      }
       updateNode(data.id, { x: obj.left, y: obj.top })
     }
-  }, [updateNode])
+  }, [updateNode, startObjectInteraction])
 
   const handleObjectScaling = useCallback((e: any) => {
     const obj = e.target
@@ -85,6 +114,11 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
     if (data.type === 'node') {
       const node = nodes.get(data.id)
       if (!node) return
+
+      // Mark interaction start on first scale
+      if (activeObjectRef.current !== data.id) {
+        startObjectInteraction(data.id)
+      }
 
       updateNode(data.id, {
         width: obj.width * obj.scaleX,
@@ -97,7 +131,7 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
         scaleY: 1,
       })
     }
-  }, [nodes, updateNode])
+  }, [nodes, updateNode, startObjectInteraction])
 
   // Mouse event handlers
   const handleMouseWheel = useCallback((e: any) => {
@@ -282,9 +316,12 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
       setDomainStartPos({ x: 0, y: 0 })
     }
 
+    // End object interaction when mouse is released
+    endObjectInteraction()
+
     // Clear the mouse button record when mouse is released
     mouseButtonRef.current = null
-  }, [isCreatingDomain, domainPreviewRect, domainStartPos, domains, addDomain])
+  }, [isCreatingDomain, domainPreviewRect, domainStartPos, domains, addDomain, endObjectInteraction])
 
   // Initialize Fabric canvas
   useEffect(() => {

@@ -135,7 +135,7 @@ export function applyUpdateNode(canvasId: number, nodeId: string, updates: any):
   if (!existing) {
     return false
   }
-  state.nodes.set(nodeId, { ...existing, ...updates })
+  state.nodes.set(nodeId, { ...(existing as object), ...updates })
   state.version++
   state.lastModified = Date.now()
   schedulePersistCanvasState(canvasId)
@@ -177,7 +177,7 @@ export function applyUpdateGroup(canvasId: number, groupId: string, updates: any
   const state = ensureCanvasState(canvasId)
   const existing = state.groups.get(groupId)
   if (!existing) return false
-  state.groups.set(groupId, { ...existing, ...updates })
+  state.groups.set(groupId, { ...(existing as object), ...updates })
   state.version++
   state.lastModified = Date.now()
   schedulePersistCanvasState(canvasId)
@@ -210,7 +210,7 @@ export function applyUpdateDomain(canvasId: number, domainId: string, updates: a
   const state = ensureCanvasState(canvasId)
   const existing = state.domains.get(domainId)
   if (!existing) return false
-  state.domains.set(domainId, { ...existing, ...updates })
+  state.domains.set(domainId, { ...(existing as object), ...updates })
   state.version++
   state.lastModified = Date.now()
   schedulePersistCanvasState(canvasId)
@@ -243,7 +243,7 @@ export function applyUpdateConnection(canvasId: number, connectionId: string, up
   const state = ensureCanvasState(canvasId)
   const existing = state.connections.get(connectionId)
   if (!existing) return false
-  state.connections.set(connectionId, { ...existing, ...updates })
+  state.connections.set(connectionId, { ...(existing as object), ...updates })
   state.version++
   state.lastModified = Date.now()
   schedulePersistCanvasState(canvasId)

@@ -2,7 +2,6 @@ import { useCanvasStore } from '@/store/useCanvasStore'
 import { useAuthStore } from '@/store/useAuthStore'
 import { getEditingState } from '@/hooks/useCollabEditing'
 import { logger } from '@/utils/logger'
-import { saveCanvasNodesData } from '@/services/api'
 import type { Node, NodeGroup, Domain, Connection } from '@/types'
 
 interface CollabUser {
@@ -62,12 +61,6 @@ interface PendingConnectionChanges {
   changes: Map<string, FieldChange>
 }
 
-interface ConflictResolutionResult {
-  value: unknown
-  strategy: 'local' | 'remote' | 'merged' | 'conflict'
-  reason: string
-}
-
 class CollaborationService {
   private ws: WebSocket | null = null
   private canvasId: number | null = null
@@ -92,12 +85,20 @@ class CollaborationService {
 
   private pendingNodeChanges = new Map<string, PendingNodeChanges>()
   private pendingConnectionChanges = new Map<string, PendingConnectionChanges>()
-  private lastSyncedVersions = new Map<string, number>()
   private isSyncing = false
-  private mergeStartTime = 0
-  private conflictResolutionLog: ConflictResolutionResult[] = []
   private recentPositionChanges = new Map<string, number>()
   private recentNodeUpdates = new Map<string, Map<string, number>>()
+
+  // Server version tracking
+  private serverVersion = 0
+  private isAwaitingSync = false
+
+  // User interaction protection - when user is actively interacting with canvas,
+  // remote updates for the same element are deferred
+  private activeUserInteractions = new Map<string, { field: string | null; startTime: number }>()
+  private deferredOperations: Array<{ operation: string; data: unknown; timestamp: number }> = []
+  private interactionCheckInterval: ReturnType<typeof setInterval> | null = null
+  private readonly INTERACTION_TIMEOUT_MS = 500
 
   connect(canvasId: number) {
     if (this.isDestroyed) return
@@ -132,6 +133,7 @@ class CollaborationService {
         this.requestSync()
         this.flushOfflineQueue()
         this.startCleanupInterval()
+        this.startInteractionCheckInterval()
       }
 
       this.ws.onmessage = (event) => {
@@ -154,6 +156,82 @@ class CollaborationService {
         this.scheduleReconnect(canvasId)
       }
     }
+  }
+
+  // User interaction protection API
+  startInteraction(nodeId: string, field: string | null = null): void {
+    this.activeUserInteractions.set(nodeId, { field, startTime: Date.now() })
+  }
+
+  endInteraction(nodeId: string): void {
+    this.activeUserInteractions.delete(nodeId)
+    // Process deferred operations for this node
+    this.processDeferredOperations(nodeId)
+  }
+
+  private isNodeBeingInteractedWith(nodeId: string, field?: string): boolean {
+    const interaction = this.activeUserInteractions.get(nodeId)
+    if (!interaction) return false
+
+    // Check if interaction has timed out
+    if (Date.now() - interaction.startTime > this.INTERACTION_TIMEOUT_MS) {
+      this.activeUserInteractions.delete(nodeId)
+      return false
+    }
+
+    // If field is specified, only block if interacting with same field
+    if (field && interaction.field && field !== interaction.field) {
+      return false
+    }
+
+    return true
+  }
+
+  private startInteractionCheckInterval(): void {
+    if (this.interactionCheckInterval) return
+    this.interactionCheckInterval = setInterval(() => {
+      const now = Date.now()
+      for (const [nodeId, interaction] of this.activeUserInteractions) {
+        if (now - interaction.startTime > this.INTERACTION_TIMEOUT_MS) {
+          this.activeUserInteractions.delete(nodeId)
+          this.processDeferredOperations(nodeId)
+        }
+      }
+    }, this.INTERACTION_TIMEOUT_MS)
+  }
+
+  private stopInteractionCheckInterval(): void {
+    if (this.interactionCheckInterval) {
+      clearInterval(this.interactionCheckInterval)
+      this.interactionCheckInterval = null
+    }
+  }
+
+  private processDeferredOperations(nodeId: string): void {
+    const remainingDeferred: Array<{ operation: string; data: unknown; timestamp: number }> = []
+
+    for (const op of this.deferredOperations) {
+      const opNodeId = this.extractNodeIdFromOperation(op.operation, op.data)
+      if (opNodeId === nodeId && !this.isNodeBeingInteractedWith(nodeId)) {
+        // Apply the deferred operation now
+        const handlers = this.operationHandlers.get(op.operation)
+        if (handlers) {
+          handlers.forEach(handler => handler(op.data))
+        }
+      } else {
+        remainingDeferred.push(op)
+      }
+    }
+
+    this.deferredOperations = remainingDeferred
+  }
+
+  private extractNodeIdFromOperation(operation: string, data: unknown): string | null {
+    if (!data || typeof data !== 'object') return null
+    const d = data as Record<string, unknown>
+    if ('id' in d && typeof d.id === 'string') return d.id
+    if ('nodeId' in d && typeof d.nodeId === 'string') return d.nodeId
+    return null
   }
 
   private scheduleReconnect(canvasId: number) {
@@ -184,6 +262,7 @@ class CollaborationService {
       this.reconnectTimeout = null
     }
     this.stopCleanupInterval()
+    this.stopInteractionCheckInterval()
     if (this.ws) {
       this.ws.onopen = null
       this.ws.onmessage = null
@@ -197,10 +276,6 @@ class CollaborationService {
   }
 
   disconnect() {
-    if (this.canvasId && !this.isDestroyed) {
-      this.saveCurrentCanvasData()
-    }
-
     this.isIntentionallyClosed = true
     this.isDestroyed = true
     this.cleanupWebSocket()
@@ -213,38 +288,14 @@ class CollaborationService {
     this.userListeners = []
     this.isFlushingQueue = false
     this.isSyncing = false
-    this.mergeStartTime = 0
     this.pendingNodeChanges.clear()
     this.pendingConnectionChanges.clear()
-    this.lastSyncedVersions.clear()
-    this.conflictResolutionLog = []
     this.recentPositionChanges.clear()
     this.recentNodeUpdates.clear()
-  }
-
-  private async saveCurrentCanvasData() {
-    if (!this.canvasId) return
-
-    try {
-      const syncedData = await this.syncBeforeSave()
-      if (!syncedData) return
-
-      await saveCanvasNodesData(this.canvasId, {
-        nodes: syncedData.nodes,
-        groups: syncedData.groups,
-        domains: syncedData.domains,
-        connections: syncedData.connections,
-      })
-      this.clearPendingChangesBefore(syncedData.mergeTimestamp)
-      logger.info('Collaboration data merged and saved')
-    } catch (error) {
-      logger.error('Failed to save collaboration data', error)
-    }
-  }
-
-  private async handleForceSave(projectId: number) {
-    logger.info('Received force-save notification for project', projectId)
-    await this.saveCurrentCanvasData()
+    this.serverVersion = 0
+    this.isAwaitingSync = false
+    this.activeUserInteractions.clear()
+    this.deferredOperations = []
   }
 
   isConnected(): boolean {
@@ -286,6 +337,18 @@ class CollaborationService {
   private handleOperation(message: CollabMessage) {
     if (message.senderId === this.userId) return
 
+    // Check if user is currently interacting with the affected node
+    const nodeId = this.extractNodeIdFromOperation(message.operation, message.data)
+    if (nodeId && this.isNodeBeingInteractedWith(nodeId)) {
+      // Defer this operation until interaction ends
+      this.deferredOperations.push({
+        operation: message.operation,
+        data: message.data,
+        timestamp: message.timestamp,
+      })
+      return
+    }
+
     const handlers = this.operationHandlers.get(message.operation)
     if (handlers) {
       handlers.forEach(handler => handler(message.data))
@@ -318,371 +381,66 @@ class CollaborationService {
     this.cursorListeners.forEach(listener => listener(new Map(this.cursors)))
   }
 
-  private handleSync(message: { nodes: Node[]; groups: NodeGroup[]; domains: Domain[]; connections: Connection[] }) {
+  private handleSync(message: {
+    nodes: Node[]
+    groups: NodeGroup[]
+    domains: Domain[]
+    connections: Connection[]
+    version: number
+  }) {
     if (this.isDestroyed) return
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return
 
+    this.isAwaitingSync = false
+
     const store = useCanvasStore.getState()
 
-    const hasLocalData = store.nodes.size > 0 || store.groups.size > 0 || store.domains.size > 0 || store.connections.size > 0
-    const hasRemoteData = message.nodes.length > 0 || message.groups.length > 0 || message.domains.length > 0 || message.connections.length > 0
-
-    if (hasLocalData && !hasRemoteData) {
-      this.saveCurrentCanvasData()
-      return
-    }
+    // Always trust server state during sync
+    // But preserve nodes that user is currently editing
+    const editingState = getEditingState()
+    const editingNodeId = editingState.nodeId
 
     try {
-      if (hasLocalData && hasRemoteData) {
-        const mergedNodes = this.mergeNodes(
-          Array.from(store.nodes.values()),
-          message.nodes
-        )
-        const mergedGroups = this.mergeEntityMaps(
-          Array.from(store.groups.values()),
-          message.groups,
-          (g) => g.id,
-          (g) => g.name
-        )
-        const mergedDomains = this.mergeEntityMaps(
-          Array.from(store.domains.values()),
-          message.domains,
-          (d) => d.id,
-          (d) => d.name
-        )
-        const mergedConnections = this.mergeConnectionsWithVersion(
-          Array.from(store.connections.values()),
-          message.connections
-        )
-
-        this.isSyncing = true
-        store.setCanvasData({
-          nodes: mergedNodes,
-          groups: mergedGroups,
-          domains: mergedDomains,
-          connections: mergedConnections
-        })
-        this.isSyncing = false
-        return
-      }
-
-      message.nodes.forEach(node => {
-        this.lastSyncedVersions.set(node.id, node._version || 0)
-      })
-
       this.isSyncing = true
-      store.setCanvasData({
-        nodes: message.nodes,
-        groups: message.groups,
-        domains: message.domains,
-        connections: message.connections
-      })
-      this.isSyncing = false
-    } catch {
-      this.isSyncing = true
-      store.setCanvasData({
-        nodes: message.nodes,
-        groups: message.groups,
-        domains: message.domains,
-        connections: message.connections
-      })
-      this.isSyncing = false
-    }
-  }
 
-  private mergeEntityMaps<T>(
-    local: T[],
-    remote: T[],
-    getId: (item: T) => string,
-    getTimestamp: (item: T) => number | string | undefined
-  ): T[] {
-    const merged = new Map<string, T>()
-
-    local.forEach((item) => {
-      merged.set(getId(item), item)
-    })
-
-    remote.forEach((remoteItem) => {
-      const id = getId(remoteItem)
-      const localItem = merged.get(id)
-
-      if (!localItem) {
-        merged.set(id, remoteItem)
-      } else {
-        const localTime = getTimestamp(localItem)
-        const remoteTime = getTimestamp(remoteItem)
-
-        const localMs = typeof localTime === 'string' ? new Date(localTime).getTime() : localTime || 0
-        const remoteMs = typeof remoteTime === 'string' ? new Date(remoteTime).getTime() : remoteTime || 0
-
-        if (remoteMs > localMs) {
-          merged.set(id, remoteItem)
-        }
-      }
-    })
-
-    return Array.from(merged.values())
-  }
-
-  private mergeNodes(localNodes: Node[], remoteNodes: Node[]): Node[] {
-    const merged = new Map<string, Node>()
-
-    localNodes.forEach((node) => {
-      merged.set(node.id, node)
-    })
-
-    remoteNodes.forEach((remoteNode) => {
-      const id = remoteNode.id
-      const localNode = merged.get(id)
-
-      if (!localNode) {
-        merged.set(id, remoteNode)
-        this.lastSyncedVersions.set(id, remoteNode._version || 0)
-        return
-      }
-
-      const localVersion = localNode._version || 0
-      const remoteVersion = remoteNode._version || 0
-      const lastSyncedVersion = this.lastSyncedVersions.get(id) || 0
-
-      const hasLocalPendingChanges = this.hasPendingChanges(id)
-      const conflictType = this.detectConflictType(localVersion, remoteVersion, lastSyncedVersion, hasLocalPendingChanges)
-
-      const mergedNode = this.resolveNodeConflict(localNode, remoteNode, conflictType, lastSyncedVersion)
-      merged.set(id, mergedNode)
-
-      this.lastSyncedVersions.set(id, remoteVersion)
-    })
-
-    return Array.from(merged.values())
-  }
-
-  private detectConflictType(
-    localVersion: number,
-    remoteVersion: number,
-    lastSyncedVersion: number,
-    hasLocalPendingChanges: boolean
-  ): 'no_conflict' | 'sequential_remote' | 'sequential_local' | 'concurrent' | 'diverged' {
-    if (remoteVersion === localVersion && localVersion === lastSyncedVersion) {
-      if (hasLocalPendingChanges) {
-        return 'concurrent'
-      }
-      return 'no_conflict'
-    }
-
-    if (remoteVersion > localVersion) {
-      if (localVersion > lastSyncedVersion && hasLocalPendingChanges) {
-        return 'diverged'
-      }
-      if (!hasLocalPendingChanges) {
-        return 'sequential_remote'
-      }
-      return 'diverged'
-    }
-
-    if (localVersion > remoteVersion && remoteVersion === lastSyncedVersion) {
-      return 'sequential_local'
-    }
-
-    if (remoteVersion === localVersion && hasLocalPendingChanges) {
-      return 'concurrent'
-    }
-
-    if (remoteVersion > lastSyncedVersion && localVersion > lastSyncedVersion && remoteVersion !== localVersion) {
-      return 'diverged'
-    }
-
-    return 'no_conflict'
-  }
-
-  private resolveNodeConflict(
-    local: Node,
-    remote: Node,
-    conflictType: 'no_conflict' | 'sequential_remote' | 'sequential_local' | 'concurrent' | 'diverged',
-    lastSyncedVersion: number
-  ): Node {
-    let result: Node
-
-    switch (conflictType) {
-      case 'no_conflict':
-        result = { ...remote }
-        break
-
-      case 'sequential_remote':
-        result = { ...remote }
-        break
-
-      case 'sequential_local':
-        result = { ...local }
-        break
-
-      case 'concurrent':
-      case 'diverged':
-        return this.mergeNodeFieldsWithConflictResolution(local, remote, lastSyncedVersion, conflictType === 'diverged')
-
-      default:
-        result = { ...remote }
-    }
-
-    result._version = Math.max(local._version || 0, remote._version || 0) + 1
-    return result
-  }
-
-  private mergeNodeFieldsWithConflictResolution(
-    local: Node,
-    remote: Node,
-    lastSyncedVersion: number,
-    isDiverged: boolean
-  ): Node {
-    const result: Node = { ...local }
-    const pendingChanges = this.pendingNodeChanges.get(local.id)
-    const editingState = this.getEditingState()
-    const isEditingThisNode = editingState.nodeId === local.id
-
-    const fieldGroups = {
-      content: ['title', 'content'] as const,
-      position: ['x', 'y', 'width', 'height'] as const,
-      style: ['color', 'fontSize', 'textAlign', 'titleAlign', 'contentAlign', 'collapsedTitleAlign'] as const,
-      state: ['collapsed', 'locked', 'expandedHeight'] as const,
-      media: ['type', 'imageUrl', 'aspectRatio'] as const,
-    }
-
-    Object.entries(fieldGroups).forEach(([group, fields]) => {
-      fields.forEach((field) => {
-        const localVal = local[field as keyof Node]
-        const remoteVal = remote[field as keyof Node]
-
-        if (remoteVal === undefined || remoteVal === localVal) {
-          return
-        }
-
-        const resolution = this.resolveFieldConflict(
-          local.id,
-          field,
-          localVal,
-          remoteVal,
-          group as keyof typeof fieldGroups,
-          pendingChanges,
-          isEditingThisNode && editingState.field === field,
-          isDiverged,
-          isEditingThisNode
-        )
-
-        if (resolution.strategy !== 'local') {
-          (result as unknown as Record<string, unknown>)[field] = resolution.value
-        }
-
-        this.conflictResolutionLog.push(resolution)
-      })
-    })
-
-    result._version = Math.max(local._version || 0, remote._version || 0) + 1
-
-    return result
-  }
-
-  private resolveFieldConflict(
-    nodeId: string,
-    field: string,
-    localValue: unknown,
-    remoteValue: unknown,
-    fieldGroup: 'content' | 'position' | 'style' | 'state' | 'media',
-    pendingChanges: PendingNodeChanges | undefined,
-    isCurrentlyEditing: boolean,
-    isDiverged: boolean,
-    isEditingThisNode: boolean
-  ): ConflictResolutionResult {
-    const pendingChange = pendingChanges?.changes.get(field)
-    const hasLocalChange = pendingChange !== undefined
-
-    // 当用户正在编辑该节点的任何 content 字段时，保留所有 content 字段的本地值
-    if (fieldGroup === 'content' && isEditingThisNode) {
-      return {
-        value: localValue,
-        strategy: 'local',
-        reason: 'User is currently editing this node'
-      }
-    }
-
-    if (hasLocalChange && fieldGroup === 'content') {
-      return {
-        value: localValue,
-        strategy: 'local',
-        reason: 'Local has pending changes for this content field'
-      }
-    }
-
-    if (fieldGroup === 'position') {
-      if (hasLocalChange) {
-        const localTime = pendingChange.timestamp
-        const now = Date.now()
-        const timeDiff = now - localTime
-
-        if (timeDiff < 5000) {
-          return {
-            value: localValue,
-            strategy: 'local',
-            reason: 'Recent local position change (within 5s)'
+      // Convert arrays to Maps
+      const newNodes = new Map<string, Node>()
+      for (const node of message.nodes) {
+        // If user is editing this node, preserve local content changes
+        if (editingNodeId === node.id && (editingState.field === 'title' || editingState.field === 'content')) {
+          const localNode = store.nodes.get(node.id)
+          if (localNode) {
+            newNodes.set(node.id, {
+              ...node,
+              [editingState.field]: localNode[editingState.field],
+            })
+            continue
           }
         }
+        newNodes.set(node.id, node)
       }
-      return {
-        value: remoteValue,
-        strategy: 'remote',
-        reason: 'Position changes use latest remote'
-      }
-    }
 
-    if (fieldGroup === 'style') {
-      if (hasLocalChange) {
-        return {
-          value: localValue,
-          strategy: 'local',
-          reason: 'Local style change pending'
-        }
-      }
-      return {
-        value: remoteValue,
-        strategy: 'remote',
-        reason: 'Style changes use latest remote'
-      }
-    }
+      store.setCanvasData({
+        nodes: Array.from(newNodes.values()),
+        groups: message.groups,
+        domains: message.domains,
+        connections: message.connections,
+      })
 
-    if (fieldGroup === 'state') {
-      if (field === 'collapsed' || field === 'locked') {
-        if (hasLocalChange) {
-          return {
-            value: localValue,
-            strategy: 'local',
-            reason: 'State change by local user takes priority'
-          }
-        }
-      }
-      return {
-        value: remoteValue,
-        strategy: 'remote',
-        reason: 'State changes use latest remote'
-      }
-    }
+      this.serverVersion = message.version
+      this.isSyncing = false
 
-    if (fieldGroup === 'media') {
-      return {
-        value: remoteValue,
-        strategy: 'remote',
-        reason: 'Media properties always use remote'
-      }
-    }
-
-    return {
-      value: remoteValue,
-      strategy: 'remote',
-      reason: 'Default: accept remote'
+      logger.info('Synced with server state', { version: message.version, nodes: message.nodes.length })
+    } catch (error) {
+      this.isSyncing = false
+      logger.error('Failed to handle sync', error)
     }
   }
 
-  private hasPendingChanges(nodeId: string): boolean {
-    const pending = this.pendingNodeChanges.get(nodeId)
-    return pending !== undefined && pending.changes.size > 0
+  private handleForceSave(_projectId: number) {
+    // Server now handles persistence automatically
+    // This is just a notification, no action needed
+    logger.info('Received force-save notification')
   }
 
   trackLocalConnectionChange(connectionId: string, field: string, oldValue: unknown, newValue: unknown, operationType: OperationType): void {
@@ -705,11 +463,6 @@ class CollaborationService {
       operationType,
       timestamp: Date.now()
     })
-  }
-
-  private hasPendingConnectionChanges(connectionId: string): boolean {
-    const pending = this.pendingConnectionChanges.get(connectionId)
-    return pending !== undefined && pending.changes.size > 0
   }
 
   trackLocalChange(nodeId: string, field: string, oldValue: unknown, newValue: unknown, operationType: OperationType): void {
@@ -740,43 +493,6 @@ class CollaborationService {
   clearPendingChanges(nodeId: string): void {
     this.pendingNodeChanges.delete(nodeId)
     this.pendingConnectionChanges.delete(nodeId)
-  }
-
-  clearPendingChangesBefore(timestamp: number): void {
-    for (const [nodeId, pending] of this.pendingNodeChanges) {
-      for (const [field, change] of pending.changes) {
-        if (change.timestamp <= timestamp) {
-          pending.changes.delete(field)
-        }
-      }
-      if (pending.changes.size === 0) {
-        this.pendingNodeChanges.delete(nodeId)
-      }
-    }
-    for (const [connId, pending] of this.pendingConnectionChanges) {
-      for (const [field, change] of pending.changes) {
-        if (change.timestamp <= timestamp) {
-          pending.changes.delete(field)
-        }
-      }
-      if (pending.changes.size === 0) {
-        this.pendingConnectionChanges.delete(connId)
-      }
-    }
-  }
-
-  hasPendingChangesAfter(timestamp: number): boolean {
-    for (const [, pending] of this.pendingNodeChanges) {
-      for (const [, change] of pending.changes) {
-        if (change.timestamp > timestamp) return true
-      }
-    }
-    for (const [, pending] of this.pendingConnectionChanges) {
-      for (const [, change] of pending.changes) {
-        if (change.timestamp > timestamp) return true
-      }
-    }
-    return false
   }
 
   trackPositionChange(nodeId: string): void {
@@ -826,79 +542,10 @@ class CollaborationService {
     }
   }
 
-  getConflictResolutionLog(): ConflictResolutionResult[] {
-    return [...this.conflictResolutionLog]
-  }
-
-  clearConflictResolutionLog(): void {
-    this.conflictResolutionLog = []
-  }
-
-  private getEditingState(): { nodeId: string | null; field: 'title' | 'content' | null } {
-    const state = getEditingState()
-    return { nodeId: state.nodeId, field: state.field }
-  }
-
-  private mergeConnectionsWithVersion(
-    localConnections: Connection[],
-    remoteConnections: Connection[]
-  ): Connection[] {
-    const merged = new Map<string, Connection>()
-
-    localConnections.forEach((conn) => {
-      merged.set(conn.id, conn)
-    })
-
-    remoteConnections.forEach((remoteConn) => {
-      const id = remoteConn.id
-      const localConn = merged.get(id)
-
-      if (!localConn) {
-        merged.set(id, remoteConn)
-        return
-      }
-
-      const hasPending = this.hasPendingConnectionChanges(id)
-      const mergedConn = this.mergeConnectionFields(localConn, remoteConn, hasPending)
-      merged.set(id, mergedConn)
-    })
-
-    return Array.from(merged.values())
-  }
-
-  private mergeConnectionFields(local: Connection, remote: Connection, hasPendingChanges: boolean): Connection {
-    if (!hasPendingChanges) {
-      return { ...remote }
-    }
-
-    const result: Connection = { ...local }
-    const pending = this.pendingConnectionChanges.get(local.id)
-
-    const geometryFields: (keyof Pick<Connection, 'fromPort' | 'toPort' | 'type' | 'style' | 'color' | 'width' | 'arrowType' | 'direction' | 'label' | 'bendPoints'>)[] = [
-      'fromPort', 'toPort', 'type', 'style', 'color', 'width', 'arrowType', 'direction', 'label', 'bendPoints'
-    ]
-
-    geometryFields.forEach((field) => {
-      const remoteVal = remote[field]
-      if (remoteVal === undefined) return
-      const localVal = local[field]
-
-      if (JSON.stringify(remoteVal) === JSON.stringify(localVal)) return
-
-      const localChange = pending?.changes.get(field)
-      if (localChange) {
-        return
-      }
-
-      (result as unknown as Record<string, unknown>)[field] = remoteVal
-    })
-
-    return result
-  }
-
   private requestSync() {
     if (this.isDestroyed || this.isIntentionallyClosed) return
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.isAwaitingSync = true
       this.ws.send(JSON.stringify({ type: 'sync-request' }))
     }
   }
@@ -1007,133 +654,8 @@ class CollaborationService {
     return new Map(this.cursors)
   }
 
-  async syncBeforeSave(): Promise<{
-    nodes: Node[]
-    groups: NodeGroup[]
-    domains: Domain[]
-    connections: Connection[]
-    mergeTimestamp: number
-  } | null> {
-    if (!this.canvasId) return null
-
-    try {
-      this.mergeStartTime = Date.now()
-
-      const response = await fetch(`/api/canvases/detail/${this.canvasId}`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('mindmap_token')}`,
-        },
-      })
-
-      if (!response.ok) return null
-
-      const result = await response.json()
-      const canvas = result.data
-
-      if (!canvas || !canvas.yjsData) {
-        return null
-      }
-
-      const binaryString = atob(canvas.yjsData)
-      const utf8Bytes = new Uint8Array(binaryString.length)
-      for (let i = 0; i < binaryString.length; i++) {
-        utf8Bytes[i] = binaryString.charCodeAt(i)
-      }
-      const jsonString = new TextDecoder().decode(utf8Bytes)
-      const remoteData = JSON.parse(jsonString)
-
-      const remoteNodes: Node[] = remoteData.nodes || []
-      const remoteGroups: NodeGroup[] = remoteData.groups || []
-      const remoteDomains: Domain[] = remoteData.domains || []
-      const remoteConnections: Connection[] = remoteData.connections || []
-
-      const store = useCanvasStore.getState()
-      const localNodes = Array.from(store.nodes.values())
-      const localGroups = Array.from(store.groups.values())
-      const localDomains = Array.from(store.domains.values())
-      const localConnections = Array.from(store.connections.values())
-
-      // 保存前同步：优先保留本地数据，特别是有 pending changes 的节点
-      const mergedNodes = this.mergeNodesForSave(localNodes, remoteNodes)
-      const mergedGroups = this.mergeEntityMaps(
-        localGroups,
-        remoteGroups,
-        (g) => g.id,
-        (g) => g.name
-      )
-      const mergedDomains = this.mergeEntityMaps(
-        localDomains,
-        remoteDomains,
-        (d) => d.id,
-        (d) => d.name
-      )
-      const mergedConnections = this.mergeConnectionsWithVersion(localConnections, remoteConnections)
-
-      return {
-        nodes: mergedNodes,
-        groups: mergedGroups,
-        domains: mergedDomains,
-        connections: mergedConnections,
-        mergeTimestamp: this.mergeStartTime,
-      }
-    } catch {
-      return null
-    }
-  }
-
-  // 专用于保存前的合并：逐字段三向合并，利用 pendingChanges 精确保护本地修改
-  private mergeNodesForSave(localNodes: Node[], remoteNodes: Node[]): Node[] {
-    const merged = new Map<string, Node>()
-
-    localNodes.forEach((node) => {
-      merged.set(node.id, node)
-    })
-
-    remoteNodes.forEach((remoteNode) => {
-      const id = remoteNode.id
-      const localNode = merged.get(id)
-
-      if (!localNode) {
-        merged.set(id, remoteNode)
-        return
-      }
-
-      const hasPendingChanges = this.hasPendingChanges(id)
-      const editingState = this.getEditingState()
-      const isEditingThisNode = editingState.nodeId === id
-      const localVersion = localNode._version || 0
-      const remoteVersion = remoteNode._version || 0
-      const lastSyncedVersion = this.lastSyncedVersions.get(id) || 0
-
-      // 如果没有任何冲突迹象，直接接受远程（远程更新了而我们没改过）
-      if (!hasPendingChanges && !isEditingThisNode && remoteVersion > localVersion) {
-        merged.set(id, { ...remoteNode })
-        this.lastSyncedVersions.set(id, remoteVersion)
-        return
-      }
-
-      // 有本地修改或正在编辑 — 使用逐字段合并（和 sync 路径一致）
-      // pendingNodeChanges 记录了哪些字段被本地修改过
-      // 没被修改的字段接受远程，被修改的字段保留本地
-      const conflictType = this.detectConflictType(
-        localVersion, remoteVersion, lastSyncedVersion, hasPendingChanges
-      )
-
-      if (conflictType === 'sequential_remote') {
-        merged.set(id, { ...remoteNode })
-      } else if (conflictType === 'sequential_local') {
-        merged.set(id, { ...localNode })
-      } else {
-        const mergedNode = this.mergeNodeFieldsWithConflictResolution(
-          localNode, remoteNode, lastSyncedVersion, conflictType === 'diverged'
-        )
-        merged.set(id, mergedNode)
-      }
-
-      this.lastSyncedVersions.set(id, Math.max(localVersion, remoteVersion))
-    })
-
-    return Array.from(merged.values())
+  getServerVersion(): number {
+    return this.serverVersion
   }
 }
 
