@@ -1327,9 +1327,8 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
           </>
         )}
 
-        {/* Node container */}
+        {/* Node shadow container - carries boxShadow, no overflow clipping */}
         <div
-          ref={nodeRef}
           data-node-id={node.id}
           className={`node-item absolute shadow-sm ${isDragging ? 'node-dragging' : node.locked ? 'cursor-not-allowed' : editingField !== null ? 'cursor-text' : 'cursor-move'
             } ${isDragging ? 'shadow-2xl scale-[1.01]' : ''} ${isHovered && !isSelected && !node.locked ? 'shadow-md' : ''
@@ -1340,10 +1339,6 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
             top: 16,
             width: localSize.width,
             height: localSize.height,
-            backgroundColor: node.type === 'image' ? '#ffffff' : node.color,
-            overflow: 'visible',
-            display: 'flex',
-            flexDirection: 'column',
             boxShadow: isSelected
               ? '0 4px 12px rgba(0, 0, 0, 0.15)'
               : isDragging || groupDragOffset
@@ -1351,39 +1346,52 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
                 : '0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04)',
             zIndex: Z_INDEX.NODE,
           }}
-          onMouseDown={handleMouseDown}
-          onClick={(e) => {
-            if (editingField !== null) {
-              e.stopPropagation()
-              return
-            }
-
-            if (currentTool === 'connection') {
-              const connectionStartEvent = new CustomEvent('connectionStart', {
-                detail: {
-                  nodeId: node.id,
-                  mouseX: e.clientX,
-                  mouseY: e.clientY,
-                },
-                bubbles: true,
-              })
-              e.currentTarget.dispatchEvent(connectionStartEvent)
-            } else {
-              e.stopPropagation()
-            }
-          }}
-          onDoubleClick={(e) => {
-            // 对于图片节点，根元素双击只允许编辑title
-            if (node.type === 'image') {
-              handleDoubleClick(e, 'title')
-            } else {
-              handleDoubleClick(e)
-            }
-          }}
-          onContextMenu={handleContextMenu}
           onMouseEnter={() => setIsHovered(true)}
           onMouseLeave={() => setIsHovered(false)}
         >
+          {/* Node content container - overflow: hidden clips content to bounds */}
+          <div
+            ref={nodeRef}
+            style={{
+              width: '100%',
+              height: '100%',
+              overflow: 'hidden',
+              display: 'flex',
+              flexDirection: 'column',
+              backgroundColor: node.type === 'image' ? '#ffffff' : node.color,
+              borderRadius: 'inherit',
+            }}
+            onMouseDown={handleMouseDown}
+            onClick={(e) => {
+              if (editingField !== null) {
+                e.stopPropagation()
+                return
+              }
+
+              if (currentTool === 'connection') {
+                const connectionStartEvent = new CustomEvent('connectionStart', {
+                  detail: {
+                    nodeId: node.id,
+                    mouseX: e.clientX,
+                    mouseY: e.clientY,
+                  },
+                  bubbles: true,
+                })
+                e.currentTarget.dispatchEvent(connectionStartEvent)
+              } else {
+                e.stopPropagation()
+              }
+            }}
+            onDoubleClick={(e) => {
+              // 对于图片节点，根元素双击只允许编辑title
+              if (node.type === 'image') {
+                handleDoubleClick(e, 'title')
+              } else {
+                handleDoubleClick(e)
+              }
+            }}
+            onContextMenu={handleContextMenu}
+          >
           {/* Node content */}
           {node.collapsed ? (
             // 折叠状态 - 只显示标题，支持编辑
@@ -1645,6 +1653,8 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
             </div>
           )}
         </div>
+        </div>
+        {/* End node shadow container */}
       </div>
       {/* End wrapper for node and resize handles */}
     </>

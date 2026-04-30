@@ -39,6 +39,7 @@
     "@radix-ui/react-tooltip": "^1.0.7",
     "clsx": "^2.0.0",
     "cmdk": "^0.2.0",
+    "fabric": "^5.3.0",
     "date-fns": "^3.0.0",
     "highlight.js": "^11.11.1",
     "html2canvas-pro": "^1.4.1",

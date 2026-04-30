@@ -49,6 +49,7 @@ const mockConnections: Connection[] = [
     color: '#3b82f6',
     width: 2,
     arrowType: 'end',
+    direction: 'directed',
   },
 ]
 
@@ -170,7 +171,7 @@ vi.mock('react-router-dom', async () => {
   }
 })
 
-const mockedUseCanvasStore = vi.mocked(useCanvasStore)
+const mockedUseCanvasStore = vi.mocked(useCanvasStore) as any
 const mockedUseUIStore = vi.mocked(useUIStore)
 const mockedUseAuthStore = vi.mocked(useAuthStore)
 const mockedUseProjectsStore = vi.mocked(useProjectsStore)
