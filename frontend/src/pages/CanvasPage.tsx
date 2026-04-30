@@ -1312,22 +1312,24 @@ export function CanvasPage() {
       }
 
       try {
-        await collabService.syncBeforeSave()
-        // Re-read store after merge to capture any concurrent WebSocket updates
-        const collectedData = collectCanvasData(useCanvasStore.getState())
+        const syncedData = await collabService.syncBeforeSave()
+        if (!syncedData) {
+          dbSaveTimeoutRef.current = setTimeout(saveToDatabase, AUTO_SAVE_INTERVAL)
+          return
+        }
 
         await saveCanvasNodesData(id, {
-          nodes: collectedData.nodes,
-          groups: collectedData.groups,
-          domains: collectedData.domains,
-          connections: collectedData.connections,
+          nodes: syncedData.nodes,
+          groups: syncedData.groups,
+          domains: syncedData.domains,
+          connections: syncedData.connections,
         })
 
         lastSaveTimeRef.current = now
         setDirty(false)
 
         // Generate thumbnail after successful auto-save
-        if (hasCanvasContent(collectedData.nodes, collectedData.domains)) {
+        if (hasCanvasContent(syncedData.nodes, syncedData.domains)) {
           await triggerThumbnailGeneration(id)
         }
       } catch (error) {
@@ -1381,15 +1383,14 @@ export function CanvasPage() {
       return
     }
 
-    await collabService.syncBeforeSave()
-    const currentState = useCanvasStore.getState()
-    const collectedData = collectCanvasData(currentState)
+    const syncedData = await collabService.syncBeforeSave()
+    if (!syncedData) return
 
     await saveCanvasNodesData(id, {
-      nodes: collectedData.nodes,
-      groups: collectedData.groups,
-      domains: collectedData.domains,
-      connections: collectedData.connections,
+      nodes: syncedData.nodes,
+      groups: syncedData.groups,
+      domains: syncedData.domains,
+      connections: syncedData.connections,
     })
 
     const now = Date.now()
@@ -1397,7 +1398,7 @@ export function CanvasPage() {
     setDirty(false)
 
     // Generate thumbnail immediately when manually saving
-    if (hasCanvasContent(collectedData.nodes, collectedData.domains)) {
+    if (hasCanvasContent(syncedData.nodes, syncedData.domains)) {
       await generateThumbnail(id)
     }
   }, [canvasId, setDirty, generateThumbnail])

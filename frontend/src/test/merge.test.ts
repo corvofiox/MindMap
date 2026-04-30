@@ -233,10 +233,6 @@ function createMergeHelper(): MergeTestHelper {
 
       result._version = Math.max(local._version || 0, remote._version || 0) + 1
 
-      if (pendingChanges) {
-        pendingNodeChanges.delete(local.id)
-      }
-
       return result
     },
 
@@ -262,13 +258,6 @@ function createMergeHelper(): MergeTestHelper {
       }
 
       if (hasLocalChange && fieldGroup === 'content') {
-        if (isDiverged) {
-          return {
-            value: remoteValue,
-            strategy: 'remote',
-            reason: 'Diverged versions - accepting remote for content field'
-          }
-        }
         return {
           value: localValue,
           strategy: 'local',
@@ -624,7 +613,7 @@ describe('Node Merge Functions', () => {
   })
 
   describe('mergeNodes - diverged version handling', () => {
-    it('should accept remote for content fields in diverged scenario', () => {
+    it('should preserve local content when local has pending changes even in diverged scenario', () => {
       helper.setLastSyncedVersion('node-1', 1)
       helper.trackPendingChange('node-1', 'title', 'Base Title', 'Local Title', 'content')
 
@@ -633,7 +622,7 @@ describe('Node Merge Functions', () => {
 
       const result = helper.mergeNodes(localNodes, remoteNodes)
 
-      expect(result[0].title).toBe('Remote Title')
+      expect(result[0].title).toBe('Local Title')
     })
   })
 })

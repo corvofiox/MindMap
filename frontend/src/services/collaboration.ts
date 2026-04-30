@@ -575,10 +575,6 @@ class CollaborationService {
 
     result._version = Math.max(local._version || 0, remote._version || 0) + 1
 
-    if (pendingChanges) {
-      this.pendingNodeChanges.delete(local.id)
-    }
-
     return result
   }
 
@@ -1028,15 +1024,6 @@ class CollaborationService {
         (d) => d.name
       )
       const mergedConnections = this.mergeConnectionsWithVersion(localConnections, remoteConnections)
-
-      this.isSyncing = true
-      store.setCanvasData({
-        nodes: mergedNodes,
-        groups: mergedGroups,
-        domains: mergedDomains,
-        connections: mergedConnections,
-      })
-      this.isSyncing = false
 
       return {
         nodes: mergedNodes,
