@@ -1326,7 +1326,9 @@ export function CanvasPage() {
         })
 
         lastSaveTimeRef.current = now
-        setDirty(false)
+        // 只清除 merge 开始前已有的 pendingChanges，merge 开始后新产生的保留
+        collabService.clearPendingChangesBefore(syncedData.mergeTimestamp)
+        setDirty(collabService.hasPendingChangesAfter(syncedData.mergeTimestamp))
 
         // Generate thumbnail after successful auto-save
         if (hasCanvasContent(syncedData.nodes, syncedData.domains)) {
@@ -1395,7 +1397,8 @@ export function CanvasPage() {
 
     const now = Date.now()
     lastSaveTimeRef.current = now
-    setDirty(false)
+    collabService.clearPendingChangesBefore(syncedData.mergeTimestamp)
+    setDirty(collabService.hasPendingChangesAfter(syncedData.mergeTimestamp))
 
     // Generate thumbnail immediately when manually saving
     if (hasCanvasContent(syncedData.nodes, syncedData.domains)) {

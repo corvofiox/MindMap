@@ -94,6 +94,7 @@ class CollaborationService {
   private pendingConnectionChanges = new Map<string, PendingConnectionChanges>()
   private lastSyncedVersions = new Map<string, number>()
   private isSyncing = false
+  private mergeStartTime = 0
   private conflictResolutionLog: ConflictResolutionResult[] = []
   private recentPositionChanges = new Map<string, number>()
   private recentNodeUpdates = new Map<string, Map<string, number>>()
@@ -212,6 +213,7 @@ class CollaborationService {
     this.userListeners = []
     this.isFlushingQueue = false
     this.isSyncing = false
+    this.mergeStartTime = 0
     this.pendingNodeChanges.clear()
     this.pendingConnectionChanges.clear()
     this.lastSyncedVersions.clear()
@@ -233,6 +235,7 @@ class CollaborationService {
         domains: syncedData.domains,
         connections: syncedData.connections,
       })
+      this.clearPendingChangesBefore(syncedData.mergeTimestamp)
       logger.info('Collaboration data merged and saved')
     } catch (error) {
       logger.error('Failed to save collaboration data', error)
@@ -736,6 +739,44 @@ class CollaborationService {
 
   clearPendingChanges(nodeId: string): void {
     this.pendingNodeChanges.delete(nodeId)
+    this.pendingConnectionChanges.delete(nodeId)
+  }
+
+  clearPendingChangesBefore(timestamp: number): void {
+    for (const [nodeId, pending] of this.pendingNodeChanges) {
+      for (const [field, change] of pending.changes) {
+        if (change.timestamp <= timestamp) {
+          pending.changes.delete(field)
+        }
+      }
+      if (pending.changes.size === 0) {
+        this.pendingNodeChanges.delete(nodeId)
+      }
+    }
+    for (const [connId, pending] of this.pendingConnectionChanges) {
+      for (const [field, change] of pending.changes) {
+        if (change.timestamp <= timestamp) {
+          pending.changes.delete(field)
+        }
+      }
+      if (pending.changes.size === 0) {
+        this.pendingConnectionChanges.delete(connId)
+      }
+    }
+  }
+
+  hasPendingChangesAfter(timestamp: number): boolean {
+    for (const [, pending] of this.pendingNodeChanges) {
+      for (const [, change] of pending.changes) {
+        if (change.timestamp > timestamp) return true
+      }
+    }
+    for (const [, pending] of this.pendingConnectionChanges) {
+      for (const [, change] of pending.changes) {
+        if (change.timestamp > timestamp) return true
+      }
+    }
+    return false
   }
 
   trackPositionChange(nodeId: string): void {
@@ -971,10 +1012,13 @@ class CollaborationService {
     groups: NodeGroup[]
     domains: Domain[]
     connections: Connection[]
+    mergeTimestamp: number
   } | null> {
     if (!this.canvasId) return null
 
     try {
+      this.mergeStartTime = Date.now()
+
       const response = await fetch(`/api/canvases/detail/${this.canvasId}`, {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('mindmap_token')}`,
@@ -1030,6 +1074,7 @@ class CollaborationService {
         groups: mergedGroups,
         domains: mergedDomains,
         connections: mergedConnections,
+        mergeTimestamp: this.mergeStartTime,
       }
     } catch {
       return null
