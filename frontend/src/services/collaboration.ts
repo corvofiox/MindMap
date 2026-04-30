@@ -93,6 +93,7 @@ class CollaborationService {
   private pendingNodeChanges = new Map<string, PendingNodeChanges>()
   private pendingConnectionChanges = new Map<string, PendingConnectionChanges>()
   private lastSyncedVersions = new Map<string, number>()
+  private isSyncing = false
   private conflictResolutionLog: ConflictResolutionResult[] = []
   private recentPositionChanges = new Map<string, number>()
   private recentNodeUpdates = new Map<string, Map<string, number>>()
@@ -210,6 +211,7 @@ class CollaborationService {
     this.cursorListeners = []
     this.userListeners = []
     this.isFlushingQueue = false
+    this.isSyncing = false
     this.pendingNodeChanges.clear()
     this.pendingConnectionChanges.clear()
     this.lastSyncedVersions.clear()
@@ -350,12 +352,14 @@ class CollaborationService {
           message.connections
         )
 
+        this.isSyncing = true
         store.setCanvasData({
           nodes: mergedNodes,
           groups: mergedGroups,
           domains: mergedDomains,
           connections: mergedConnections
         })
+        this.isSyncing = false
         return
       }
 
@@ -363,19 +367,23 @@ class CollaborationService {
         this.lastSyncedVersions.set(node.id, node._version || 0)
       })
 
+      this.isSyncing = true
       store.setCanvasData({
         nodes: message.nodes,
         groups: message.groups,
         domains: message.domains,
         connections: message.connections
       })
+      this.isSyncing = false
     } catch {
+      this.isSyncing = true
       store.setCanvasData({
         nodes: message.nodes,
         groups: message.groups,
         domains: message.domains,
         connections: message.connections
       })
+      this.isSyncing = false
     }
   }
 
@@ -598,13 +606,6 @@ class CollaborationService {
     }
 
     if (hasLocalChange && fieldGroup === 'content') {
-      if (isDiverged) {
-        return {
-          value: remoteValue,
-          strategy: 'remote',
-          reason: 'Diverged versions - accepting remote for content field'
-        }
-      }
       return {
         value: localValue,
         strategy: 'local',
@@ -686,6 +687,8 @@ class CollaborationService {
   }
 
   trackLocalConnectionChange(connectionId: string, field: string, oldValue: unknown, newValue: unknown, operationType: OperationType): void {
+    if (this.isSyncing) return
+
     let pending = this.pendingConnectionChanges.get(connectionId)
 
     if (!pending) {
@@ -711,6 +714,8 @@ class CollaborationService {
   }
 
   trackLocalChange(nodeId: string, field: string, oldValue: unknown, newValue: unknown, operationType: OperationType): void {
+    if (this.isSyncing) return
+
     let pending = this.pendingNodeChanges.get(nodeId)
 
     if (!pending) {
@@ -1024,12 +1029,14 @@ class CollaborationService {
       )
       const mergedConnections = this.mergeConnectionsWithVersion(localConnections, remoteConnections)
 
+      this.isSyncing = true
       store.setCanvasData({
         nodes: mergedNodes,
         groups: mergedGroups,
         domains: mergedDomains,
         connections: mergedConnections,
       })
+      this.isSyncing = false
 
       return {
         nodes: mergedNodes,
