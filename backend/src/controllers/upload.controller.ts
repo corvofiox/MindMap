@@ -2,7 +2,6 @@ import { Router } from 'express'
 import multer from 'multer'
 import { v4 as uuidv4 } from 'uuid'
 import type { Request, Response } from 'express'
-import sharp from 'sharp'
 import { log } from '../utils/logger.js'
 
 const router = Router()
@@ -57,30 +56,26 @@ router.post('/', upload.single('image'), async (req: Request, res: Response) => 
         const uniqueName = `${uuidv4()}${req.file.originalname.split('.').pop() ? '.' + req.file.originalname.split('.').pop() : ''}`
 
         if (process.env.NODE_ENV === 'development') {
-          log('Upload starting sharp processing')
+          log('Upload starting processing')
         }
-        // Compress image using sharp (lossy compression with balanced quality)
-        const compressedBuffer = await sharp(req.file.buffer)
-            .withMetadata() // Preserve metadata
-            .png({ quality: 80, compressionLevel: 9 }) // Lossy PNG compression with 80% quality
-            .jpeg({ quality: 80, progressive: true, optimizeScans: true }) // Lossy JPEG compression with 80% quality
-            .toBuffer()
+        // Keep original image data without compression to preserve quality
+        const imageBuffer = req.file.buffer
 
         if (process.env.NODE_ENV === 'development') {
-          log('Upload sharp processing complete', {
+          log('Upload processing complete', {
             originalSize: req.file.size,
-            compressedSize: compressedBuffer.length,
+            keptSize: imageBuffer.length,
           })
         }
 
         // Convert to Base64
-        const base64Image = compressedBuffer.toString('base64')
+        const base64Image = imageBuffer.toString('base64')
         const dataUrl = `data:${req.file.mimetype};base64,${base64Image}`
 
         if (process.env.NODE_ENV === 'development') {
           log('Upload successful', {
             filename: uniqueName,
-            size: compressedBuffer.length,
+            size: imageBuffer.length,
           })
         }
 
@@ -90,8 +85,8 @@ router.post('/', upload.single('image'), async (req: Request, res: Response) => 
                 url: dataUrl, // Return data URL instead of file path
                 filename: uniqueName,
                 mimetype: req.file.mimetype,
-                size: compressedBuffer.length, // Return compressed size
-                originalSize: req.file.size // Optional: return original size for reference
+                size: imageBuffer.length,
+                originalSize: req.file.size
             }
         })
     } catch (error) {

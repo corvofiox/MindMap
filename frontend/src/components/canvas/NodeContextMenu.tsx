@@ -16,6 +16,7 @@ import {
   FolderPlus,
   Image as ImageIcon,
   RefreshCw,
+  Download,
 } from 'lucide-react'
 import { useCanvasStore } from '@/store/useCanvasStore'
 import { useUIStore } from '@/store/useUIStore'
@@ -194,6 +195,47 @@ export function NodeContextMenu({ nodeId, position, onClose }: NodeContextMenuPr
       }
     }
     input.click()
+    onClose()
+  }
+
+  const handleDownloadImage = async () => {
+    if (!node.imageUrl) {
+      addToast({ type: 'warning', title: '下载失败', message: '节点未包含图片' })
+      onClose()
+      return
+    }
+
+    if (node.imageUrl.startsWith('data:')) {
+      const a = document.createElement('a')
+      a.href = node.imageUrl
+      a.download = 'image.png'
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      addToast({ type: 'success', title: '下载成功', message: '图片已保存到本地' })
+      onClose()
+      return
+    }
+
+    try {
+      const response = await fetch(node.imageUrl)
+      if (!response.ok) {
+        throw new Error('获取图片失败')
+      }
+      const blob = await response.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      const filename = node.imageUrl.split('/').pop() || 'image.png'
+      a.download = filename
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+      addToast({ type: 'success', title: '下载成功', message: '图片已保存到本地' })
+    } catch {
+      addToast({ type: 'error', title: '下载失败', message: '无法下载图片' })
+    }
     onClose()
   }
 
@@ -416,6 +458,11 @@ export function NodeContextMenu({ nodeId, position, onClose }: NodeContextMenuPr
                   label="更换图片"
                   onClick={handleReplaceImage}
                   disabled={node.locked}
+                />
+                <MenuItem
+                  icon={Download}
+                  label="下载图片"
+                  onClick={handleDownloadImage}
                 />
                 <MenuItem
                   icon={RefreshCw}
