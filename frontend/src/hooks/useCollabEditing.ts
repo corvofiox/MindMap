@@ -1,11 +1,13 @@
 interface EditingState {
   nodeId: string | null
   field: 'title' | 'content' | null
+  version: number
 }
 
 const editingState: EditingState = {
   nodeId: null,
   field: null,
+  version: 0,
 }
 
 let localEditingUpdateFlag = false
@@ -21,6 +23,7 @@ export function isLocalEditingUpdate(): boolean {
 export function setEditingFieldForCollab(nodeId: string | null, field: 'title' | 'content' | null) {
   editingState.nodeId = nodeId
   editingState.field = field
+  editingState.version++
 }
 
 export function getEditingState(): EditingState {

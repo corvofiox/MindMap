@@ -125,6 +125,7 @@ class CollaborationService {
   private activeUserInteractions = new Map<string, { field: string | null; startTime: number }>()
   private deferredOperations: Array<{ operation: string; data: unknown; timestamp: number }> = []
   private interactionCheckInterval: ReturnType<typeof setInterval> | null = null
+  private cleanupInterval: ReturnType<typeof setInterval> | null = null
   private readonly INTERACTION_TIMEOUT_MS = 500
 
   connect(canvasId: number) {
@@ -134,6 +135,11 @@ class CollaborationService {
     if (!token) {
       logger.error('No auth token found, cannot establish WebSocket connection')
       return
+    }
+
+    // Reset serverVersion when switching to a different canvas
+    if (this.canvasId !== canvasId) {
+      this.serverVersion = 0
     }
 
     this.canvasId = canvasId
@@ -161,6 +167,7 @@ class CollaborationService {
         this.requestSync()
         this.flushOfflineQueue()
         this.startInteractionCheckInterval()
+        this.startCleanupInterval()
       }
 
       this.ws.onmessage = (event) => {
@@ -276,6 +283,30 @@ class CollaborationService {
     }, 10000)
   }
 
+  private cleanupRecentChanges(): void {
+    const cutoff = Date.now() - 30000
+    for (const [id, change] of this.pendingNodeChanges) {
+      if (change.changes.size === 0) {
+        this.pendingNodeChanges.delete(id)
+        continue
+      }
+      const latestTimestamp = Math.max(...Array.from(change.changes.values()).map(c => c.timestamp))
+      if (latestTimestamp < cutoff) {
+        this.pendingNodeChanges.delete(id)
+      }
+    }
+    for (const [id, change] of this.pendingConnectionChanges) {
+      if (change.changes.size === 0) {
+        this.pendingConnectionChanges.delete(id)
+        continue
+      }
+      const latestTimestamp = Math.max(...Array.from(change.changes.values()).map(c => c.timestamp))
+      if (latestTimestamp < cutoff) {
+        this.pendingConnectionChanges.delete(id)
+      }
+    }
+  }
+
   private stopCleanupInterval(): void {
     if (this.cleanupInterval) {
       clearInterval(this.cleanupInterval)
@@ -289,6 +320,7 @@ class CollaborationService {
       this.reconnectTimeout = null
     }
     this.stopInteractionCheckInterval()
+    this.stopCleanupInterval()
 
     // 将未确认的操作移入离线队列，以便重连时刷新
     if (this.unackedOps.size > 0) {
@@ -337,7 +369,8 @@ class CollaborationService {
     this.isFlushingQueue = false
     this.pendingNodeChanges.clear()
     this.pendingConnectionChanges.clear()
-    this.serverVersion = 0
+    // Preserve serverVersion to avoid 409 conflicts when saving via REST API
+    // after disconnecting from collaboration mode
     this.activeUserInteractions.clear()
     this.deferredOperations = []
     this.unackedOps.clear()

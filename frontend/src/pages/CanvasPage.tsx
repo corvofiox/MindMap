@@ -1320,6 +1320,15 @@ export function CanvasPage() {
         return
       }
 
+      // In collaboration mode, changes are saved in real-time via WebSocket, skip REST API auto-save
+      if (collabService.isConnected()) {
+        if (dbSaveTimeoutRef.current) {
+          clearTimeout(dbSaveTimeoutRef.current)
+        }
+        dbSaveTimeoutRef.current = setTimeout(saveToDatabase, AUTO_SAVE_INTERVAL)
+        return
+      }
+
       const now = Date.now()
       if (now - currentLastSaveTime < AUTO_SAVE_INTERVAL) {
         dbSaveTimeoutRef.current = setTimeout(saveToDatabase, AUTO_SAVE_INTERVAL)
@@ -1342,9 +1351,9 @@ export function CanvasPage() {
         lastSaveTimeRef.current = Date.now()
         const currentState = useCanvasStore.getState()
         if (currentState.nodes === snapshotNodes &&
-            currentState.groups === snapshotGroups &&
-            currentState.domains === snapshotDomains &&
-            currentState.connections === snapshotConnections) {
+          currentState.groups === snapshotGroups &&
+          currentState.domains === snapshotDomains &&
+          currentState.connections === snapshotConnections) {
           setDirty(false)
         }
 
@@ -1436,6 +1445,11 @@ export function CanvasPage() {
           // Silently fail for cache save errors
         }
 
+        // Skip REST API save in collaboration mode - changes are already saved via WebSocket
+        if (collabService.isConnected()) {
+          return
+        }
+
         try {
           const token = localStorage.getItem('mindmap_token')
           const body = JSON.stringify(canvasData)
@@ -1478,6 +1492,11 @@ export function CanvasPage() {
         if (canvasData.nodes.length > 0 || canvasData.groups.length > 0 || canvasData.domains.length > 0) {
           saveToCache(id, { nodes: canvasData.nodes, groups: canvasData.groups, domains: canvasData.domains, connections: canvasData.connections })
 
+          // Skip REST API save in collaboration mode - changes are already saved via WebSocket
+          if (collabService.isConnected()) {
+            return
+          }
+
           const token = localStorage.getItem('mindmap_token')
           if (token) {
             fetch(`/api/canvases/${id}/data`, {
@@ -1490,7 +1509,7 @@ export function CanvasPage() {
               credentials: 'include',
               body: JSON.stringify(canvasData),
               keepalive: true,
-            }).catch(() => {})
+            }).catch(() => { })
           }
         }
       } catch {
@@ -1664,6 +1683,16 @@ export function CanvasPage() {
       // Ctrl+S save shortcut
       if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
         e.preventDefault()
+        // In collaboration mode, changes are already saved in real-time via WebSocket
+        if (collabService.isConnected()) {
+          addToast({
+            type: 'info',
+            title: '已实时保存',
+            message: '协作模式下编辑内容会实时同步到服务器',
+            duration: 3000,
+          })
+          return
+        }
         handleManualSave().then(() => {
           addToast({
             type: 'success',
@@ -3455,7 +3484,7 @@ export function CanvasPage() {
 
       {/* Canvas Toolbar */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
-        <CanvasToolbar onSave={handleManualSave} isViewer={isViewer} />
+        <CanvasToolbar onSave={handleManualSave} isViewer={isViewer} isCollabConnected={collabService.isConnected()} />
       </div>
 
       {/* Zoom Controls */}

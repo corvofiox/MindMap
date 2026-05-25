@@ -9,6 +9,7 @@ import { exportCanvas, importCanvas, downloadJsonFile, readJsonFile } from '@/ut
 interface CanvasToolbarProps {
   onSave?: () => Promise<void>
   isViewer?: boolean
+  isCollabConnected?: boolean
 }
 
 const tools: { id: Tool; icon: typeof MousePointer2; label: string; shortcut: string }[] = [
@@ -21,7 +22,7 @@ const tools: { id: Tool; icon: typeof MousePointer2; label: string; shortcut: st
 
 const toolSeparators = [1, 2]
 
-export function CanvasToolbar({ onSave, isViewer }: CanvasToolbarProps) {
+export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToolbarProps) {
   const { currentTool, gridVisible, dragMode, minimapVisible, quickEditMode, relationshipHighlightMode, setCurrentTool, toggleGrid, toggleDragMode, toggleMinimap, toggleQuickEditMode, toggleRelationshipHighlightMode, connectionDirection, setConnectionDirection, connectionStyle, setConnectionStyle, connectionType, setConnectionType, addToast } = useUIStore()
   const { selectedIds, removeNode, removeConnection, removeGroup, removeDomain, nodes, undo, redo, history, groups, domains, addGroup, connections, zoom, panX, panY, setCanvasData } = useCanvasStore()
 
@@ -55,6 +56,17 @@ export function CanvasToolbar({ onSave, isViewer }: CanvasToolbarProps) {
   const handleSave = useCallback(async () => {
     if (!onSave || isSaving) return
 
+    // In collaboration mode, changes are saved in real-time via WebSocket
+    if (isCollabConnected) {
+      addToast({
+        type: 'info',
+        title: '已实时保存',
+        message: '协作模式下编辑内容会实时同步到服务器',
+        duration: 3000,
+      })
+      return
+    }
+
     setIsSaving(true)
     setSaveSuccess(false)
 
@@ -81,7 +93,7 @@ export function CanvasToolbar({ onSave, isViewer }: CanvasToolbarProps) {
     } finally {
       setIsSaving(false)
     }
-  }, [onSave, isSaving, addToast])
+  }, [onSave, isSaving, addToast, isCollabConnected])
 
   const handleDelete = () => {
     selectedIds.forEach((id) => {
@@ -501,7 +513,7 @@ export function CanvasToolbar({ onSave, isViewer }: CanvasToolbarProps) {
                   ? 'bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400'
                   : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
               } ${!onSave ? 'opacity-50 cursor-not-allowed' : ''}`}
-            title={isViewer ? '查看者无法保存' : '保存 (Ctrl+S)'}
+            title={isViewer ? '查看者无法保存' : isCollabConnected ? '协作模式下已实时保存 (Ctrl+S)' : '保存 (Ctrl+S)'}
           >
             {isSaving ? (
               <div className="w-5 h-5 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
