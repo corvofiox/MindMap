@@ -18,6 +18,7 @@ export interface AuthRequest extends Request {
 export async function authenticate(req: AuthRequest, res: Response, next: NextFunction) {
   try {
     const token = req.headers.authorization?.replace('Bearer ', '')
+      || (req.query.token as string | undefined)
 
     if (!token) {
       return res.status(401).json({ success: false, error: '未提供令牌' })

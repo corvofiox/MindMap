@@ -6,9 +6,55 @@ import { authenticate, type AuthRequest } from '../middleware/auth.middleware.js
 import { asyncHandler } from '../middleware/error.middleware.js'
 import { transformResponse, transformResponseArray, getProperty } from '../utils/transformResponse.js'
 import { log } from '../utils/logger.js'
-import { getCanvasActiveUsers } from '../websocket/index.js'
+import { getCanvasActiveUsers, broadcastVersionUpdate } from '../websocket/index.js'
+import { ensureCanvasState, loadCanvasStateFromDb } from '../websocket/canvas-state.js'
 
 export const canvasRouter = Router()
+
+const postSaveMutexes = new Map<number, Promise<void>>()
+const MUTEX_TIMEOUT = 30000
+
+async function withPostSaveMutex<T>(canvasId: number, fn: () => Promise<T>): Promise<T> {
+  const prev = (postSaveMutexes.get(canvasId) ?? Promise.resolve()).catch(() => {})
+
+  // Execute fn() inside the chain so the mutex always waits for fn() to fully complete
+  let done = false
+  const next = prev.then(async () => {
+    try {
+      return await fn()
+    } finally {
+      done = true
+    }
+  })
+
+  // The mutex guard resolves only after fn() finishes (or errors), preventing
+  // the next queued operation from starting before the current one is done
+  const cleanupGuard = next.then(() => {}, () => {})
+  postSaveMutexes.set(canvasId, cleanupGuard)
+
+  // Auto-cleanup stale mutex entry after resolution: if no new POST has been
+  // queued for this canvas (entry still points to our guard), remove it
+  cleanupGuard.finally(() => {
+    if (postSaveMutexes.get(canvasId) === cleanupGuard) {
+      postSaveMutexes.delete(canvasId)
+    }
+  })
+
+  const timeoutPromise = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error('Canvas save timed out')), MUTEX_TIMEOUT),
+  )
+
+  try {
+    return await Promise.race([next, timeoutPromise])
+  } catch (error) {
+    // If timed out, wait for fn() to actually finish before propagating the error.
+    // This ensures mutex integrity — the next operation won't start until fn() completes.
+    if (!done) {
+      await next.catch(() => {})
+    }
+    throw error
+  }
+}
 
 async function checkProjectAccess(projectId: number, userId: number): Promise<{ isOwner: boolean; isMember: boolean; canEdit: boolean; role: string | null }> {
   const project = await db.query.projects.findFirst({
@@ -288,6 +334,7 @@ canvasRouter.delete('/:id', authenticate, asyncHandler(async (req: AuthRequest, 
     }
 
     await db.delete(canvases).where(eq(canvases.id, canvasId))
+    postSaveMutexes.delete(canvasId)
 
     if (canvasProjectId) {
       await db
@@ -341,26 +388,87 @@ canvasRouter.post('/:id/data', authenticate, asyncHandler(async (req: AuthReques
     })
   }
 
-  const { nodes, groups, domains, connections } = req.body
+  await withPostSaveMutex(canvasId, async () => {
+    const { nodes, groups, domains, connections, version: clientVersion } = req.body
 
-  const jsonString = JSON.stringify({ nodes, groups, domains, connections })
-  const utf8Bytes = new TextEncoder().encode(jsonString)
-  const binaryString = Array.from(utf8Bytes, byte => String.fromCharCode(byte)).join('')
-  const base64Data = btoa(binaryString)
+    await loadCanvasStateFromDb(canvasId)
+    const state = ensureCanvasState(canvasId)
 
-  await db
-    .update(canvases)
-    .set({
-      yjsData: base64Data,
-      updatedAt: Math.floor(Date.now() / 1000),
+    // 使用内存版本做过期检测，可捕获尚未持久化到 DB 的 WS 更新
+    // 如果客户端版本落在服务端版本之后，拒绝保存，让客户端先同步再保存
+    if (typeof clientVersion === 'number' && state.version > clientVersion) {
+      log('POST canvas data - Rejected stale save', {
+        canvasId,
+        clientVersion,
+        serverVersion: state.version,
+      })
+      return res.status(409).json({
+        success: false,
+        error: '版本冲突：画布数据已被其他用户更新，请刷新后重试',
+        data: { serverVersion: state.version, clientVersion },
+      })
+    }
+
+    if (nodes || groups || domains || connections) {
+      state.version = typeof clientVersion === 'number' ? clientVersion + 1 : state.version + 1
+
+      const mergeEntityMap = <T extends { id: string }>(
+        serverMap: Map<string, unknown>,
+        clientArray: T[] | undefined,
+      ) => {
+        if (!Array.isArray(clientArray)) return
+        for (const item of clientArray) {
+          const existing = serverMap.get(item.id)
+          if (existing && typeof existing === 'object') {
+            // Field-level merge: preserve server-side updates from other users
+            serverMap.set(item.id, { ...(existing as object), ...item })
+          } else {
+            serverMap.set(item.id, item)
+          }
+        }
+      }
+
+      mergeEntityMap(state.nodes, nodes)
+      mergeEntityMap(state.groups, groups)
+      mergeEntityMap(state.domains, domains)
+      mergeEntityMap(state.connections, connections)
+
+      state.lastModified = Date.now()
+    }
+
+    const snapshotVersion = state.version
+    const jsonString = JSON.stringify({
+      nodes: Array.from(state.nodes.values()),
+      groups: Array.from(state.groups.values()),
+      domains: Array.from(state.domains.values()),
+      connections: Array.from(state.connections.values()),
+      version: snapshotVersion,
     })
-    .where(eq(canvases.id, canvasId))
+    const utf8Bytes = new TextEncoder().encode(jsonString)
+    const binaryString = Array.from(utf8Bytes, byte => String.fromCharCode(byte)).join('')
+    const base64Data = btoa(binaryString)
 
-  scheduleSave()
+    await db
+      .update(canvases)
+      .set({
+        yjsData: base64Data,
+        updatedAt: Math.floor(Date.now() / 1000),
+      })
+      .where(eq(canvases.id, canvasId))
 
-  res.json({
-    success: true,
-    data: { message: 'Canvas data saved' },
+    if (state.version === snapshotVersion) {
+      state.lastPersistedVersion = snapshotVersion
+    }
+
+    broadcastVersionUpdate(canvasId, state.version)
+
+    scheduleSave()
+    log('POST canvas data - Saved', { canvasId, clientVersion })
+
+    res.json({
+      success: true,
+      data: { message: 'Canvas data saved', version: state.version },
+    })
   })
 }))
 

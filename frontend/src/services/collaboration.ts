@@ -19,6 +19,7 @@ interface CollabMessage {
   data: unknown
   timestamp: number
   senderId: number
+  seq?: number
 }
 
 interface CursorData {
@@ -37,22 +38,14 @@ interface QueuedOperation {
   timestamp: number
 }
 
-export type OperationType = 'create' | 'update' | 'delete' | 'move' | 'resize' | 'style' | 'content' | 'state'
-
-const DEFAULT_POSITION_WINDOW_MS = 2000
-const DEFAULT_NODE_FIELD_WINDOW_MS = 3000
-
 interface FieldChange {
   field: string
-  oldValue: unknown
   newValue: unknown
-  operationType: OperationType
   timestamp: number
 }
 
 interface PendingNodeChanges {
   nodeId: string
-  baseVersion: number
   changes: Map<string, FieldChange>
 }
 
@@ -69,7 +62,6 @@ class CollaborationService {
   private maxReconnectAttempts = 5
   private reconnectDelay = 2000
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null
-  private cleanupInterval: ReturnType<typeof setInterval> | null = null
   private userId: number | null = null
 
   private users: CollabUser[] = []
@@ -83,16 +75,51 @@ class CollaborationService {
   private isFlushingQueue = false
   private isDestroyed = false
 
+  // 操作确认机制：追踪已发送但未确认的操作
+  private opSeq = 0
+  private unackedOps = new Map<number, QueuedOperation>()
+  private readonly ACK_TIMEOUT_MS = 5000
+  private ackTimeoutId: ReturnType<typeof setTimeout> | null = null
+
+  private getOfflineQueueKey(): string {
+    return `collab_offline_queue_${this.canvasId}`
+  }
+
+  private persistOfflineQueue(): void {
+    if (!this.canvasId) return
+    try {
+      if (this.offlineQueue.length > 0) {
+        localStorage.setItem(this.getOfflineQueueKey(), JSON.stringify(this.offlineQueue))
+      } else {
+        localStorage.removeItem(this.getOfflineQueueKey())
+      }
+    } catch (e) {
+      logger.warn('Failed to persist offline queue to localStorage', e)
+    }
+  }
+
+  private restoreOfflineQueue(): void {
+    if (!this.canvasId) return
+    try {
+      const stored = localStorage.getItem(this.getOfflineQueueKey())
+      if (stored) {
+        const restored: unknown = JSON.parse(stored)
+        if (Array.isArray(restored)) {
+          this.offlineQueue = restored as QueuedOperation[]
+        }
+      }
+    } catch (e) {
+      logger.warn('Failed to restore offline queue from localStorage', e)
+      localStorage.removeItem(this.getOfflineQueueKey())
+    }
+  }
+
   private pendingNodeChanges = new Map<string, PendingNodeChanges>()
   private pendingConnectionChanges = new Map<string, PendingConnectionChanges>()
-  private isSyncing = false
-  private recentPositionChanges = new Map<string, number>()
-  private recentNodeUpdates = new Map<string, Map<string, number>>()
+  isApplyingRemoteUpdate = false
 
   // Server version tracking
   private serverVersion = 0
-  private isAwaitingSync = false
-
   // User interaction protection - when user is actively interacting with canvas,
   // remote updates for the same element are deferred
   private activeUserInteractions = new Map<string, { field: string | null; startTime: number }>()
@@ -101,7 +128,7 @@ class CollaborationService {
   private readonly INTERACTION_TIMEOUT_MS = 500
 
   connect(canvasId: number) {
-    if (this.isDestroyed) return
+    this.isDestroyed = false
 
     const token = localStorage.getItem('mindmap_token')
     if (!token) {
@@ -130,9 +157,9 @@ class CollaborationService {
         }
         this.reconnectAttempts = 0
         this.reconnectDelay = 2000
+        this.restoreOfflineQueue()
         this.requestSync()
         this.flushOfflineQueue()
-        this.startCleanupInterval()
         this.startInteractionCheckInterval()
       }
 
@@ -148,8 +175,8 @@ class CollaborationService {
         }
       }
 
-      this.ws.onerror = () => {
-        // WebSocket error - silently handle
+      this.ws.onerror = (_event) => {
+        logger.warn('WebSocket connection error', { canvasId: this.canvasId })
       }
     } catch {
       if (!this.isDestroyed && this.reconnectAttempts < this.maxReconnectAttempts) {
@@ -261,8 +288,29 @@ class CollaborationService {
       clearTimeout(this.reconnectTimeout)
       this.reconnectTimeout = null
     }
-    this.stopCleanupInterval()
     this.stopInteractionCheckInterval()
+
+    // 将未确认的操作移入离线队列，以便重连时刷新
+    if (this.unackedOps.size > 0) {
+      const moved: number[] = []
+      for (const [seq, op] of this.unackedOps) {
+        if (this.offlineQueue.length < this.maxQueueSize) {
+          this.offlineQueue.push(op)
+          moved.push(seq)
+        } else {
+          logger.warn('Offline queue full, unacked operation dropped', { seq, operation: op.operation })
+        }
+      }
+      for (const seq of moved) {
+        this.unackedOps.delete(seq)
+      }
+      this.persistOfflineQueue()
+    }
+    if (this.ackTimeoutId) {
+      clearTimeout(this.ackTimeoutId)
+      this.ackTimeoutId = null
+    }
+
     if (this.ws) {
       this.ws.onopen = null
       this.ws.onmessage = null
@@ -287,15 +335,16 @@ class CollaborationService {
     this.cursorListeners = []
     this.userListeners = []
     this.isFlushingQueue = false
-    this.isSyncing = false
     this.pendingNodeChanges.clear()
     this.pendingConnectionChanges.clear()
-    this.recentPositionChanges.clear()
-    this.recentNodeUpdates.clear()
     this.serverVersion = 0
-    this.isAwaitingSync = false
     this.activeUserInteractions.clear()
     this.deferredOperations = []
+    this.unackedOps.clear()
+    if (this.ackTimeoutId) {
+      clearTimeout(this.ackTimeoutId)
+      this.ackTimeoutId = null
+    }
   }
 
   isConnected(): boolean {
@@ -325,8 +374,11 @@ class CollaborationService {
         case 'sync':
           this.handleSync(message)
           break
-        case 'force-save':
-          this.handleForceSave(message.projectId)
+        case 'version-update':
+          this.serverVersion = message.version
+          break
+        case 'ack':
+          this.handleAck(message.seq)
           break
       }
     } catch {
@@ -336,8 +388,6 @@ class CollaborationService {
 
   private handleOperation(message: CollabMessage) {
     if (message.senderId === this.userId) return
-
-    // Check if user is currently interacting with the affected node
     const nodeId = this.extractNodeIdFromOperation(message.operation, message.data)
     if (nodeId && this.isNodeBeingInteractedWith(nodeId)) {
       // Defer this operation until interaction ends
@@ -357,7 +407,6 @@ class CollaborationService {
 
   private handleCursor(cursor: CursorData) {
     if (cursor.userId === this.userId) return
-
     this.cursors.set(cursor.userId, cursor)
     this.cursorListeners.forEach(listener => listener(new Map(this.cursors)))
   }
@@ -391,8 +440,6 @@ class CollaborationService {
     if (this.isDestroyed) return
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return
 
-    this.isAwaitingSync = false
-
     const store = useCanvasStore.getState()
 
     // Always trust server state during sync
@@ -401,8 +448,6 @@ class CollaborationService {
     const editingNodeId = editingState.nodeId
 
     try {
-      this.isSyncing = true
-
       // Convert arrays to Maps
       const newNodes = new Map<string, Node>()
       for (const node of message.nodes) {
@@ -420,31 +465,123 @@ class CollaborationService {
         newNodes.set(node.id, node)
       }
 
-      store.setCanvasData({
-        nodes: Array.from(newNodes.values()),
-        groups: message.groups,
-        domains: message.domains,
-        connections: message.connections,
-      })
+      // Convert connections array to Map
+      const newConnections = new Map<string, Connection>()
+      for (const conn of message.connections) {
+        newConnections.set(conn.id, conn)
+      }
+
+      // Re-apply only the specific fields with pending local changes,
+      // instead of overwriting the entire node (which would lose remote updates)
+      for (const [nodeId, pending] of this.pendingNodeChanges) {
+        const serverNode = newNodes.get(nodeId)
+        if (serverNode) {
+          for (const [field, change] of pending.changes) {
+            (serverNode as unknown as Record<string, unknown>)[field] = change.newValue
+          }
+        } else {
+          const localNode = store.nodes.get(nodeId)
+          if (localNode) {
+            newNodes.set(nodeId, { ...localNode })
+          }
+        }
+      }
+
+      // Re-apply pending connection changes
+      for (const [connectionId, pending] of this.pendingConnectionChanges) {
+        const serverConn = newConnections.get(connectionId)
+        if (serverConn) {
+          for (const [field, change] of pending.changes) {
+            (serverConn as unknown as Record<string, unknown>)[field] = change.newValue
+          }
+        } else {
+          const localConn = store.connections.get(connectionId)
+          if (localConn) {
+            newConnections.set(connectionId, { ...localConn })
+          }
+        }
+      }
+
+      // Rebroadcast pending changes to room before clearing
+      const pendingNodes = new Map(this.pendingNodeChanges)
+      const pendingConns = new Map(this.pendingConnectionChanges)
+
+      this.isApplyingRemoteUpdate = true
+      try {
+        store.setCanvasData({
+          nodes: Array.from(newNodes.values()),
+          groups: message.groups,
+          domains: message.domains,
+          connections: Array.from(newConnections.values()),
+        })
+      } finally {
+        this.isApplyingRemoteUpdate = false
+      }
+
+      // 将 pending 变更批量回放：每个节点/连接的所有字段合并为单次 sendOperation
+      // 避免逐字段回放导致服务端版本号人为膨胀
+      for (const [, pending] of pendingNodes) {
+        const combinedUpdates: Record<string, unknown> = {}
+        for (const [, change] of pending.changes) {
+          combinedUpdates[change.field] = change.newValue
+        }
+        if (Object.keys(combinedUpdates).length > 0) {
+          this.sendOperation('update-node', { id: pending.nodeId, updates: combinedUpdates })
+        }
+      }
+      for (const [, pending] of pendingConns) {
+        const combinedUpdates: Record<string, unknown> = {}
+        for (const [, change] of pending.changes) {
+          combinedUpdates[change.field] = change.newValue
+        }
+        if (Object.keys(combinedUpdates).length > 0) {
+          this.sendOperation('update-connection', { id: pending.connectionId, updates: combinedUpdates })
+        }
+      }
+      this.pendingNodeChanges.clear()
+      this.pendingConnectionChanges.clear()
 
       this.serverVersion = message.version
-      this.isSyncing = false
 
       logger.info('Synced with server state', { version: message.version, nodes: message.nodes.length })
     } catch (error) {
-      this.isSyncing = false
       logger.error('Failed to handle sync', error)
     }
   }
 
-  private handleForceSave(_projectId: number) {
-    // Server now handles persistence automatically
-    // This is just a notification, no action needed
-    logger.info('Received force-save notification')
+  private handleAck(seq: number): void {
+    this.unackedOps.delete(seq)
+    if (this.unackedOps.size === 0 && this.ackTimeoutId) {
+      clearTimeout(this.ackTimeoutId)
+      this.ackTimeoutId = null
+    }
   }
 
-  trackLocalConnectionChange(connectionId: string, field: string, oldValue: unknown, newValue: unknown, operationType: OperationType): void {
-    if (this.isSyncing) return
+  private scheduleAckTimeout(): void {
+    if (this.ackTimeoutId) return
+    this.ackTimeoutId = setTimeout(() => {
+      this.ackTimeoutId = null
+      if (this.unackedOps.size > 0) {
+        // 超时未确认的操作移入离线队列，等待重连时刷新
+        const moved: number[] = []
+        for (const [seq, op] of this.unackedOps) {
+          if (this.offlineQueue.length < this.maxQueueSize) {
+            this.offlineQueue.push(op)
+            moved.push(seq)
+          } else {
+            logger.warn('ACK timeout: offline queue full, operation dropped', { seq, operation: op.operation })
+          }
+        }
+        for (const seq of moved) {
+          this.unackedOps.delete(seq)
+        }
+        this.persistOfflineQueue()
+        logger.warn('Operation ACK timeout, moved to offline queue', { count: moved.length })
+      }
+    }, this.ACK_TIMEOUT_MS)
+  }
+
+  trackLocalConnectionChange(connectionId: string, field: string, newValue: unknown): void {
 
     let pending = this.pendingConnectionChanges.get(connectionId)
 
@@ -458,24 +595,18 @@ class CollaborationService {
 
     pending.changes.set(field, {
       field,
-      oldValue,
       newValue,
-      operationType,
       timestamp: Date.now()
     })
   }
 
-  trackLocalChange(nodeId: string, field: string, oldValue: unknown, newValue: unknown, operationType: OperationType): void {
-    if (this.isSyncing) return
+  trackLocalChange(nodeId: string, field: string, newValue: unknown): void {
 
     let pending = this.pendingNodeChanges.get(nodeId)
 
     if (!pending) {
-      const store = useCanvasStore.getState()
-      const node = store.nodes.get(nodeId)
       pending = {
         nodeId,
-        baseVersion: node?._version || 0,
         changes: new Map()
       }
       this.pendingNodeChanges.set(nodeId, pending)
@@ -483,81 +614,30 @@ class CollaborationService {
 
     pending.changes.set(field, {
       field,
-      oldValue,
       newValue,
-      operationType,
       timestamp: Date.now()
     })
   }
 
-  clearPendingChanges(nodeId: string): void {
-    this.pendingNodeChanges.delete(nodeId)
-    this.pendingConnectionChanges.delete(nodeId)
-  }
-
-  trackPositionChange(nodeId: string): void {
-    this.recentPositionChanges.set(nodeId, Date.now())
-  }
-
-  isRecentPositionChange(nodeId: string, windowMs: number = DEFAULT_POSITION_WINDOW_MS): boolean {
-    const timestamp = this.recentPositionChanges.get(nodeId)
-    if (!timestamp) return false
-    return Date.now() - timestamp < windowMs
-  }
-
-  trackNodeFieldUpdate(nodeId: string, field: string): void {
-    let fields = this.recentNodeUpdates.get(nodeId)
-    if (!fields) {
-      fields = new Map()
-      this.recentNodeUpdates.set(nodeId, fields)
-    }
-    fields.set(field, Date.now())
-  }
-
-  isRecentNodeFieldUpdate(nodeId: string, field: string, windowMs: number = DEFAULT_NODE_FIELD_WINDOW_MS): boolean {
-    const fields = this.recentNodeUpdates.get(nodeId)
-    if (!fields) return false
-    const timestamp = fields.get(field)
-    if (!timestamp) return false
-    return Date.now() - timestamp < windowMs
-  }
-
-  private cleanupRecentChanges(): void {
-    const now = Date.now()
-    const maxAge = Math.max(DEFAULT_POSITION_WINDOW_MS, DEFAULT_NODE_FIELD_WINDOW_MS)
-    for (const [nodeId, timestamp] of this.recentPositionChanges) {
-      if (now - timestamp > maxAge) {
-        this.recentPositionChanges.delete(nodeId)
-      }
-    }
-    for (const [nodeId, fields] of this.recentNodeUpdates) {
-      for (const [field, timestamp] of fields) {
-        if (now - timestamp > maxAge) {
-          fields.delete(field)
-        }
-      }
-      if (fields.size === 0) {
-        this.recentNodeUpdates.delete(nodeId)
-      }
-    }
-  }
-
-  private requestSync() {
-    if (this.isDestroyed || this.isIntentionallyClosed) return
+  requestSync(): boolean {
+    if (this.isDestroyed || this.isIntentionallyClosed) return false
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.isAwaitingSync = true
       this.ws.send(JSON.stringify({ type: 'sync-request' }))
+      return true
     }
+    return false
   }
 
   sendOperation(operation: string, data: unknown) {
     if (this.isDestroyed || this.isIntentionallyClosed) return
 
     const timestamp = Date.now()
+    const seq = ++this.opSeq
 
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       if (this.offlineQueue.length < this.maxQueueSize) {
         this.offlineQueue.push({ operation, data, timestamp })
+        this.persistOfflineQueue()
       }
       return
     }
@@ -567,8 +647,13 @@ class CollaborationService {
       operation,
       data,
       timestamp,
-      senderId: this.userId || 0
+      senderId: this.userId || 0,
+      seq,
     }
+
+    // 追踪未确认操作
+    this.unackedOps.set(seq, { operation, data, timestamp })
+    this.scheduleAckTimeout()
 
     this.ws.send(JSON.stringify(message))
   }
@@ -581,15 +666,22 @@ class CollaborationService {
     this.offlineQueue = []
 
     try {
-      for (const item of queue) {
+      for (let i = 0; i < queue.length; i++) {
         if (this.isDestroyed || this.isIntentionallyClosed || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
-          this.offlineQueue.unshift(...queue.slice(queue.indexOf(item)))
+          this.offlineQueue.unshift(...queue.slice(i))
           break
         }
-        this.sendOperation(item.operation, item.data)
+        try {
+          this.sendOperation(queue[i].operation, queue[i].data)
+        } catch {
+          // If send fails, put remaining items back in queue
+          this.offlineQueue.unshift(...queue.slice(i))
+          break
+        }
       }
     } finally {
       this.isFlushingQueue = false
+      this.persistOfflineQueue()
     }
   }
 
@@ -656,6 +748,10 @@ class CollaborationService {
 
   getServerVersion(): number {
     return this.serverVersion
+  }
+
+  setServerVersion(version: number): void {
+    this.serverVersion = version
   }
 }
 

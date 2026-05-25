@@ -513,7 +513,6 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
       if (title !== editingTitleRef.current) {
         const originalTitle = editingTitleRef.current
         updateNodeWithOriginal(node.id, { title }, { title: originalTitle })
-        collabService.sendOperation('update-node', { id: node.id, updates: { title } })
         editingTitleRef.current = title
       }
     }
@@ -553,7 +552,6 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
       if (trimmedContent !== editingContentRef.current) {
         const originalContent = editingContentRef.current
         updateNodeWithOriginal(node.id, { content: trimmedContent }, { content: originalContent })
-        collabService.sendOperation('update-node', { id: node.id, updates: { content: trimmedContent } })
         editingContentRef.current = trimmedContent
       }
     }
@@ -928,6 +926,10 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
   // 中文输入法开始
   const handleCompositionStart = useCallback(() => {
     setIsComposing(true)
+    if (inputSyncTimerRef.current) {
+      clearTimeout(inputSyncTimerRef.current)
+      inputSyncTimerRef.current = null
+    }
   }, [])
 
   // 中文输入法结束
@@ -937,6 +939,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
 
   // 不做状态更新，避免光标跳动
   const handleInputChange = useCallback(() => {
+    if (isComposing) return
     if (inputSyncTimerRef.current) {
       clearTimeout(inputSyncTimerRef.current)
     }
@@ -952,9 +955,12 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
         const title = text.replace(/\n/g, '').replace(/\u200B/g, '').trim()
         if (title && title !== editingTitleRef.current) {
           setLocalEditingUpdate(true)
-          updateNodeWithoutHistory(node.id, { title })
-          collabService.sendOperation('update-node', { id: node.id, updates: { title } })
-          setLocalEditingUpdate(false)
+          try {
+            updateNodeWithoutHistory(node.id, { title })
+            collabService.sendOperation('update-node', { id: node.id, updates: { title } })
+          } finally {
+            setLocalEditingUpdate(false)
+          }
         }
       } else if (currentField === 'content' && contentRef.current) {
         const cleanedHtml = cleanHtmlContent(contentRef.current.innerHTML)
@@ -967,13 +973,16 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
         const content = isEmpty ? '' : cleanedHtml
         if (content !== editingContentRef.current) {
           setLocalEditingUpdate(true)
-          updateNodeWithoutHistory(node.id, { content })
-          collabService.sendOperation('update-node', { id: node.id, updates: { content } })
-          setLocalEditingUpdate(false)
+          try {
+            updateNodeWithoutHistory(node.id, { content })
+            collabService.sendOperation('update-node', { id: node.id, updates: { content } })
+          } finally {
+            setLocalEditingUpdate(false)
+          }
         }
       }
     }, 300)
-  }, [editingField, node.id, updateNodeWithoutHistory, cleanHtmlContent])
+  }, [editingField, node.id, updateNodeWithoutHistory, cleanHtmlContent, isComposing])
 
   // 手动插入换行，确保光标位置正确
   const insertLineBreakManually = useCallback(() => {

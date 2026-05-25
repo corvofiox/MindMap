@@ -30,6 +30,7 @@ function getProjectOwnerId(project: Record<string, unknown>): number | undefined
 import {
   loadCanvasStateFromDb,
   getSyncData,
+  persistCanvasState,
   applyAddNode,
   applyUpdateNode,
   applyRemoveNode,
@@ -43,6 +44,13 @@ import {
   applyUpdateConnection,
   applyRemoveConnection,
   removeCanvasState,
+  flushPendingPersist,
+  getCanvasState,
+  isCanvasStatePersisted,
+  startPeriodicCanvasFlush,
+  stopPeriodicCanvasFlush,
+  incrementStateGeneration,
+  getStateGeneration,
 } from './canvas-state.js'
 
 interface CanvasActiveUser {
@@ -67,6 +75,7 @@ interface CanvasRoom {
   id: number
   clients: Set<WebSocketWithUserData>
   activeUsers: Map<number, CanvasActiveUser>
+  userConnectionCounts: Map<number, number>
 }
 
 interface CollabMessage {
@@ -75,6 +84,7 @@ interface CollabMessage {
   data: unknown
   timestamp: number
   senderId: number
+  seq?: number
 }
 
 interface SyncMessage {
@@ -131,6 +141,8 @@ function checkWsRateLimit(ip: string): boolean {
 export function setupWebSocket(wss: WebSocketServer) {
   wss.on('connection', handleConnection)
 
+  startPeriodicCanvasFlush()
+
   const heartbeatIntervalId = setInterval(() => {
     const now = Date.now()
 
@@ -142,9 +154,22 @@ export function setupWebSocket(wss: WebSocketServer) {
 
     for (const [canvasId, room] of canvasRooms.entries()) {
       if (room.clients.size === 0) {
+        flushPendingPersist(canvasId)
+        // Always remove the room so it doesn't leak
         canvasRooms.delete(canvasId)
-        removeCanvasState(canvasId)
-        continue
+        if (!isCanvasStatePersisted(canvasId)) {
+          const gen = getStateGeneration(canvasId)
+          persistCanvasState(canvasId).then((success) => {
+            // 防止竞态：新连接可能在异步持久化期间创建了新的 CanvasData
+            if (getStateGeneration(canvasId) !== gen) return
+            if (success || isCanvasStatePersisted(canvasId)) {
+              removeCanvasState(canvasId)
+            }
+          })
+        } else {
+          removeCanvasState(canvasId)
+        }
+    continue
       }
 
       for (const client of Array.from(room.clients)) {
@@ -168,7 +193,18 @@ export function setupWebSocket(wss: WebSocketServer) {
 
   wss.on('close', () => {
     clearInterval(heartbeatIntervalId)
+    stopPeriodicCanvasFlush()
   })
+}
+
+export function broadcastVersionUpdate(canvasId: number, version: number): void {
+  const room = canvasRooms.get(canvasId)
+  if (!room) return
+
+  broadcastToRoom(room, {
+    type: 'version-update',
+    version,
+  }, null)
 }
 
 export function getCanvasActiveUsers(canvasId: number): CanvasActiveUser[] {
@@ -185,21 +221,6 @@ export function getProjectActiveUsers(_projectId: number): Map<number, CanvasAct
     }
   }
   return result
-}
-
-export function notifyProjectCollaboratorsToSave(projectId: number): void {
-  const message = JSON.stringify({
-    type: 'force-save',
-    projectId,
-  })
-
-  for (const [, room] of canvasRooms.entries()) {
-    for (const client of room.clients) {
-      if (client.readyState === 1) {
-        client.send(message)
-      }
-    }
-  }
 }
 
 async function handleConnection(ws: WebSocketWithUserData, req: any) {
@@ -323,12 +344,18 @@ async function handleConnection(ws: WebSocketWithUserData, req: any) {
       id: canvasId,
       clients: new Set(),
       activeUsers: new Map(),
+      userConnectionCounts: new Map(),
     }
     canvasRooms.set(canvasId, room)
+    // 递增世代计数，防止旧异步回调误删新创建的 CanvasData
+    incrementStateGeneration(canvasId)
   }
 
   room.clients.add(ws)
   room.activeUsers.set(userId, userInfo)
+
+  const currentCount = room.userConnectionCounts.get(userId) || 0
+  room.userConnectionCounts.set(userId, currentCount + 1)
 
   // Load canvas state from DB if not already in memory
   await loadCanvasStateFromDb(canvasId)
@@ -401,19 +428,35 @@ function handleClientDisconnect(ws: WebSocketWithUserData, room: CanvasRoom, sho
   if (!wasInRoom) return
 
   if (ws.userId) {
-    room.activeUsers.delete(ws.userId)
-  }
+    const currentCount = (room.userConnectionCounts.get(ws.userId) || 1) - 1
+    if (currentCount <= 0) {
+      room.userConnectionCounts.delete(ws.userId)
+      room.activeUsers.delete(ws.userId)
 
-  if (ws.userInfo) {
-    broadcastToRoom(room, {
-      type: 'user-leave',
-      user: ws.userInfo,
-    } as UserJoinMessage, null)
+      if (ws.userInfo) {
+        broadcastToRoom(room, {
+          type: 'user-leave',
+          user: ws.userInfo,
+        } as UserJoinMessage, null)
+      }
+    } else {
+      room.userConnectionCounts.set(ws.userId, currentCount)
+    }
   }
 
   if (room.clients.size === 0) {
+    flushPendingPersist(room.id)
+    // Always remove the room so it doesn't leak, even if persist hasn't completed yet.
+    // The canvas state stays in memory and will be flushed by the periodic persist.
     canvasRooms.delete(room.id)
-    // Keep canvas state in memory for a while in case user reconnects quickly
+    const gen = getStateGeneration(room.id)
+    persistCanvasState(room.id).then((success) => {
+      // 防止竞态：新连接可能在异步持久化期间创建了新的 CanvasData
+      if (getStateGeneration(room.id) !== gen) return
+      if (success || isCanvasStatePersisted(room.id)) {
+        removeCanvasState(room.id)
+      }
+    })
   }
 
   if (shouldTerminate && ws.readyState === 1) {
@@ -497,8 +540,16 @@ function handleOperation(ws: WebSocketWithUserData, room: CanvasRoom, message: C
   }
 
   if (applied) {
-    // Broadcast to all other clients in the room
     broadcastToRoom(room, message, ws)
+    broadcastVersionUpdate(canvasId, getCanvasState(canvasId)!.version)
+
+    // 向发送方回 ACK 确认操作已处理
+    if (typeof message.seq === 'number' && ws.readyState === 1) {
+      ws.send(JSON.stringify({
+        type: 'ack',
+        seq: message.seq,
+      }))
+    }
   }
 }
 

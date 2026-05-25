@@ -5,7 +5,6 @@ import { eq, and } from 'drizzle-orm'
 import { authenticate, type AuthRequest } from '../middleware/auth.middleware.js'
 import { asyncHandler } from '../middleware/error.middleware.js'
 import { transformResponse, transformResponseArray, getProperty } from '../utils/transformResponse.js'
-import { notifyProjectCollaboratorsToSave } from '../websocket/index.js'
 
 export const projectRouter = Router()
 
@@ -166,13 +165,6 @@ projectRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, re
       success: false,
       error: '只有项目所有者可以修改项目',
     })
-  }
-
-  const wasCollaborative = getProperty<boolean>(project, 'is_collaborative', 'isCollaborative') || project.isCollaborative
-  const willBeCollaborative = collaborativeValue
-
-  if (wasCollaborative && willBeCollaborative === false) {
-    notifyProjectCollaboratorsToSave(projectId)
   }
 
   const updateData: Record<string, unknown> = {

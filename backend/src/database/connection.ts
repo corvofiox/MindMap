@@ -97,10 +97,13 @@ export async function initializeDb(): Promise<AppDatabase> {
 let saveTimeout: NodeJS.Timeout | null = null
 let lastSaveTime = Date.now()
 let firstScheduleTime = 0
-const SAVE_INTERVAL = 5000
-const MAX_SAVE_DELAY = 15000
+let isSaving = false
+const SAVE_INTERVAL = 2000
+const MAX_SAVE_DELAY = 2000
 
 async function saveToDisk() {
+  if (isSaving) return
+  isSaving = true
   try {
     const sqlite = await getSqlite()
     const data = sqlite.export()
@@ -109,6 +112,8 @@ async function saveToDisk() {
     lastSaveTime = Date.now()
   } catch (error) {
     logError('Failed to save database', error)
+  } finally {
+    isSaving = false
   }
 }
 
@@ -127,22 +132,60 @@ export function scheduleSave() {
   const maxRemaining = Math.max(0, MAX_SAVE_DELAY - sinceFirstSchedule)
   const delay = Math.min(Math.max(0, SAVE_INTERVAL - elapsed), maxRemaining)
 
-  saveTimeout = setTimeout(() => {
-    saveToDisk()
+  saveTimeout = setTimeout(async () => {
+    await saveToDisk()
     saveTimeout = null
     firstScheduleTime = 0
   }, delay || 100)
 }
 
 async function gracefulShutdown() {
+  log('Graceful shutdown initiated, saving all data...')
+
+  // Flush pending save timer first
   if (saveTimeout) {
     clearTimeout(saveTimeout)
     saveTimeout = null
   }
+
+  // Dynamically import canvas-state to flush all in-memory canvas states to DB
+  try {
+    const { flushAllCanvasStates, stopPeriodicCanvasFlush } = await import(
+      '../websocket/canvas-state.js'
+    )
+    stopPeriodicCanvasFlush()
+    await flushAllCanvasStates()
+  } catch (error) {
+    logError('Failed to flush canvas states during shutdown', error)
+  }
+
   await saveToDisk()
+  log('Database saved to disk, exiting')
 }
 
 process.on('SIGINT', gracefulShutdown)
 process.on('SIGTERM', gracefulShutdown)
 
-process.on('beforeExit', gracefulShutdown)
+process.once('beforeExit', gracefulShutdown)
+
+process.on('uncaughtException', async (error) => {
+  logError('Uncaught exception, attempting graceful shutdown', error)
+  try {
+    await gracefulShutdown()
+  } catch (shutdownError) {
+    logError('Shutdown failed during uncaught exception handler', shutdownError)
+  } finally {
+    process.exit(1)
+  }
+})
+
+process.on('unhandledRejection', async (reason) => {
+  logError('Unhandled rejection, attempting graceful shutdown', reason)
+  try {
+    await gracefulShutdown()
+  } catch (shutdownError) {
+    logError('Shutdown failed during unhandled rejection handler', shutdownError)
+  } finally {
+    process.exit(1)
+  }
+})

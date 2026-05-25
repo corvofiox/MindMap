@@ -4,6 +4,19 @@ import { useUIStore } from '@/store/useUIStore'
 // API配置 - 使用相对路径，自动适应部署环境
 export const API_BASE_URL = ''
 
+// API error with response body preserved for structured error handling
+export class ApiError extends Error {
+  status: number
+  data: Record<string, unknown> | null
+
+  constructor(message: string, status: number, data: Record<string, unknown> | null = null) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.data = data
+  }
+}
+
 // 常见错误信息
 export const ERROR_MESSAGES = {
   NETWORK_ERROR: '网络连接失败，请检查您的网络设置',
@@ -233,10 +246,12 @@ export class ApiClient {
 
         // 尝试解析服务器返回的错误信息
         let errorMessage: string
+        let responseData: Record<string, unknown> | null = null
         try {
-          const errorData = await this.parseResponse<any>(response)
-          if (errorData && errorData.error) {
-            errorMessage = errorData.error
+          const parsed = await this.parseResponse<any>(response)
+          responseData = parsed as unknown as Record<string, unknown>
+          if (responseData && responseData.error) {
+            errorMessage = String(responseData.error)
           } else {
             errorMessage = getErrorMessageByStatus(response.status, '请求失败')
           }
@@ -244,7 +259,7 @@ export class ApiClient {
           // 如果无法解析响应，使用默认的状态信息
           errorMessage = getErrorMessageByStatus(response.status, '请求失败')
         }
-        throw new Error(errorMessage)
+        throw new ApiError(errorMessage, response.status, responseData)
       }
 
       // 解析响应

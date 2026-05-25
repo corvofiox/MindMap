@@ -208,7 +208,10 @@ export function NodeContextMenu({ nodeId, position, onClose }: NodeContextMenuPr
     if (node.imageUrl.startsWith('data:')) {
       const a = document.createElement('a')
       a.href = node.imageUrl
-      a.download = 'image.png'
+      // Extract file extension from data URL MIME type (e.g. "data:image/jpeg" → "jpeg")
+      const mimeMatch = node.imageUrl.match(/^data:(image\/\w+)/)
+      const ext = mimeMatch ? mimeMatch[1].split('/')[1] : 'png'
+      a.download = `image.${ext}`
       document.body.appendChild(a)
       a.click()
       document.body.removeChild(a)

@@ -1,4 +1,5 @@
 import type { Node, NodeGroup, Domain, Connection } from '@/types'
+import { logger } from '@/utils/logger'
 
 const CACHE_KEY_PREFIX = 'mindmap_canvas_cache_'
 const CACHE_VERSION = 'v4' // Updated to remove drawings
@@ -31,7 +32,7 @@ export function saveToCache(canvasId: number, data: {
     const key = CACHE_KEY_PREFIX + canvasId
     localStorage.setItem(key, JSON.stringify(cacheData))
   } catch (error) {
-    // Silently fail
+    logger.warn('Failed to save canvas cache to localStorage', { canvasId, error })
   }
 }
 
@@ -74,7 +75,7 @@ export function clearCache(canvasId: number): void {
     const key = CACHE_KEY_PREFIX + canvasId
     localStorage.removeItem(key)
   } catch (error) {
-    // Silently fail
+    logger.warn('Failed to clear canvas cache from localStorage', { canvasId, error })
   }
 }
 
@@ -136,6 +137,6 @@ export function clearAllCaches(): void {
       localStorage.removeItem(key)
     })
   } catch (error) {
-    // Silently fail
+    logger.warn('Failed to clear all canvas caches from localStorage', error)
   }
 }

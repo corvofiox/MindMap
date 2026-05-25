@@ -23,7 +23,8 @@ import { CONNECTION_DEFAULTS, Z_INDEX } from '@/constants'
 import { generateId, colorToHex, hexToRgba, calculateCurveControlPoints, getCurveThroughPoints, getStepPath, pointsToPath, calculateSmartPortPosition, buildConnectionInfoMap, getPortOffsetVector, type PortDirection, type ConnectionInfo } from '@/utils/canvas'
 import { saveToCache, loadFromCache } from '@/utils/nodeCache'
 import { execFormatCommand } from '@/utils/richTextCommands'
-import { saveCanvasNodesData, loadCanvasNodesData } from '@/services/api'
+import { loadCanvasNodesData, apiClient } from '@/services/api'
+import { ApiError } from '@/services/apiClient'
 import { collabService } from '@/services/collaboration'
 import type { Node, Connection } from '@/types'
 import html2canvas from 'html2canvas-pro'
@@ -598,7 +599,14 @@ function collectCanvasData(state: ReturnType<typeof useCanvasStore.getState>) {
     groups: Array.from(state.groups.values()),
     domains: Array.from(state.domains.values()),
     connections: Array.from(state.connections.values()),
+    version: collabService.getServerVersion(),
   }
+}
+
+// Read CSRF token from cookie for REST API calls
+function getCsrfToken(): string {
+  const match = document.cookie.match(/(?:^|;\s*)x-csrf-token=([^;]*)/)
+  return match ? decodeURIComponent(match[1]) : ''
 }
 
 // Helper function to check if canvas has content
@@ -641,6 +649,7 @@ export function CanvasPage() {
   const panStartRef = useRef({ x: 0, y: 0 })
   const cacheTimeoutRef = useRef<ReturnType<typeof setTimeout>>()
   const dbSaveTimeoutRef = useRef<ReturnType<typeof setTimeout>>()
+  const conflictCooldownRef = useRef<number>(0) // Prevent immediate re-save after 409 conflict
   const mouseDownOnContentRef = useRef(false) // Track if mouse down was on content
   const [hasInitializedCamera, setHasInitializedCamera] = useState(false) // Track if camera has been initialized
   const [hasLoadedCanvasData, setHasLoadedCanvasData] = useState(false) // Track if canvas data has been loaded
@@ -1046,11 +1055,11 @@ export function CanvasPage() {
         )
 
         if (hasData) {
-          // Found data in DB
           clearCanvas()
           setCanvasData(dbData)
           setDirty(false)
           saveToCache(id, dbData)
+          collabService.setServerVersion(dbData.version)
         } else {
           // No data in DB, try cache
           const cachedData = loadFromCache(id)
@@ -1300,6 +1309,12 @@ export function CanvasPage() {
         return
       }
 
+      // Cooldown after 409 conflict: skip one cycle to let sync complete
+      if (conflictCooldownRef.current && Date.now() - conflictCooldownRef.current < AUTO_SAVE_INTERVAL) {
+        dbSaveTimeoutRef.current = setTimeout(saveToDatabase, AUTO_SAVE_INTERVAL)
+        return
+      }
+
       if (!currentIsDirty) {
         dbSaveTimeoutRef.current = setTimeout(saveToDatabase, AUTO_SAVE_INTERVAL)
         return
@@ -1312,23 +1327,46 @@ export function CanvasPage() {
       }
 
       try {
-        // Server now handles auto-persistence via WebSocket
-        // Client just needs to generate thumbnail periodically
         const state = useCanvasStore.getState()
         const canvasData = collectCanvasData(state)
+        const snapshotNodes = state.nodes
+        const snapshotGroups = state.groups
+        const snapshotDomains = state.domains
+        const snapshotConnections = state.connections
 
-        lastSaveTimeRef.current = now
-        setDirty(false)
+        const result = await apiClient.post<{ message: string; version: number }>(`/api/canvases/${id}/data`, canvasData)
+        if (result && typeof result.version === 'number') {
+          collabService.setServerVersion(result.version)
+        }
+
+        lastSaveTimeRef.current = Date.now()
+        const currentState = useCanvasStore.getState()
+        if (currentState.nodes === snapshotNodes &&
+            currentState.groups === snapshotGroups &&
+            currentState.domains === snapshotDomains &&
+            currentState.connections === snapshotConnections) {
+          setDirty(false)
+        }
 
         // Generate thumbnail after successful auto-save
         if (hasCanvasContent(canvasData.nodes, canvasData.domains)) {
           await triggerThumbnailGeneration(id)
         }
       } catch (error) {
-        // Error handled by toast
+        const message = error instanceof Error ? error.message : String(error)
+        if (error instanceof ApiError && error.status === 409 && typeof error.data?.serverVersion === 'number') {
+          collabService.setServerVersion(error.data.serverVersion as number)
+          collabService.requestSync()
+          conflictCooldownRef.current = Date.now()
+          addToast({ type: 'warning', title: '保存冲突', message: '已获取服务端最新版本，可再次保存' })
+        } else if (message.includes('网络连接失败')) {
+          addToast({ type: 'error', title: '保存失败', message: '网络错误，请检查连接后重试' })
+        } else {
+          addToast({ type: 'error', title: '保存失败', message: '服务器错误，请稍后重试' })
+        }
+      } finally {
+        dbSaveTimeoutRef.current = setTimeout(saveToDatabase, AUTO_SAVE_INTERVAL)
       }
-
-      dbSaveTimeoutRef.current = setTimeout(saveToDatabase, AUTO_SAVE_INTERVAL)
     }
 
     dbSaveTimeoutRef.current = setTimeout(saveToDatabase, AUTO_SAVE_INTERVAL)
@@ -1338,57 +1376,43 @@ export function CanvasPage() {
         clearTimeout(dbSaveTimeoutRef.current)
       }
     }
-  }, [canvasId, setDirty])
-
-  // Handle space key for panning
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.code === 'Space' && !e.repeat) {
-        setIsSpacePressed(true)
-      }
-    }
-
-    const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.code === 'Space') {
-        setIsSpacePressed(false)
-        setIsDragging(false)
-      }
-    }
-
-    window.addEventListener('keydown', handleKeyDown)
-    window.addEventListener('keyup', handleKeyUp)
-
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown)
-      window.removeEventListener('keyup', handleKeyUp)
-    }
-  }, [])
+  }, [canvasId, setDirty, triggerThumbnailGeneration, addToast])
 
   // Manual save function
   const handleManualSave = useCallback(async () => {
-    if (!canvasId) {
-      return
-    }
+    if (!canvasId) return
 
     const id = parseInt(canvasId)
-    if (isNaN(id)) {
-      return
-    }
+    if (isNaN(id)) return
 
-    // Server now handles persistence via WebSocket
-    // Manual save just triggers thumbnail generation
     const state = useCanvasStore.getState()
     const canvasData = collectCanvasData(state)
 
-    const now = Date.now()
-    lastSaveTimeRef.current = now
-    setDirty(false)
+    try {
+      const result = await apiClient.post<{ message: string; version: number }>(`/api/canvases/${id}/data`, canvasData)
+      if (result && typeof result.version === 'number') {
+        collabService.setServerVersion(result.version)
+      }
 
-    // Generate thumbnail immediately when manually saving
-    if (hasCanvasContent(canvasData.nodes, canvasData.domains)) {
-      await generateThumbnail(id)
+      lastSaveTimeRef.current = Date.now()
+      setDirty(false)
+
+      if (hasCanvasContent(canvasData.nodes, canvasData.domains)) {
+        await generateThumbnail(id)
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (error instanceof ApiError && error.status === 409 && typeof error.data?.serverVersion === 'number') {
+        collabService.setServerVersion(error.data.serverVersion as number)
+        collabService.requestSync()
+        addToast({ type: 'warning', title: '保存冲突', message: '已获取服务端最新版本，可再次保存' })
+      } else if (message.includes('网络连接失败')) {
+        addToast({ type: 'error', title: '保存失败', message: '网络错误，请检查连接后重试' })
+      } else {
+        addToast({ type: 'error', title: '保存失败', message: '服务器错误，请稍后重试' })
+      }
     }
-  }, [canvasId, setDirty, generateThumbnail])
+  }, [canvasId, setDirty, generateThumbnail, addToast])
 
   // Handle page refresh/close - save data immediately before unloading
   useEffect(() => {
@@ -1421,7 +1445,9 @@ export function CanvasPage() {
             headers: {
               'Content-Type': 'application/json',
               'Authorization': `Bearer ${token}`,
+              'x-csrf-token': getCsrfToken(),
             },
+            credentials: 'include',
             body,
             keepalive: true,
           }).catch(() => {
@@ -1438,9 +1464,47 @@ export function CanvasPage() {
       }
     }
 
+    // pagehide: 比 beforeunload 更可靠的页面卸载兜底（含移动端浏览器后台化场景）
+    // 立即写入 localStorage 作为紧急备份，不依赖 500ms 防抖的 cache save
+    // 同时通过 sendBeacon 发送网络请求，确保数据在服务端持久化
+    const handlePageHide = () => {
+      if (!canvasId) return
+      const id = parseInt(canvasId)
+      if (isNaN(id)) return
+
+      try {
+        const state = useCanvasStore.getState()
+        const canvasData = collectCanvasData(state)
+        if (canvasData.nodes.length > 0 || canvasData.groups.length > 0 || canvasData.domains.length > 0) {
+          saveToCache(id, { nodes: canvasData.nodes, groups: canvasData.groups, domains: canvasData.domains, connections: canvasData.connections })
+
+          const token = localStorage.getItem('mindmap_token')
+          if (token) {
+            fetch(`/api/canvases/${id}/data`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`,
+                'x-csrf-token': getCsrfToken(),
+              },
+              credentials: 'include',
+              body: JSON.stringify(canvasData),
+              keepalive: true,
+            }).catch(() => {})
+          }
+        }
+      } catch {
+        // Silently fail
+      }
+    }
+
     window.addEventListener('beforeunload', handleBeforeUnload)
+    window.addEventListener('pagehide', handlePageHide)
 
     return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload)
+      window.removeEventListener('pagehide', handlePageHide)
+
       // Generate thumbnail on component unmount (when navigating away)
       if (canvasId) {
         const id = parseInt(canvasId)
@@ -1895,6 +1959,32 @@ export function CanvasPage() {
       window.removeEventListener('keydown', handleKeyDown)
     }
   }, [zoom, currentTool, setCurrentTool, setZoom, setPan, toggleGrid, toggleQuickEditMode, toggleRelationshipHighlightMode, toggleDragMode, toggleMinimap, setEditingId, nodes, groups, selectedIds, addGroup, toggleSidebar, toggleNodePool, setSettingsOpen, setCommandPaletteOpen, handleManualSave, setIsCreatingConnection, setConnectionStartNodeId, setStartPortPreview, setSelectedIds, canUndo, canRedo, undo, redo, addNode, addToast])
+
+  // Space key for canvas drag
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'Space' && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || (e.target as HTMLElement).contentEditable === 'true')) {
+        e.preventDefault()
+        setIsSpacePressed(true)
+      }
+    }
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'Space') {
+        e.preventDefault()
+        setIsSpacePressed(false)
+        setIsDragging(false)
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('keyup', handleKeyUp)
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('keyup', handleKeyUp)
+    }
+  }, [])
 
   // Handle click outside to end group name editing
   useEffect(() => {

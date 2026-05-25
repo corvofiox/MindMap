@@ -63,7 +63,7 @@ interface CanvasState {
   // Node actions
   addNode: (node: Node) => void
   updateNode: (id: string, updates: Partial<Node>) => void
-  updateNodeWithoutHistory: (id: string, updates: Partial<Node>) => void
+  updateNodeWithoutHistory: (id: string, updates: Partial<Node>, markDirty?: boolean) => void
   updateNodeWithOriginal: (id: string, updates: Partial<Node>, originalValues: Partial<Node>) => void
   removeNode: (id: string) => void
   duplicateNode: (id: string) => void
@@ -75,19 +75,19 @@ interface CanvasState {
   // Group actions
   addGroup: (group: NodeGroup) => void
   updateGroup: (id: string, updates: Partial<NodeGroup>) => void
-  updateGroupWithoutHistory: (id: string, updates: Partial<NodeGroup>) => void
+  updateGroupWithoutHistory: (id: string, updates: Partial<NodeGroup>, markDirty?: boolean) => void
   removeGroup: (id: string) => void
 
   // Domain actions
   addDomain: (domain: Domain) => void
   updateDomain: (id: string, updates: Partial<Domain>) => void
-  updateDomainWithoutHistory: (id: string, updates: Partial<Domain>) => void
+  updateDomainWithoutHistory: (id: string, updates: Partial<Domain>, markDirty?: boolean) => void
   removeDomain: (id: string) => void
 
   // Connection actions
   addConnection: (connection: Connection) => void
   updateConnection: (id: string, updates: Partial<Connection>) => void
-  updateConnectionWithoutHistory: (id: string, updates: Partial<Connection>) => void
+  updateConnectionWithoutHistory: (id: string, updates: Partial<Connection>, markDirty?: boolean) => void
   removeConnection: (id: string) => void
 
   // Bend point actions
@@ -115,7 +115,7 @@ interface CanvasState {
   setDirty: (dirty: boolean) => void
 
   // Undo/Redo actions
-  executeCommand: (command: Command, skipHistory?: boolean) => void
+  executeCommand: (command: Command, skipHistory?: boolean, markDirty?: boolean) => void
   executeCommandWithoutHistory: (command: Command) => void
   undo: () => void
   redo: () => void
@@ -217,13 +217,13 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     })
   },
 
-  updateNodeWithoutHistory: (id, updates) => {
+  updateNodeWithoutHistory: (id, updates, markDirty = true) => {
     set((state) => {
       const currentNodes = new Map(state.nodes)
       const currentNode = currentNodes.get(id)
       if (currentNode) {
         currentNodes.set(id, { ...currentNode, ...updates })
-        return { nodes: currentNodes, isDirty: true }
+        return markDirty ? { nodes: currentNodes, isDirty: true } : { nodes: currentNodes }
       }
       return {}
     })
@@ -365,13 +365,13 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     })
   },
 
-  updateGroupWithoutHistory: (id, updates) => {
+  updateGroupWithoutHistory: (id, updates, markDirty = true) => {
     set((state) => {
       const groups = new Map(state.groups)
       const group = groups.get(id)
       if (group) {
         groups.set(id, { ...group, ...updates })
-        return { groups, isDirty: true }
+        return markDirty ? { groups, isDirty: true } : { groups }
       }
       return {}
     })
@@ -455,13 +455,13 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     })
   },
 
-  updateDomainWithoutHistory: (id, updates) => {
+  updateDomainWithoutHistory: (id, updates, markDirty = true) => {
     set((state) => {
       const domains = new Map(state.domains)
       const domain = domains.get(id)
       if (domain) {
         domains.set(id, { ...domain, ...updates })
-        return { domains, isDirty: true }
+        return markDirty ? { domains, isDirty: true } : { domains }
       }
       return {}
     })
@@ -544,13 +544,13 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     })
   },
 
-  updateConnectionWithoutHistory: (id, updates) => {
+  updateConnectionWithoutHistory: (id, updates, markDirty = true) => {
     set((state) => {
       const connections = new Map(state.connections)
       const connection = connections.get(id)
       if (connection) {
         connections.set(id, { ...connection, ...updates })
-        return { connections, isDirty: true }
+        return markDirty ? { connections, isDirty: true } : { connections }
       }
       return {}
     })
@@ -869,13 +869,13 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   },
 
   // Undo/Redo actions
-  executeCommand: (command, skipHistory = false) => {
+  executeCommand: (command, skipHistory = false, markDirty = true) => {
     const currentUserId = getCurrentUserId()
     const commandWithUser = { ...command, userId: currentUserId ?? undefined }
 
     if (skipHistory) {
       const commandResult = commandWithUser.execute()
-      set({ ...commandResult, isDirty: true })
+      set(markDirty ? { ...commandResult, isDirty: true } : commandResult)
       return
     }
 
@@ -902,7 +902,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           commands: newCommands,
           currentIndex: newCommands.length - 1,
         },
-        isDirty: true,
+        ...(markDirty ? { isDirty: true } : {}),
       }
     })
   },

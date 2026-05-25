@@ -142,27 +142,6 @@ export async function saveCanvasData(id: number, yjsData: Uint8Array): Promise<v
 }
 
 /**
- * Save canvas nodes data as JSON (for auto-save feature)
- * Stores the data in yjsData field as a JSON string in base64 encoding
- */
-export async function saveCanvasNodesData(id: number, nodesData: {
-  nodes: Node[]
-  groups: NodeGroup[]
-  domains: Domain[]
-  connections: Connection[]
-  drawings?: unknown[]
-}): Promise<void> {
-  // Convert to JSON and encode as base64 to store in yjsData field
-  // Use proper UTF-8 encoding to handle Unicode characters (like Chinese)
-  const jsonString = JSON.stringify(nodesData)
-  const utf8Bytes = new TextEncoder().encode(jsonString)
-  const binaryString = Array.from(utf8Bytes, byte => String.fromCharCode(byte)).join('')
-  const base64Data = btoa(binaryString)
-
-  return await apiClient.put<void>(API_ENDPOINTS.CANVAS_BY_ID(id), { yjsData: base64Data })
-}
-
-/**
  * Load canvas nodes data from yjsData field
  * Returns null if there's an error loading from database
  * Returns empty object if canvas exists but has no data
@@ -173,6 +152,7 @@ export async function loadCanvasNodesData(id: number): Promise<{
   domains: Domain[]
   connections: Connection[]
   drawings?: unknown[]
+  version: number
 } | null> {
   try {
     const canvas = await getCanvas(id)
@@ -185,23 +165,19 @@ export async function loadCanvasNodesData(id: number): Promise<{
         domains: [],
         connections: [],
         drawings: [],
+        version: 0,
       }
     }
 
-    // Try to decode as base64 JSON
     try {
-      // Decode base64 to binary string
       const binaryString = atob(yjsData)
-      // Convert binary string to Uint8Array (UTF-8 bytes)
       const utf8Bytes = new Uint8Array(binaryString.length)
       for (let i = 0; i < binaryString.length; i++) {
         utf8Bytes[i] = binaryString.charCodeAt(i)
       }
-      // Decode UTF-8 bytes to string
       const jsonString = new TextDecoder().decode(utf8Bytes)
       const data = JSON.parse(jsonString)
 
-      // Check if it has the expected structure
       if (data.nodes || data.groups || data.domains || data.connections || data.drawings) {
         return {
           nodes: data.nodes || [],
@@ -209,6 +185,7 @@ export async function loadCanvasNodesData(id: number): Promise<{
           domains: data.domains || [],
           connections: data.connections || [],
           drawings: data.drawings || [],
+          version: typeof data.version === 'number' ? data.version : 0,
         }
       } else {
         return {
@@ -217,6 +194,7 @@ export async function loadCanvasNodesData(id: number): Promise<{
           domains: [],
           connections: [],
           drawings: [],
+          version: 0,
         }
       }
     } catch {
@@ -226,6 +204,7 @@ export async function loadCanvasNodesData(id: number): Promise<{
         domains: [],
         connections: [],
         drawings: [],
+        version: 0,
       }
     }
   } catch {
