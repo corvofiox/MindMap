@@ -122,6 +122,11 @@ export function removeCanvasState(canvasId: number): void {
   loadingPromises.delete(canvasId)
   persistPromises.delete(canvasId)
   stateGenerations.delete(canvasId)
+  const existing = persistTimeouts.get(canvasId)
+  if (existing) {
+    clearTimeout(existing)
+    persistTimeouts.delete(canvasId)
+  }
 }
 
 export async function loadCanvasStateFromDb(canvasId: number): Promise<CanvasData> {
@@ -271,6 +276,12 @@ export function schedulePersistCanvasState(canvasId: number): void {
   const timeout = setTimeout(async () => {
     persistTimeouts.delete(canvasId)
     await persistCanvasState(canvasId)
+    // After persist attempt, schedule another if there are still unpersisted changes
+    // Handles: isPersisting was true, new operations came in during persist, etc.
+    const state = canvasStates.get(canvasId)
+    if (state && state.version !== state.lastPersistedVersion) {
+      schedulePersistCanvasState(canvasId)
+    }
   }, PERSIST_DELAY_MS)
 
   persistTimeouts.set(canvasId, timeout)

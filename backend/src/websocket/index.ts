@@ -85,6 +85,7 @@ interface CollabMessage {
   timestamp: number
   senderId: number
   seq?: number
+  clientVersion?: number
 }
 
 interface SyncMessage {
@@ -471,6 +472,27 @@ function handleOperation(ws: WebSocketWithUserData, room: CanvasRoom, message: C
   }
 
   const canvasId = room.id
+
+  // 版本冲突检测：拒绝基于过期版本的操作
+  const state = getCanvasState(canvasId)
+  if (state && typeof message.clientVersion === 'number' && state.version > message.clientVersion) {
+    if (typeof message.seq === 'number' && ws.readyState === 1) {
+      ws.send(JSON.stringify({
+        type: 'nak',
+        seq: message.seq,
+        reason: 'version-conflict',
+        serverVersion: state.version,
+      }))
+    }
+    log('Operation rejected due to version conflict', {
+      canvasId,
+      operation: message.operation,
+      clientVersion: message.clientVersion,
+      serverVersion: state.version,
+    })
+    return
+  }
+
   let applied = false
 
   try {
@@ -536,6 +558,15 @@ function handleOperation(ws: WebSocketWithUserData, room: CanvasRoom, message: C
       operation: message.operation,
       error: error instanceof Error ? error.message : String(error),
     })
+
+    // 通知发送方操作处理失败
+    if (typeof message.seq === 'number' && ws.readyState === 1) {
+      ws.send(JSON.stringify({
+        type: 'nak',
+        seq: message.seq,
+        reason: 'server-error',
+      }))
+    }
     return
   }
 
@@ -550,6 +581,13 @@ function handleOperation(ws: WebSocketWithUserData, room: CanvasRoom, message: C
         seq: message.seq,
       }))
     }
+  } else if (typeof message.seq === 'number' && ws.readyState === 1) {
+    // 操作未被应用（例如目标不存在），通知发送方
+    ws.send(JSON.stringify({
+      type: 'nak',
+      seq: message.seq,
+      reason: 'operation-failed',
+    }))
   }
 }
 

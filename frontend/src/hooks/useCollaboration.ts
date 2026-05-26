@@ -379,7 +379,12 @@ export function useCollaboration({ canvasId, enabled = true }: UseCollaborationO
         })
 
         addedGroups.forEach(group => collabService.sendOperation('add-group', group))
-        updatedGroups.forEach(({ id, updates }) => collabService.sendOperation('update-group', { id, updates }))
+        updatedGroups.forEach(({ id, updates }) => {
+          collabService.sendOperation('update-group', { id, updates })
+          Object.keys(updates).forEach((field) => {
+            collabService.trackLocalGroupChange(id, field, (updates as Record<string, unknown>)[field])
+          })
+        })
         removedGroupIds.forEach(id => collabService.sendOperation('remove-group', { id }))
       }
 
@@ -413,7 +418,12 @@ export function useCollaboration({ canvasId, enabled = true }: UseCollaborationO
         })
 
         addedDomains.forEach(domain => collabService.sendOperation('add-domain', domain))
-        updatedDomains.forEach(({ id, updates }) => collabService.sendOperation('update-domain', { id, updates }))
+        updatedDomains.forEach(({ id, updates }) => {
+          collabService.sendOperation('update-domain', { id, updates })
+          Object.keys(updates).forEach((field) => {
+            collabService.trackLocalDomainChange(id, field, (updates as Record<string, unknown>)[field])
+          })
+        })
         removedDomainIds.forEach(id => collabService.sendOperation('remove-domain', { id }))
       }
 

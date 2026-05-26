@@ -1321,10 +1321,8 @@ export function CanvasPage() {
       }
 
       // In collaboration mode, changes are saved in real-time via WebSocket, skip REST API auto-save
+      // Still schedule next check to resume auto-save when collaboration disconnects
       if (collabService.isConnected()) {
-        if (dbSaveTimeoutRef.current) {
-          clearTimeout(dbSaveTimeoutRef.current)
-        }
         dbSaveTimeoutRef.current = setTimeout(saveToDatabase, AUTO_SAVE_INTERVAL)
         return
       }
@@ -1445,11 +1443,8 @@ export function CanvasPage() {
           // Silently fail for cache save errors
         }
 
-        // Skip REST API save in collaboration mode - changes are already saved via WebSocket
-        if (collabService.isConnected()) {
-          return
-        }
-
+        // 始终尝试 REST API 保存作为安全网——即使 WebSocket 已连接
+        // 在页面卸载时作为兜底保障，防止静默断连导致数据丢失
         try {
           const token = localStorage.getItem('mindmap_token')
           const body = JSON.stringify(canvasData)
@@ -1492,10 +1487,8 @@ export function CanvasPage() {
         if (canvasData.nodes.length > 0 || canvasData.groups.length > 0 || canvasData.domains.length > 0) {
           saveToCache(id, { nodes: canvasData.nodes, groups: canvasData.groups, domains: canvasData.domains, connections: canvasData.connections })
 
-          // Skip REST API save in collaboration mode - changes are already saved via WebSocket
-          if (collabService.isConnected()) {
-            return
-          }
+          // 始终尝试 REST API 保存作为安全网——即使 WebSocket 已连接
+          // 在页面卸载时作为兜底保障，防止静默断连导致数据丢失
 
           const token = localStorage.getItem('mindmap_token')
           if (token) {

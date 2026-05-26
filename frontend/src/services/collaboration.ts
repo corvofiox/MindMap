@@ -20,6 +20,7 @@ interface CollabMessage {
   timestamp: number
   senderId: number
   seq?: number
+  clientVersion?: number
 }
 
 interface CursorData {
@@ -54,6 +55,16 @@ interface PendingConnectionChanges {
   changes: Map<string, FieldChange>
 }
 
+interface PendingGroupChanges {
+  groupId: string
+  changes: Map<string, FieldChange>
+}
+
+interface PendingDomainChanges {
+  domainId: string
+  changes: Map<string, FieldChange>
+}
+
 class CollaborationService {
   private ws: WebSocket | null = null
   private canvasId: number | null = null
@@ -74,6 +85,8 @@ class CollaborationService {
   private maxQueueSize = 100
   private isFlushingQueue = false
   private isDestroyed = false
+  // Tab-unique session ID to prevent offline queue conflicts across tabs
+  private sessionId: string
 
   // 操作确认机制：追踪已发送但未确认的操作
   private opSeq = 0
@@ -81,8 +94,12 @@ class CollaborationService {
   private readonly ACK_TIMEOUT_MS = 5000
   private ackTimeoutId: ReturnType<typeof setTimeout> | null = null
 
+  constructor() {
+    this.sessionId = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+  }
+
   private getOfflineQueueKey(): string {
-    return `collab_offline_queue_${this.canvasId}`
+    return `collab_offline_queue_${this.canvasId}_${this.sessionId}`
   }
 
   private persistOfflineQueue(): void {
@@ -116,6 +133,8 @@ class CollaborationService {
 
   private pendingNodeChanges = new Map<string, PendingNodeChanges>()
   private pendingConnectionChanges = new Map<string, PendingConnectionChanges>()
+  private pendingGroupChanges = new Map<string, PendingGroupChanges>()
+  private pendingDomainChanges = new Map<string, PendingDomainChanges>()
   isApplyingRemoteUpdate = false
 
   // Server version tracking
@@ -305,6 +324,26 @@ class CollaborationService {
         this.pendingConnectionChanges.delete(id)
       }
     }
+    for (const [id, change] of this.pendingGroupChanges) {
+      if (change.changes.size === 0) {
+        this.pendingGroupChanges.delete(id)
+        continue
+      }
+      const latestTimestamp = Math.max(...Array.from(change.changes.values()).map(c => c.timestamp))
+      if (latestTimestamp < cutoff) {
+        this.pendingGroupChanges.delete(id)
+      }
+    }
+    for (const [id, change] of this.pendingDomainChanges) {
+      if (change.changes.size === 0) {
+        this.pendingDomainChanges.delete(id)
+        continue
+      }
+      const latestTimestamp = Math.max(...Array.from(change.changes.values()).map(c => c.timestamp))
+      if (latestTimestamp < cutoff) {
+        this.pendingDomainChanges.delete(id)
+      }
+    }
   }
 
   private stopCleanupInterval(): void {
@@ -369,6 +408,8 @@ class CollaborationService {
     this.isFlushingQueue = false
     this.pendingNodeChanges.clear()
     this.pendingConnectionChanges.clear()
+    this.pendingGroupChanges.clear()
+    this.pendingDomainChanges.clear()
     // Preserve serverVersion to avoid 409 conflicts when saving via REST API
     // after disconnecting from collaboration mode
     this.activeUserInteractions.clear()
@@ -412,6 +453,9 @@ class CollaborationService {
           break
         case 'ack':
           this.handleAck(message.seq)
+          break
+        case 'nak':
+          this.handleNak(message.seq, message.reason, message.serverVersion)
           break
       }
     } catch {
@@ -484,7 +528,6 @@ class CollaborationService {
       // Convert arrays to Maps
       const newNodes = new Map<string, Node>()
       for (const node of message.nodes) {
-        // If user is editing this node, preserve local content changes
         if (editingNodeId === node.id && (editingState.field === 'title' || editingState.field === 'content')) {
           const localNode = store.nodes.get(node.id)
           if (localNode) {
@@ -498,14 +541,22 @@ class CollaborationService {
         newNodes.set(node.id, node)
       }
 
-      // Convert connections array to Map
+      const newGroups = new Map<string, NodeGroup>()
+      for (const group of message.groups) {
+        newGroups.set(group.id, group)
+      }
+
+      const newDomains = new Map<string, Domain>()
+      for (const domain of message.domains) {
+        newDomains.set(domain.id, domain)
+      }
+
       const newConnections = new Map<string, Connection>()
       for (const conn of message.connections) {
         newConnections.set(conn.id, conn)
       }
 
-      // Re-apply only the specific fields with pending local changes,
-      // instead of overwriting the entire node (which would lose remote updates)
+      // Re-apply pending local changes for nodes
       for (const [nodeId, pending] of this.pendingNodeChanges) {
         const serverNode = newNodes.get(nodeId)
         if (serverNode) {
@@ -516,6 +567,36 @@ class CollaborationService {
           const localNode = store.nodes.get(nodeId)
           if (localNode) {
             newNodes.set(nodeId, { ...localNode })
+          }
+        }
+      }
+
+      // Re-apply pending local changes for groups
+      for (const [groupId, pending] of this.pendingGroupChanges) {
+        const serverGroup = newGroups.get(groupId)
+        if (serverGroup) {
+          for (const [field, change] of pending.changes) {
+            (serverGroup as unknown as Record<string, unknown>)[field] = change.newValue
+          }
+        } else {
+          const localGroup = store.groups.get(groupId)
+          if (localGroup) {
+            newGroups.set(groupId, { ...localGroup })
+          }
+        }
+      }
+
+      // Re-apply pending local changes for domains
+      for (const [domainId, pending] of this.pendingDomainChanges) {
+        const serverDomain = newDomains.get(domainId)
+        if (serverDomain) {
+          for (const [field, change] of pending.changes) {
+            (serverDomain as unknown as Record<string, unknown>)[field] = change.newValue
+          }
+        } else {
+          const localDomain = store.domains.get(domainId)
+          if (localDomain) {
+            newDomains.set(domainId, { ...localDomain })
           }
         }
       }
@@ -535,24 +616,49 @@ class CollaborationService {
         }
       }
 
+      // [BUG 1 FIX] Preserve locally-added entities that are not yet on the server
+      // This includes nodes/connections/groups/domains created via add-*
+      // that were sent but not yet ACKed, or queued in offlineQueue
+      for (const [nodeId, node] of store.nodes) {
+        if (!newNodes.has(nodeId)) {
+          newNodes.set(nodeId, { ...node })
+        }
+      }
+      for (const [groupId, group] of store.groups) {
+        if (!newGroups.has(groupId)) {
+          newGroups.set(groupId, { ...group })
+        }
+      }
+      for (const [domainId, domain] of store.domains) {
+        if (!newDomains.has(domainId)) {
+          newDomains.set(domainId, { ...domain })
+        }
+      }
+      for (const [connId, conn] of store.connections) {
+        if (!newConnections.has(connId)) {
+          newConnections.set(connId, { ...conn })
+        }
+      }
+
       // Rebroadcast pending changes to room before clearing
       const pendingNodes = new Map(this.pendingNodeChanges)
+      const pendingGroups = new Map(this.pendingGroupChanges)
+      const pendingDomains = new Map(this.pendingDomainChanges)
       const pendingConns = new Map(this.pendingConnectionChanges)
 
       this.isApplyingRemoteUpdate = true
       try {
         store.setCanvasData({
           nodes: Array.from(newNodes.values()),
-          groups: message.groups,
-          domains: message.domains,
+          groups: Array.from(newGroups.values()),
+          domains: Array.from(newDomains.values()),
           connections: Array.from(newConnections.values()),
         })
       } finally {
         this.isApplyingRemoteUpdate = false
       }
 
-      // 将 pending 变更批量回放：每个节点/连接的所有字段合并为单次 sendOperation
-      // 避免逐字段回放导致服务端版本号人为膨胀
+      // Batch-replay pending changes as single operations per entity
       for (const [, pending] of pendingNodes) {
         const combinedUpdates: Record<string, unknown> = {}
         for (const [, change] of pending.changes) {
@@ -560,6 +666,24 @@ class CollaborationService {
         }
         if (Object.keys(combinedUpdates).length > 0) {
           this.sendOperation('update-node', { id: pending.nodeId, updates: combinedUpdates })
+        }
+      }
+      for (const [, pending] of pendingGroups) {
+        const combinedUpdates: Record<string, unknown> = {}
+        for (const [, change] of pending.changes) {
+          combinedUpdates[change.field] = change.newValue
+        }
+        if (Object.keys(combinedUpdates).length > 0) {
+          this.sendOperation('update-group', { id: pending.groupId, updates: combinedUpdates })
+        }
+      }
+      for (const [, pending] of pendingDomains) {
+        const combinedUpdates: Record<string, unknown> = {}
+        for (const [, change] of pending.changes) {
+          combinedUpdates[change.field] = change.newValue
+        }
+        if (Object.keys(combinedUpdates).length > 0) {
+          this.sendOperation('update-domain', { id: pending.domainId, updates: combinedUpdates })
         }
       }
       for (const [, pending] of pendingConns) {
@@ -573,6 +697,8 @@ class CollaborationService {
       }
       this.pendingNodeChanges.clear()
       this.pendingConnectionChanges.clear()
+      this.pendingGroupChanges.clear()
+      this.pendingDomainChanges.clear()
 
       this.serverVersion = message.version
 
@@ -588,6 +714,23 @@ class CollaborationService {
       clearTimeout(this.ackTimeoutId)
       this.ackTimeoutId = null
     }
+  }
+
+  private handleNak(seq: number, reason: string, serverVersion?: number): void {
+    // 操作被服务器拒绝，从 unackedOps 移除（不再重试）
+    this.unackedOps.delete(seq)
+    if (this.unackedOps.size === 0 && this.ackTimeoutId) {
+      clearTimeout(this.ackTimeoutId)
+      this.ackTimeoutId = null
+    }
+    if (typeof serverVersion === 'number') {
+      this.serverVersion = serverVersion
+    }
+    if (reason === 'version-conflict') {
+      // 版本冲突：客户端状态落后于服务器，请求重新同步
+      this.requestSync()
+    }
+    logger.warn('Operation rejected by server', { seq, reason, serverVersion })
   }
 
   private scheduleAckTimeout(): void {
@@ -652,6 +795,38 @@ class CollaborationService {
     })
   }
 
+  trackLocalGroupChange(groupId: string, field: string, newValue: unknown): void {
+    let pending = this.pendingGroupChanges.get(groupId)
+    if (!pending) {
+      pending = {
+        groupId,
+        changes: new Map()
+      }
+      this.pendingGroupChanges.set(groupId, pending)
+    }
+    pending.changes.set(field, {
+      field,
+      newValue,
+      timestamp: Date.now()
+    })
+  }
+
+  trackLocalDomainChange(domainId: string, field: string, newValue: unknown): void {
+    let pending = this.pendingDomainChanges.get(domainId)
+    if (!pending) {
+      pending = {
+        domainId,
+        changes: new Map()
+      }
+      this.pendingDomainChanges.set(domainId, pending)
+    }
+    pending.changes.set(field, {
+      field,
+      newValue,
+      timestamp: Date.now()
+    })
+  }
+
   requestSync(): boolean {
     if (this.isDestroyed || this.isIntentionallyClosed) return false
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
@@ -682,6 +857,7 @@ class CollaborationService {
       timestamp,
       senderId: this.userId || 0,
       seq,
+      clientVersion: this.serverVersion,
     }
 
     // 追踪未确认操作
