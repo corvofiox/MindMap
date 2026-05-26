@@ -1021,11 +1021,18 @@ export function CanvasPage() {
       try {
         setLoading(true)
 
+        // Clear old canvas data immediately when entering this canvas.
+        // This serves two purposes:
+        // 1. Prevents showing stale data from the previous canvas during loading.
+        // 2. Ensures the WebSocket sync guard below correctly detects that any
+        //    data in the store was put there by the CURRENT canvas's WebSocket sync
+        //    (not leaked from a previous canvas).
+        collabService.isApplyingRemoteUpdate = true
+        clearCanvas()
+        collabService.isApplyingRemoteUpdate = false
+
         // 如果是临时ID，不尝试从数据库加载数据
         if (id < 0) {
-          collabService.isApplyingRemoteUpdate = true
-          clearCanvas()
-          collabService.isApplyingRemoteUpdate = false
           setDirty(false)
           return
         }
@@ -1048,6 +1055,22 @@ export function CanvasPage() {
           return
         }
 
+        // During the async DB load above, WebSocket sync may have completed
+        // and set fresh data directly from server in-memory state. The server's
+        // in-memory state includes changes that haven't yet been flushed to DB
+        // (debounced persist with 200ms delay). Loading stale DB data after sync
+        // would:
+        // 1. Overwrite fresh canvas data with stale DB data
+        // 2. Reset serverVersion to a stale value, causing every subsequent
+        //    operation to be NAKed with version-conflict → full sync cycle on
+        //    every edit (the "canvas clears on each edit" bug).
+        const storeState = useCanvasStore.getState()
+        if (collabService.isConnected() &&
+          (storeState.nodes.size > 0 || storeState.domains.size > 0)) {
+          setDirty(false)
+          return
+        }
+
         const hasData = dbData && (
           (dbData.nodes && dbData.nodes.length > 0) ||
           (dbData.groups && dbData.groups.length > 0) ||
@@ -1062,7 +1085,12 @@ export function CanvasPage() {
           collabService.isApplyingRemoteUpdate = false
           setDirty(false)
           saveToCache(id, dbData)
-          collabService.setServerVersion(dbData.version)
+          // Only update serverVersion if higher than current (avoid downgrading
+          // in case WebSocket sync arrived between our guard check and here)
+          const currentVersion = collabService.getServerVersion()
+          if (dbData.version > currentVersion) {
+            collabService.setServerVersion(dbData.version)
+          }
         } else {
           // No data in DB, try cache
           const cachedData = loadFromCache(id)
@@ -1133,7 +1161,7 @@ export function CanvasPage() {
               credentials: 'include',
               body: JSON.stringify(canvasData),
               keepalive: true,
-            }).catch(() => {})
+            }).catch(() => { })
           }
         }
       }
