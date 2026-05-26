@@ -931,7 +931,7 @@ function FolderItem({
         </div>
       ) : (
         // 查看模式
-        <div className="relative group" data-folder-item>
+        <div className="relative" data-folder-item>
           <div
             onClick={handleToggle}
             onContextMenu={(e) => {
