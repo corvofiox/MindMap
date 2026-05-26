@@ -686,6 +686,9 @@ class CollaborationService {
         this.isApplyingRemoteUpdate = false
       }
 
+      // Update serverVersion BEFORE replay so replayed operations use the correct version
+      this.serverVersion = message.version
+
       // Batch-replay pending changes as single operations per entity
       for (const [, pending] of pendingNodes) {
         const combinedUpdates: Record<string, unknown> = {}
@@ -727,8 +730,6 @@ class CollaborationService {
       this.pendingConnectionChanges.clear()
       this.pendingGroupChanges.clear()
       this.pendingDomainChanges.clear()
-
-      this.serverVersion = message.version
 
       logger.info('Synced with server state', { version: message.version, nodes: message.nodes.length })
     } catch (error) {
