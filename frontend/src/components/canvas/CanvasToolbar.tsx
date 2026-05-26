@@ -1,4 +1,28 @@
-import { MousePointer2, Square, Layers, Link, Grid3x3, Undo, Redo, Trash2, ArrowRight, ArrowLeftRight, Minus, Group, Save, Download, Upload, Check, Map, Layout, Image as ImageIcon, Pencil, ChevronDown, GitBranch, Route } from 'lucide-react'
+import {
+  MousePointer2,
+  Square,
+  Layers,
+  Link,
+  Grid3x3,
+  Undo,
+  Redo,
+  Trash2,
+  ArrowRight,
+  ArrowLeftRight,
+  Minus,
+  Group,
+  Save,
+  Download,
+  Upload,
+  Check,
+  Map,
+  Layout,
+  Image as ImageIcon,
+  Pencil,
+  ChevronDown,
+  GitBranch,
+  Route,
+} from 'lucide-react'
 import { useCanvasStore } from '@/store/useCanvasStore'
 import { useUIStore } from '@/store/useUIStore'
 import type { Tool } from '@/types'
@@ -23,8 +47,47 @@ const tools: { id: Tool; icon: typeof MousePointer2; label: string; shortcut: st
 const toolSeparators = [1, 2]
 
 export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToolbarProps) {
-  const { currentTool, gridVisible, dragMode, minimapVisible, quickEditMode, relationshipHighlightMode, setCurrentTool, toggleGrid, toggleDragMode, toggleMinimap, toggleQuickEditMode, toggleRelationshipHighlightMode, connectionDirection, setConnectionDirection, connectionStyle, setConnectionStyle, connectionType, setConnectionType, addToast } = useUIStore()
-  const { selectedIds, removeNode, removeConnection, removeGroup, removeDomain, nodes, undo, redo, history, groups, domains, addGroup, connections, zoom, panX, panY, setCanvasData } = useCanvasStore()
+  const {
+    currentTool,
+    gridVisible,
+    dragMode,
+    minimapVisible,
+    quickEditMode,
+    relationshipHighlightMode,
+    setCurrentTool,
+    toggleGrid,
+    toggleDragMode,
+    toggleMinimap,
+    toggleQuickEditMode,
+    toggleRelationshipHighlightMode,
+    connectionDirection,
+    setConnectionDirection,
+    connectionStyle,
+    setConnectionStyle,
+    connectionType,
+    setConnectionType,
+    addToast,
+  } = useUIStore()
+  const {
+    selectedIds,
+    removeNode,
+    removeConnection,
+    removeGroup,
+    removeDomain,
+    nodes,
+    undo,
+    redo,
+    history,
+    groups,
+    domains,
+    addGroup,
+    connections,
+    zoom,
+    panX,
+    panY,
+    setCanvasData,
+    setDirty,
+  } = useCanvasStore()
 
   const [isSaving, setIsSaving] = useState(false)
   const [saveSuccess, setSaveSuccess] = useState(false)
@@ -109,7 +172,7 @@ export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToo
     })
   }
 
-  const hasSelectedNodes = selectedIds.some(id => nodes.has(id))
+  const hasSelectedNodes = selectedIds.some((id) => nodes.has(id))
 
   // 点击外部关闭导入导出菜单
   useEffect(() => {
@@ -124,13 +187,7 @@ export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToo
 
   // 处理导出
   const handleExport = useCallback(() => {
-    const jsonString = exportCanvas(
-      nodes,
-      connections,
-      groups,
-      domains,
-      { zoom, panX, panY }
-    )
+    const jsonString = exportCanvas(nodes, connections, groups, domains, { zoom, panX, panY })
     const filename = `mindmap-${new Date().toISOString().slice(0, 10)}.json`
     downloadJsonFile(jsonString, filename)
     addToast({
@@ -149,53 +206,57 @@ export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToo
   }, [])
 
   // 处理文件选择
-  const handleFileSelect = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    if (!file) return
+  const handleFileSelect = useCallback(
+    async (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0]
+      if (!file) return
 
-    try {
-      const jsonString = await readJsonFile(file)
-      const data = importCanvas(jsonString)
+      try {
+        const jsonString = await readJsonFile(file)
+        const data = importCanvas(jsonString)
 
-      if (data) {
-        setCanvasData(data)
-        addToast({
-          type: 'success',
-          title: '导入成功',
-          message: `成功导入 ${data.nodes.length} 个节点, ${data.connections.length} 条连线`,
-          duration: 3000,
-        })
-      } else {
+        if (data) {
+          setCanvasData(data)
+          setDirty(true)
+          addToast({
+            type: 'success',
+            title: '导入成功',
+            message: `成功导入 ${data.nodes.length} 个节点, ${data.connections.length} 条连线`,
+            duration: 3000,
+          })
+        } else {
+          addToast({
+            type: 'error',
+            title: '导入失败',
+            message: '文件格式不正确或已损坏',
+            duration: 5000,
+          })
+        }
+      } catch (error) {
         addToast({
           type: 'error',
           title: '导入失败',
-          message: '文件格式不正确或已损坏',
+          message: '读取文件时发生错误',
           duration: 5000,
         })
       }
-    } catch (error) {
-      addToast({
-        type: 'error',
-        title: '导入失败',
-        message: '读取文件时发生错误',
-        duration: 5000,
-      })
-    }
 
-    // 清空 input 值，允许重复选择同一文件
-    event.target.value = ''
-  }, [setCanvasData, addToast])
+      // 清空 input 值，允许重复选择同一文件
+      event.target.value = ''
+    },
+    [setCanvasData, setDirty, addToast]
+  )
 
   const handleCreateGroup = () => {
     if (hasSelectedNodes) {
-      const selectedNodes = selectedIds.map(id => nodes.get(id)).filter(Boolean)
+      const selectedNodes = selectedIds.map((id) => nodes.get(id)).filter(Boolean)
       if (selectedNodes.length > 0) {
         let minX = Infinity
         let minY = Infinity
         let maxX = -Infinity
         let maxY = -Infinity
 
-        selectedNodes.forEach(node => {
+        selectedNodes.forEach((node) => {
           minX = Math.min(minX, node.x)
           minY = Math.min(minY, node.y)
           maxX = Math.max(maxX, node.x + node.width)
@@ -319,11 +380,12 @@ export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToo
                   }}
                   className={`
                     p-2 rounded-lg transition-colors
-                    ${isDisabled
-                      ? 'opacity-50 cursor-not-allowed text-gray-400 dark:text-gray-600'
-                      : isActive
-                        ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 cursor-pointer'
-                        : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400 cursor-pointer'
+                    ${
+                      isDisabled
+                        ? 'opacity-50 cursor-not-allowed text-gray-400 dark:text-gray-600'
+                        : isActive
+                          ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 cursor-pointer'
+                          : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400 cursor-pointer'
                     }
                   `}
                   title={`${tool.label} (${tool.shortcut})${isDisabled ? ' - 查看者无法使用' : ''}`}
@@ -331,7 +393,9 @@ export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToo
                 >
                   <Icon className="w-5 h-5" />
                 </button>
-                {showSeparatorAfter && <div className="h-6 w-px bg-gray-300 dark:bg-gray-600 mx-1" />}
+                {showSeparatorAfter && (
+                  <div className="h-6 w-px bg-gray-300 dark:bg-gray-600 mx-1" />
+                )}
               </div>
             )
           })}
@@ -344,11 +408,12 @@ export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToo
             disabled={isViewer}
             className={`
               px-3 py-1.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap
-              ${isViewer
-                ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed'
-                : dragMode === 'grid'
-                  ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
-                  : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
+              ${
+                isViewer
+                  ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed'
+                  : dragMode === 'grid'
+                    ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
+                    : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
               }
             `}
             title={isViewer ? '查看者无法切换拖动模式' : '切换拖动模式 (Shift)'}
@@ -361,11 +426,12 @@ export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToo
             disabled={isViewer}
             className={`
               p-2 rounded-lg transition-colors
-              ${isViewer
-                ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed'
-                : quickEditMode
-                  ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
-                  : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
+              ${
+                isViewer
+                  ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed'
+                  : quickEditMode
+                    ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
+                    : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
               }
             `}
             title={isViewer ? '查看者无法使用快速编辑模式' : '快速编辑模式 (E)'}
@@ -378,11 +444,12 @@ export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToo
             disabled={isViewer}
             className={`
               p-2 rounded-lg transition-colors
-              ${isViewer
-                ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed'
-                : relationshipHighlightMode
-                  ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400'
-                  : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
+              ${
+                isViewer
+                  ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed'
+                  : relationshipHighlightMode
+                    ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400'
+                    : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
               }
             `}
             title={isViewer ? '查看者无法使用关系梳理' : '关系梳理 (T)'}
@@ -394,9 +461,10 @@ export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToo
             onClick={toggleGrid}
             className={`
               p-2 rounded-lg transition-colors
-              ${gridVisible
-                ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
-                : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
+              ${
+                gridVisible
+                  ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
+                  : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
               }
             `}
             title="切换网格 (H)"
@@ -408,9 +476,10 @@ export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToo
             onClick={toggleMinimap}
             className={`
               p-2 rounded-lg transition-colors
-              ${minimapVisible
-                ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
-                : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
+              ${
+                minimapVisible
+                  ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
+                  : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
               }
             `}
             title="切换小地图 (M)"
@@ -428,9 +497,10 @@ export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToo
             disabled={connections.size === 0 || isViewer}
             className={`
               p-2 rounded-lg transition-colors
-              ${connections.size > 0 && !isViewer
-                ? 'hover:bg-purple-100 dark:hover:bg-purple-900/30 text-purple-600 dark:text-purple-400'
-                : 'text-gray-300 dark:text-gray-600 cursor-not-allowed'
+              ${
+                connections.size > 0 && !isViewer
+                  ? 'hover:bg-purple-100 dark:hover:bg-purple-900/30 text-purple-600 dark:text-purple-400'
+                  : 'text-gray-300 dark:text-gray-600 cursor-not-allowed'
               }
             `}
             title={isViewer ? '查看者无法优化连线' : '优化连线 (O) - 调整所有连线到最近端口'}
@@ -443,9 +513,10 @@ export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToo
             disabled={!hasSelectedNodes || isViewer}
             className={`
               p-2 rounded-lg transition-colors
-              ${hasSelectedNodes && !isViewer
-                ? 'hover:bg-blue-100 dark:hover:bg-blue-900/30 text-blue-600 dark:text-blue-400'
-                : 'text-gray-300 dark:text-gray-600 cursor-not-allowed'
+              ${
+                hasSelectedNodes && !isViewer
+                  ? 'hover:bg-blue-100 dark:hover:bg-blue-900/30 text-blue-600 dark:text-blue-400'
+                  : 'text-gray-300 dark:text-gray-600 cursor-not-allowed'
               }
             `}
             title={isViewer ? '查看者无法创建组' : '创建组 (Ctrl+G)'}
@@ -458,9 +529,10 @@ export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToo
             disabled={selectedIds.length === 0 || isViewer}
             className={`
               p-2 rounded-lg transition-colors
-              ${selectedIds.length > 0 && !isViewer
-                ? 'hover:bg-red-100 dark:hover:bg-red-900/30 text-red-600 dark:text-red-400'
-                : 'text-gray-300 dark:text-gray-600 cursor-not-allowed'
+              ${
+                selectedIds.length > 0 && !isViewer
+                  ? 'hover:bg-red-100 dark:hover:bg-red-900/30 text-red-600 dark:text-red-400'
+                  : 'text-gray-300 dark:text-gray-600 cursor-not-allowed'
               }
             `}
             title={isViewer ? '查看者无法删除' : '删除选中项 (Delete)'}
@@ -475,9 +547,10 @@ export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToo
             disabled={!canUndo || isViewer}
             className={`
               p-2 rounded-lg transition-colors
-              ${canUndo && !isViewer
-                ? 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
-                : 'text-gray-300 dark:text-gray-600 cursor-not-allowed'
+              ${
+                canUndo && !isViewer
+                  ? 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
+                  : 'text-gray-300 dark:text-gray-600 cursor-not-allowed'
               }
             `}
             title={isViewer ? '查看者无法撤销' : '撤销 (Ctrl+Z)'}
@@ -490,9 +563,10 @@ export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToo
             disabled={!canRedo || isViewer}
             className={`
               p-2 rounded-lg transition-colors
-              ${canRedo && !isViewer
-                ? 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
-                : 'text-gray-300 dark:text-gray-600 cursor-not-allowed'
+              ${
+                canRedo && !isViewer
+                  ? 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
+                  : 'text-gray-300 dark:text-gray-600 cursor-not-allowed'
               }
             `}
             title={isViewer ? '查看者无法重做' : '重做 (Ctrl+Y)'}
@@ -505,15 +579,22 @@ export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToo
           <button
             onClick={handleSave}
             disabled={isSaving || !onSave || isViewer}
-            className={`p-2 rounded-lg transition-colors relative ${isViewer
-              ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed'
-              : isSaving
-                ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
-                : saveSuccess
-                  ? 'bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400'
-                  : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
-              } ${!onSave ? 'opacity-50 cursor-not-allowed' : ''}`}
-            title={isViewer ? '查看者无法保存' : isCollabConnected ? '协作模式下已实时保存 (Ctrl+S)' : '保存 (Ctrl+S)'}
+            className={`p-2 rounded-lg transition-colors relative ${
+              isViewer
+                ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed'
+                : isSaving
+                  ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
+                  : saveSuccess
+                    ? 'bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400'
+                    : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
+            } ${!onSave ? 'opacity-50 cursor-not-allowed' : ''}`}
+            title={
+              isViewer
+                ? '查看者无法保存'
+                : isCollabConnected
+                  ? '协作模式下已实时保存 (Ctrl+S)'
+                  : '保存 (Ctrl+S)'
+            }
           >
             {isSaving ? (
               <div className="w-5 h-5 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
@@ -530,9 +611,10 @@ export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToo
               disabled={isViewer}
               className={`
                 flex items-center gap-1 px-2 py-2 rounded-lg transition-colors
-                ${isViewer
-                  ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed'
-                  : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
+                ${
+                  isViewer
+                    ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed'
+                    : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
                 }
               `}
               title={isViewer ? '查看者无法导入导出' : '导入/导出'}
@@ -580,7 +662,9 @@ export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToo
             <>
               {/* Connection Directions */}
               <div className="flex items-center xl:justify-center gap-1 min-w-fit">
-                <span className="text-xs text-gray-500 dark:text-gray-400 mr-1 px-1 shrink-0 bg-gray-100 dark:bg-gray-800 rounded">方向：</span>
+                <span className="text-xs text-gray-500 dark:text-gray-400 mr-1 px-1 shrink-0 bg-gray-100 dark:bg-gray-800 rounded">
+                  方向：
+                </span>
                 {connectionDirections.map((dir) => {
                   const DirIcon = dir.icon
                   const isActive = connectionDirection === dir.id
@@ -590,9 +674,10 @@ export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToo
                       onClick={() => setConnectionDirection(dir.id)}
                       className={`
                         px-2 py-1 rounded-lg text-xs font-medium transition-colors flex items-center gap-1 shrink-0
-                        ${isActive
-                          ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
-                          : 'hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
+                        ${
+                          isActive
+                            ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
+                            : 'hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
                         }
                       `}
                       title={dir.label}
@@ -606,7 +691,9 @@ export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToo
 
               {/* Connection Styles */}
               <div className="flex items-center xl:justify-center gap-1 min-w-fit">
-                <span className="text-xs text-gray-500 dark:text-gray-400 mr-1 px-1 shrink-0 bg-gray-100 dark:bg-gray-800 rounded">样式：</span>
+                <span className="text-xs text-gray-500 dark:text-gray-400 mr-1 px-1 shrink-0 bg-gray-100 dark:bg-gray-800 rounded">
+                  样式：
+                </span>
                 {connectionStyles.map((style) => {
                   const isActive = connectionStyle === style.id
                   return (
@@ -615,9 +702,10 @@ export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToo
                       onClick={() => setConnectionStyle(style.id)}
                       className={`
                         px-2 py-1 rounded-lg text-xs font-medium transition-colors shrink-0
-                        ${isActive
-                          ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
-                          : 'hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
+                        ${
+                          isActive
+                            ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
+                            : 'hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
                         }
                       `}
                       title={style.label}
@@ -630,7 +718,9 @@ export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToo
 
               {/* Connection Types */}
               <div className="flex items-center xl:justify-center gap-1 min-w-fit">
-                <span className="text-xs text-gray-500 dark:text-gray-400 mr-1 px-1 shrink-0 bg-gray-100 dark:bg-gray-800 rounded">类型：</span>
+                <span className="text-xs text-gray-500 dark:text-gray-400 mr-1 px-1 shrink-0 bg-gray-100 dark:bg-gray-800 rounded">
+                  类型：
+                </span>
                 {connectionTypes.map((type) => {
                   const isActive = connectionType === type.id
                   return (
@@ -641,9 +731,10 @@ export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToo
                       }}
                       className={`
                         px-2 py-1 rounded-lg text-xs font-medium transition-colors shrink-0
-                        ${isActive
-                          ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
-                          : 'hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
+                        ${
+                          isActive
+                            ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
+                            : 'hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
                         }
                       `}
                       title={type.label}
