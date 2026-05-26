@@ -1113,6 +1113,31 @@ export function CanvasPage() {
       // Mark as cancelled when effect is cleaned up
       isCancelled = true
       isMounted = false
+
+      // Force-save dirty data before switching canvases or unmounting
+      // This prevents data loss when auto-save timers are cancelled below
+      if (id > 0) {
+        const state = useCanvasStore.getState()
+        if (state.isDirty && state.canvasId === id) {
+          const canvasData = collectCanvasData(state)
+          saveToCache(id, canvasData)
+          const token = localStorage.getItem('mindmap_token')
+          if (token) {
+            fetch(`/api/canvases/${id}/data`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${token}`,
+                'x-csrf-token': getCsrfToken(),
+              },
+              credentials: 'include',
+              body: JSON.stringify(canvasData),
+              keepalive: true,
+            }).catch(() => {})
+          }
+        }
+      }
+
       clearTimeout(cacheTimeoutRef.current)
       clearTimeout(dbSaveTimeoutRef.current)
 
