@@ -107,6 +107,20 @@ export function ensureCanvasState(canvasId: number): CanvasData {
   return state
 }
 
+/**
+ * Ensure canvas state is loaded from DB before applying operations.
+ * This prevents the race condition where ensureCanvasState creates an empty state
+ * and operations are applied to it before loadCanvasStateFromDb completes.
+ */
+export async function ensureCanvasStateLoaded(canvasId: number): Promise<CanvasData> {
+  const state = canvasStates.get(canvasId)
+  if (state?.loaded) {
+    return state
+  }
+  // State doesn't exist or hasn't been loaded yet — wait for DB load
+  return loadCanvasStateFromDb(canvasId)
+}
+
 export function incrementStateGeneration(canvasId: number): number {
   const gen = (stateGenerations.get(canvasId) || 0) + 1
   stateGenerations.set(canvasId, gen)
@@ -296,8 +310,8 @@ export function flushPendingPersist(canvasId: number): void {
 }
 
 // Apply operations to server state
-export function applyAddNode(canvasId: number, node: any): boolean {
-  const state = ensureCanvasState(canvasId)
+export async function applyAddNode(canvasId: number, node: any): Promise<boolean> {
+  const state = await ensureCanvasStateLoaded(canvasId)
   if (state.nodes.has(node.id)) {
     return false
   }
@@ -308,8 +322,8 @@ export function applyAddNode(canvasId: number, node: any): boolean {
   return true
 }
 
-export function applyUpdateNode(canvasId: number, nodeId: string, updates: any): boolean {
-  const state = ensureCanvasState(canvasId)
+export async function applyUpdateNode(canvasId: number, nodeId: string, updates: any): Promise<boolean> {
+  const state = await ensureCanvasStateLoaded(canvasId)
   const existing = state.nodes.get(nodeId)
   if (!existing) {
     return false
@@ -326,8 +340,8 @@ export function applyUpdateNode(canvasId: number, nodeId: string, updates: any):
   return true
 }
 
-export function applyRemoveNode(canvasId: number, nodeId: string): boolean {
-  const state = ensureCanvasState(canvasId)
+export async function applyRemoveNode(canvasId: number, nodeId: string): Promise<boolean> {
+  const state = await ensureCanvasStateLoaded(canvasId)
   const existed = state.nodes.delete(nodeId)
   if (!existed) return false
 
@@ -345,8 +359,8 @@ export function applyRemoveNode(canvasId: number, nodeId: string): boolean {
   return true
 }
 
-export function applyAddGroup(canvasId: number, group: any): boolean {
-  const state = ensureCanvasState(canvasId)
+export async function applyAddGroup(canvasId: number, group: any): Promise<boolean> {
+  const state = await ensureCanvasStateLoaded(canvasId)
   if (state.groups.has(group.id)) {
     return false
   }
@@ -357,8 +371,8 @@ export function applyAddGroup(canvasId: number, group: any): boolean {
   return true
 }
 
-export function applyUpdateGroup(canvasId: number, groupId: string, updates: any): boolean {
-  const state = ensureCanvasState(canvasId)
+export async function applyUpdateGroup(canvasId: number, groupId: string, updates: any): Promise<boolean> {
+  const state = await ensureCanvasStateLoaded(canvasId)
   const existing = state.groups.get(groupId)
   if (!existing) return false
   const updated = { ...(existing as object), ...updates }
@@ -372,8 +386,8 @@ export function applyUpdateGroup(canvasId: number, groupId: string, updates: any
   return true
 }
 
-export function applyRemoveGroup(canvasId: number, groupId: string): boolean {
-  const state = ensureCanvasState(canvasId)
+export async function applyRemoveGroup(canvasId: number, groupId: string): Promise<boolean> {
+  const state = await ensureCanvasStateLoaded(canvasId)
   const existed = state.groups.delete(groupId)
   if (!existed) return false
   state.version++
@@ -382,8 +396,8 @@ export function applyRemoveGroup(canvasId: number, groupId: string): boolean {
   return true
 }
 
-export function applyAddDomain(canvasId: number, domain: any): boolean {
-  const state = ensureCanvasState(canvasId)
+export async function applyAddDomain(canvasId: number, domain: any): Promise<boolean> {
+  const state = await ensureCanvasStateLoaded(canvasId)
   if (state.domains.has(domain.id)) {
     return false
   }
@@ -394,8 +408,8 @@ export function applyAddDomain(canvasId: number, domain: any): boolean {
   return true
 }
 
-export function applyUpdateDomain(canvasId: number, domainId: string, updates: any): boolean {
-  const state = ensureCanvasState(canvasId)
+export async function applyUpdateDomain(canvasId: number, domainId: string, updates: any): Promise<boolean> {
+  const state = await ensureCanvasStateLoaded(canvasId)
   const existing = state.domains.get(domainId)
   if (!existing) return false
   const updated = { ...(existing as object), ...updates }
@@ -409,8 +423,8 @@ export function applyUpdateDomain(canvasId: number, domainId: string, updates: a
   return true
 }
 
-export function applyRemoveDomain(canvasId: number, domainId: string): boolean {
-  const state = ensureCanvasState(canvasId)
+export async function applyRemoveDomain(canvasId: number, domainId: string): Promise<boolean> {
+  const state = await ensureCanvasStateLoaded(canvasId)
   const existed = state.domains.delete(domainId)
   if (!existed) return false
   state.version++
@@ -419,8 +433,8 @@ export function applyRemoveDomain(canvasId: number, domainId: string): boolean {
   return true
 }
 
-export function applyAddConnection(canvasId: number, connection: any): boolean {
-  const state = ensureCanvasState(canvasId)
+export async function applyAddConnection(canvasId: number, connection: any): Promise<boolean> {
+  const state = await ensureCanvasStateLoaded(canvasId)
   if (state.connections.has(connection.id)) {
     return false
   }
@@ -431,8 +445,8 @@ export function applyAddConnection(canvasId: number, connection: any): boolean {
   return true
 }
 
-export function applyUpdateConnection(canvasId: number, connectionId: string, updates: any): boolean {
-  const state = ensureCanvasState(canvasId)
+export async function applyUpdateConnection(canvasId: number, connectionId: string, updates: any): Promise<boolean> {
+  const state = await ensureCanvasStateLoaded(canvasId)
   const existing = state.connections.get(connectionId)
   if (!existing) return false
   const updated = { ...(existing as object), ...updates }
@@ -446,8 +460,8 @@ export function applyUpdateConnection(canvasId: number, connectionId: string, up
   return true
 }
 
-export function applyRemoveConnection(canvasId: number, connectionId: string): boolean {
-  const state = ensureCanvasState(canvasId)
+export async function applyRemoveConnection(canvasId: number, connectionId: string): Promise<boolean> {
+  const state = await ensureCanvasStateLoaded(canvasId)
   const existed = state.connections.delete(connectionId)
   if (!existed) return false
   state.version++

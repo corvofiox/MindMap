@@ -29,6 +29,7 @@ function getProjectOwnerId(project: Record<string, unknown>): number | undefined
 }
 import {
   loadCanvasStateFromDb,
+  ensureCanvasStateLoaded,
   getSyncData,
   persistCanvasState,
   applyAddNode,
@@ -227,7 +228,40 @@ export function getProjectActiveUsers(_projectId: number): Map<number, CanvasAct
 async function handleConnection(ws: WebSocketWithUserData, req: any) {
   const clientIp = (req.socket.remoteAddress || (req.headers['x-forwarded-for'] as string) || 'unknown')
 
+  // Buffer early messages before async setup completes.
+  // ws (EventEmitter) silently drops messages when no 'message' listener is registered.
+  // Since this function is async with multiple awaits, the client may send messages
+  // (e.g. sync-request) before we reach ws.on('message', ...) — those would be lost.
+  const earlyMessages: Buffer[] = []
+  const earlyMessageListener = (data: Buffer) => { earlyMessages.push(data) }
+  ws.on('message', earlyMessageListener)
+
+  // Also register pong/close/error early to avoid missing these events during async setup
+  ws.on('pong', () => {
+    ws.isAlive = true
+    ws.lastPong = Date.now()
+  })
+
+  let earlyClose = false
+  ws.on('close', () => { earlyClose = true })
+
+  ws.on('error', (error) => {
+    logError('WebSocket connection error during setup', {
+      error: error instanceof Error ? error.message : String(error),
+    })
+    earlyClose = true
+  })
+
+  // Helper to clean up early listeners when connection is rejected during setup
+  const cleanupEarlyListeners = () => {
+    ws.off('message', earlyMessageListener)
+    ws.removeAllListeners('close')
+    ws.removeAllListeners('error')
+  }
+
+  try {
   if (!checkWsRateLimit(clientIp)) {
+    cleanupEarlyListeners()
     ws.close(1008, 'Too many connection attempts. Please try again later.')
     return
   }
@@ -237,18 +271,21 @@ async function handleConnection(ws: WebSocketWithUserData, req: any) {
   const tokenParam = url.searchParams.get('token')
 
   if (!canvasIdParam) {
+    cleanupEarlyListeners()
     ws.close(1008, 'Missing canvasId')
     return
   }
 
   const canvasId = parseInt(canvasIdParam, 10)
   if (isNaN(canvasId)) {
+    cleanupEarlyListeners()
     ws.close(1008, 'Invalid canvas ID format')
     return
   }
 
   const authHeader = req.headers.authorization?.replace('Bearer ', '') || tokenParam
   if (!authHeader) {
+    cleanupEarlyListeners()
     ws.close(1008, 'Missing authentication')
     return
   }
@@ -260,12 +297,20 @@ async function handleConnection(ws: WebSocketWithUserData, req: any) {
     const decoded = jwt.verify(authHeader, env.JWT_SECRET) as { userId: number }
     userId = decoded.userId
   } catch {
+    cleanupEarlyListeners()
     ws.close(1008, 'Invalid token')
     return
   }
 
   if (!userId) {
+    cleanupEarlyListeners()
     ws.close(1008, 'Authentication required')
+    return
+  }
+
+  // Check if client disconnected during async auth
+  if (earlyClose) {
+    cleanupEarlyListeners()
     return
   }
 
@@ -274,6 +319,7 @@ async function handleConnection(ws: WebSocketWithUserData, req: any) {
   })
 
   if (!canvas) {
+    cleanupEarlyListeners()
     ws.close(1008, 'Canvas not found')
     return
   }
@@ -281,6 +327,7 @@ async function handleConnection(ws: WebSocketWithUserData, req: any) {
   const canvasProjectId = getCanvasProjectId(canvas as Record<string, unknown>)
 
   if (!canvasProjectId) {
+    cleanupEarlyListeners()
     ws.close(1008, 'Canvas has no project')
     return
   }
@@ -290,6 +337,7 @@ async function handleConnection(ws: WebSocketWithUserData, req: any) {
   })
 
   if (!project) {
+    cleanupEarlyListeners()
     ws.close(1008, 'Project not found')
     return
   }
@@ -308,6 +356,7 @@ async function handleConnection(ws: WebSocketWithUserData, req: any) {
   const isMember = member && member.id !== undefined
 
   if (!isOwner && !isMember) {
+    cleanupEarlyListeners()
     ws.close(1008, 'Access denied')
     return
   }
@@ -319,7 +368,14 @@ async function handleConnection(ws: WebSocketWithUserData, req: any) {
   })
 
   if (!userRecord) {
+    cleanupEarlyListeners()
     ws.close(1008, 'User not found')
+    return
+  }
+
+  // Check if client disconnected during async DB queries
+  if (earlyClose) {
+    cleanupEarlyListeners()
     return
   }
 
@@ -361,6 +417,13 @@ async function handleConnection(ws: WebSocketWithUserData, req: any) {
   // Load canvas state from DB if not already in memory
   await loadCanvasStateFromDb(canvasId)
 
+  // Check if client disconnected during async state loading
+  if (earlyClose) {
+    cleanupEarlyListeners()
+    handleClientDisconnect(ws, room)
+    return
+  }
+
   broadcastToRoom(room, {
     type: 'user-join',
     user: userInfo,
@@ -372,19 +435,20 @@ async function handleConnection(ws: WebSocketWithUserData, req: any) {
     users: existingUsers,
   }))
 
+  // Replace early message listener with the real one
+  ws.off('message', earlyMessageListener)
   ws.on('message', (data: Buffer) => {
     handleMessage(ws, room!, data)
   })
 
-  ws.on('pong', () => {
-    ws.isAlive = true
-    ws.lastPong = Date.now()
-  })
-
+  // Replace early close listener with the real one
+  ws.removeAllListeners('close')
   ws.on('close', () => {
     handleClientDisconnect(ws, room!)
   })
 
+  // Replace early error listener with the real one
+  ws.removeAllListeners('error')
   ws.on('error', (error) => {
     logError('WebSocket connection error', {
       userId: ws.userId,
@@ -394,21 +458,37 @@ async function handleConnection(ws: WebSocketWithUserData, req: any) {
     })
     handleClientDisconnect(ws, room!, true)
   })
+
+  // Process buffered early messages (e.g. sync-request sent right after connect)
+  for (const msg of earlyMessages) {
+    handleMessage(ws, room!, msg)
+  }
+
+  } catch (error) {
+    // If any unexpected error occurs during setup, clean up
+    logError('Unexpected error during WebSocket connection setup', {
+      error: error instanceof Error ? error.message : String(error),
+    })
+    cleanupEarlyListeners()
+    if (ws.readyState === 1) {
+      ws.close(1011, 'Internal server error')
+    }
+  }
 }
 
-function handleMessage(ws: WebSocketWithUserData, room: CanvasRoom, data: Buffer) {
+async function handleMessage(ws: WebSocketWithUserData, room: CanvasRoom, data: Buffer) {
   try {
     const message = JSON.parse(data.toString())
 
     switch (message.type) {
       case 'operation':
-        handleOperation(ws, room, message as CollabMessage)
+        await handleOperation(ws, room, message as CollabMessage)
         break
       case 'cursor':
         handleCursor(ws, room, message as CursorMessage)
         break
       case 'sync-request':
-        handleSyncRequest(ws, room)
+        await handleSyncRequest(ws, room)
         break
       default:
         break
@@ -465,7 +545,7 @@ function handleClientDisconnect(ws: WebSocketWithUserData, room: CanvasRoom, sho
   }
 }
 
-function handleOperation(ws: WebSocketWithUserData, room: CanvasRoom, message: CollabMessage) {
+async function handleOperation(ws: WebSocketWithUserData, room: CanvasRoom, message: CollabMessage) {
   // Only editors and owners can modify
   if (ws.userRole === 'viewer') {
     return
@@ -498,55 +578,55 @@ function handleOperation(ws: WebSocketWithUserData, room: CanvasRoom, message: C
   try {
     switch (message.operation) {
       case 'add-node':
-        applied = applyAddNode(canvasId, message.data)
+        applied = await applyAddNode(canvasId, message.data)
         break
       case 'update-node': {
         const { id, updates } = message.data as { id: string; updates: unknown }
-        applied = applyUpdateNode(canvasId, id, updates)
+        applied = await applyUpdateNode(canvasId, id, updates)
         break
       }
       case 'remove-node': {
         const { id } = message.data as { id: string }
-        applied = applyRemoveNode(canvasId, id)
+        applied = await applyRemoveNode(canvasId, id)
         break
       }
       case 'add-group':
-        applied = applyAddGroup(canvasId, message.data)
+        applied = await applyAddGroup(canvasId, message.data)
         break
       case 'update-group': {
         const { id, updates } = message.data as { id: string; updates: unknown }
-        applied = applyUpdateGroup(canvasId, id, updates)
+        applied = await applyUpdateGroup(canvasId, id, updates)
         break
       }
       case 'remove-group': {
         const { id } = message.data as { id: string }
-        applied = applyRemoveGroup(canvasId, id)
+        applied = await applyRemoveGroup(canvasId, id)
         break
       }
       case 'add-domain':
-        applied = applyAddDomain(canvasId, message.data)
+        applied = await applyAddDomain(canvasId, message.data)
         break
       case 'update-domain': {
         const { id, updates } = message.data as { id: string; updates: unknown }
-        applied = applyUpdateDomain(canvasId, id, updates)
+        applied = await applyUpdateDomain(canvasId, id, updates)
         break
       }
       case 'remove-domain': {
         const { id } = message.data as { id: string }
-        applied = applyRemoveDomain(canvasId, id)
+        applied = await applyRemoveDomain(canvasId, id)
         break
       }
       case 'add-connection':
-        applied = applyAddConnection(canvasId, message.data)
+        applied = await applyAddConnection(canvasId, message.data)
         break
       case 'update-connection': {
         const { id, updates } = message.data as { id: string; updates: unknown }
-        applied = applyUpdateConnection(canvasId, id, updates)
+        applied = await applyUpdateConnection(canvasId, id, updates)
         break
       }
       case 'remove-connection': {
         const { id } = message.data as { id: string }
-        applied = applyRemoveConnection(canvasId, id)
+        applied = await applyRemoveConnection(canvasId, id)
         break
       }
       default:
@@ -597,6 +677,9 @@ function handleCursor(ws: WebSocketWithUserData, room: CanvasRoom, message: Curs
 
 async function handleSyncRequest(ws: WebSocketWithUserData, room: CanvasRoom) {
   try {
+    // Ensure state is loaded from DB before returning sync data
+    await ensureCanvasStateLoaded(room.id)
+
     const syncData = getSyncData(room.id)
 
     ws.send(JSON.stringify({

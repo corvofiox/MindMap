@@ -149,6 +149,7 @@ class CollaborationService {
 
   connect(canvasId: number) {
     this.isDestroyed = false
+    this.emptySyncRetryCount = 0
 
     const token = localStorage.getItem('mindmap_token')
     if (!token) {
@@ -397,6 +398,7 @@ class CollaborationService {
   disconnect() {
     this.isIntentionallyClosed = true
     this.isDestroyed = true
+    this.emptySyncRetryCount = 0
     this.cleanupWebSocket()
     this.cursors.clear()
     this.users = []
@@ -507,6 +509,9 @@ class CollaborationService {
     this.cursorListeners.forEach(listener => listener(new Map(this.cursors)))
   }
 
+  private emptySyncRetryCount = 0
+  private readonly MAX_EMPTY_SYNC_RETRIES = 3
+
   private handleSync(message: {
     nodes: Node[]
     groups: NodeGroup[]
@@ -518,6 +523,29 @@ class CollaborationService {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return
 
     const store = useCanvasStore.getState()
+
+    // Guard against empty sync data that would wipe valid local state.
+    // This can happen if the server's in-memory state was not yet loaded from DB
+    // when the sync-request was processed (race condition in ensureCanvasState).
+    // If local store has data but server returns version 0 with no entities,
+    // skip this sync and request another one after a short delay.
+    // Limit retries to prevent infinite loops for genuinely empty new canvases.
+    const serverHasData = message.nodes.length > 0 || message.groups.length > 0 ||
+      message.domains.length > 0 || message.connections.length > 0
+    const localHasData = store.nodes.size > 0 || store.groups.size > 0 ||
+      store.domains.size > 0 || store.connections.size > 0
+    if (!serverHasData && localHasData && message.version === 0 && this.emptySyncRetryCount < this.MAX_EMPTY_SYNC_RETRIES) {
+      this.emptySyncRetryCount++
+      logger.warn('Received empty sync response while local state has data — retrying sync', {
+        localNodes: store.nodes.size,
+        serverVersion: message.version,
+        retryCount: this.emptySyncRetryCount,
+      })
+      setTimeout(() => this.requestSync(), 500)
+      return
+    }
+    // Reset retry counter on successful sync or after max retries exhausted
+    this.emptySyncRetryCount = 0
 
     // Always trust server state during sync
     // But preserve nodes that user is currently editing
