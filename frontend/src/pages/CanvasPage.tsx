@@ -1023,8 +1023,9 @@ export function CanvasPage() {
 
         // 如果是临时ID，不尝试从数据库加载数据
         if (id < 0) {
-          // 清空画布，准备一个新的画布
+          collabService.isApplyingRemoteUpdate = true
           clearCanvas()
+          collabService.isApplyingRemoteUpdate = false
           setDirty(false)
           return
         }
@@ -1055,8 +1056,10 @@ export function CanvasPage() {
         )
 
         if (hasData) {
+          collabService.isApplyingRemoteUpdate = true
           clearCanvas()
           setCanvasData(dbData)
+          collabService.isApplyingRemoteUpdate = false
           setDirty(false)
           saveToCache(id, dbData)
           collabService.setServerVersion(dbData.version)
@@ -1064,12 +1067,16 @@ export function CanvasPage() {
           // No data in DB, try cache
           const cachedData = loadFromCache(id)
           if (cachedData) {
+            collabService.isApplyingRemoteUpdate = true
             clearCanvas()
             setCanvasData(cachedData)
+            collabService.isApplyingRemoteUpdate = false
             setDirty(false)
           } else {
             // No data anywhere
+            collabService.isApplyingRemoteUpdate = true
             clearCanvas()
+            collabService.isApplyingRemoteUpdate = false
           }
         }
       } catch (error) {
@@ -1081,11 +1088,15 @@ export function CanvasPage() {
         // DB load failed, fallback to cache
         const cachedData = loadFromCache(id)
         if (cachedData) {
+          collabService.isApplyingRemoteUpdate = true
           clearCanvas()
           setCanvasData(cachedData)
+          collabService.isApplyingRemoteUpdate = false
           setDirty(false)
         } else {
+          collabService.isApplyingRemoteUpdate = true
           clearCanvas()
+          collabService.isApplyingRemoteUpdate = false
         }
       } finally {
         // Only update state if still mounted
