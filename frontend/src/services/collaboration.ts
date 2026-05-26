@@ -23,6 +23,33 @@ interface CollabMessage {
   clientVersion?: number
 }
 
+interface BatchCollabMessage {
+  type: 'batch-operation'
+  operations: Array<{
+    operation: string
+    data: unknown
+  }>
+  timestamp: number
+  senderId: number
+  seq: number
+  clientVersion: number
+}
+
+export interface BatchOperations {
+  addedNodes?: Node[]
+  updatedNodes?: { id: string; updates: Partial<Node> }[]
+  removedNodeIds?: string[]
+  addedGroups?: NodeGroup[]
+  updatedGroups?: { id: string; updates: Partial<NodeGroup> }[]
+  removedGroupIds?: string[]
+  addedDomains?: Domain[]
+  updatedDomains?: { id: string; updates: Partial<Domain> }[]
+  removedDomainIds?: string[]
+  addedConnections?: Connection[]
+  updatedConnections?: { id: string; updates: Partial<Connection> }[]
+  removedConnectionIds?: string[]
+}
+
 interface CursorData {
   userId: number
   x: number
@@ -63,6 +90,201 @@ interface PendingGroupChanges {
 interface PendingDomainChanges {
   domainId: string
   changes: Map<string, FieldChange>
+}
+
+/**
+ * 将 BatchOperations 对象展开为有序操作数组。
+ *
+ * 顺序约定：add → update → remove（每种实体类型重复）。
+ * 此顺序与后端 applyBatchOperations 的 for 循环处理顺序一致。
+ * - 同时 add+remove：add 在前，结果正确（先创建再删除）
+ * - 同时 add+update：add 在前，update 在后，确保新增节点拿到初始属性
+ */
+export function batchToOperations(batch: BatchOperations): Array<{ operation: string; data: unknown }> {
+  const ops: Array<{ operation: string; data: unknown }> = []
+
+  if (batch.addedNodes) {
+    for (const node of batch.addedNodes) {
+      ops.push({ operation: 'add-node', data: node })
+    }
+  }
+  if (batch.updatedNodes) {
+    for (const { id, updates } of batch.updatedNodes) {
+      ops.push({ operation: 'update-node', data: { id, updates } })
+    }
+  }
+  if (batch.removedNodeIds) {
+    for (const id of batch.removedNodeIds) {
+      ops.push({ operation: 'remove-node', data: { id } })
+    }
+  }
+  if (batch.addedGroups) {
+    for (const group of batch.addedGroups) {
+      ops.push({ operation: 'add-group', data: group })
+    }
+  }
+  if (batch.updatedGroups) {
+    for (const { id, updates } of batch.updatedGroups) {
+      ops.push({ operation: 'update-group', data: { id, updates } })
+    }
+  }
+  if (batch.removedGroupIds) {
+    for (const id of batch.removedGroupIds) {
+      ops.push({ operation: 'remove-group', data: { id } })
+    }
+  }
+  if (batch.addedDomains) {
+    for (const domain of batch.addedDomains) {
+      ops.push({ operation: 'add-domain', data: domain })
+    }
+  }
+  if (batch.updatedDomains) {
+    for (const { id, updates } of batch.updatedDomains) {
+      ops.push({ operation: 'update-domain', data: { id, updates } })
+    }
+  }
+  if (batch.removedDomainIds) {
+    for (const id of batch.removedDomainIds) {
+      ops.push({ operation: 'remove-domain', data: { id } })
+    }
+  }
+  if (batch.addedConnections) {
+    for (const conn of batch.addedConnections) {
+      ops.push({ operation: 'add-connection', data: conn })
+    }
+  }
+  if (batch.updatedConnections) {
+    for (const { id, updates } of batch.updatedConnections) {
+      ops.push({ operation: 'update-connection', data: { id, updates } })
+    }
+  }
+  if (batch.removedConnectionIds) {
+    for (const id of batch.removedConnectionIds) {
+      ops.push({ operation: 'remove-connection', data: { id } })
+    }
+  }
+
+  return ops
+}
+
+/**
+ * 将离线队列中的单独操作转换为 BatchOperations 对象。
+ * 支持展开嵌套的 batch-operation 条目（来自 ACK 超时回退）。
+ */
+export function queueToBatch(queue: QueuedOperation[]): BatchOperations {
+  const addedNodes: Node[] = []
+  const updatedNodes: { id: string; updates: Partial<Node> }[] = []
+  const removedNodeIds: string[] = []
+  const addedGroups: NodeGroup[] = []
+  const updatedGroups: { id: string; updates: Partial<NodeGroup> }[] = []
+  const removedGroupIds: string[] = []
+  const addedDomains: Domain[] = []
+  const updatedDomains: { id: string; updates: Partial<Domain> }[] = []
+  const removedDomainIds: string[] = []
+  const addedConnections: Connection[] = []
+  const updatedConnections: { id: string; updates: Partial<Connection> }[] = []
+  const removedConnectionIds: string[] = []
+
+  for (const op of queue) {
+    switch (op.operation) {
+      case 'add-node':
+        addedNodes.push(op.data as Node)
+        break
+      case 'update-node':
+        updatedNodes.push(op.data as { id: string; updates: Partial<Node> })
+        break
+      case 'remove-node':
+        removedNodeIds.push((op.data as { id: string }).id)
+        break
+      case 'add-group':
+        addedGroups.push(op.data as NodeGroup)
+        break
+      case 'update-group':
+        updatedGroups.push(op.data as { id: string; updates: Partial<NodeGroup> })
+        break
+      case 'remove-group':
+        removedGroupIds.push((op.data as { id: string }).id)
+        break
+      case 'add-domain':
+        addedDomains.push(op.data as Domain)
+        break
+      case 'update-domain':
+        updatedDomains.push(op.data as { id: string; updates: Partial<Domain> })
+        break
+      case 'remove-domain':
+        removedDomainIds.push((op.data as { id: string }).id)
+        break
+      case 'add-connection':
+        addedConnections.push(op.data as Connection)
+        break
+      case 'update-connection':
+        updatedConnections.push(op.data as { id: string; updates: Partial<Connection> })
+        break
+      case 'remove-connection':
+        removedConnectionIds.push((op.data as { id: string }).id)
+        break
+      case 'batch-operation': {
+        // 展开因 ACK 超时而落入离线队列的 batch，将其子操作归入对应数组
+        const subOps = batchToOperations(op.data as BatchOperations)
+        for (const sub of subOps) {
+          switch (sub.operation) {
+            case 'add-node':
+              addedNodes.push(sub.data as Node)
+              break
+            case 'update-node':
+              updatedNodes.push(sub.data as { id: string; updates: Partial<Node> })
+              break
+            case 'remove-node':
+              removedNodeIds.push((sub.data as { id: string }).id)
+              break
+            case 'add-group':
+              addedGroups.push(sub.data as NodeGroup)
+              break
+            case 'update-group':
+              updatedGroups.push(sub.data as { id: string; updates: Partial<NodeGroup> })
+              break
+            case 'remove-group':
+              removedGroupIds.push((sub.data as { id: string }).id)
+              break
+            case 'add-domain':
+              addedDomains.push(sub.data as Domain)
+              break
+            case 'update-domain':
+              updatedDomains.push(sub.data as { id: string; updates: Partial<Domain> })
+              break
+            case 'remove-domain':
+              removedDomainIds.push((sub.data as { id: string }).id)
+              break
+            case 'add-connection':
+              addedConnections.push(sub.data as Connection)
+              break
+            case 'update-connection':
+              updatedConnections.push(sub.data as { id: string; updates: Partial<Connection> })
+              break
+            case 'remove-connection':
+              removedConnectionIds.push((sub.data as { id: string }).id)
+              break
+          }
+        }
+        break
+      }
+    }
+  }
+
+  return {
+    addedNodes: addedNodes.length > 0 ? addedNodes : undefined,
+    updatedNodes: updatedNodes.length > 0 ? updatedNodes : undefined,
+    removedNodeIds: removedNodeIds.length > 0 ? removedNodeIds : undefined,
+    addedGroups: addedGroups.length > 0 ? addedGroups : undefined,
+    updatedGroups: updatedGroups.length > 0 ? updatedGroups : undefined,
+    removedGroupIds: removedGroupIds.length > 0 ? removedGroupIds : undefined,
+    addedDomains: addedDomains.length > 0 ? addedDomains : undefined,
+    updatedDomains: updatedDomains.length > 0 ? updatedDomains : undefined,
+    removedDomainIds: removedDomainIds.length > 0 ? removedDomainIds : undefined,
+    addedConnections: addedConnections.length > 0 ? addedConnections : undefined,
+    updatedConnections: updatedConnections.length > 0 ? updatedConnections : undefined,
+    removedConnectionIds: removedConnectionIds.length > 0 ? removedConnectionIds : undefined,
+  }
 }
 
 class CollaborationService {
@@ -435,6 +657,9 @@ class CollaborationService {
         case 'operation':
           this.handleOperation(message as CollabMessage)
           break
+        case 'batch-operation':
+          this.handleBatchOperation(message as BatchCollabMessage)
+          break
         case 'cursor':
           this.handleCursor(message as CursorData)
           break
@@ -481,6 +706,27 @@ class CollaborationService {
     const handlers = this.operationHandlers.get(message.operation)
     if (handlers) {
       handlers.forEach(handler => handler(message.data))
+    }
+  }
+
+  private handleBatchOperation(message: BatchCollabMessage) {
+    if (message.senderId === this.userId) return
+
+    for (const op of message.operations) {
+      const nodeId = this.extractNodeIdFromOperation(op.operation, op.data)
+      if (nodeId && this.isNodeBeingInteractedWith(nodeId)) {
+        this.deferredOperations.push({
+          operation: op.operation,
+          data: op.data,
+          timestamp: message.timestamp,
+        })
+        continue
+      }
+
+      const handlers = this.operationHandlers.get(op.operation)
+      if (handlers) {
+        handlers.forEach(handler => handler(op.data))
+      }
     }
   }
 
@@ -689,14 +935,19 @@ class CollaborationService {
       // Update serverVersion BEFORE replay so replayed operations use the correct version
       this.serverVersion = message.version
 
-      // Batch-replay pending changes as single operations per entity
+      // Batch-replay pending changes as a single batch operation per entity
+      const replyUpdatedNodes: { id: string; updates: Partial<{ id: string;[key: string]: unknown }> }[] = []
+      const replyUpdatedGroups: { id: string; updates: Partial<{ id: string;[key: string]: unknown }> }[] = []
+      const replyUpdatedDomains: { id: string; updates: Partial<{ id: string;[key: string]: unknown }> }[] = []
+      const replyUpdatedConns: { id: string; updates: Partial<{ id: string;[key: string]: unknown }> }[] = []
+
       for (const [, pending] of pendingNodes) {
         const combinedUpdates: Record<string, unknown> = {}
         for (const [, change] of pending.changes) {
           combinedUpdates[change.field] = change.newValue
         }
         if (Object.keys(combinedUpdates).length > 0) {
-          this.sendOperation('update-node', { id: pending.nodeId, updates: combinedUpdates })
+          replyUpdatedNodes.push({ id: pending.nodeId, updates: combinedUpdates })
         }
       }
       for (const [, pending] of pendingGroups) {
@@ -705,7 +956,7 @@ class CollaborationService {
           combinedUpdates[change.field] = change.newValue
         }
         if (Object.keys(combinedUpdates).length > 0) {
-          this.sendOperation('update-group', { id: pending.groupId, updates: combinedUpdates })
+          replyUpdatedGroups.push({ id: pending.groupId, updates: combinedUpdates })
         }
       }
       for (const [, pending] of pendingDomains) {
@@ -714,7 +965,7 @@ class CollaborationService {
           combinedUpdates[change.field] = change.newValue
         }
         if (Object.keys(combinedUpdates).length > 0) {
-          this.sendOperation('update-domain', { id: pending.domainId, updates: combinedUpdates })
+          replyUpdatedDomains.push({ id: pending.domainId, updates: combinedUpdates })
         }
       }
       for (const [, pending] of pendingConns) {
@@ -723,8 +974,19 @@ class CollaborationService {
           combinedUpdates[change.field] = change.newValue
         }
         if (Object.keys(combinedUpdates).length > 0) {
-          this.sendOperation('update-connection', { id: pending.connectionId, updates: combinedUpdates })
+          replyUpdatedConns.push({ id: pending.connectionId, updates: combinedUpdates })
         }
+      }
+
+      // 使用 sendBatch 将所有待回放变更合并为一条消息，避免版本冲突
+      if (replyUpdatedNodes.length > 0 || replyUpdatedGroups.length > 0 ||
+        replyUpdatedDomains.length > 0 || replyUpdatedConns.length > 0) {
+        this.sendBatch({
+          updatedNodes: replyUpdatedNodes.length > 0 ? replyUpdatedNodes : undefined,
+          updatedGroups: replyUpdatedGroups.length > 0 ? replyUpdatedGroups : undefined,
+          updatedDomains: replyUpdatedDomains.length > 0 ? replyUpdatedDomains : undefined,
+          updatedConnections: replyUpdatedConns.length > 0 ? replyUpdatedConns : undefined,
+        })
       }
       this.pendingNodeChanges.clear()
       this.pendingConnectionChanges.clear()
@@ -896,6 +1158,47 @@ class CollaborationService {
     this.ws.send(JSON.stringify(message))
   }
 
+  /**
+   * 发送批量操作，所有操作共享同一个 clientVersion，
+   * 避免循环发送单独操作时因服务端版本递增导致后续操作被 NAK 拒绝。
+   */
+  sendBatch(batch: BatchOperations) {
+    if (this.isDestroyed || this.isIntentionallyClosed) return
+
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      // 离线时保留 batch 结构，重连时 queueToBatch 可正确展开
+      if (this.offlineQueue.length < this.maxQueueSize) {
+        this.offlineQueue.push({
+          operation: 'batch-operation',
+          data: batch,
+          timestamp: Date.now(),
+        })
+      }
+      this.persistOfflineQueue()
+      return
+    }
+
+    const timestamp = Date.now()
+    const seq = ++this.opSeq
+    const opEntries = batchToOperations(batch)
+
+    if (opEntries.length === 0) return
+
+    const message: BatchCollabMessage = {
+      type: 'batch-operation',
+      operations: opEntries,
+      timestamp,
+      senderId: this.userId || 0,
+      seq,
+      clientVersion: this.serverVersion,
+    }
+
+    this.unackedOps.set(seq, { operation: 'batch-operation', data: batch, timestamp })
+    this.scheduleAckTimeout()
+
+    this.ws.send(JSON.stringify(message))
+  }
+
   private flushOfflineQueue() {
     if (this.offlineQueue.length === 0 || this.isFlushingQueue || this.isDestroyed || this.isIntentionallyClosed) return
 
@@ -904,17 +1207,16 @@ class CollaborationService {
     this.offlineQueue = []
 
     try {
-      for (let i = 0; i < queue.length; i++) {
-        if (this.isDestroyed || this.isIntentionallyClosed || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
-          this.offlineQueue.unshift(...queue.slice(i))
-          break
-        }
+      if (this.isDestroyed || this.isIntentionallyClosed || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
+        this.offlineQueue.unshift(...queue)
+      } else {
+        // 将离线队列中的操作合并为批量操作，避免版本冲突
+        const batch = queueToBatch(queue)
         try {
-          this.sendOperation(queue[i].operation, queue[i].data)
+          this.sendBatch(batch)
         } catch {
-          // If send fails, put remaining items back in queue
-          this.offlineQueue.unshift(...queue.slice(i))
-          break
+          // 如果发送失败，将操作放回队列
+          this.offlineQueue.unshift(...queue)
         }
       }
     } finally {

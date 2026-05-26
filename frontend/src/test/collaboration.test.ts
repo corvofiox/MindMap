@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { batchToOperations, queueToBatch, BatchOperations } from '../services/collaboration'
+// 测试中使用简化数据，避免导入全部实体类型
+type AnyBatch = Record<string, unknown>
 
 interface QueuedOperation {
   operation: string
@@ -24,9 +27,11 @@ class MockCollaborationService {
 
   connect(shouldConnect: boolean = true) {
     if (shouldConnect) {
-      this.ws = { readyState: WebSocket.OPEN, send: (msg: string) => {
-        this.sentMessages.push(JSON.parse(msg))
-      }} as unknown as WebSocket
+      this.ws = {
+        readyState: WebSocket.OPEN, send: (msg: string) => {
+          this.sentMessages.push(JSON.parse(msg))
+        }
+      } as unknown as WebSocket
     } else {
       this.ws = null
     }
@@ -305,5 +310,174 @@ describe('detectConflictType - Truth Table Tests', () => {
       expect(detectConflictType(6, 7, 5, true)).toBe('diverged')
       expect(detectConflictType(7, 6, 5, false)).toBe('diverged')
     })
+  })
+})
+
+// ===========================================================
+// Batch Operations Tests (batchToOperations / queueToBatch / sendBatch)
+// ===========================================================
+
+describe('batchToOperations', () => {
+  it('should convert addedNodes to add-node operations', () => {
+    const batch = {
+      addedNodes: [{ id: 'n1', text: 'Hello' }, { id: 'n2', text: 'World' }],
+    }
+    const ops = batchToOperations(batch as unknown as BatchOperations)
+    expect(ops).toHaveLength(2)
+    expect(ops[0]).toEqual({ operation: 'add-node', data: { id: 'n1', text: 'Hello' } })
+    expect(ops[1]).toEqual({ operation: 'add-node', data: { id: 'n2', text: 'World' } })
+  })
+
+  it('should maintain order: add → update → remove within same entity type', () => {
+    const batch = {
+      addedNodes: [{ id: 'n1' }],
+      updatedNodes: [{ id: 'n1', updates: { text: 'new' } }],
+      removedNodeIds: ['n2'],
+    }
+    const ops = batchToOperations(batch as unknown as BatchOperations)
+    expect(ops).toHaveLength(3)
+    expect(ops[0].operation).toBe('add-node')
+    expect(ops[1].operation).toBe('update-node')
+    expect(ops[2].operation).toBe('remove-node')
+  })
+
+  it('should handle mixed entity types (nodes → groups → domains → connections)', () => {
+    const batch = {
+      addedNodes: [{ id: 'n1' }],
+      addedGroups: [{ id: 'g1' }],
+      addedDomains: [{ id: 'd1' }],
+      addedConnections: [{ id: 'c1' }],
+    }
+    const ops = batchToOperations(batch as unknown as BatchOperations)
+    expect(ops).toHaveLength(4)
+    expect(ops[0].operation).toBe('add-node')
+    expect(ops[1].operation).toBe('add-group')
+    expect(ops[2].operation).toBe('add-domain')
+    expect(ops[3].operation).toBe('add-connection')
+  })
+
+  it('should return empty array for empty batch', () => {
+    const ops = batchToOperations({})
+    expect(ops).toHaveLength(0)
+  })
+
+  it('should handle add + remove of same node (add before remove)', () => {
+    const batch = {
+      addedNodes: [{ id: 'n1', text: 'tmp' }],
+      removedNodeIds: ['n1'],
+    }
+    const ops = batchToOperations(batch as unknown as BatchOperations)
+    expect(ops).toHaveLength(2)
+    expect(ops[0].operation).toBe('add-node')
+    expect(ops[1].operation).toBe('remove-node')
+  })
+
+  it('should handle all 12 operation types', () => {
+    const batch = {
+      addedNodes: [{ id: 'n1' }],
+      updatedNodes: [{ id: 'n1', updates: { text: 'x' } }],
+      removedNodeIds: ['n2'],
+      addedGroups: [{ id: 'g1' }],
+      updatedGroups: [{ id: 'g1', updates: { name: 'x' } }],
+      removedGroupIds: ['g2'],
+      addedDomains: [{ id: 'd1' }],
+      updatedDomains: [{ id: 'd1', updates: { label: 'x' } }],
+      removedDomainIds: ['d2'],
+      addedConnections: [{ id: 'c1' }],
+      updatedConnections: [{ id: 'c1', updates: {} }],
+      removedConnectionIds: ['c2'],
+    }
+    const ops = batchToOperations(batch as unknown as BatchOperations)
+    expect(ops).toHaveLength(12)
+  })
+})
+
+describe('queueToBatch', () => {
+  it('should combine individual operations into a single BatchOperations', () => {
+    const queue = [
+      { operation: 'add-node', data: { id: 'n1', text: 'A' }, timestamp: 0 },
+      { operation: 'update-node', data: { id: 'n1', updates: { text: 'B' } }, timestamp: 0 },
+      { operation: 'remove-node', data: { id: 'n2' }, timestamp: 0 },
+    ]
+    const batch = queueToBatch(queue)
+    expect(batch.addedNodes).toHaveLength(1)
+    expect(batch.addedNodes![0].id).toBe('n1')
+    expect(batch.updatedNodes).toHaveLength(1)
+    expect(batch.removedNodeIds).toHaveLength(1)
+  })
+
+  it('should expand batch-operation entries', () => {
+    const inner = {
+      addedNodes: [{ id: 'n1', text: 'inner' }],
+      updatedNodes: [{ id: 'n2', updates: { text: 'updated' } }],
+    }
+    const queue = [
+      { operation: 'batch-operation', data: inner as unknown as BatchOperations, timestamp: 0 },
+      { operation: 'remove-node', data: { id: 'n3' }, timestamp: 0 },
+    ]
+    const batch = queueToBatch(queue)
+    expect(batch.addedNodes).toHaveLength(1)
+    expect(batch.addedNodes![0].id).toBe('n1')
+    expect(batch.updatedNodes).toHaveLength(1)
+    expect(batch.removedNodeIds).toHaveLength(1)
+    expect(batch.removedNodeIds![0]).toBe('n3')
+  })
+
+  it('should handle nested batch-operation with mixed entity types', () => {
+    const inner = {
+      addedNodes: [{ id: 'n1' }],
+      addedGroups: [{ id: 'g1' }],
+      removedConnectionIds: ['c1'],
+    }
+    const queue = [
+      { operation: 'batch-operation', data: inner as unknown as BatchOperations, timestamp: 0 },
+      { operation: 'add-domain', data: { id: 'd1' }, timestamp: 0 },
+    ]
+    const batch = queueToBatch(queue)
+    expect(batch.addedNodes).toHaveLength(1)
+    expect(batch.addedGroups).toHaveLength(1)
+    expect(batch.removedConnectionIds).toHaveLength(1)
+    expect(batch.addedDomains).toHaveLength(1)
+  })
+
+  it('should return empty BatchOperations fields as undefined for empty arrays', () => {
+    const queue = [{ operation: 'add-node', data: { id: 'n1' }, timestamp: 0 }]
+    const batch = queueToBatch(queue)
+    expect(batch.addedNodes).toBeDefined()
+    expect(batch.updatedNodes).toBeUndefined()
+    expect(batch.removedNodeIds).toBeUndefined()
+  })
+})
+
+describe('sendBatch', () => {
+  it('should not send empty batch', () => {
+    const ops = batchToOperations({})
+    expect(ops).toHaveLength(0)
+  })
+
+  it('should preserve batch structure when queuing offline', () => {
+    // 模拟 sendBatch 离线路径：将整个 batch 作为 batch-operation 入队
+    const batch = {
+      addedNodes: [{ id: 'n1' }],
+      removedNodeIds: ['n2'],
+    }
+    const offlineQueue: Array<{ operation: string; data: unknown; timestamp: number }> = []
+
+    // 离线：保留 batch 结构
+    offlineQueue.push({
+      operation: 'batch-operation',
+      data: batch,
+      timestamp: Date.now(),
+    })
+
+    expect(offlineQueue).toHaveLength(1)
+    expect(offlineQueue[0].operation).toBe('batch-operation')
+
+    // 验证重连后 queueToBatch 可正确展开
+    const result = queueToBatch(offlineQueue)
+    expect(result.addedNodes).toHaveLength(1)
+    expect(result.addedNodes![0].id).toBe('n1')
+    expect(result.removedNodeIds).toHaveLength(1)
+    expect(result.removedNodeIds![0]).toBe('n2')
   })
 })

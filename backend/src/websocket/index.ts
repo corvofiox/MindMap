@@ -44,6 +44,7 @@ import {
   applyAddConnection,
   applyUpdateConnection,
   applyRemoveConnection,
+  applyBatchOperations,
   removeCanvasState,
   flushPendingPersist,
   getCanvasState,
@@ -484,6 +485,9 @@ async function handleMessage(ws: WebSocketWithUserData, room: CanvasRoom, data: 
       case 'operation':
         await handleOperation(ws, room, message as CollabMessage)
         break
+      case 'batch-operation':
+        await handleBatchOperation(ws, room, message)
+        break
       case 'cursor':
         handleCursor(ws, room, message as CursorMessage)
         break
@@ -582,7 +586,7 @@ async function handleOperation(ws: WebSocketWithUserData, room: CanvasRoom, mess
         break
       case 'update-node': {
         const { id, updates } = message.data as { id: string; updates: unknown }
-        applied = await applyUpdateNode(canvasId, id, updates)
+        applied = await applyUpdateNode(canvasId, id, updates, message.clientVersion)
         break
       }
       case 'remove-node': {
@@ -595,7 +599,7 @@ async function handleOperation(ws: WebSocketWithUserData, room: CanvasRoom, mess
         break
       case 'update-group': {
         const { id, updates } = message.data as { id: string; updates: unknown }
-        applied = await applyUpdateGroup(canvasId, id, updates)
+        applied = await applyUpdateGroup(canvasId, id, updates, message.clientVersion)
         break
       }
       case 'remove-group': {
@@ -608,7 +612,7 @@ async function handleOperation(ws: WebSocketWithUserData, room: CanvasRoom, mess
         break
       case 'update-domain': {
         const { id, updates } = message.data as { id: string; updates: unknown }
-        applied = await applyUpdateDomain(canvasId, id, updates)
+        applied = await applyUpdateDomain(canvasId, id, updates, message.clientVersion)
         break
       }
       case 'remove-domain': {
@@ -621,7 +625,7 @@ async function handleOperation(ws: WebSocketWithUserData, room: CanvasRoom, mess
         break
       case 'update-connection': {
         const { id, updates } = message.data as { id: string; updates: unknown }
-        applied = await applyUpdateConnection(canvasId, id, updates)
+        applied = await applyUpdateConnection(canvasId, id, updates, message.clientVersion)
         break
       }
       case 'remove-connection': {
@@ -662,12 +666,108 @@ async function handleOperation(ws: WebSocketWithUserData, room: CanvasRoom, mess
       }))
     }
   } else if (typeof message.seq === 'number' && ws.readyState === 1) {
-    // 操作未被应用（例如目标不存在），通知发送方
-    ws.send(JSON.stringify({
-      type: 'nak',
-      seq: message.seq,
-      reason: 'operation-failed',
-    }))
+    // 区分 TOCTOU 版本冲突（需发 nak 触发客户端重同步）与操作无影响
+    const currentState = getCanvasState(canvasId)
+    if (currentState && typeof message.clientVersion === 'number' && currentState.version > message.clientVersion) {
+      ws.send(JSON.stringify({
+        type: 'nak',
+        seq: message.seq,
+        reason: 'version-conflict',
+        serverVersion: currentState.version,
+      }))
+    } else {
+      ws.send(JSON.stringify({
+        type: 'nak',
+        seq: message.seq,
+        reason: 'operation-failed',
+      }))
+    }
+  }
+}
+
+/**
+ * 处理批量操作请求，所有操作共享同一个版本检查，整体只递增一次版本号。
+ */
+async function handleBatchOperation(ws: WebSocketWithUserData, room: CanvasRoom, message: {
+  type: 'batch-operation'
+  operations: Array<{ operation: string; data: unknown }>
+  timestamp: number
+  senderId: number
+  seq: number
+  clientVersion: number
+}) {
+  if (ws.userRole === 'viewer') {
+    return
+  }
+
+  const canvasId = room.id
+
+  // 版本冲突检测：与单次操作相同的逻辑
+  const state = getCanvasState(canvasId)
+  if (state && typeof message.clientVersion === 'number' && state.version > message.clientVersion) {
+    if (typeof message.seq === 'number' && ws.readyState === 1) {
+      ws.send(JSON.stringify({
+        type: 'nak',
+        seq: message.seq,
+        reason: 'version-conflict',
+        serverVersion: state.version,
+      }))
+    }
+    log('Batch operation rejected due to version conflict', {
+      canvasId,
+      clientVersion: message.clientVersion,
+      serverVersion: state.version,
+      operationsCount: message.operations?.length || 0,
+    })
+    return
+  }
+
+  let applied = false
+
+  try {
+    applied = await applyBatchOperations(canvasId, message.operations, message.clientVersion)
+  } catch (error) {
+    logError('Batch operation application error', {
+      canvasId,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    if (typeof message.seq === 'number' && ws.readyState === 1) {
+      ws.send(JSON.stringify({
+        type: 'nak',
+        seq: message.seq,
+        reason: 'server-error',
+      }))
+    }
+    return
+  }
+
+  if (applied) {
+    // 将批量操作广播给房间内其他客户端
+    broadcastToRoom(room, message, ws)
+    broadcastVersionUpdate(canvasId, getCanvasState(canvasId)!.version)
+
+    if (typeof message.seq === 'number' && ws.readyState === 1) {
+      ws.send(JSON.stringify({
+        type: 'ack',
+        seq: message.seq,
+      }))
+    }
+  } else if (typeof message.seq === 'number' && ws.readyState === 1) {
+    // 区分 TOCTOU 版本冲突（需发 nak 触发客户端重同步）与操作无实际影响（发 ack）
+    const currentState = getCanvasState(canvasId)
+    if (currentState && typeof message.clientVersion === 'number' && currentState.version > message.clientVersion) {
+      ws.send(JSON.stringify({
+        type: 'nak',
+        seq: message.seq,
+        reason: 'version-conflict',
+        serverVersion: currentState.version,
+      }))
+    } else {
+      ws.send(JSON.stringify({
+        type: 'ack',
+        seq: message.seq,
+      }))
+    }
   }
 }
 

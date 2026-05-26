@@ -304,16 +304,28 @@ export function useCollaboration({ canvasId, enabled = true }: UseCollaborationO
     collabService.onOperation('update-connection', handleUpdateConnection)
     collabService.onOperation('remove-connection', handleRemoveConnection)
 
-    // Local change detection -> send to server
+    // Local change detection -> send to server as batch
     const unsubscribe = useCanvasStore.subscribe((state, prevState) => {
       if (isApplyingRemoteChanges.current) return
       if (isLocalEditingUpdate()) return
       if (collabService.isApplyingRemoteUpdate) return
 
+      let batchNeeded = false
+      const addedNodes: Node[] = []
+      const updatedNodes: { id: string; updates: Partial<Node> }[] = []
+      const removedNodeIds: string[] = []
+      const addedGroups: NodeGroup[] = []
+      const updatedGroups: { id: string; updates: Partial<NodeGroup> }[] = []
+      const removedGroupIds: string[] = []
+      const addedDomains: Domain[] = []
+      const updatedDomains: { id: string; updates: Partial<Domain> }[] = []
+      const removedDomainIds: string[] = []
+      const addedConnections: Connection[] = []
+      const updatedConnections: { id: string; updates: Partial<Connection> }[] = []
+      const removedConnectionIds: string[] = []
+
       if (state.nodes !== prevState.nodes) {
-        const addedNodes: Node[] = []
-        const updatedNodes: { id: string; updates: Partial<Node> }[] = []
-        const removedNodeIds: string[] = []
+        batchNeeded = true
 
         state.nodes.forEach((node, id) => {
           const prevNode = prevState.nodes.get(id)
@@ -338,21 +350,10 @@ export function useCollaboration({ canvasId, enabled = true }: UseCollaborationO
             removedNodeIds.push(id)
           }
         })
-
-        addedNodes.forEach(node => collabService.sendOperation('add-node', node))
-        updatedNodes.forEach(({ id, updates }) => {
-          collabService.sendOperation('update-node', { id, updates })
-          Object.keys(updates).forEach((field) => {
-            collabService.trackLocalChange(id, field, (updates as Record<string, unknown>)[field])
-          })
-        })
-        removedNodeIds.forEach(id => collabService.sendOperation('remove-node', { id }))
       }
 
       if (state.groups !== prevState.groups) {
-        const addedGroups: NodeGroup[] = []
-        const updatedGroups: { id: string; updates: Partial<NodeGroup> }[] = []
-        const removedGroupIds: string[] = []
+        batchNeeded = true
 
         state.groups.forEach((group, id) => {
           const prevGroup = prevState.groups.get(id)
@@ -377,21 +378,10 @@ export function useCollaboration({ canvasId, enabled = true }: UseCollaborationO
             removedGroupIds.push(id)
           }
         })
-
-        addedGroups.forEach(group => collabService.sendOperation('add-group', group))
-        updatedGroups.forEach(({ id, updates }) => {
-          collabService.sendOperation('update-group', { id, updates })
-          Object.keys(updates).forEach((field) => {
-            collabService.trackLocalGroupChange(id, field, (updates as Record<string, unknown>)[field])
-          })
-        })
-        removedGroupIds.forEach(id => collabService.sendOperation('remove-group', { id }))
       }
 
       if (state.domains !== prevState.domains) {
-        const addedDomains: Domain[] = []
-        const updatedDomains: { id: string; updates: Partial<Domain> }[] = []
-        const removedDomainIds: string[] = []
+        batchNeeded = true
 
         state.domains.forEach((domain, id) => {
           const prevDomain = prevState.domains.get(id)
@@ -416,21 +406,10 @@ export function useCollaboration({ canvasId, enabled = true }: UseCollaborationO
             removedDomainIds.push(id)
           }
         })
-
-        addedDomains.forEach(domain => collabService.sendOperation('add-domain', domain))
-        updatedDomains.forEach(({ id, updates }) => {
-          collabService.sendOperation('update-domain', { id, updates })
-          Object.keys(updates).forEach((field) => {
-            collabService.trackLocalDomainChange(id, field, (updates as Record<string, unknown>)[field])
-          })
-        })
-        removedDomainIds.forEach(id => collabService.sendOperation('remove-domain', { id }))
       }
 
       if (state.connections !== prevState.connections) {
-        const addedConnections: Connection[] = []
-        const updatedConnections: { id: string; updates: Partial<Connection> }[] = []
-        const removedConnectionIds: string[] = []
+        batchNeeded = true
 
         state.connections.forEach((connection, id) => {
           const prevConnection = prevState.connections.get(id)
@@ -455,16 +434,48 @@ export function useCollaboration({ canvasId, enabled = true }: UseCollaborationO
             removedConnectionIds.push(id)
           }
         })
-
-        addedConnections.forEach(connection => collabService.sendOperation('add-connection', connection))
-        updatedConnections.forEach(({ id, updates }) => {
-          collabService.sendOperation('update-connection', { id, updates })
-          Object.keys(updates).forEach((field) => {
-            collabService.trackLocalConnectionChange(id, field, (updates as Record<string, unknown>)[field])
-          })
-        })
-        removedConnectionIds.forEach(id => collabService.sendOperation('remove-connection', { id }))
       }
+
+      if (!batchNeeded) return
+
+      // Track local changes for sync replay
+      updatedNodes.forEach(({ id, updates }) => {
+        Object.keys(updates).forEach((field) => {
+          collabService.trackLocalChange(id, field, (updates as Record<string, unknown>)[field])
+        })
+      })
+      updatedGroups.forEach(({ id, updates }) => {
+        Object.keys(updates).forEach((field) => {
+          collabService.trackLocalGroupChange(id, field, (updates as Record<string, unknown>)[field])
+        })
+      })
+      updatedDomains.forEach(({ id, updates }) => {
+        Object.keys(updates).forEach((field) => {
+          collabService.trackLocalDomainChange(id, field, (updates as Record<string, unknown>)[field])
+        })
+      })
+      updatedConnections.forEach(({ id, updates }) => {
+        Object.keys(updates).forEach((field) => {
+          collabService.trackLocalConnectionChange(id, field, (updates as Record<string, unknown>)[field])
+        })
+      })
+
+      // 使用 sendBatch 将所有变更合并为一条消息，共享同一个 clientVersion，
+      // 避免服务端版本递增导致后续操作被 NAK 拒绝
+      collabService.sendBatch({
+        addedNodes: addedNodes.length > 0 ? addedNodes : undefined,
+        updatedNodes: updatedNodes.length > 0 ? updatedNodes : undefined,
+        removedNodeIds: removedNodeIds.length > 0 ? removedNodeIds : undefined,
+        addedGroups: addedGroups.length > 0 ? addedGroups : undefined,
+        updatedGroups: updatedGroups.length > 0 ? updatedGroups : undefined,
+        removedGroupIds: removedGroupIds.length > 0 ? removedGroupIds : undefined,
+        addedDomains: addedDomains.length > 0 ? addedDomains : undefined,
+        updatedDomains: updatedDomains.length > 0 ? updatedDomains : undefined,
+        removedDomainIds: removedDomainIds.length > 0 ? removedDomainIds : undefined,
+        addedConnections: addedConnections.length > 0 ? addedConnections : undefined,
+        updatedConnections: updatedConnections.length > 0 ? updatedConnections : undefined,
+        removedConnectionIds: removedConnectionIds.length > 0 ? removedConnectionIds : undefined,
+      })
     })
 
     return () => {
