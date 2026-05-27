@@ -1149,20 +1149,11 @@ export function CanvasPage() {
         if (state.isDirty && state.canvasId === id) {
           const canvasData = collectCanvasData(state)
           saveToCache(id, canvasData)
-          const token = localStorage.getItem('mindmap_token')
-          if (token) {
-            fetch(`/api/canvases/${id}/data`, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${token}`,
-                'x-csrf-token': getCsrfToken(),
-              },
-              credentials: 'include',
-              body: JSON.stringify(canvasData),
-              keepalive: true,
-            }).catch(() => { })
-          }
+          // 使用 apiClient.post 替代 fetch(keepalive: true)：
+          // 1. 切换画布时页面未卸载，无需 keepalive 保证请求完成
+          // 2. apiClient 自动处理 CSRF 获取/刷新/重试
+          // 3. 无 64KB 负载上限（keepalive fetch 的浏览器限制）
+          apiClient.post(`/api/canvases/${id}/data`, canvasData).catch(() => { })
         }
       }
 
@@ -1507,27 +1498,29 @@ export function CanvasPage() {
           // Silently fail for cache save errors
         }
 
-        // 始终尝试 REST API 保存作为安全网——即使 WebSocket 已连接
-        // 在页面卸载时作为兜底保障，防止静默断连导致数据丢失
+        // 尝试通过 REST API 兜底保存。keepalive fetch 有 64KB 累积上限（浏览器强制），
+        // 超限会静默截断请求体。截断后的部分数据写入服务端后会导致下一步页面重载时
+        // localStorage 完整缓存被跳过加载（DB 有数据即优先），反而造成数据丢失。
+        // 因此仅对小负载发送 keepalive 网络请求，大负载完全依赖 localStorage 缓存兜底。
         try {
           const token = localStorage.getItem('mindmap_token')
           const body = JSON.stringify(canvasData)
-
-          fetch(`/api/canvases/${id}/data`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${token}`,
-              'x-csrf-token': getCsrfToken(),
-            },
-            credentials: 'include',
-            body,
-            keepalive: true,
-          }).catch(() => {
-            // Silently fail for fetch errors
-          })
+          const bodySize = new Blob([body]).size
+          if (bodySize < 48 * 1024 && token) {
+            fetch(`/api/canvases/${id}/data`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`,
+                'x-csrf-token': getCsrfToken(),
+              },
+              credentials: 'include',
+              body,
+              keepalive: true,
+            }).catch(() => { })
+          }
         } catch (error) {
-          // Silently fail for fetch errors
+          // Silently fail
         }
 
         // Generate thumbnail when page is being unloaded
@@ -1551,11 +1544,14 @@ export function CanvasPage() {
         if (canvasData.nodes.length > 0 || canvasData.groups.length > 0 || canvasData.domains.length > 0) {
           saveToCache(id, { nodes: canvasData.nodes, groups: canvasData.groups, domains: canvasData.domains, connections: canvasData.connections })
 
-          // 始终尝试 REST API 保存作为安全网——即使 WebSocket 已连接
-          // 在页面卸载时作为兜底保障，防止静默断连导致数据丢失
+          // keepalive fetch 有 ~64KB 累积上限，超限后浏览器静默截断请求体，
+          // 导致服务端收到部分数据，使 localStorage 完整缓存被跳过加载。
+          // 仅对小负载发送网络请求，大负载完全依赖 localStorage 缓存兜底。
 
           const token = localStorage.getItem('mindmap_token')
-          if (token) {
+          const body = JSON.stringify(canvasData)
+          const bodySize = new Blob([body]).size
+          if (bodySize < 48 * 1024 && token) {
             fetch(`/api/canvases/${id}/data`, {
               method: 'POST',
               headers: {
@@ -1564,7 +1560,7 @@ export function CanvasPage() {
                 'x-csrf-token': getCsrfToken(),
               },
               credentials: 'include',
-              body: JSON.stringify(canvasData),
+              body,
               keepalive: true,
             }).catch(() => { })
           }

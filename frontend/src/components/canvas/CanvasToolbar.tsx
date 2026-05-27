@@ -218,12 +218,34 @@ export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToo
         if (data) {
           setCanvasData(data)
           setDirty(true)
-          addToast({
-            type: 'success',
-            title: '导入成功',
-            message: `成功导入 ${data.nodes.length} 个节点, ${data.connections.length} 条连线`,
-            duration: 3000,
-          })
+
+          // 强制立即保存到服务器，确保导入的数据被持久化。
+          // 协作模式下自动保存会跳过 REST API，而导入数据不会通过 WebSocket 同步，
+          // 若不在此时保存，切换画布后再切回会导致导入数据丢失。
+          if (onSave) {
+            try {
+              await onSave()
+            } catch {
+              // onSave（handleManualSave）已内部处理所有错误，此处仅作防御
+            }
+            // handleManualSave 成功时 setDirty(false)，失败时不修改 isDirty。
+            // 通过检查 isDirty 区分是否保存成功（避免 onSave 内部吞掉错误后仍显示成功 toast）。
+            if (!useCanvasStore.getState().isDirty) {
+              addToast({
+                type: 'success',
+                title: '导入成功',
+                message: `成功导入 ${data.nodes.length} 个节点, ${data.connections.length} 条连线`,
+                duration: 3000,
+              })
+            }
+          } else {
+            addToast({
+              type: 'success',
+              title: '导入成功',
+              message: `成功导入 ${data.nodes.length} 个节点, ${data.connections.length} 条连线`,
+              duration: 3000,
+            })
+          }
         } else {
           addToast({
             type: 'error',
@@ -244,7 +266,7 @@ export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToo
       // 清空 input 值，允许重复选择同一文件
       event.target.value = ''
     },
-    [setCanvasData, setDirty, addToast]
+    [setCanvasData, setDirty, addToast, onSave]
   )
 
   const handleCreateGroup = () => {
