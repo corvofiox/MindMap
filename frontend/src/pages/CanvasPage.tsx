@@ -849,9 +849,13 @@ export function CanvasPage() {
 
   const id = canvasId ? parseInt(canvasId) : null
 
+  // Ref to hold thumbnail generation callback (defined later) for collaboration hook
+  const onRemoteChangeRef = useRef<((canvasId: number) => void) | undefined>(undefined)
+
   const { sendCursor } = useCollaboration({
     canvasId: id || 0,
-    enabled: id !== null && id > 0
+    enabled: id !== null && id > 0,
+    onRemoteChange: (cid) => onRemoteChangeRef.current?.(cid),
   })
 
   // Refs to store latest values for global event listeners
@@ -1315,6 +1319,7 @@ export function CanvasPage() {
       generateThumbnail(canvasId)
     }, THUMBNAIL.DEBOUNCE_DELAY)
   }, [generateThumbnail])
+  onRemoteChangeRef.current = triggerThumbnailGeneration
 
   // Log canvas page lifecycle
   useEffect(() => {

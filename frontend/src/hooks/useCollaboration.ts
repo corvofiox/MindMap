@@ -10,10 +10,13 @@ import {
 interface UseCollaborationOptions {
   canvasId: number
   enabled?: boolean
+  onRemoteChange?: (canvasId: number) => void
 }
 
-export function useCollaboration({ canvasId, enabled = true }: UseCollaborationOptions) {
+export function useCollaboration({ canvasId, enabled = true, onRemoteChange }: UseCollaborationOptions) {
   const isApplyingRemoteChanges = useRef(false)
+  const onRemoteChangeRef = useRef(onRemoteChange)
+  onRemoteChangeRef.current = onRemoteChange
 
   useEffect(() => {
     if (!enabled || !canvasId || canvasId <= 0) return
@@ -478,8 +481,16 @@ export function useCollaboration({ canvasId, enabled = true }: UseCollaborationO
       })
     })
 
+    // Trigger thumbnail generation when remote changes are applied
+    const thumbnailUnsubscribe = useCanvasStore.subscribe(() => {
+      if (isApplyingRemoteChanges.current && onRemoteChangeRef.current) {
+        onRemoteChangeRef.current(canvasId)
+      }
+    })
+
     return () => {
       unsubscribe()
+      thumbnailUnsubscribe()
       collabService.offOperation('add-node', handleAddNode)
       collabService.offOperation('update-node', handleUpdateNode)
       collabService.offOperation('remove-node', handleRemoveNode)
