@@ -1464,8 +1464,9 @@ export function CanvasPage() {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      if (error instanceof ApiError && error.status === 409 && typeof error.data?.serverVersion === 'number') {
-        collabService.setServerVersion(error.data.serverVersion as number)
+      const conflictData = error instanceof ApiError && error.data?.data as { serverVersion?: number } | undefined
+      if (error instanceof ApiError && error.status === 409 && typeof conflictData?.serverVersion === 'number') {
+        collabService.setServerVersion(conflictData.serverVersion)
         collabService.requestSync()
         addToast({ type: 'warning', title: '保存冲突', message: '已获取服务端最新版本，可再次保存' })
       } else if (message.includes('网络连接失败')) {
