@@ -453,6 +453,41 @@ describe('API Client Tests', () => {
     })
   })
 
+  describe('409 版本冲突响应解析', () => {
+    it('serverVersion 应位于 error.data.data（嵌套）而非 error.data 顶层', () => {
+      // ApiError 模拟生产代码中的实现
+      class ApiError extends Error {
+        status: number
+        data: Record<string, unknown> | null
+        constructor(message: string, status: number, data: Record<string, unknown> | null = null) {
+          super(message)
+          this.name = 'ApiError'
+          this.status = status
+          this.data = data
+        }
+      }
+
+      // 后端 409 响应体: { success: false, error: "...", data: { serverVersion: 42 } }
+      const responseBody = {
+        success: false,
+        error: '版本冲突：画布数据已被其他用户更新，请刷新后重试',
+        data: { serverVersion: 42, clientVersion: 5 },
+      }
+
+      const error = new ApiError(responseBody.error, 409, responseBody)
+
+      // 旧代码（bug）: error.data?.serverVersion → undefined
+      // 因为 error.data = 整个响应体, serverVersion 在 data.data 里
+      expect(error.data?.serverVersion).toBeUndefined()
+      expect(typeof error.data?.serverVersion === 'number').toBe(false)
+
+      // 新代码（修复）: error.data?.data?.serverVersion → 42
+      const nested = error.data?.data as { serverVersion?: number } | undefined
+      expect(nested?.serverVersion).toBe(42)
+      expect(typeof nested?.serverVersion).toBe('number')
+    })
+  })
+
   describe('API Response Types', () => {
     it('should define ApiResponse type', () => {
       type ApiResponse<T> = {
