@@ -1383,6 +1383,14 @@ export function CanvasPage() {
       // In collaboration mode, changes are saved in real-time via WebSocket, skip REST API auto-save
       // Still schedule next check to resume auto-save when collaboration disconnects
       if (collabService.isConnected()) {
+        // Still generate thumbnail for local changes even in collaboration mode
+        const state = useCanvasStore.getState()
+        if (state.canvasId === id) {
+          const { nodes, domains } = collectCanvasData(state)
+          if (hasCanvasContent(nodes, domains)) {
+            triggerThumbnailGeneration(id)
+          }
+        }
         dbSaveTimeoutRef.current = setTimeout(saveToDatabase, AUTO_SAVE_INTERVAL)
         return
       }

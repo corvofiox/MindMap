@@ -1130,6 +1130,37 @@ class CollaborationService {
   sendOperation(operation: string, data: unknown) {
     if (this.isDestroyed || this.isIntentionallyClosed) return
 
+    // 追踪本地变更，确保 sync 待处理重放时不会丢失
+    if (operation === 'update-node') {
+      const d = data as { id: string; updates: Record<string, unknown> }
+      if (d?.updates) {
+        Object.keys(d.updates).forEach((field) => {
+          this.trackLocalChange(d.id, field, d.updates[field])
+        })
+      }
+    } else if (operation === 'update-group') {
+      const d = data as { id: string; updates: Record<string, unknown> }
+      if (d?.updates) {
+        Object.keys(d.updates).forEach((field) => {
+          this.trackLocalGroupChange(d.id, field, d.updates[field])
+        })
+      }
+    } else if (operation === 'update-domain') {
+      const d = data as { id: string; updates: Record<string, unknown> }
+      if (d?.updates) {
+        Object.keys(d.updates).forEach((field) => {
+          this.trackLocalDomainChange(d.id, field, d.updates[field])
+        })
+      }
+    } else if (operation === 'update-connection') {
+      const d = data as { id: string; updates: Record<string, unknown> }
+      if (d?.updates) {
+        Object.keys(d.updates).forEach((field) => {
+          this.trackLocalConnectionChange(d.id, field, d.updates[field])
+        })
+      }
+    }
+
     const timestamp = Date.now()
     const seq = ++this.opSeq
 
