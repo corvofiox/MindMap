@@ -3,6 +3,18 @@ import { useAuthStore } from '@/store/useAuthStore'
 import { getEditingState } from '@/hooks/useCollabEditing'
 import { logger } from '@/utils/logger'
 import type { Node, NodeGroup, Domain, Connection } from '@/types'
+import type {
+  FieldChange,
+  PendingNodeChanges,
+  PendingConnectionChanges,
+  PendingGroupChanges,
+  PendingDomainChanges,
+  BatchOperations,
+} from './collab-utils.js'
+import {
+  clearPendingForBatch,
+  prunePendingFields,
+} from './collab-utils.js'
 
 interface CollabUser {
   userId: number
@@ -35,21 +47,6 @@ interface BatchCollabMessage {
   clientVersion: number
 }
 
-export interface BatchOperations {
-  addedNodes?: Node[]
-  updatedNodes?: { id: string; updates: Partial<Node> }[]
-  removedNodeIds?: string[]
-  addedGroups?: NodeGroup[]
-  updatedGroups?: { id: string; updates: Partial<NodeGroup> }[]
-  removedGroupIds?: string[]
-  addedDomains?: Domain[]
-  updatedDomains?: { id: string; updates: Partial<Domain> }[]
-  removedDomainIds?: string[]
-  addedConnections?: Connection[]
-  updatedConnections?: { id: string; updates: Partial<Connection> }[]
-  removedConnectionIds?: string[]
-}
-
 interface CursorData {
   userId: number
   x: number
@@ -64,32 +61,6 @@ interface QueuedOperation {
   operation: string
   data: unknown
   timestamp: number
-}
-
-interface FieldChange {
-  field: string
-  newValue: unknown
-  timestamp: number
-}
-
-interface PendingNodeChanges {
-  nodeId: string
-  changes: Map<string, FieldChange>
-}
-
-interface PendingConnectionChanges {
-  connectionId: string
-  changes: Map<string, FieldChange>
-}
-
-interface PendingGroupChanges {
-  groupId: string
-  changes: Map<string, FieldChange>
-}
-
-interface PendingDomainChanges {
-  domainId: string
-  changes: Map<string, FieldChange>
 }
 
 /**
@@ -583,6 +554,11 @@ class CollaborationService {
     }
     this.stopInteractionCheckInterval()
     this.stopCleanupInterval()
+    // Defensive reset of isApplyingRemoteUpdate. This can be reached from
+    // both disconnect() and the ws.onclose handler; in the latter case the
+    // normal try/finally in handleSync would have run, but a flag stuck
+    // here would silently disable WS sending on the next connection.
+    this.isApplyingRemoteUpdate = false
 
     // 将未确认的操作移入离线队列，以便重连时刷新
     if (this.unackedOps.size > 0) {
@@ -634,6 +610,10 @@ class CollaborationService {
     this.pendingConnectionChanges.clear()
     this.pendingGroupChanges.clear()
     this.pendingDomainChanges.clear()
+    // Defensive reset: if a handleSync was interrupted before its
+    // try/finally could clear the flag, the new connection would otherwise
+    // skip echoing local changes back to the server.
+    this.isApplyingRemoteUpdate = false
     // Preserve serverVersion to avoid 409 conflicts when saving via REST API
     // after disconnecting from collaboration mode
     this.activeUserInteractions.clear()
@@ -677,6 +657,18 @@ class CollaborationService {
           break
         case 'version-update':
           this.serverVersion = message.version
+          if (message.persistError) {
+            // Server failed to persist the latest in-memory state to DB after
+            // exhausting its retries. Changes are still in server memory and
+            // visible to collaborators, but if the server process crashes
+            // before the next successful persist, those changes are lost.
+            logger.warn('Server reported persist failure', {
+              canvasId: this.canvasId,
+              version: message.version,
+              attempts: message.persistError.attempts,
+              error: message.persistError.message,
+            })
+          }
           break
         case 'ack':
           this.handleAck(message.seq)
@@ -790,7 +782,21 @@ class CollaborationService {
       setTimeout(() => this.requestSync(), 500)
       return
     }
-    // Reset retry counter on successful sync or after max retries exhausted
+    // After max retries, if server STILL sends empty while local has data,
+    // refuse to apply this sync — otherwise setCanvasData({nodes: []}) would
+    // wipe the local state. Keep the local data and reset the counter so a
+    // later (correct) sync can proceed.
+    if (!serverHasData && localHasData && message.version === 0) {
+      this.emptySyncRetryCount = 0
+      logger.error('Server returned empty sync after max retries; preserving local data', {
+        localNodes: store.nodes.size,
+        localDomains: store.domains.size,
+        localGroups: store.groups.size,
+        localConnections: store.connections.size,
+      })
+      return
+    }
+    // Reset retry counter on successful sync
     this.emptySyncRetryCount = 0
 
     // Always trust server state during sync
@@ -988,10 +994,9 @@ class CollaborationService {
           updatedConnections: replyUpdatedConns.length > 0 ? replyUpdatedConns : undefined,
         })
       }
-      this.pendingNodeChanges.clear()
-      this.pendingConnectionChanges.clear()
-      this.pendingGroupChanges.clear()
-      this.pendingDomainChanges.clear()
+      // Do NOT clear pending*Changes here — the replay batch above will be
+      // ACKed (or NAKed) on its own seq. We clear per-field on ACK so that
+      // new local changes tracked AFTER the batch was sent are preserved.
 
       logger.info('Synced with server state', { version: message.version, nodes: message.nodes.length })
     } catch (error) {
@@ -1000,6 +1005,20 @@ class CollaborationService {
   }
 
   private handleAck(seq: number): void {
+    const op = this.unackedOps.get(seq)
+    if (op?.operation === 'batch-operation') {
+      // Server confirmed the batch — clear only the fields that were in the
+      // batch (timestamp <= op.timestamp). New local changes tracked AFTER
+      // the batch was sent have a later timestamp and are preserved.
+      clearPendingForBatch(
+        op.data as BatchOperations,
+        op.timestamp,
+        this.pendingNodeChanges,
+        this.pendingGroupChanges,
+        this.pendingDomainChanges,
+        this.pendingConnectionChanges,
+      )
+    }
     this.unackedOps.delete(seq)
     if (this.unackedOps.size === 0 && this.ackTimeoutId) {
       clearTimeout(this.ackTimeoutId)
@@ -1009,6 +1028,11 @@ class CollaborationService {
 
   private handleNak(seq: number, reason: string, serverVersion?: number): void {
     // 操作被服务器拒绝，从 unackedOps 移除（不再重试）
+    // Note: we intentionally do NOT clear pending*Changes on NAK. On a
+    // version-conflict, the upcoming sync will replay the pending changes
+    // with the fresh server version. For other NAKs (unknown-id, etc.) the
+    // merge path in handleSync will drop the orphan pending entries via
+    // their normal cleanup, and the 30s cleanupRecentChanges is a safety net.
     this.unackedOps.delete(seq)
     if (this.unackedOps.size === 0 && this.ackTimeoutId) {
       clearTimeout(this.ackTimeoutId)

@@ -204,9 +204,11 @@ export function broadcastVersionUpdate(canvasId: number, version: number): void 
   const room = canvasRooms.get(canvasId)
   if (!room) return
 
+  const state = getCanvasState(canvasId)
   broadcastToRoom(room, {
     type: 'version-update',
     version,
+    persistError: state?.persistError ?? null,
   }, null)
 }
 

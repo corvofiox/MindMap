@@ -38,6 +38,7 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
     addNode,
     addDomain,
     updateNode,
+    updateNodeWithoutHistory,
     updateDomain,
     setSelectedIds,
     setZoom,
@@ -82,56 +83,103 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
     }, 100)
   }, [])
 
-  // Object modification handlers
-  const handleObjectMoved = useCallback((e: any) => {
-    // Only allow left mouse button to move objects
-    if (mouseButtonRef.current !== 0) {
-      return
-    }
+  // Throttle the in-flight store update during drag/scale so connection
+  // lines and other store-driven UI can follow the node visually, but
+  // without flooding the WS at 60Hz or polluting undo history with 60
+  // entries per drag. 20Hz (50ms) is well below the 60Hz event rate and
+  // is imperceptible to users.
+  const lastThrottleUpdateRef = useRef<number>(0)
+  const THROTTLE_MS = 50
 
-    const obj = e.target
-    if (!obj) return
+  const flushThrottledGeometry = useCallback(
+    (obj: any) => {
+      const now = Date.now()
+      if (now - lastThrottleUpdateRef.current < THROTTLE_MS) return
+      lastThrottleUpdateRef.current = now
+      // updateNodeWithoutHistory keeps the store in sync so connection lines
+      // and other store-driven UI follow during the drag, but does NOT
+      // create a history entry per frame. Only the final object:modified
+      // commit goes through the regular updateNode (with history), so undo
+      // behaves naturally (one entry per drag).
+      updateNodeWithoutHistory(
+        obj.data.id,
+        {
+          x: obj.left,
+          y: obj.top,
+          width: obj.width * obj.scaleX,
+          height: obj.height * obj.scaleY,
+        },
+        false
+      )
+    },
+    [updateNodeWithoutHistory]
+  )
 
-    const data = obj.data
-    if (!data) return
-
-    // 域不可移动，只处理节点
-    if (data.type === 'node') {
-      // Mark interaction start on first move
-      if (activeObjectRef.current !== data.id) {
-        startObjectInteraction(data.id)
+  // object:moving fires ~60Hz during a drag. Mark interaction start once
+  // and flush throttled geometry to the store.
+  const handleObjectMoving = useCallback(
+    (e: any) => {
+      if (mouseButtonRef.current !== 0) return
+      const obj = e.target
+      if (!obj || !obj.data || obj.data.type !== 'node') return
+      if (activeObjectRef.current !== obj.data.id) {
+        startObjectInteraction(obj.data.id)
+        // Reset the throttle timer so the first frame of a new drag flushes
+        // immediately rather than waiting up to 50ms.
+        lastThrottleUpdateRef.current = 0
       }
-      updateNode(data.id, { x: obj.left, y: obj.top })
-    }
-  }, [updateNode, startObjectInteraction])
+      flushThrottledGeometry(obj)
+    },
+    [startObjectInteraction, flushThrottledGeometry]
+  )
 
-  const handleObjectScaling = useCallback((e: any) => {
-    const obj = e.target
-    const data = obj.data
-    if (!data) return
+  // object:modified fires once after drag/scale/rotate ends. This is the
+  // single point where we commit the final geometry to history (one entry
+  // per drag/scale, so undo behaves naturally).
+  const handleObjectModified = useCallback(
+    (e: any) => {
+      if (mouseButtonRef.current !== 0) return
+      const obj = e.target
+      if (!obj || !obj.data || obj.data.type !== 'node') return
 
-    // 域不可缩放，只处理节点
-    if (data.type === 'node') {
-      const node = nodes.get(data.id)
-      if (!node) return
-
-      // Mark interaction start on first scale
-      if (activeObjectRef.current !== data.id) {
-        startObjectInteraction(data.id)
-      }
-
-      updateNode(data.id, {
-        width: obj.width * obj.scaleX,
-        height: obj.height * obj.scaleY,
+      const finalWidth = obj.width * obj.scaleX
+      const finalHeight = obj.height * obj.scaleY
+      updateNode(obj.data.id, {
+        x: obj.left,
+        y: obj.top,
+        width: finalWidth,
+        height: finalHeight,
       })
 
-      // Reset scale to prevent accumulation
-      obj.set({
-        scaleX: 1,
-        scaleY: 1,
-      })
-    }
-  }, [nodes, updateNode, startObjectInteraction])
+      if (obj.scaleX !== 1 || obj.scaleY !== 1) {
+        obj.set({ scaleX: 1, scaleY: 1 })
+      }
+      lastThrottleUpdateRef.current = 0
+    },
+    [updateNode]
+  )
+
+  // object:scaling fires during scale drag — mark interaction start,
+  // reset scaleX/scaleY each frame (so dimensions don't accumulate), and
+  // flush throttled geometry so store-driven UI follows the scale.
+  const handleObjectScaling = useCallback(
+    (e: any) => {
+      const obj = e.target
+      if (!obj || !obj.data || obj.data.type !== 'node') return
+
+      if (activeObjectRef.current !== obj.data.id) {
+        startObjectInteraction(obj.data.id)
+        lastThrottleUpdateRef.current = 0
+      }
+
+      if (obj.scaleX !== 1 || obj.scaleY !== 1) {
+        obj.set({ scaleX: 1, scaleY: 1 })
+      }
+
+      flushThrottledGeometry(obj)
+    },
+    [startObjectInteraction, flushThrottledGeometry]
+  )
 
   // Mouse event handlers
   const handleMouseWheel = useCallback((e: any) => {
@@ -376,8 +424,8 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
     canvas.on('selection:created', handleSelectionChanged)
     canvas.on('selection:updated', handleSelectionChanged)
     canvas.on('selection:cleared', handleSelectionCleared)
-    canvas.on('object:moving', handleObjectMoved)
-    canvas.on('object:modified', handleObjectMoved)
+    canvas.on('object:moving', handleObjectMoving)
+    canvas.on('object:modified', handleObjectModified)
     canvas.on('object:scaling', handleObjectScaling)
     canvas.on('mouse:wheel', handleMouseWheel)
     canvas.on('mouse:down', handleMouseDown)
@@ -389,8 +437,8 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
       canvas.off('selection:created', handleSelectionChanged)
       canvas.off('selection:updated', handleSelectionChanged)
       canvas.off('selection:cleared', handleSelectionCleared)
-      canvas.off('object:moving', handleObjectMoved)
-      canvas.off('object:modified', handleObjectMoved)
+      canvas.off('object:moving', handleObjectMoving)
+      canvas.off('object:modified', handleObjectModified)
       canvas.off('object:scaling', handleObjectScaling)
       canvas.off('mouse:wheel', handleMouseWheel)
       canvas.off('mouse:down', handleMouseDown)
@@ -398,7 +446,7 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
       canvas.off('mouse:move', handleMouseMove)
       canvas.off('mouse:dblclick', handleDoubleClick)
     }
-  }, [handleSelectionChanged, handleSelectionCleared, handleObjectMoved, handleObjectScaling, handleMouseWheel, handleMouseDown, handleMouseUp, handleMouseMove, handleDoubleClick])
+  }, [handleSelectionChanged, handleSelectionCleared, handleObjectMoving, handleObjectModified, handleObjectScaling, handleMouseWheel, handleMouseDown, handleMouseUp, handleMouseMove, handleDoubleClick])
 
   // Load canvas data from store (initial load only)
   const loadCanvasData = useCallback(() => {

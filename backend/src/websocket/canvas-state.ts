@@ -13,6 +13,14 @@ export interface CanvasData {
   loaded: boolean
   lastPersistedVersion: number
   isPersisting: boolean
+  /**
+   * Set when persistCanvasState exhausts its retries. Cleared on the next
+   * successful persist. Surfaced to clients via version-update so they can
+   * warn the user that recent in-memory changes have NOT been saved to DB.
+   * If the server process crashes between now and the next successful
+   * persist, those changes are lost.
+   */
+  persistError: { message: string; attempts: number } | null
 }
 
 const canvasStates = new Map<number, CanvasData>()
@@ -101,6 +109,7 @@ export function ensureCanvasState(canvasId: number): CanvasData {
       loaded: false,
       lastPersistedVersion: 0,
       isPersisting: false,
+      persistError: null,
     }
     canvasStates.set(canvasId, state)
   }
@@ -242,6 +251,10 @@ export async function persistCanvasState(canvasId: number): Promise<boolean> {
           const currentState = canvasStates.get(canvasId)
           if (currentState && currentState.version === currentVersion) {
             currentState.lastPersistedVersion = currentVersion
+            // Successful persist — clear any previous persist error
+            if (currentState.persistError) {
+              currentState.persistError = null
+            }
           }
 
           scheduleSave()
@@ -258,10 +271,18 @@ export async function persistCanvasState(canvasId: number): Promise<boolean> {
         }
       }
 
+      const errorMessage = lastError instanceof Error ? lastError.message : String(lastError)
+      const failedState = canvasStates.get(canvasId)
+      if (failedState) {
+        failedState.persistError = {
+          message: errorMessage,
+          attempts: MAX_PERSIST_RETRIES,
+        }
+      }
       logError('Failed to persist canvas state after retries', {
         canvasId,
         attempts: MAX_PERSIST_RETRIES,
-        error: lastError instanceof Error ? lastError.message : String(lastError),
+        error: errorMessage,
       })
       return false
     } finally {

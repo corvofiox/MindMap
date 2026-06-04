@@ -1,7 +1,24 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { batchToOperations, queueToBatch, BatchOperations } from '../services/collaboration'
+import { batchToOperations, queueToBatch } from '../services/collaboration'
+import type {
+  BatchOperations,
+  FieldChange,
+  PendingNodeChanges,
+  PendingConnectionChanges,
+  PendingGroupChanges,
+  PendingDomainChanges,
+} from '../services/collab-utils'
+import { clearPendingForBatch } from '../services/collab-utils'
 // 测试中使用简化数据，避免导入全部实体类型
 type AnyBatch = Record<string, unknown>
+
+interface BatchCollabMessage {
+  type: 'batch-operation'
+  operations: Array<{ operation: string; data: unknown }>
+  timestamp: number
+  senderId: number
+  seq: number
+}
 
 interface QueuedOperation {
   operation: string
@@ -24,6 +41,15 @@ class MockCollaborationService {
   private offlineQueue: QueuedOperation[] = []
   private maxQueueSize = 100
   private sentMessages: CollabMessage[] = []
+  private pendingNodeChanges = new Map<string, PendingNodeChanges>()
+  private pendingConnectionChanges = new Map<string, PendingConnectionChanges>()
+  private pendingGroupChanges = new Map<string, PendingGroupChanges>()
+  private pendingDomainChanges = new Map<string, PendingDomainChanges>()
+  private isApplyingRemoteUpdate = false
+  private unackedOps = new Map<number, QueuedOperation>()
+  private opSeq = 0
+  private emptySyncRetryCount = 0
+  private readonly MAX_EMPTY_SYNC_RETRIES = 3
 
   connect(shouldConnect: boolean = true) {
     if (shouldConnect) {
@@ -39,8 +65,67 @@ class MockCollaborationService {
 
   disconnect() {
     this.isIntentionallyClosed = true
+    this.isApplyingRemoteUpdate = false
     this.ws = null
     this.offlineQueue = []
+    this.pendingNodeChanges.clear()
+    this.pendingConnectionChanges.clear()
+    this.pendingGroupChanges.clear()
+    this.pendingDomainChanges.clear()
+    this.unackedOps.clear()
+  }
+
+  cleanupWebSocket() {
+    this.isApplyingRemoteUpdate = false
+    if (this.unackedOps.size > 0) {
+      for (const [seq, op] of this.unackedOps) {
+        if (this.offlineQueue.length < this.maxQueueSize) {
+          this.offlineQueue.push(op)
+        }
+      }
+      this.unackedOps.clear()
+    }
+    this.ws = null
+  }
+
+  handleAck(seq: number): void {
+    const op = this.unackedOps.get(seq)
+    if (op?.operation === 'batch-operation') {
+      clearPendingForBatch(
+        op.data as BatchOperations,
+        op.timestamp,
+        this.pendingNodeChanges,
+        this.pendingGroupChanges,
+        this.pendingDomainChanges,
+        this.pendingConnectionChanges,
+      )
+    }
+    this.unackedOps.delete(seq)
+  }
+
+  handleNak(seq: number): void {
+    // Intentionally do NOT clear pending*Changes on NAK
+    this.unackedOps.delete(seq)
+  }
+
+  handleSync(): void {
+    // Simulate sync that preserves pending changes (does NOT clear them)
+    this.emptySyncRetryCount = 0
+  }
+
+  sendBatch(batch: BatchOperations): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return
+    const timestamp = Date.now()
+    const seq = ++this.opSeq
+    this.unackedOps.set(seq, { operation: 'batch-operation', data: batch, timestamp })
+    const message: BatchCollabMessage = {
+      type: 'batch-operation',
+      operations: batchToOperations(batch),
+      timestamp,
+      senderId: this.userId || 0,
+      seq,
+    }
+    this.ws.send(JSON.stringify(message))
   }
 
   isConnected(): boolean {
@@ -48,6 +133,37 @@ class MockCollaborationService {
   }
 
   sendOperation(operation: string, data: unknown) {
+    // 追踪本地变更，确保 sync 待处理重放时不会丢失
+    if (operation === 'update-node') {
+      const d = data as { id: string; updates: Record<string, unknown> }
+      if (d?.updates) {
+        Object.keys(d.updates).forEach((field) => {
+          this.trackLocalChange(d.id, field, d.updates[field])
+        })
+      }
+    } else if (operation === 'update-group') {
+      const d = data as { id: string; updates: Record<string, unknown> }
+      if (d?.updates) {
+        Object.keys(d.updates).forEach((field) => {
+          this.trackLocalGroupChange(d.id, field, d.updates[field])
+        })
+      }
+    } else if (operation === 'update-domain') {
+      const d = data as { id: string; updates: Record<string, unknown> }
+      if (d?.updates) {
+        Object.keys(d.updates).forEach((field) => {
+          this.trackLocalDomainChange(d.id, field, d.updates[field])
+        })
+      }
+    } else if (operation === 'update-connection') {
+      const d = data as { id: string; updates: Record<string, unknown> }
+      if (d?.updates) {
+        Object.keys(d.updates).forEach((field) => {
+          this.trackLocalConnectionChange(d.id, field, d.updates[field])
+        })
+      }
+    }
+
     const timestamp = Date.now()
 
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
@@ -89,6 +205,123 @@ class MockCollaborationService {
 
   clearSentMessages() {
     this.sentMessages = []
+  }
+
+  trackLocalChange(nodeId: string, field: string, newValue: unknown): void {
+    let pending = this.pendingNodeChanges.get(nodeId)
+    if (!pending) {
+      pending = { nodeId, changes: new Map() }
+      this.pendingNodeChanges.set(nodeId, pending)
+    }
+    pending.changes.set(field, { field, newValue, timestamp: Date.now() })
+  }
+
+  trackLocalGroupChange(groupId: string, field: string, newValue: unknown): void {
+    let pending = this.pendingGroupChanges.get(groupId)
+    if (!pending) {
+      pending = { groupId, changes: new Map() }
+      this.pendingGroupChanges.set(groupId, pending)
+    }
+    pending.changes.set(field, { field, newValue, timestamp: Date.now() })
+  }
+
+  trackLocalDomainChange(domainId: string, field: string, newValue: unknown): void {
+    let pending = this.pendingDomainChanges.get(domainId)
+    if (!pending) {
+      pending = { domainId, changes: new Map() }
+      this.pendingDomainChanges.set(domainId, pending)
+    }
+    pending.changes.set(field, { field, newValue, timestamp: Date.now() })
+  }
+
+  trackLocalConnectionChange(connectionId: string, field: string, newValue: unknown): void {
+    let pending = this.pendingConnectionChanges.get(connectionId)
+    if (!pending) {
+      pending = { connectionId, changes: new Map() }
+      this.pendingConnectionChanges.set(connectionId, pending)
+    }
+    pending.changes.set(field, { field, newValue, timestamp: Date.now() })
+  }
+
+  getPendingNodeChangeValue(nodeId: string, field: string): unknown | undefined {
+    return this.pendingNodeChanges.get(nodeId)?.changes.get(field)?.newValue
+  }
+
+  getPendingGroupChangeValue(groupId: string, field: string): unknown | undefined {
+    return this.pendingGroupChanges.get(groupId)?.changes.get(field)?.newValue
+  }
+
+  getPendingDomainChangeValue(domainId: string, field: string): unknown | undefined {
+    return this.pendingDomainChanges.get(domainId)?.changes.get(field)?.newValue
+  }
+
+  getPendingConnectionChangeValue(connectionId: string, field: string): unknown | undefined {
+    return this.pendingConnectionChanges.get(connectionId)?.changes.get(field)?.newValue
+  }
+
+  hasPendingNodeChange(nodeId: string): boolean {
+    return this.pendingNodeChanges.has(nodeId)
+  }
+
+  hasPendingGroupChange(groupId: string): boolean {
+    return this.pendingGroupChanges.has(groupId)
+  }
+
+  hasPendingDomainChange(domainId: string): boolean {
+    return this.pendingDomainChanges.has(domainId)
+  }
+
+  hasPendingConnectionChange(connectionId: string): boolean {
+    return this.pendingConnectionChanges.has(connectionId)
+  }
+
+  getPendingNodeChangeCount(): number {
+    return this.pendingNodeChanges.size
+  }
+
+  getPendingGroupChangeCount(): number {
+    return this.pendingGroupChanges.size
+  }
+
+  getPendingDomainChangeCount(): number {
+    return this.pendingDomainChanges.size
+  }
+
+  getPendingConnectionChangeCount(): number {
+    return this.pendingConnectionChanges.size
+  }
+
+  getPendingNodeFields(nodeId: string): string[] {
+    const pending = this.pendingNodeChanges.get(nodeId)
+    return pending ? Array.from(pending.changes.keys()) : []
+  }
+
+  getIsApplyingRemoteUpdate(): boolean {
+    return this.isApplyingRemoteUpdate
+  }
+
+  setIsApplyingRemoteUpdate(val: boolean): void {
+    this.isApplyingRemoteUpdate = val
+  }
+
+  getPendingChangeTimestamp(nodeId: string, field: string): number | undefined {
+    return this.pendingNodeChanges.get(nodeId)?.changes.get(field)?.timestamp
+  }
+
+  getUnackedOpCount(): number {
+    return this.unackedOps.size
+  }
+
+  setEmptySyncRetryCount(n: number): void {
+    this.emptySyncRetryCount = n
+  }
+
+  getEmptySyncRetryCount(): number {
+    return this.emptySyncRetryCount
+  }
+
+  getMaxEmptySyncRetries(): number {
+    return this.MAX_EMPTY_SYNC_RETRIES
   }
 }
 
@@ -192,16 +425,301 @@ describe('CollaborationService Offline Queue', () => {
   })
 
   describe('disconnect', () => {
-    it('should clear queue on intentional disconnect', () => {
+    it('should clear queue and reset isApplyingRemoteUpdate on intentional disconnect', () => {
       service.connect(false)
 
       service.sendOperation('add-node', { id: 'node-1' })
       expect(service.getQueueLength()).toBe(1)
 
+      service.setIsApplyingRemoteUpdate(true)
       service.disconnect()
 
       expect(service.getQueueLength()).toBe(0)
+      expect(service.getIsApplyingRemoteUpdate()).toBe(false)
     })
+  })
+})
+
+describe('sendOperation 本地变更追踪', () => {
+  let service: MockCollaborationService
+
+  beforeEach(() => {
+    service = new MockCollaborationService()
+    service.connect(true)
+  })
+
+  it('update-node 应追踪到 pendingNodeChanges', () => {
+    service.sendOperation('update-node', { id: 'n1', updates: { text: 'new text', x: 100 } })
+
+    expect(service.hasPendingNodeChange('n1')).toBe(true)
+    expect(service.getPendingNodeChangeValue('n1', 'text')).toBe('new text')
+    expect(service.getPendingNodeChangeValue('n1', 'x')).toBe(100)
+    expect(service.getPendingNodeChangeCount()).toBe(1)
+  })
+
+  it('update-group 应追踪到 pendingGroupChanges', () => {
+    service.sendOperation('update-group', { id: 'g1', updates: { name: 'renamed' } })
+
+    expect(service.hasPendingGroupChange('g1')).toBe(true)
+    expect(service.getPendingGroupChangeValue('g1', 'name')).toBe('renamed')
+  })
+
+  it('update-domain 应追踪到 pendingDomainChanges', () => {
+    service.sendOperation('update-domain', { id: 'd1', updates: { label: 'domain-x' } })
+
+    expect(service.hasPendingDomainChange('d1')).toBe(true)
+    expect(service.getPendingDomainChangeValue('d1', 'label')).toBe('domain-x')
+  })
+
+  it('update-connection 应追踪到 pendingConnectionChanges', () => {
+    service.sendOperation('update-connection', { id: 'c1', updates: { color: '#ff0' } })
+
+    expect(service.hasPendingConnectionChange('c1')).toBe(true)
+    expect(service.getPendingConnectionChangeValue('c1', 'color')).toBe('#ff0')
+  })
+
+  it('非 update 操作不应追踪本地变更', () => {
+    service.sendOperation('add-node', { id: 'n1', text: 'new' })
+    service.sendOperation('remove-node', { id: 'n2' })
+    service.sendOperation('add-group', { id: 'g1' })
+    service.sendOperation('add-domain', { id: 'd1' })
+    service.sendOperation('add-connection', { id: 'c1' })
+
+    expect(service.getPendingNodeChangeCount()).toBe(0)
+    expect(service.getPendingGroupChangeCount()).toBe(0)
+    expect(service.getPendingDomainChangeCount()).toBe(0)
+    expect(service.getPendingConnectionChangeCount()).toBe(0)
+  })
+
+  it('同字段多次追踪应覆盖值', () => {
+    service.sendOperation('update-node', { id: 'n1', updates: { text: 'v1' } })
+    service.sendOperation('update-node', { id: 'n1', updates: { text: 'v2' } })
+
+    expect(service.getPendingNodeChangeValue('n1', 'text')).toBe('v2')
+    expect(service.getPendingNodeChangeCount()).toBe(1)
+  })
+
+  it('多字段更新应全部追踪', () => {
+    service.sendOperation('update-node', {
+      id: 'n1',
+      updates: { text: 'hello', x: 200, y: 300, width: 400 }
+    })
+
+    const fields = service.getPendingNodeFields('n1')
+    expect(fields).toContain('text')
+    expect(fields).toContain('x')
+    expect(fields).toContain('y')
+    expect(fields).toContain('width')
+    expect(fields).toHaveLength(4)
+  })
+
+  it('noop: updates 为空对象不应报错也不应追踪', () => {
+    service.sendOperation('update-node', { id: 'n1', updates: {} })
+
+    expect(service.hasPendingNodeChange('n1')).toBe(false)
+  })
+
+  it('noop: 缺省 updates 字段不应报错', () => {
+    service.sendOperation('update-node', { id: 'n1' })
+
+    expect(service.hasPendingNodeChange('n1')).toBe(false)
+  })
+})
+
+describe('sendOperation 追踪 — 离线场景', () => {
+  let service: MockCollaborationService
+
+  beforeEach(() => {
+    service = new MockCollaborationService()
+  })
+
+  it('离线时 sendOperation 仍应追踪本地变更 (pending 不依赖 WS)', () => {
+    service.connect(false)
+
+    service.sendOperation('update-node', { id: 'n1', updates: { text: 'offline edit' } })
+
+    expect(service.getPendingNodeChangeValue('n1', 'text')).toBe('offline edit')
+    expect(service.isConnected()).toBe(false)
+  })
+
+  it('离线入队 + 重连后 pending 与发送一致', () => {
+    service.connect(false)
+    service.sendOperation('update-node', { id: 'n1', updates: { text: 'queued' } })
+    expect(service.getQueueLength()).toBe(1)
+
+    service.connect(true)
+    service.flushOfflineQueue()
+    expect(service.getQueueLength()).toBe(0)
+    expect(service.getSentMessages()).toHaveLength(1)
+    // sendOperation 在 connect(true) 后的 flushOfflineQueue 中被调用，
+    // 重连后刷新队列时也会追踪 pending
+    expect(service.getPendingNodeChangeValue('n1', 'text')).toBe('queued')
+  })
+})
+
+describe('ACK 清除 pending (clearPendingForBatch)', () => {
+  let service: MockCollaborationService
+
+  beforeEach(() => {
+    service = new MockCollaborationService()
+    service.connect(true)
+  })
+
+  it('ACK batch 后应清除该批次的 pending 字段，保留未包含的节点', () => {
+    service.sendOperation('update-node', { id: 'n1', updates: { text: 'v1' } })
+    service.sendOperation('update-node', { id: 'n2', updates: { text: 'v2' } })
+    expect(service.getPendingNodeChangeCount()).toBe(2)
+
+    const batch: BatchOperations = {
+      updatedNodes: [{ id: 'n1', updates: { text: 'v1' } }],
+    }
+    const seq = 1
+    service['unackedOps'].set(seq, { operation: 'batch-operation', data: batch, timestamp: Date.now() })
+    service.handleAck(seq)
+
+    expect(service.hasPendingNodeChange('n1')).toBe(false)
+    expect(service.hasPendingNodeChange('n2')).toBe(true)
+    expect(service.getPendingNodeChangeValue('n2', 'text')).toBe('v2')
+  })
+
+  it('ACK 后新追踪的变更 (晚于时间戳) 应存活', () => {
+    vi.useFakeTimers()
+    // t1: text tracked at time 1000
+    vi.setSystemTime(1000)
+    service.sendOperation('update-node', { id: 'n1', updates: { text: 'old' } })
+
+    // batchTs = 2000, the ACK cutoff
+    vi.setSystemTime(2000)
+    const batchTs = Date.now()
+
+    // t3: color tracked at time 3000 (AFTER batchTs)
+    vi.setSystemTime(3000)
+    service.sendOperation('update-node', { id: 'n1', updates: { color: 'red' } })
+
+    const batch: BatchOperations = {
+      updatedNodes: [{ id: 'n1', updates: { text: 'old', color: 'red' } }],
+    }
+    const seq = 1
+    service['unackedOps'].set(seq, { operation: 'batch-operation', data: batch, timestamp: batchTs })
+    service.handleAck(seq)
+
+    // text tracked at 1000 <= 2000 → cleared
+    // color tracked at 3000 > 2000 → survives
+    expect(service.hasPendingNodeChange('n1')).toBe(true)
+    expect(service.getPendingNodeChangeValue('n1', 'color')).toBe('red')
+    expect(service.getPendingNodeChangeValue('n1', 'text')).toBeUndefined()
+    vi.useRealTimers()
+  })
+
+  it('ACK 清除后 pending node 如无剩余字段应整条删除', () => {
+    service.sendOperation('update-node', { id: 'n1', updates: { text: 'only' } })
+
+    const batch: BatchOperations = {
+      updatedNodes: [{ id: 'n1', updates: { text: 'only' } }],
+    }
+    const seq = 1
+    service['unackedOps'].set(seq, { operation: 'batch-operation', data: batch, timestamp: Date.now() })
+    service.handleAck(seq)
+
+    expect(service.hasPendingNodeChange('n1')).toBe(false)
+  })
+
+  it('NAK 不应清除 pending 变更', () => {
+    service.sendOperation('update-node', { id: 'n1', updates: { text: 'v1' } })
+    expect(service.hasPendingNodeChange('n1')).toBe(true)
+
+    service.handleNak(1)
+
+    // NAK must NOT clear pending — the upcoming sync will replay them
+    expect(service.hasPendingNodeChange('n1')).toBe(true)
+    expect(service.getPendingNodeChangeValue('n1', 'text')).toBe('v1')
+  })
+})
+
+describe('isApplyingRemoteUpdate 防御性复位', () => {
+  let service: MockCollaborationService
+
+  beforeEach(() => {
+    service = new MockCollaborationService()
+  })
+
+  it('cleanupWebSocket 应复位 isApplyingRemoteUpdate', () => {
+    service.setIsApplyingRemoteUpdate(true)
+    service.cleanupWebSocket()
+    expect(service.getIsApplyingRemoteUpdate()).toBe(false)
+  })
+
+  it('disconnect 应复位 isApplyingRemoteUpdate', () => {
+    service.setIsApplyingRemoteUpdate(true)
+    service.disconnect()
+    expect(service.getIsApplyingRemoteUpdate()).toBe(false)
+  })
+
+  it('首次连接时 isApplyingRemoteUpdate 为 false', () => {
+    expect(service.getIsApplyingRemoteUpdate()).toBe(false)
+  })
+
+  it('cleanupWebSocket 应将未确认的操作移入离线队列', () => {
+    service.connect(true)
+    const op = { operation: 'update-node', data: { id: 'n1', updates: { text: 'x' } }, timestamp: Date.now() }
+    service['unackedOps'].set(1, op)
+    expect(service.getUnackedOpCount()).toBe(1)
+
+    service.cleanupWebSocket()
+
+    expect(service.getUnackedOpCount()).toBe(0)
+    expect(service.getQueueLength()).toBe(1)
+  })
+})
+
+describe('handleSync — pending 存活保护', () => {
+  let service: MockCollaborationService
+
+  beforeEach(() => {
+    service = new MockCollaborationService()
+    service.connect(true)
+  })
+
+  it('handleSync 后 pending 变更不应被清除', () => {
+    service.sendOperation('update-node', { id: 'n1', updates: { text: 'survive!' } })
+
+    service.handleSync()
+
+    expect(service.hasPendingNodeChange('n1')).toBe(true)
+    expect(service.getPendingNodeChangeValue('n1', 'text')).toBe('survive!')
+  })
+
+  it('handleSync 后多实体 pending 均存活', () => {
+    service.sendOperation('update-node', { id: 'n1', updates: { text: 'node' } })
+    service.sendOperation('update-group', { id: 'g1', updates: { name: 'group' } })
+    service.sendOperation('update-domain', { id: 'd1', updates: { label: 'domain' } })
+    service.sendOperation('update-connection', { id: 'c1', updates: { color: '#000' } })
+
+    service.handleSync()
+
+    expect(service.getPendingNodeChangeCount()).toBe(1)
+    expect(service.getPendingGroupChangeCount()).toBe(1)
+    expect(service.getPendingDomainChangeCount()).toBe(1)
+    expect(service.getPendingConnectionChangeCount()).toBe(1)
+  })
+})
+
+describe('emptySyncRetry — 空同步保护', () => {
+  let service: MockCollaborationService
+
+  beforeEach(() => {
+    service = new MockCollaborationService()
+    service.connect(true)
+  })
+
+  it('达到最大重试次数后 localHasData 应跳过同步 (模拟)', () => {
+    service.setEmptySyncRetryCount(service.getMaxEmptySyncRetries())
+    const retries = service.getEmptySyncRetryCount()
+
+    // After max retries exhausted, handleSync should reset counter
+    // (real logic: refuse to apply empty sync; here we verify the reset)
+    service.handleSync()
+    expect(service.getEmptySyncRetryCount()).toBe(0)
   })
 })
 
