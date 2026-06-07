@@ -47,7 +47,7 @@ function trackPersist(promise: Promise<boolean>): Promise<boolean> {
 }
 
 // Periodic flush: ensure all dirty canvas states are persisted to DB regularly
-const PERIODIC_FLUSH_INTERVAL_MS = 2000
+const PERIODIC_FLUSH_INTERVAL_MS = 1000
 let periodicFlushTimer: ReturnType<typeof setInterval> | null = null
 
 export function startPeriodicCanvasFlush(): void {
@@ -210,7 +210,7 @@ export async function loadCanvasStateFromDb(canvasId: number): Promise<CanvasDat
 }
 
 const MAX_PERSIST_RETRIES = 3
-const PERSIST_RETRY_DELAYS = [200, 500, 1000]
+const PERSIST_RETRY_DELAYS = [100, 200, 500]
 
 export async function persistCanvasState(canvasId: number): Promise<boolean> {
   const state = canvasStates.get(canvasId)
@@ -300,7 +300,7 @@ export async function persistCanvasState(canvasId: number): Promise<boolean> {
 
 // Debounced persistence
 const persistTimeouts = new Map<number, ReturnType<typeof setTimeout>>()
-const PERSIST_DELAY_MS = 200
+const PERSIST_DELAY_MS = 100
 
 export function schedulePersistCanvasState(canvasId: number): void {
   const existing = persistTimeouts.get(canvasId)

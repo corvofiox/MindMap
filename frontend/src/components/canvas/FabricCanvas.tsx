@@ -85,11 +85,11 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
 
   // Throttle the in-flight store update during drag/scale so connection
   // lines and other store-driven UI can follow the node visually, but
-  // without flooding the WS at 60Hz or polluting undo history with 60
-  // entries per drag. 20Hz (50ms) is well below the 60Hz event rate and
-  // is imperceptible to users.
+  // without flooding the WS or polluting undo history with too many
+  // entries per drag. 10Hz (100ms) is sufficient for visual feedback and
+  // reduces version conflict NAKs during concurrent dragging.
   const lastThrottleUpdateRef = useRef<number>(0)
-  const THROTTLE_MS = 50
+  const THROTTLE_MS = 100
 
   const flushThrottledGeometry = useCallback(
     (obj: any) => {
@@ -115,19 +115,19 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
     [updateNodeWithoutHistory]
   )
 
-  // object:moving fires ~60Hz during a drag. Mark interaction start once
-  // and flush throttled geometry to the store.
+  // object:moving fires ~60Hz during a drag. Refresh interaction timer
+  // every frame to keep drag protection alive, and flush throttled geometry.
   const handleObjectMoving = useCallback(
     (e: any) => {
       if (mouseButtonRef.current !== 0) return
       const obj = e.target
       if (!obj || !obj.data || obj.data.type !== 'node') return
       if (activeObjectRef.current !== obj.data.id) {
-        startObjectInteraction(obj.data.id)
         // Reset the throttle timer so the first frame of a new drag flushes
-        // immediately rather than waiting up to 50ms.
+        // immediately rather than waiting up to 100ms.
         lastThrottleUpdateRef.current = 0
       }
+      startObjectInteraction(obj.data.id)
       flushThrottledGeometry(obj)
     },
     [startObjectInteraction, flushThrottledGeometry]
@@ -159,7 +159,7 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
     [updateNode]
   )
 
-  // object:scaling fires during scale drag — mark interaction start,
+  // object:scaling fires during scale drag — refresh interaction timer,
   // reset scaleX/scaleY each frame (so dimensions don't accumulate), and
   // flush throttled geometry so store-driven UI follows the scale.
   const handleObjectScaling = useCallback(
@@ -168,9 +168,9 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
       if (!obj || !obj.data || obj.data.type !== 'node') return
 
       if (activeObjectRef.current !== obj.data.id) {
-        startObjectInteraction(obj.data.id)
         lastThrottleUpdateRef.current = 0
       }
+      startObjectInteraction(obj.data.id)
 
       if (obj.scaleX !== 1 || obj.scaleY !== 1) {
         obj.set({ scaleX: 1, scaleY: 1 })

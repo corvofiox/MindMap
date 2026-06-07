@@ -808,6 +808,21 @@ class CollaborationService {
       // Convert arrays to Maps
       const newNodes = new Map<string, Node>()
       for (const node of message.nodes) {
+        // Preserve geometry of actively-dragged nodes to prevent visual
+        // jumping during concurrent-drag NAK → sync cycles
+        if (this.isNodeBeingInteractedWith(node.id)) {
+          const localNode = store.nodes.get(node.id)
+          if (localNode) {
+            newNodes.set(node.id, {
+              ...node,
+              x: localNode.x,
+              y: localNode.y,
+              width: localNode.width,
+              height: localNode.height,
+            })
+            continue
+          }
+        }
         if (editingNodeId === node.id && (editingState.field === 'title' || editingState.field === 'content')) {
           const localNode = store.nodes.get(node.id)
           if (localNode) {
