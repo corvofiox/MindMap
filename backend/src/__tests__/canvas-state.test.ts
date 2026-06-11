@@ -133,19 +133,52 @@ describe('applyBatchOperations', () => {
     })
   })
 
-  describe('TOCTOU version check', () => {
-    it('should reject batch when server version exceeds clientVersion', async () => {
+  describe('entity-level version check', () => {
+    it('should accept add-node regardless of global version (no version check for adds)', async () => {
       const state = getCanvasState(CANVAS_ID)!
       state.version = 10
+      // Mark a different entity as modified at version 10 to raise global version
+      state.nodes.set('existing', { id: 'existing' })
+      state.entityVersions.set('existing', 10)
 
       const result = await applyBatchOperations(
         CANVAS_ID,
         [{ operation: 'add-node', data: { id: 'n1' } }],
         5
       )
+      expect(result).toBe(true)
+      expect(state.nodes.has('n1')).toBe(true)
+    })
+
+    it('should reject update-node when entity version exceeds clientVersion', async () => {
+      const state = getCanvasState(CANVAS_ID)!
+      state.nodes.set('n1', { id: 'n1', text: 'old' })
+      state.entityVersions.set('n1', 10) // entity modified at global version 10
+
+      const result = await applyBatchOperations(
+        CANVAS_ID,
+        [{ operation: 'update-node', data: { id: 'n1', updates: { text: 'new' } } }],
+        5
+      )
       expect(result).toBe(false)
-      expect(state.version).toBe(10)
-      expect(state.nodes.has('n1')).toBe(false)
+      expect((state.nodes.get('n1') as any).text).toBe('old')
+    })
+
+    it('should accept update-node when entity version <= clientVersion even if global version is higher', async () => {
+      const state = getCanvasState(CANVAS_ID)!
+      state.version = 10 // global version is high
+      state.nodes.set('n1', { id: 'n1', text: 'old' })
+      state.nodes.set('n2', { id: 'n2', text: 'other' })
+      state.entityVersions.set('n1', 3) // n1 last modified at version 3
+      state.entityVersions.set('n2', 10) // n2 modified at version 10
+
+      const result = await applyBatchOperations(
+        CANVAS_ID,
+        [{ operation: 'update-node', data: { id: 'n1', updates: { text: 'new' } } }],
+        5 // client has seen through version 5, n1's version is 3 <= 5 → OK
+      )
+      expect(result).toBe(true)
+      expect((state.nodes.get('n1') as any).text).toBe('new')
     })
 
     it('should accept batch when clientVersion equals serverVersion', async () => {

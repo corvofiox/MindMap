@@ -14,6 +14,7 @@ import type {
 import {
   clearPendingForBatch,
   prunePendingFields,
+  clearPendingRemoves,
 } from './collab-utils.js'
 
 interface CollabUser {
@@ -328,6 +329,12 @@ class CollaborationService {
   private pendingConnectionChanges = new Map<string, PendingConnectionChanges>()
   private pendingGroupChanges = new Map<string, PendingGroupChanges>()
   private pendingDomainChanges = new Map<string, PendingDomainChanges>()
+  private pendingRemoves = {
+    nodeIds: new Set<string>(),
+    groupIds: new Set<string>(),
+    domainIds: new Set<string>(),
+    connectionIds: new Set<string>(),
+  }
   isApplyingRemoteUpdate = false
 
   // Server version tracking
@@ -610,6 +617,10 @@ class CollaborationService {
     this.pendingConnectionChanges.clear()
     this.pendingGroupChanges.clear()
     this.pendingDomainChanges.clear()
+    this.pendingRemoves.nodeIds.clear()
+    this.pendingRemoves.groupIds.clear()
+    this.pendingRemoves.domainIds.clear()
+    this.pendingRemoves.connectionIds.clear()
     // Defensive reset: if a handleSync was interrupted before its
     // try/finally could clear the flag, the new connection would otherwise
     // skip echoing local changes back to the server.
@@ -935,11 +946,35 @@ class CollaborationService {
         }
       }
 
-      // Rebroadcast pending changes to room before clearing
+      // Re-apply pending removes on top of merged server state so that
+      // locally-deleted entities don't "resurrect" after a NAK→resync cycle
+      for (const nodeId of this.pendingRemoves.nodeIds) {
+        newNodes.delete(nodeId)
+        for (const [connId, conn] of newConnections) {
+          if (conn.fromNodeId === nodeId || conn.toNodeId === nodeId) {
+            newConnections.delete(connId)
+          }
+        }
+      }
+      for (const groupId of this.pendingRemoves.groupIds) {
+        newGroups.delete(groupId)
+      }
+      for (const domainId of this.pendingRemoves.domainIds) {
+        newDomains.delete(domainId)
+      }
+      for (const connId of this.pendingRemoves.connectionIds) {
+        newConnections.delete(connId)
+      }
+
+      // Snapshot pending changes for rebroadcast
       const pendingNodes = new Map(this.pendingNodeChanges)
       const pendingGroups = new Map(this.pendingGroupChanges)
       const pendingDomains = new Map(this.pendingDomainChanges)
       const pendingConns = new Map(this.pendingConnectionChanges)
+      const pendingRemoveNodeIds = new Set(this.pendingRemoves.nodeIds)
+      const pendingRemoveGroupIds = new Set(this.pendingRemoves.groupIds)
+      const pendingRemoveDomainIds = new Set(this.pendingRemoves.domainIds)
+      const pendingRemoveConnectionIds = new Set(this.pendingRemoves.connectionIds)
 
       this.isApplyingRemoteUpdate = true
       try {
@@ -1000,13 +1035,20 @@ class CollaborationService {
       }
 
       // 使用 sendBatch 将所有待回放变更合并为一条消息，避免版本冲突
-      if (replyUpdatedNodes.length > 0 || replyUpdatedGroups.length > 0 ||
-        replyUpdatedDomains.length > 0 || replyUpdatedConns.length > 0) {
+      const replyUpdatedCount = replyUpdatedNodes.length + replyUpdatedGroups.length +
+        replyUpdatedDomains.length + replyUpdatedConns.length
+      const replyRemovedCount = pendingRemoveNodeIds.size + pendingRemoveGroupIds.size +
+        pendingRemoveDomainIds.size + pendingRemoveConnectionIds.size
+      if (replyUpdatedCount > 0 || replyRemovedCount > 0) {
         this.sendBatch({
           updatedNodes: replyUpdatedNodes.length > 0 ? replyUpdatedNodes : undefined,
           updatedGroups: replyUpdatedGroups.length > 0 ? replyUpdatedGroups : undefined,
           updatedDomains: replyUpdatedDomains.length > 0 ? replyUpdatedDomains : undefined,
           updatedConnections: replyUpdatedConns.length > 0 ? replyUpdatedConns : undefined,
+          removedNodeIds: pendingRemoveNodeIds.size > 0 ? Array.from(pendingRemoveNodeIds) : undefined,
+          removedGroupIds: pendingRemoveGroupIds.size > 0 ? Array.from(pendingRemoveGroupIds) : undefined,
+          removedDomainIds: pendingRemoveDomainIds.size > 0 ? Array.from(pendingRemoveDomainIds) : undefined,
+          removedConnectionIds: pendingRemoveConnectionIds.size > 0 ? Array.from(pendingRemoveConnectionIds) : undefined,
         })
       }
       // Do NOT clear pending*Changes here — the replay batch above will be
@@ -1022,17 +1064,16 @@ class CollaborationService {
   private handleAck(seq: number): void {
     const op = this.unackedOps.get(seq)
     if (op?.operation === 'batch-operation') {
-      // Server confirmed the batch — clear only the fields that were in the
-      // batch (timestamp <= op.timestamp). New local changes tracked AFTER
-      // the batch was sent have a later timestamp and are preserved.
+      const batch = op.data as BatchOperations
       clearPendingForBatch(
-        op.data as BatchOperations,
+        batch,
         op.timestamp,
         this.pendingNodeChanges,
         this.pendingGroupChanges,
         this.pendingDomainChanges,
         this.pendingConnectionChanges,
       )
+      clearPendingRemoves(batch, this.pendingRemoves)
     }
     this.unackedOps.delete(seq)
     if (this.unackedOps.size === 0 && this.ackTimeoutId) {
@@ -1155,6 +1196,23 @@ class CollaborationService {
       newValue,
       timestamp: Date.now()
     })
+  }
+
+  trackPendingRemove(entityType: 'node' | 'group' | 'domain' | 'connection', id: string): void {
+    switch (entityType) {
+      case 'node':
+        this.pendingRemoves.nodeIds.add(id)
+        break
+      case 'group':
+        this.pendingRemoves.groupIds.add(id)
+        break
+      case 'domain':
+        this.pendingRemoves.domainIds.add(id)
+        break
+      case 'connection':
+        this.pendingRemoves.connectionIds.add(id)
+        break
+    }
   }
 
   requestSync(): boolean {

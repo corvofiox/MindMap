@@ -551,6 +551,18 @@ function handleClientDisconnect(ws: WebSocketWithUserData, room: CanvasRoom, sho
   }
 }
 
+function extractEntityId(operation: string, data: unknown): string | null {
+  if (!data || typeof data !== 'object') return null
+  const d = data as Record<string, unknown>
+  if (typeof d.id === 'string') return d.id
+  return null
+}
+
+function getEntityVersion(canvasId: number, entityId: string): number {
+  const state = getCanvasState(canvasId)
+  return state?.entityVersions?.get(entityId) ?? 0
+}
+
 async function handleOperation(ws: WebSocketWithUserData, room: CanvasRoom, message: CollabMessage) {
   // Only editors and owners can modify
   if (ws.userRole === 'viewer') {
@@ -558,26 +570,6 @@ async function handleOperation(ws: WebSocketWithUserData, room: CanvasRoom, mess
   }
 
   const canvasId = room.id
-
-  // 版本冲突检测：拒绝基于过期版本的操作
-  const state = getCanvasState(canvasId)
-  if (state && typeof message.clientVersion === 'number' && state.version > message.clientVersion) {
-    if (typeof message.seq === 'number' && ws.readyState === 1) {
-      ws.send(JSON.stringify({
-        type: 'nak',
-        seq: message.seq,
-        reason: 'version-conflict',
-        serverVersion: state.version,
-      }))
-    }
-    log('Operation rejected due to version conflict', {
-      canvasId,
-      operation: message.operation,
-      clientVersion: message.clientVersion,
-      serverVersion: state.version,
-    })
-    return
-  }
 
   let applied = false
 
@@ -645,7 +637,6 @@ async function handleOperation(ws: WebSocketWithUserData, room: CanvasRoom, mess
       error: error instanceof Error ? error.message : String(error),
     })
 
-    // 通知发送方操作处理失败
     if (typeof message.seq === 'number' && ws.readyState === 1) {
       ws.send(JSON.stringify({
         type: 'nak',
@@ -660,7 +651,6 @@ async function handleOperation(ws: WebSocketWithUserData, room: CanvasRoom, mess
     broadcastToRoom(room, message, ws)
     broadcastVersionUpdate(canvasId, getCanvasState(canvasId)!.version)
 
-    // 向发送方回 ACK 确认操作已处理
     if (typeof message.seq === 'number' && ws.readyState === 1) {
       ws.send(JSON.stringify({
         type: 'ack',
@@ -668,14 +658,14 @@ async function handleOperation(ws: WebSocketWithUserData, room: CanvasRoom, mess
       }))
     }
   } else if (typeof message.seq === 'number' && ws.readyState === 1) {
-    // 区分 TOCTOU 版本冲突（需发 nak 触发客户端重同步）与操作无影响
-    const currentState = getCanvasState(canvasId)
-    if (currentState && typeof message.clientVersion === 'number' && currentState.version > message.clientVersion) {
+    const entityId = extractEntityId(message.operation, message.data)
+    const entityVer = entityId ? getEntityVersion(canvasId, entityId) : 0
+    if (typeof message.clientVersion === 'number' && entityVer > message.clientVersion) {
       ws.send(JSON.stringify({
         type: 'nak',
         seq: message.seq,
         reason: 'version-conflict',
-        serverVersion: currentState.version,
+        serverVersion: getCanvasState(canvasId)?.version,
       }))
     } else {
       ws.send(JSON.stringify({
@@ -704,26 +694,6 @@ async function handleBatchOperation(ws: WebSocketWithUserData, room: CanvasRoom,
 
   const canvasId = room.id
 
-  // 版本冲突检测：与单次操作相同的逻辑
-  const state = getCanvasState(canvasId)
-  if (state && typeof message.clientVersion === 'number' && state.version > message.clientVersion) {
-    if (typeof message.seq === 'number' && ws.readyState === 1) {
-      ws.send(JSON.stringify({
-        type: 'nak',
-        seq: message.seq,
-        reason: 'version-conflict',
-        serverVersion: state.version,
-      }))
-    }
-    log('Batch operation rejected due to version conflict', {
-      canvasId,
-      clientVersion: message.clientVersion,
-      serverVersion: state.version,
-      operationsCount: message.operations?.length || 0,
-    })
-    return
-  }
-
   let applied = false
 
   try {
@@ -744,7 +714,6 @@ async function handleBatchOperation(ws: WebSocketWithUserData, room: CanvasRoom,
   }
 
   if (applied) {
-    // 将批量操作广播给房间内其他客户端
     broadcastToRoom(room, message, ws)
     broadcastVersionUpdate(canvasId, getCanvasState(canvasId)!.version)
 
@@ -755,14 +724,22 @@ async function handleBatchOperation(ws: WebSocketWithUserData, room: CanvasRoom,
       }))
     }
   } else if (typeof message.seq === 'number' && ws.readyState === 1) {
-    // 区分 TOCTOU 版本冲突（需发 nak 触发客户端重同步）与操作无实际影响（发 ack）
-    const currentState = getCanvasState(canvasId)
-    if (currentState && typeof message.clientVersion === 'number' && currentState.version > message.clientVersion) {
+    let anyStale = false
+    if (typeof message.clientVersion === 'number') {
+      for (const op of message.operations) {
+        const entityId = extractEntityId(op.operation, op.data)
+        if (entityId && getEntityVersion(canvasId, entityId) > message.clientVersion) {
+          anyStale = true
+          break
+        }
+      }
+    }
+    if (anyStale) {
       ws.send(JSON.stringify({
         type: 'nak',
         seq: message.seq,
         reason: 'version-conflict',
-        serverVersion: currentState.version,
+        serverVersion: getCanvasState(canvasId)?.version,
       }))
     } else {
       ws.send(JSON.stringify({

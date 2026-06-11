@@ -463,6 +463,20 @@ export function useCollaboration({ canvasId, enabled = true, onRemoteChange }: U
         })
       })
 
+      // Track remove operations for NAK→resync recovery
+      removedNodeIds.forEach((id) => {
+        collabService.trackPendingRemove('node', id)
+      })
+      removedGroupIds.forEach((id) => {
+        collabService.trackPendingRemove('group', id)
+      })
+      removedDomainIds.forEach((id) => {
+        collabService.trackPendingRemove('domain', id)
+      })
+      removedConnectionIds.forEach((id) => {
+        collabService.trackPendingRemove('connection', id)
+      })
+
       // 使用 sendBatch 将所有变更合并为一条消息，共享同一个 clientVersion，
       // 避免服务端版本递增导致后续操作被 NAK 拒绝
       collabService.sendBatch({

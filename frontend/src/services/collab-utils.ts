@@ -41,6 +41,18 @@ export interface PendingDomainChanges {
   changes: Map<string, FieldChange>
 }
 
+/**
+ * Pending remove tracking: entity IDs the local user has deleted but
+ * haven't been ACKed by the server yet. Used in handleSync to re-apply
+ * removals after a NAK→resync cycle so deleted entities don't "resurrect".
+ */
+export interface PendingRemoves {
+  nodeIds: Set<string>
+  groupIds: Set<string>
+  domainIds: Set<string>
+  connectionIds: Set<string>
+}
+
 export function prunePendingFields<P extends { changes: Map<string, FieldChange> }>(
   map: Map<string, P>,
   id: string,
@@ -57,6 +69,32 @@ export function prunePendingFields<P extends { changes: Map<string, FieldChange>
   }
   if (pending.changes.size === 0) {
     map.delete(id)
+  }
+}
+
+export function clearPendingRemoves(
+  batch: BatchOperations,
+  pendingRemoves: PendingRemoves,
+): void {
+  if (batch.removedNodeIds) {
+    for (const id of batch.removedNodeIds) {
+      pendingRemoves.nodeIds.delete(id)
+    }
+  }
+  if (batch.removedGroupIds) {
+    for (const id of batch.removedGroupIds) {
+      pendingRemoves.groupIds.delete(id)
+    }
+  }
+  if (batch.removedDomainIds) {
+    for (const id of batch.removedDomainIds) {
+      pendingRemoves.domainIds.delete(id)
+    }
+  }
+  if (batch.removedConnectionIds) {
+    for (const id of batch.removedConnectionIds) {
+      pendingRemoves.connectionIds.delete(id)
+    }
   }
 }
 

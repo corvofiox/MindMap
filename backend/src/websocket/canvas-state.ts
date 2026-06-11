@@ -21,6 +21,13 @@ export interface CanvasData {
    * persist, those changes are lost.
    */
   persistError: { message: string; attempts: number } | null
+  /**
+   * Per-entity version tracking: maps entity ID → global version at which
+   * this entity was last modified. Used for fine-grained conflict detection:
+   * a client update on entity X only conflicts if another user modified X
+   * since the client's last sync, not if they modified an unrelated entity Y.
+   */
+  entityVersions: Map<string, number>
 }
 
 const canvasStates = new Map<number, CanvasData>()
@@ -110,6 +117,7 @@ export function ensureCanvasState(canvasId: number): CanvasData {
       lastPersistedVersion: 0,
       isPersisting: false,
       persistError: null,
+      entityVersions: new Map(),
     }
     canvasStates.set(canvasId, state)
   }
@@ -338,6 +346,7 @@ export async function applyAddNode(canvasId: number, node: any): Promise<boolean
   }
   state.nodes.set(node.id, node)
   state.version++
+  state.entityVersions.set(node.id, state.version)
   state.lastModified = Date.now()
   schedulePersistCanvasState(canvasId)
   return true
@@ -345,17 +354,19 @@ export async function applyAddNode(canvasId: number, node: any): Promise<boolean
 
 export async function applyUpdateNode(canvasId: number, nodeId: string, updates: any, clientVersion?: number): Promise<boolean> {
   const state = await ensureCanvasStateLoaded(canvasId)
-  if (typeof clientVersion === 'number' && state.version > clientVersion) {
-    return false
-  }
   const existing = state.nodes.get(nodeId)
   if (!existing) {
+    return false
+  }
+  const entityVer = state.entityVersions.get(nodeId) ?? 0
+  if (typeof clientVersion === 'number' && entityVer > clientVersion) {
     return false
   }
   if (updates && Object.keys(updates).some(k => (existing as Record<string, unknown>)[k] !== (updates as Record<string, unknown>)[k])) {
     const updated = { ...(existing as object), ...updates }
     state.nodes.set(nodeId, updated)
     state.version++
+    state.entityVersions.set(nodeId, state.version)
     state.lastModified = Date.now()
     schedulePersistCanvasState(canvasId)
     return true
@@ -373,9 +384,11 @@ export async function applyRemoveNode(canvasId: number, nodeId: string): Promise
     const c = conn as any
     if (c.fromNodeId === nodeId || c.toNodeId === nodeId) {
       state.connections.delete(connId)
+      state.entityVersions.delete(connId)
     }
   }
 
+  state.entityVersions.delete(nodeId)
   state.version++
   state.lastModified = Date.now()
   schedulePersistCanvasState(canvasId)
@@ -389,6 +402,7 @@ export async function applyAddGroup(canvasId: number, group: any): Promise<boole
   }
   state.groups.set(group.id, group)
   state.version++
+  state.entityVersions.set(group.id, state.version)
   state.lastModified = Date.now()
   schedulePersistCanvasState(canvasId)
   return true
@@ -396,15 +410,17 @@ export async function applyAddGroup(canvasId: number, group: any): Promise<boole
 
 export async function applyUpdateGroup(canvasId: number, groupId: string, updates: any, clientVersion?: number): Promise<boolean> {
   const state = await ensureCanvasStateLoaded(canvasId)
-  if (typeof clientVersion === 'number' && state.version > clientVersion) {
-    return false
-  }
   const existing = state.groups.get(groupId)
   if (!existing) return false
+  const entityVer = state.entityVersions.get(groupId) ?? 0
+  if (typeof clientVersion === 'number' && entityVer > clientVersion) {
+    return false
+  }
   if (updates && Object.keys(updates).some(k => (existing as Record<string, unknown>)[k] !== (updates as Record<string, unknown>)[k])) {
     const updated = { ...(existing as object), ...updates }
     state.groups.set(groupId, updated)
     state.version++
+    state.entityVersions.set(groupId, state.version)
     state.lastModified = Date.now()
     schedulePersistCanvasState(canvasId)
     return true
@@ -416,6 +432,7 @@ export async function applyRemoveGroup(canvasId: number, groupId: string): Promi
   const state = await ensureCanvasStateLoaded(canvasId)
   const existed = state.groups.delete(groupId)
   if (!existed) return false
+  state.entityVersions.delete(groupId)
   state.version++
   state.lastModified = Date.now()
   schedulePersistCanvasState(canvasId)
@@ -429,6 +446,7 @@ export async function applyAddDomain(canvasId: number, domain: any): Promise<boo
   }
   state.domains.set(domain.id, domain)
   state.version++
+  state.entityVersions.set(domain.id, state.version)
   state.lastModified = Date.now()
   schedulePersistCanvasState(canvasId)
   return true
@@ -436,15 +454,17 @@ export async function applyAddDomain(canvasId: number, domain: any): Promise<boo
 
 export async function applyUpdateDomain(canvasId: number, domainId: string, updates: any, clientVersion?: number): Promise<boolean> {
   const state = await ensureCanvasStateLoaded(canvasId)
-  if (typeof clientVersion === 'number' && state.version > clientVersion) {
-    return false
-  }
   const existing = state.domains.get(domainId)
   if (!existing) return false
+  const entityVer = state.entityVersions.get(domainId) ?? 0
+  if (typeof clientVersion === 'number' && entityVer > clientVersion) {
+    return false
+  }
   if (updates && Object.keys(updates).some(k => (existing as Record<string, unknown>)[k] !== (updates as Record<string, unknown>)[k])) {
     const updated = { ...(existing as object), ...updates }
     state.domains.set(domainId, updated)
     state.version++
+    state.entityVersions.set(domainId, state.version)
     state.lastModified = Date.now()
     schedulePersistCanvasState(canvasId)
     return true
@@ -456,6 +476,7 @@ export async function applyRemoveDomain(canvasId: number, domainId: string): Pro
   const state = await ensureCanvasStateLoaded(canvasId)
   const existed = state.domains.delete(domainId)
   if (!existed) return false
+  state.entityVersions.delete(domainId)
   state.version++
   state.lastModified = Date.now()
   schedulePersistCanvasState(canvasId)
@@ -469,6 +490,7 @@ export async function applyAddConnection(canvasId: number, connection: any): Pro
   }
   state.connections.set(connection.id, connection)
   state.version++
+  state.entityVersions.set(connection.id, state.version)
   state.lastModified = Date.now()
   schedulePersistCanvasState(canvasId)
   return true
@@ -476,15 +498,17 @@ export async function applyAddConnection(canvasId: number, connection: any): Pro
 
 export async function applyUpdateConnection(canvasId: number, connectionId: string, updates: any, clientVersion?: number): Promise<boolean> {
   const state = await ensureCanvasStateLoaded(canvasId)
-  if (typeof clientVersion === 'number' && state.version > clientVersion) {
-    return false
-  }
   const existing = state.connections.get(connectionId)
   if (!existing) return false
+  const entityVer = state.entityVersions.get(connectionId) ?? 0
+  if (typeof clientVersion === 'number' && entityVer > clientVersion) {
+    return false
+  }
   if (updates && Object.keys(updates).some(k => (existing as Record<string, unknown>)[k] !== (updates as Record<string, unknown>)[k])) {
     const updated = { ...(existing as object), ...updates }
     state.connections.set(connectionId, updated)
     state.version++
+    state.entityVersions.set(connectionId, state.version)
     state.lastModified = Date.now()
     schedulePersistCanvasState(canvasId)
     return true
@@ -496,6 +520,7 @@ export async function applyRemoveConnection(canvasId: number, connectionId: stri
   const state = await ensureCanvasStateLoaded(canvasId)
   const existed = state.connections.delete(connectionId)
   if (!existed) return false
+  state.entityVersions.delete(connectionId)
   state.version++
   state.lastModified = Date.now()
   schedulePersistCanvasState(canvasId)
@@ -539,18 +564,16 @@ export async function applyBatchOperations(
 
   const state = await ensureCanvasStateLoaded(canvasId)
 
-  // 异步加载 state 后再次比较版本，防止 TOCTOU 竞态条件
-  if (typeof clientVersion === 'number' && state.version > clientVersion) {
-    return false
-  }
-
   let anyApplied = false
+  const modifiedIds: string[] = []
 
   for (const op of operations) {
     let applied = false
+    let entityId: string | undefined
     switch (op.operation) {
       case 'add-node': {
         const node = op.data as { id: string }
+        entityId = node.id
         if (!state.nodes.has(node.id)) {
           state.nodes.set(node.id, node)
           applied = true
@@ -559,9 +582,12 @@ export async function applyBatchOperations(
       }
       case 'update-node': {
         const { id, updates } = op.data as { id: string; updates: unknown }
+        entityId = id
         const existing = state.nodes.get(id)
         if (existing) {
-          if (updates && typeof updates === 'object' && Object.keys(updates).some(k => (existing as Record<string, unknown>)[k] !== (updates as Record<string, unknown>)[k])) {
+          const entityVer = state.entityVersions.get(id) ?? 0
+          const isStale = typeof clientVersion === 'number' && entityVer > clientVersion
+          if (!isStale && updates && typeof updates === 'object' && Object.keys(updates).some(k => (existing as Record<string, unknown>)[k] !== (updates as Record<string, unknown>)[k])) {
             const updated = { ...(existing as object), ...(updates as object) }
             state.nodes.set(id, updated)
             applied = true
@@ -572,11 +598,12 @@ export async function applyBatchOperations(
       case 'remove-node': {
         const { id } = op.data as { id: string }
         if (state.nodes.delete(id)) {
-          // Also clean up orphaned connections
+          state.entityVersions.delete(id)
           for (const [connId, conn] of state.connections) {
             const c = conn as { fromNodeId?: string; toNodeId?: string }
             if (c.fromNodeId === id || c.toNodeId === id) {
               state.connections.delete(connId)
+              state.entityVersions.delete(connId)
             }
           }
           applied = true
@@ -585,6 +612,7 @@ export async function applyBatchOperations(
       }
       case 'add-group': {
         const group = op.data as { id: string }
+        entityId = group.id
         if (!state.groups.has(group.id)) {
           state.groups.set(group.id, group)
           applied = true
@@ -593,9 +621,12 @@ export async function applyBatchOperations(
       }
       case 'update-group': {
         const { id, updates } = op.data as { id: string; updates: unknown }
+        entityId = id
         const existing = state.groups.get(id)
         if (existing) {
-          if (updates && typeof updates === 'object' && Object.keys(updates).some(k => (existing as Record<string, unknown>)[k] !== (updates as Record<string, unknown>)[k])) {
+          const entityVer = state.entityVersions.get(id) ?? 0
+          const isStale = typeof clientVersion === 'number' && entityVer > clientVersion
+          if (!isStale && updates && typeof updates === 'object' && Object.keys(updates).some(k => (existing as Record<string, unknown>)[k] !== (updates as Record<string, unknown>)[k])) {
             const updated = { ...(existing as object), ...(updates as object) }
             state.groups.set(id, updated)
             applied = true
@@ -606,12 +637,14 @@ export async function applyBatchOperations(
       case 'remove-group': {
         const { id } = op.data as { id: string }
         if (state.groups.delete(id)) {
+          state.entityVersions.delete(id)
           applied = true
         }
         break
       }
       case 'add-domain': {
         const domain = op.data as { id: string }
+        entityId = domain.id
         if (!state.domains.has(domain.id)) {
           state.domains.set(domain.id, domain)
           applied = true
@@ -620,9 +653,12 @@ export async function applyBatchOperations(
       }
       case 'update-domain': {
         const { id, updates } = op.data as { id: string; updates: unknown }
+        entityId = id
         const existing = state.domains.get(id)
         if (existing) {
-          if (updates && typeof updates === 'object' && Object.keys(updates).some(k => (existing as Record<string, unknown>)[k] !== (updates as Record<string, unknown>)[k])) {
+          const entityVer = state.entityVersions.get(id) ?? 0
+          const isStale = typeof clientVersion === 'number' && entityVer > clientVersion
+          if (!isStale && updates && typeof updates === 'object' && Object.keys(updates).some(k => (existing as Record<string, unknown>)[k] !== (updates as Record<string, unknown>)[k])) {
             const updated = { ...(existing as object), ...(updates as object) }
             state.domains.set(id, updated)
             applied = true
@@ -633,12 +669,14 @@ export async function applyBatchOperations(
       case 'remove-domain': {
         const { id } = op.data as { id: string }
         if (state.domains.delete(id)) {
+          state.entityVersions.delete(id)
           applied = true
         }
         break
       }
       case 'add-connection': {
         const connection = op.data as { id: string }
+        entityId = connection.id
         if (!state.connections.has(connection.id)) {
           state.connections.set(connection.id, connection)
           applied = true
@@ -647,9 +685,12 @@ export async function applyBatchOperations(
       }
       case 'update-connection': {
         const { id, updates } = op.data as { id: string; updates: unknown }
+        entityId = id
         const existing = state.connections.get(id)
         if (existing) {
-          if (updates && typeof updates === 'object' && Object.keys(updates).some(k => (existing as Record<string, unknown>)[k] !== (updates as Record<string, unknown>)[k])) {
+          const entityVer = state.entityVersions.get(id) ?? 0
+          const isStale = typeof clientVersion === 'number' && entityVer > clientVersion
+          if (!isStale && updates && typeof updates === 'object' && Object.keys(updates).some(k => (existing as Record<string, unknown>)[k] !== (updates as Record<string, unknown>)[k])) {
             const updated = { ...(existing as object), ...(updates as object) }
             state.connections.set(id, updated)
             applied = true
@@ -660,6 +701,7 @@ export async function applyBatchOperations(
       case 'remove-connection': {
         const { id } = op.data as { id: string }
         if (state.connections.delete(id)) {
+          state.entityVersions.delete(id)
           applied = true
         }
         break
@@ -667,11 +709,17 @@ export async function applyBatchOperations(
     }
     if (applied) {
       anyApplied = true
+      if (entityId) {
+        modifiedIds.push(entityId)
+      }
     }
   }
 
   if (anyApplied) {
     state.version++
+    for (const id of modifiedIds) {
+      state.entityVersions.set(id, state.version)
+    }
     state.lastModified = Date.now()
     schedulePersistCanvasState(canvasId)
   }
