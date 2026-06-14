@@ -45,6 +45,12 @@ class MockCollaborationService {
   private pendingConnectionChanges = new Map<string, PendingConnectionChanges>()
   private pendingGroupChanges = new Map<string, PendingGroupChanges>()
   private pendingDomainChanges = new Map<string, PendingDomainChanges>()
+  private pendingRemoves = {
+    nodeIds: new Set<string>(),
+    groupIds: new Set<string>(),
+    domainIds: new Set<string>(),
+    connectionIds: new Set<string>(),
+  }
   private isApplyingRemoteUpdate = false
   private unackedOps = new Map<number, QueuedOperation>()
   private opSeq = 0
@@ -72,6 +78,10 @@ class MockCollaborationService {
     this.pendingConnectionChanges.clear()
     this.pendingGroupChanges.clear()
     this.pendingDomainChanges.clear()
+    this.pendingRemoves.nodeIds.clear()
+    this.pendingRemoves.groupIds.clear()
+    this.pendingRemoves.domainIds.clear()
+    this.pendingRemoves.connectionIds.clear()
     this.unackedOps.clear()
   }
 
@@ -174,6 +184,19 @@ class MockCollaborationService {
           this.trackLocalConnectionChange(d.id, field, d.updates[field])
         })
       }
+    } else if (
+      operation === 'remove-node' ||
+      operation === 'remove-group' ||
+      operation === 'remove-domain' ||
+      operation === 'remove-connection'
+    ) {
+      // 与真实 service 对称：单操作路径下追踪 remove，避免 NAK→resync 时
+      // 被删实体从服务端最新状态复活。
+      const d = data as { id: string }
+      if (d?.id) {
+        const entityType = operation.split('-')[1] as 'node' | 'group' | 'domain' | 'connection'
+        this.trackPendingRemove(entityType, d.id)
+      }
     }
 
     const timestamp = Date.now()
@@ -266,6 +289,49 @@ class MockCollaborationService {
       this.pendingConnectionChanges.set(connectionId, pending)
     }
     pending.changes.set(field, { field, newValue, timestamp: Date.now() })
+  }
+
+  trackPendingRemove(entityType: 'node' | 'group' | 'domain' | 'connection', id: string): void {
+    switch (entityType) {
+      case 'node':
+        this.pendingRemoves.nodeIds.add(id)
+        break
+      case 'group':
+        this.pendingRemoves.groupIds.add(id)
+        break
+      case 'domain':
+        this.pendingRemoves.domainIds.add(id)
+        break
+      case 'connection':
+        this.pendingRemoves.connectionIds.add(id)
+        break
+    }
+  }
+
+  hasPendingRemove(entityType: 'node' | 'group' | 'domain' | 'connection', id: string): boolean {
+    switch (entityType) {
+      case 'node':
+        return this.pendingRemoves.nodeIds.has(id)
+      case 'group':
+        return this.pendingRemoves.groupIds.has(id)
+      case 'domain':
+        return this.pendingRemoves.domainIds.has(id)
+      case 'connection':
+        return this.pendingRemoves.connectionIds.has(id)
+    }
+  }
+
+  getPendingRemoveCount(entityType: 'node' | 'group' | 'domain' | 'connection'): number {
+    switch (entityType) {
+      case 'node':
+        return this.pendingRemoves.nodeIds.size
+      case 'group':
+        return this.pendingRemoves.groupIds.size
+      case 'domain':
+        return this.pendingRemoves.domainIds.size
+      case 'connection':
+        return this.pendingRemoves.connectionIds.size
+    }
   }
 
   getPendingNodeChangeValue(nodeId: string, field: string): unknown | undefined {
@@ -551,6 +617,71 @@ describe('sendOperation 本地变更追踪', () => {
   })
 })
 
+describe('sendOperation 追踪 — remove-* 路径', () => {
+  // 单操作 remove 路径必须把删除记入 pendingRemoves，与 batch 路径
+  // （useCollaboration subscribe → trackPendingRemove）对称。否则
+  // NAK→resync 周期中 handleSync 不会重新应用删除，被删实体会从
+  // 服务端最新状态"复活"。
+  let service: MockCollaborationService
+
+  beforeEach(() => {
+    service = new MockCollaborationService()
+    service.connect(true)
+  })
+
+  it('remove-node 应追踪到 pendingRemoves.nodeIds', () => {
+    service.sendOperation('remove-node', { id: 'n1' })
+
+    expect(service.hasPendingRemove('node', 'n1')).toBe(true)
+    expect(service.getPendingRemoveCount('node')).toBe(1)
+    // remove 不应进入 pendingNodeChanges（那是 update 路径的集合）
+    expect(service.hasPendingNodeChange('n1')).toBe(false)
+  })
+
+  it('remove-group 应追踪到 pendingRemoves.groupIds', () => {
+    service.sendOperation('remove-group', { id: 'g1' })
+
+    expect(service.hasPendingRemove('group', 'g1')).toBe(true)
+    expect(service.getPendingRemoveCount('group')).toBe(1)
+  })
+
+  it('remove-domain 应追踪到 pendingRemoves.domainIds', () => {
+    service.sendOperation('remove-domain', { id: 'd1' })
+
+    expect(service.hasPendingRemove('domain', 'd1')).toBe(true)
+    expect(service.getPendingRemoveCount('domain')).toBe(1)
+  })
+
+  it('remove-connection 应追踪到 pendingRemoves.connectionIds', () => {
+    service.sendOperation('remove-connection', { id: 'c1' })
+
+    expect(service.hasPendingRemove('connection', 'c1')).toBe(true)
+    expect(service.getPendingRemoveCount('connection')).toBe(1)
+  })
+
+  it('同一实体多次 remove 应幂等（Set 去重）', () => {
+    service.sendOperation('remove-node', { id: 'n1' })
+    service.sendOperation('remove-node', { id: 'n1' })
+
+    expect(service.hasPendingRemove('node', 'n1')).toBe(true)
+    expect(service.getPendingRemoveCount('node')).toBe(1)
+  })
+
+  it('remove 与 update 同实体应分别记录到不同集合', () => {
+    service.sendOperation('update-node', { id: 'n1', updates: { title: 'v1' } })
+    service.sendOperation('remove-node', { id: 'n1' })
+
+    expect(service.hasPendingNodeChange('n1')).toBe(true)
+    expect(service.hasPendingRemove('node', 'n1')).toBe(true)
+  })
+
+  it('noop: remove 缺省 id 不应报错也不应追踪', () => {
+    service.sendOperation('remove-node', {})
+
+    expect(service.getPendingRemoveCount('node')).toBe(0)
+  })
+})
+
 describe('sendOperation 追踪 — 离线场景', () => {
   let service: MockCollaborationService
 
@@ -591,12 +722,12 @@ describe('ACK 清除 pending (clearPendingForBatch)', () => {
   })
 
   it('ACK batch 后应清除该批次的 pending 字段，保留未包含的节点', () => {
-    service.sendOperation('update-node', { id: 'n1', updates: { text: 'v1' } })
-    service.sendOperation('update-node', { id: 'n2', updates: { text: 'v2' } })
+    service.sendOperation('update-node', { id: 'n1', updates: { title: 'v1' } })
+    service.sendOperation('update-node', { id: 'n2', updates: { title: 'v2' } })
     expect(service.getPendingNodeChangeCount()).toBe(2)
 
     const batch: BatchOperations = {
-      updatedNodes: [{ id: 'n1', updates: { text: 'v1' } }],
+      updatedNodes: [{ id: 'n1', updates: { title: 'v1' } }],
     }
     const seq = 1
     service['unackedOps'].set(seq, { operation: 'batch-operation', data: batch, timestamp: Date.now() })
@@ -604,14 +735,14 @@ describe('ACK 清除 pending (clearPendingForBatch)', () => {
 
     expect(service.hasPendingNodeChange('n1')).toBe(false)
     expect(service.hasPendingNodeChange('n2')).toBe(true)
-    expect(service.getPendingNodeChangeValue('n2', 'text')).toBe('v2')
+    expect(service.getPendingNodeChangeValue('n2', 'title')).toBe('v2')
   })
 
   it('ACK 后新追踪的变更 (晚于时间戳) 应存活', () => {
     vi.useFakeTimers()
-    // t1: text tracked at time 1000
+    // t1: title tracked at time 1000
     vi.setSystemTime(1000)
-    service.sendOperation('update-node', { id: 'n1', updates: { text: 'old' } })
+    service.sendOperation('update-node', { id: 'n1', updates: { title: 'old' } })
 
     // batchTs = 2000, the ACK cutoff
     vi.setSystemTime(2000)
@@ -622,25 +753,25 @@ describe('ACK 清除 pending (clearPendingForBatch)', () => {
     service.sendOperation('update-node', { id: 'n1', updates: { color: 'red' } })
 
     const batch: BatchOperations = {
-      updatedNodes: [{ id: 'n1', updates: { text: 'old', color: 'red' } }],
+      updatedNodes: [{ id: 'n1', updates: { title: 'old', color: 'red' } }],
     }
     const seq = 1
     service['unackedOps'].set(seq, { operation: 'batch-operation', data: batch, timestamp: batchTs })
     service.handleAck(seq)
 
-    // text tracked at 1000 <= 2000 → cleared
+    // title tracked at 1000 <= 2000 → cleared
     // color tracked at 3000 > 2000 → survives
     expect(service.hasPendingNodeChange('n1')).toBe(true)
     expect(service.getPendingNodeChangeValue('n1', 'color')).toBe('red')
-    expect(service.getPendingNodeChangeValue('n1', 'text')).toBeUndefined()
+    expect(service.getPendingNodeChangeValue('n1', 'title')).toBeUndefined()
     vi.useRealTimers()
   })
 
   it('ACK 清除后 pending node 如无剩余字段应整条删除', () => {
-    service.sendOperation('update-node', { id: 'n1', updates: { text: 'only' } })
+    service.sendOperation('update-node', { id: 'n1', updates: { title: 'only' } })
 
     const batch: BatchOperations = {
-      updatedNodes: [{ id: 'n1', updates: { text: 'only' } }],
+      updatedNodes: [{ id: 'n1', updates: { title: 'only' } }],
     }
     const seq = 1
     service['unackedOps'].set(seq, { operation: 'batch-operation', data: batch, timestamp: Date.now() })
@@ -650,14 +781,14 @@ describe('ACK 清除 pending (clearPendingForBatch)', () => {
   })
 
   it('NAK 不应清除 pending 变更', () => {
-    service.sendOperation('update-node', { id: 'n1', updates: { text: 'v1' } })
+    service.sendOperation('update-node', { id: 'n1', updates: { title: 'v1' } })
     expect(service.hasPendingNodeChange('n1')).toBe(true)
 
     service.handleNak(1)
 
     // NAK must NOT clear pending — the upcoming sync will replay them
     expect(service.hasPendingNodeChange('n1')).toBe(true)
-    expect(service.getPendingNodeChangeValue('n1', 'text')).toBe('v1')
+    expect(service.getPendingNodeChangeValue('n1', 'title')).toBe('v1')
   })
 
   it('单操作 ACK 应清除该操作的 pending 字段（修复路径 B 不清除的回归）', () => {

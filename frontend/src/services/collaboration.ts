@@ -1313,6 +1313,20 @@ class CollaborationService {
           this.trackLocalConnectionChange(d.id, field, d.updates[field])
         })
       }
+    } else if (
+      operation === 'remove-node' ||
+      operation === 'remove-group' ||
+      operation === 'remove-domain' ||
+      operation === 'remove-connection'
+    ) {
+      // 单操作路径下追踪 remove：与 batch 路径（useCollaboration subscribe →
+      // trackPendingRemove）对称。否则 NAK→resync 周期中 handleSync 不会
+      // 重新应用删除，被删实体会从服务端最新状态"复活"。
+      const d = data as { id: string }
+      if (d?.id) {
+        const entityType = operation.split('-')[1] as 'node' | 'group' | 'domain' | 'connection'
+        this.trackPendingRemove(entityType, d.id)
+      }
     }
 
     const timestamp = Date.now()

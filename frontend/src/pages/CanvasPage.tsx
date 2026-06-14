@@ -609,6 +609,39 @@ function getCsrfToken(): string {
   return match ? decodeURIComponent(match[1]) : ''
 }
 
+// keepalive fetch 有 64KB 累积上限（浏览器强制），超限会静默截断请求体，
+// 截断的部分数据写入服务端后会让下一步重载时 localStorage 完整缓存被跳过
+// 加载（DB 有数据即优先），反而造成数据丢失。因此仅对小负载发送 keepalive
+// 网络请求，大负载完全依赖 localStorage 缓存兜底。
+//
+// 协作模式下跳过 REST 全量快照保存：POST mutex 只串行化其他 POST，不串行
+// WS 操作的应用，全量快照会与并发 WS 操作交叉覆盖他人编辑；协作数据由
+// 服务端 handleClientDisconnect 的 persistCanvasState 持久化。
+//
+// beforeunload 与 pagehide 两个处理器共用此逻辑。
+const KEEPALIVE_MAX_BODY_BYTES = 48 * 1024
+
+function sendKeepaliveSnapshot(
+  id: number,
+  data: ReturnType<typeof collectCanvasData>,
+): void {
+  const token = localStorage.getItem('mindmap_token')
+  if (!token || collabService.isConnected()) return
+  const body = JSON.stringify(data)
+  if (new Blob([body]).size >= KEEPALIVE_MAX_BODY_BYTES) return
+  fetch(`/api/canvases/${id}/data`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
+      'x-csrf-token': getCsrfToken(),
+    },
+    credentials: 'include',
+    body,
+    keepalive: true,
+  }).catch(() => { })
+}
+
 // Helper function to check if canvas has content
 function hasCanvasContent(nodes: any[], domains: any[]): boolean {
   return nodes.length > 0 || domains.length > 0
@@ -1152,12 +1185,20 @@ export function CanvasPage() {
         const state = useCanvasStore.getState()
         if (state.isDirty && state.canvasId === id) {
           const canvasData = collectCanvasData(state)
+          // localStorage 缓存无论协作与否都写，作为兜底备份
           saveToCache(id, canvasData)
-          // 使用 apiClient.post 替代 fetch(keepalive: true)：
-          // 1. 切换画布时页面未卸载，无需 keepalive 保证请求完成
-          // 2. apiClient 自动处理 CSRF 获取/刷新/重试
-          // 3. 无 64KB 负载上限（keepalive fetch 的浏览器限制）
-          apiClient.post(`/api/canvases/${id}/data`, canvasData).catch(() => { })
+          // 协作模式下跳过 REST 全量快照保存：POST mutex 只串行化其他 POST，
+          // 不串行 WS 操作的应用，全量快照会与并发 WS 操作交叉覆盖他人编辑。
+          // 协作模式数据由服务端 handleClientDisconnect 的 persistCanvasState
+          // 持久化，无需客户端再发全量快照。与 saveToDatabase/handleManualSave
+          // 保持一致。
+          if (!collabService.isConnected()) {
+            // 使用 apiClient.post 替代 fetch(keepalive: true)：
+            // 1. 切换画布时页面未卸载，无需 keepalive 保证请求完成
+            // 2. apiClient 自动处理 CSRF 获取/刷新/重试
+            // 3. 无 64KB 负载上限（keepalive fetch 的浏览器限制）
+            apiClient.post(`/api/canvases/${id}/data`, canvasData).catch(() => { })
+          }
         }
       }
 
@@ -1534,27 +1575,11 @@ export function CanvasPage() {
           // Silently fail for cache save errors
         }
 
-        // 尝试通过 REST API 兜底保存。keepalive fetch 有 64KB 累积上限（浏览器强制），
-        // 超限会静默截断请求体。截断后的部分数据写入服务端后会导致下一步页面重载时
-        // localStorage 完整缓存被跳过加载（DB 有数据即优先），反而造成数据丢失。
-        // 因此仅对小负载发送 keepalive 网络请求，大负载完全依赖 localStorage 缓存兜底。
+        // 尝试通过 REST API 兜底保存。仅对小负载发送 keepalive 网络请求，
+        // 大负载完全依赖上面的 localStorage 缓存兜底。协作模式下跳过 REST
+        // 保存（见 sendKeepaliveSnapshot 注释）。
         try {
-          const token = localStorage.getItem('mindmap_token')
-          const body = JSON.stringify(canvasData)
-          const bodySize = new Blob([body]).size
-          if (bodySize < 48 * 1024 && token) {
-            fetch(`/api/canvases/${id}/data`, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`,
-                'x-csrf-token': getCsrfToken(),
-              },
-              credentials: 'include',
-              body,
-              keepalive: true,
-            }).catch(() => { })
-          }
+          sendKeepaliveSnapshot(id, canvasData)
         } catch (error) {
           // Silently fail
         }
@@ -1580,26 +1605,10 @@ export function CanvasPage() {
         if (canvasData.nodes.length > 0 || canvasData.groups.length > 0 || canvasData.domains.length > 0) {
           saveToCache(id, { nodes: canvasData.nodes, groups: canvasData.groups, domains: canvasData.domains, connections: canvasData.connections })
 
-          // keepalive fetch 有 ~64KB 累积上限，超限后浏览器静默截断请求体，
-          // 导致服务端收到部分数据，使 localStorage 完整缓存被跳过加载。
-          // 仅对小负载发送网络请求，大负载完全依赖 localStorage 缓存兜底。
-
-          const token = localStorage.getItem('mindmap_token')
-          const body = JSON.stringify(canvasData)
-          const bodySize = new Blob([body]).size
-          if (bodySize < 48 * 1024 && token) {
-            fetch(`/api/canvases/${id}/data`, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`,
-                'x-csrf-token': getCsrfToken(),
-              },
-              credentials: 'include',
-              body,
-              keepalive: true,
-            }).catch(() => { })
-          }
+          // 仅对小负载发送 keepalive 网络请求，大负载完全依赖上面的
+          // localStorage 缓存兜底。协作模式下跳过 REST 保存
+          // （见 sendKeepaliveSnapshot 注释）。
+          sendKeepaliveSnapshot(id, canvasData)
         }
       } catch {
         // Silently fail
