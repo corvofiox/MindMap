@@ -8,7 +8,7 @@ import type {
   PendingGroupChanges,
   PendingDomainChanges,
 } from '../services/collab-utils'
-import { clearPendingForBatch } from '../services/collab-utils'
+import { clearPendingForBatch, clearPendingForSingleOperation } from '../services/collab-utils'
 // 测试中使用简化数据，避免导入全部实体类型
 type AnyBatch = Record<string, unknown>
 
@@ -90,15 +90,27 @@ class MockCollaborationService {
 
   handleAck(seq: number): void {
     const op = this.unackedOps.get(seq)
-    if (op?.operation === 'batch-operation') {
-      clearPendingForBatch(
-        op.data as BatchOperations,
-        op.timestamp,
-        this.pendingNodeChanges,
-        this.pendingGroupChanges,
-        this.pendingDomainChanges,
-        this.pendingConnectionChanges,
-      )
+    if (op) {
+      if (op.operation === 'batch-operation') {
+        clearPendingForBatch(
+          op.data as BatchOperations,
+          op.timestamp,
+          this.pendingNodeChanges,
+          this.pendingGroupChanges,
+          this.pendingDomainChanges,
+          this.pendingConnectionChanges,
+        )
+      } else {
+        clearPendingForSingleOperation(
+          op.operation,
+          op.data,
+          op.timestamp,
+          this.pendingNodeChanges,
+          this.pendingGroupChanges,
+          this.pendingDomainChanges,
+          this.pendingConnectionChanges,
+        )
+      }
     }
     this.unackedOps.delete(seq)
   }
@@ -181,7 +193,20 @@ class MockCollaborationService {
       senderId: this.userId || 0
     }
 
+    // Mirror the real service: track single ops as unacked so handleAck can
+    // prune their pending entries (the path-B single-operation ACK fix).
+    const seq = ++this.opSeq
+    this.unackedOps.set(seq, { operation, data, timestamp })
+    this.lastSingleOpSeq = seq
+
     this.ws.send(JSON.stringify(message))
+  }
+
+  // Most recently assigned single-op seq, exposed for tests that drive the
+  // single-operation ACK path without manually probing opSeq internals.
+  private lastSingleOpSeq = 0
+  getLastSingleOpSeq(): number {
+    return this.lastSingleOpSeq
   }
 
   flushOfflineQueue() {
@@ -633,6 +658,45 @@ describe('ACK 清除 pending (clearPendingForBatch)', () => {
     // NAK must NOT clear pending — the upcoming sync will replay them
     expect(service.hasPendingNodeChange('n1')).toBe(true)
     expect(service.getPendingNodeChangeValue('n1', 'text')).toBe('v1')
+  })
+
+  it('单操作 ACK 应清除该操作的 pending 字段（修复路径 B 不清除的回归）', () => {
+    // Path B (NodeItem input timer) sends single 'update-node' operations via
+    // sendOperation. Before the fix, ACKs for these were ignored when clearing
+    // pending — only batch ACKs cleared — so stale pending entries lingered
+    // and could be replayed over newer edits on the next sync. The single-op
+    // ACK must prune the confirmed field using the same cutoff rule as batches.
+    service.sendOperation('update-node', { id: 'n1', updates: { title: 'hello' } })
+    expect(service.hasPendingNodeChange('n1')).toBe(true)
+    expect(service.getPendingNodeChangeValue('n1', 'title')).toBe('hello')
+
+    const seq = service.getLastSingleOpSeq()
+    service.handleAck(seq)
+
+    // The confirmed field is pruned, the pending entry is removed entirely
+    // (no remaining fields).
+    expect(service.hasPendingNodeChange('n1')).toBe(false)
+  })
+
+  it('单操作 ACK 不应清除晚于该操作的新 pending 写入', () => {
+    vi.useFakeTimers()
+    // First edit at t=1000, sent as a single op.
+    vi.setSystemTime(1000)
+    service.sendOperation('update-node', { id: 'n1', updates: { title: 'old' } })
+    const firstSeq = service.getLastSingleOpSeq()
+
+    // A second edit at t=3000 to a DIFFERENT field, after the first op was
+    // already in flight. The first op's ACK (cutoff = its own timestamp 1000)
+    // must NOT prune 'color' (timestamp 3000 > 1000).
+    vi.setSystemTime(3000)
+    service.sendOperation('update-node', { id: 'n1', updates: { color: 'red' } })
+
+    // ACK for the first op arrives.
+    service.handleAck(firstSeq)
+
+    expect(service.getPendingNodeChangeValue('n1', 'title')).toBeUndefined()
+    expect(service.getPendingNodeChangeValue('n1', 'color')).toBe('red')
+    vi.useRealTimers()
   })
 })
 

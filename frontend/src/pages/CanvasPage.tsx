@@ -1460,6 +1460,28 @@ export function CanvasPage() {
     const id = parseInt(canvasId)
     if (isNaN(id)) return
 
+    // In collaboration mode, edits are synced in real time via WebSocket.
+    // Sending a full-snapshot POST /data here races with concurrent WS ops:
+    // the POST mutex only serializes other POSTs, not WS applies, so a WS
+    // op landing between the POST's state read and its DB write could be
+    // overwritten by the (staler) client snapshot. The auto-save and Ctrl+S
+    // paths already skip POST in collaboration mode; do the same here so the
+    // toolbar save button can't trigger the race. Still flush the thumbnail.
+    if (collabService.isConnected()) {
+      const state = useCanvasStore.getState()
+      const { nodes, domains } = collectCanvasData(state)
+      if (hasCanvasContent(nodes, domains)) {
+        await generateThumbnail(id)
+      }
+      addToast({
+        type: 'info',
+        title: '已实时保存',
+        message: '协作模式下编辑内容会实时同步到服务器',
+        duration: 3000,
+      })
+      return
+    }
+
     const state = useCanvasStore.getState()
     const canvasData = collectCanvasData(state)
 

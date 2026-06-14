@@ -127,3 +127,48 @@ export function clearPendingForBatch(
     }
   }
 }
+
+/**
+ * Clear pending entries for a single confirmed operation (path B:
+ * NodeItem input timer → sendOperation('update-node', {id, updates})).
+ *
+ * Why this exists: prior to this, single-operation ACKs were ignored when
+ * clearing pending — only batch-operation ACKs went through clearPendingForBatch.
+ * That meant a single-field edit (e.g. typing in a node title) would linger in
+ * pending*Changes indefinitely (until the 30s cleanupRecentChanges safety net or
+ * a sync-replay). On the next sync the stale value could be replayed over the
+ * user's newer edit. ACK is the authoritative "server accepted this change"
+ * signal, so by the same cutoff rule used for batches we prune the confirmed
+ * fields while preserving any newer writes to the same field.
+ */
+export function clearPendingForSingleOperation(
+  operation: string,
+  data: unknown,
+  cutoff: number,
+  pendingNodeChanges: Map<string, PendingNodeChanges>,
+  pendingGroupChanges: Map<string, PendingGroupChanges>,
+  pendingDomainChanges: Map<string, PendingDomainChanges>,
+  pendingConnectionChanges: Map<string, PendingConnectionChanges>,
+): void {
+  if (!data || typeof data !== 'object') return
+  const d = data as { id?: string; updates?: Record<string, unknown> }
+  if (!d.id || !d.updates) return
+
+  const updates = d.updates
+  switch (operation) {
+    case 'update-node':
+      prunePendingFields(pendingNodeChanges, d.id, updates, cutoff)
+      break
+    case 'update-group':
+      prunePendingFields(pendingGroupChanges, d.id, updates, cutoff)
+      break
+    case 'update-domain':
+      prunePendingFields(pendingDomainChanges, d.id, updates, cutoff)
+      break
+    case 'update-connection':
+      prunePendingFields(pendingConnectionChanges, d.id, updates, cutoff)
+      break
+    default:
+      break
+  }
+}

@@ -13,7 +13,7 @@ import type {
 } from './collab-utils.js'
 import {
   clearPendingForBatch,
-  prunePendingFields,
+  clearPendingForSingleOperation,
   clearPendingRemoves,
 } from './collab-utils.js'
 
@@ -265,7 +265,12 @@ class CollaborationService {
   private isIntentionallyClosed = false
   private reconnectAttempts = 0
   private maxReconnectAttempts = 5
-  private reconnectDelay = 2000
+  // Exponential backoff with jitter to avoid a thundering-herd of reconnects
+  // when many clients drop at once (e.g. server restart). The base delay
+  // doubles on each failed attempt up to MAX_RECONNECT_DELAY_MS, and each
+  // computed delay gets ±25% jitter so simultaneous disconnects spread out.
+  private reconnectBaseDelay = 2000
+  private readonly MAX_RECONNECT_DELAY_MS = 30000
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null
   private userId: number | null = null
 
@@ -339,6 +344,12 @@ class CollaborationService {
 
   // Server version tracking
   private serverVersion = 0
+  // Set when a sync-request is sent to the server, cleared when the matching
+  // sync response lands (handleSync). While in flight, cleanupRecentChanges
+  // must NOT drop pending entries — those changes are waiting to be replayed
+  // against the fresh server state, and dropping them before the replay would
+  // lose the edit permanently.
+  private syncInFlight = false
   // User interaction protection - when user is actively interacting with canvas,
   // remote updates for the same element are deferred
   private activeUserInteractions = new Map<string, { field: string | null; startTime: number }>()
@@ -382,7 +393,7 @@ class CollaborationService {
           return
         }
         this.reconnectAttempts = 0
-        this.reconnectDelay = 2000
+        this.reconnectBaseDelay = 2000
         this.restoreOfflineQueue()
         this.requestSync()
         this.flushOfflineQueue()
@@ -491,9 +502,20 @@ class CollaborationService {
   private scheduleReconnect(canvasId: number) {
     this.reconnectAttempts++
 
+    // Exponential backoff capped at MAX_RECONNECT_DELAY_MS, with ±25% jitter
+    // so that a fleet of clients disconnected by the same event (server
+    // restart, network blip) don't all reconnect on the exact same tick and
+    // stampede the server's sync-request path.
+    const exponential = Math.min(
+      this.reconnectBaseDelay * Math.pow(2, this.reconnectAttempts - 1),
+      this.MAX_RECONNECT_DELAY_MS,
+    )
+    const jitterFactor = 1 + (Math.random() * 0.5 - 0.25) // 0.75 .. 1.25
+    const delay = Math.round(exponential * jitterFactor)
+
     this.reconnectTimeout = setTimeout(() => {
       this.connect(canvasId)
-    }, this.reconnectDelay)
+    }, delay)
   }
 
   private startCleanupInterval(): void {
@@ -504,6 +526,17 @@ class CollaborationService {
   }
 
   private cleanupRecentChanges(): void {
+    // Do NOT drop pending entries while we are waiting for either:
+    //   (a) a sync response (syncInFlight) — those pending changes are about to
+    //       be replayed against the fresh server state; dropping them now would
+    //       lose the edit.
+    //   (b) ACKs for in-flight operations (unackedOps.size > 0) — the server
+    //       hasn't yet confirmed these edits; if a NAK comes back, the same
+    //       replay path needs these pending entries intact.
+    // In both cases, defer the cleanup to a later tick of this interval.
+    if (this.syncInFlight || this.unackedOps.size > 0) {
+      return
+    }
     const cutoff = Date.now() - 30000
     for (const [id, change] of this.pendingNodeChanges) {
       if (change.changes.size === 0) {
@@ -561,6 +594,9 @@ class CollaborationService {
     }
     this.stopInteractionCheckInterval()
     this.stopCleanupInterval()
+    // Clear the sync-in-flight flag: the sync response will never arrive on a
+    // closed socket, and a stuck flag would permanently disable pending cleanup.
+    this.syncInFlight = false
     // Defensive reset of isApplyingRemoteUpdate. This can be reached from
     // both disconnect() and the ws.onclose handler; in the latter case the
     // normal try/finally in handleSync would have run, but a flag stuck
@@ -625,6 +661,7 @@ class CollaborationService {
     // try/finally could clear the flag, the new connection would otherwise
     // skip echoing local changes back to the server.
     this.isApplyingRemoteUpdate = false
+    this.syncInFlight = false
     // Preserve serverVersion to avoid 409 conflicts when saving via REST API
     // after disconnecting from collaboration mode
     this.activeUserInteractions.clear()
@@ -768,6 +805,9 @@ class CollaborationService {
     connections: Connection[]
     version: number
   }) {
+    // The awaited sync has arrived — clear the in-flight flag so the cleanup
+    // timer can resume dropping stale pending entries again.
+    this.syncInFlight = false
     if (this.isDestroyed) return
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return
 
@@ -1063,17 +1103,33 @@ class CollaborationService {
 
   private handleAck(seq: number): void {
     const op = this.unackedOps.get(seq)
-    if (op?.operation === 'batch-operation') {
-      const batch = op.data as BatchOperations
-      clearPendingForBatch(
-        batch,
-        op.timestamp,
-        this.pendingNodeChanges,
-        this.pendingGroupChanges,
-        this.pendingDomainChanges,
-        this.pendingConnectionChanges,
-      )
-      clearPendingRemoves(batch, this.pendingRemoves)
+    if (op) {
+      // ACK is the authoritative "server accepted this change" signal.
+      // Prune the confirmed fields from pending*Changes using the same cutoff
+      // rule as batches: only entries with timestamp <= op.timestamp are pruned,
+      // so newer writes to the same field (made after this op was sent) survive.
+      if (op.operation === 'batch-operation') {
+        const batch = op.data as BatchOperations
+        clearPendingForBatch(
+          batch,
+          op.timestamp,
+          this.pendingNodeChanges,
+          this.pendingGroupChanges,
+          this.pendingDomainChanges,
+          this.pendingConnectionChanges,
+        )
+        clearPendingRemoves(batch, this.pendingRemoves)
+      } else {
+        clearPendingForSingleOperation(
+          op.operation,
+          op.data,
+          op.timestamp,
+          this.pendingNodeChanges,
+          this.pendingGroupChanges,
+          this.pendingDomainChanges,
+          this.pendingConnectionChanges,
+        )
+      }
     }
     this.unackedOps.delete(seq)
     if (this.unackedOps.size === 0 && this.ackTimeoutId) {
@@ -1219,6 +1275,7 @@ class CollaborationService {
     if (this.isDestroyed || this.isIntentionallyClosed) return false
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({ type: 'sync-request' }))
+      this.syncInFlight = true
       return true
     }
     return false
