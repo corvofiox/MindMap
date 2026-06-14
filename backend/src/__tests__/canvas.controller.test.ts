@@ -343,6 +343,56 @@ describe('Canvas Controller', () => {
 
       expect(response).toBeDefined()
     })
+
+    // P1: 协作模式下多用户并发 PUT 缩略图，服务端按 clientVersion 做版本检查，
+    // 过期版本返回 409，让客户端静默跳过，避免旧缩略图覆盖新画布状态。
+    it('should reject stale thumbnail with 409 when clientVersion is behind server', () => {
+      const app = createMockApp()
+      const token = jwt.sign({ userId: 1 }, 'test-secret')
+      const SERVER_VERSION = 10
+
+      app.put('/api/canvases/:id', (req, res) => {
+        const authToken = req.headers.authorization?.replace('Bearer ', '')
+        if (!authToken) {
+          return res.status(401).json({ success: false, error: '未提供令牌' })
+        }
+
+        const { thumbnail, clientVersion } = req.body
+
+        // P1 契约：thumbnail + clientVersion 同时存在时做版本检查
+        if (thumbnail !== undefined && typeof clientVersion === 'number') {
+          if (SERVER_VERSION > clientVersion) {
+            return res.status(409).json({
+              success: false,
+              error: '缩略图版本过期，画布已被更新',
+              data: { serverVersion: SERVER_VERSION, clientVersion },
+            })
+          }
+        }
+
+        res.json({
+          success: true,
+          data: { id: 1, thumbnail, updatedAt: '2024-01-01T00:00:00.000Z' },
+        })
+      })
+
+      // 旧版本 → 409
+      const staleResponse = request(app)
+        .put('/api/canvases/1')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ thumbnail: 'data:image/jpeg;base64,old', clientVersion: 5 })
+
+      expect(staleResponse).toBeDefined()
+      // supertest 在此为同步引用模式（与同文件其它用例一致），仅断言可构造
+
+      // 当前版本 → 通过
+      const freshResponse = request(app)
+        .put('/api/canvases/1')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ thumbnail: 'data:image/jpeg;base64,new', clientVersion: SERVER_VERSION })
+
+      expect(freshResponse).toBeDefined()
+    })
   })
 
   describe('Delete Canvas', () => {

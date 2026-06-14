@@ -129,7 +129,9 @@ export async function createCanvas(
   return await apiClient.post<Canvas>(API_ENDPOINTS.CANVASES(projectId), data)
 }
 
-export async function updateCanvas(id: number, data: Partial<Canvas>): Promise<Canvas> {
+// data 允许带 clientVersion（P1：缩略图 PUT 版本检查），它不是 Canvas 字段，
+// 仅作为传输层参数透传给后端 PUT /api/canvases/:id。
+export async function updateCanvas(id: number, data: Partial<Canvas> & { clientVersion?: number }): Promise<Canvas> {
   return await apiClient.put<Canvas>(API_ENDPOINTS.CANVAS_BY_ID(id), data)
 }
 

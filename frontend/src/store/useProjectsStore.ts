@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { Project, Canvas, Folder, NodeCard, NodePoolFolder, NodePoolSortOption, NodePoolSortOrder } from '@/types'
 import * as api from '@/services/api'
+import { ApiError } from '@/services/apiClient'
 
 // 项目筛选状态
 export interface ProjectFilters {
@@ -44,7 +45,7 @@ interface ProjectsState {
 
   // Canvas actions
   createCanvas: (projectId: number, data: Partial<Canvas>) => Promise<Canvas | null>
-  updateCanvas: (id: number, data: Partial<Canvas>, silent?: boolean) => Promise<void>
+  updateCanvas: (id: number, data: Partial<Canvas> & { clientVersion?: number }, silent?: boolean) => Promise<void>
   deleteCanvas: (id: number) => Promise<void>
   moveCanvasToFolder: (canvasId: number, folderId: number | null, silent?: boolean) => Promise<void>
 
@@ -369,6 +370,11 @@ export const useProjectsStore = create<ProjectsState>()(
               loadingMessage: silent ? state.loadingMessage : '',
             }))
           } catch (error) {
+            // P1: silent 模式（缩略图更新）下的 409 表示画布已被他人更新，
+            // 本次缩略图基于过时状态生成，静默丢弃比覆盖更安全，不报错。
+            if (silent && error instanceof ApiError && error.status === 409) {
+              return
+            }
             handleError(error, '更新画布失败')
           }
         },

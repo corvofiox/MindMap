@@ -26,12 +26,14 @@ interface CollabUser {
   joinedAt: number
 }
 
+// senderId 用 tab 级 sessionId（字符串）而非 userId：同账号多标签页下，
+// userId 过滤会误吞另一标签页的广播；sessionId 保证只过滤自己这条连接的回响。
 interface CollabMessage {
   type: 'operation'
   operation: string
   data: unknown
   timestamp: number
-  senderId: number
+  senderId: number | string
   seq?: number
   clientVersion?: number
 }
@@ -43,7 +45,7 @@ interface BatchCollabMessage {
     data: unknown
   }>
   timestamp: number
-  senderId: number
+  senderId: number | string
   seq: number
   clientVersion: number
 }
@@ -279,6 +281,8 @@ class CollaborationService {
   private operationHandlers = new Map<string, OperationHandler[]>()
   private cursorListeners: ((cursors: Map<number, CursorData>) => void)[] = []
   private userListeners: ((users: CollabUser[]) => void)[] = []
+  // P3: 被服务端踢出（owner 移除成员）时通知前端跳转 + 提示
+  private kickedListeners: ((reason: string) => void)[] = []
 
   private offlineQueue: QueuedOperation[] = []
   private maxQueueSize = 100
@@ -358,6 +362,14 @@ class CollaborationService {
   private cleanupInterval: ReturnType<typeof setInterval> | null = null
   private readonly INTERACTION_TIMEOUT_MS = 500
 
+  // P2: 应用层心跳。浏览器 WebSocket 无法响应 ws.ping（依赖 OS 自动回 pong），
+  // 设备休眠/切后台时原生 pong 可能延迟导致被服务端误判僵尸。前端每 25s
+  // 主动发 {type:'ping'}，服务端回 {type:'pong'}，作为双保险心跳的第二通道。
+  private appHeartbeatInterval: ReturnType<typeof setInterval> | null = null
+  private readonly APP_HEARTBEAT_INTERVAL_MS = 25000
+  private lastPong = 0
+  private visibilityHandler: (() => void) | null = null
+
   connect(canvasId: number) {
     this.isDestroyed = false
     this.emptySyncRetryCount = 0
@@ -399,6 +411,7 @@ class CollaborationService {
         this.flushOfflineQueue()
         this.startInteractionCheckInterval()
         this.startCleanupInterval()
+        this.startAppHeartbeat()
       }
 
       this.ws.onmessage = (event) => {
@@ -469,6 +482,50 @@ class CollaborationService {
     if (this.interactionCheckInterval) {
       clearInterval(this.interactionCheckInterval)
       this.interactionCheckInterval = null
+    }
+  }
+
+  /**
+   * P2: 应用层心跳。浏览器无法响应 ws.ping，靠 OS 自动回 pong；设备休眠/切后台时
+   * 原生 pong 延迟会被服务端误判僵尸。前端每 25s 主动发 ping，配合服务端的双
+   * 保险判定（ws 原生 pong + 应用层 pong 任一存活即保留连接）。
+   */
+  private startAppHeartbeat(): void {
+    this.stopAppHeartbeat()
+    // 立即发一次，确保 lastAppPong 尽快建立，避免首次巡检窗口内被误判
+    this.sendAppPing()
+    this.appHeartbeatInterval = setInterval(() => {
+      this.sendAppPing()
+    }, this.APP_HEARTBEAT_INTERVAL_MS)
+
+    // 页面从后台切回前台时立即补发一次 ping，加速恢复连接活性判定
+    if (typeof document !== 'undefined' && !this.visibilityHandler) {
+      this.visibilityHandler = () => {
+        if (document.visibilityState === 'visible') {
+          this.sendAppPing()
+        }
+      }
+      document.addEventListener('visibilitychange', this.visibilityHandler)
+    }
+  }
+
+  private stopAppHeartbeat(): void {
+    if (this.appHeartbeatInterval) {
+      clearInterval(this.appHeartbeatInterval)
+      this.appHeartbeatInterval = null
+    }
+    if (this.visibilityHandler && typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', this.visibilityHandler)
+      this.visibilityHandler = null
+    }
+  }
+
+  private sendAppPing(): void {
+    if (this.isDestroyed || !this.ws || this.ws.readyState !== WebSocket.OPEN) return
+    try {
+      this.ws.send(JSON.stringify({ type: 'ping', timestamp: Date.now() }))
+    } catch {
+      // send 失败不致命，下次心跳或 onclose 会处理
     }
   }
 
@@ -624,6 +681,9 @@ class CollaborationService {
       this.ackTimeoutId = null
     }
 
+    // P2: 断开时停止应用层心跳，避免对已关闭的 ws 继续发 ping
+    this.stopAppHeartbeat()
+
     if (this.ws) {
       this.ws.onopen = null
       this.ws.onmessage = null
@@ -648,6 +708,7 @@ class CollaborationService {
     this.operationHandlers.clear()
     this.cursorListeners = []
     this.userListeners = []
+    this.kickedListeners = []
     this.isFlushingQueue = false
     this.pendingNodeChanges.clear()
     this.pendingConnectionChanges.clear()
@@ -700,6 +761,14 @@ class CollaborationService {
         case 'user-leave':
           this.handleUserLeave(message.user)
           break
+        case 'kicked':
+          // P3: 被 owner 移除成员，通知前端提示用户并跳转
+          this.handleKicked(message.reason)
+          break
+        case 'user-role-changed':
+          // P3: 某成员角色变更，刷新本地用户列表
+          this.handleUserRoleChanged(message.userId, message.role)
+          break
         case 'sync':
           this.handleSync(message)
           break
@@ -718,6 +787,10 @@ class CollaborationService {
             })
           }
           break
+        case 'pong':
+          // P2: 应用层心跳响应，更新本地 lastPong（服务端收到 ping 时也已更新其 lastAppPong）
+          this.lastPong = Date.now()
+          break
         case 'ack':
           this.handleAck(message.seq)
           break
@@ -731,7 +804,10 @@ class CollaborationService {
   }
 
   private handleOperation(message: CollabMessage) {
-    if (message.senderId === this.userId) return
+    // 按 tab 级 sessionId 过滤回响（而非 userId）：同账号多标签页下，
+    // 后端 broadcastToRoom 已按 WS 连接排除发送者，但同账号另一标签页
+    // 是不同的 WS 连接，会收到广播——这里必须用 sessionId 才能正确区分。
+    if (message.senderId === this.sessionId) return
     const nodeId = this.extractNodeIdFromOperation(message.operation, message.data)
     if (nodeId && this.isNodeBeingInteractedWith(nodeId)) {
       // Defer this operation until interaction ends
@@ -750,7 +826,8 @@ class CollaborationService {
   }
 
   private handleBatchOperation(message: BatchCollabMessage) {
-    if (message.senderId === this.userId) return
+    // 按 tab 级 sessionId 过滤回响（见 handleOperation 注释）
+    if (message.senderId === this.sessionId) return
 
     for (const op of message.operations) {
       const nodeId = this.extractNodeIdFromOperation(op.operation, op.data)
@@ -771,6 +848,8 @@ class CollaborationService {
   }
 
   private handleCursor(cursor: CursorData) {
+    // 光标按 userId 过滤：同一账号的光标在协作面板只显示一个聚合点更合理，
+    // 不像操作那样需要逐 tab 区分（多标签页同账号共用一个光标点）。
     if (cursor.userId === this.userId) return
     this.cursors.set(cursor.userId, cursor)
     this.cursorListeners.forEach(listener => listener(new Map(this.cursors)))
@@ -793,6 +872,28 @@ class CollaborationService {
     this.cursors.delete(user.userId)
     this.userListeners.forEach(listener => listener(this.users))
     this.cursorListeners.forEach(listener => listener(new Map(this.cursors)))
+  }
+
+  /**
+   * P3: 收到服务端 kicked 消息（owner 移除了当前用户的项目成员资格）。
+   * 主动断开 WS 并通知前端跳转到项目列表 + 提示用户。
+   */
+  private handleKicked(reason: string): void {
+    // 标记为非用户主动断开，避免触发指数退避重连（被踢不应自动重连）
+    this.isIntentionallyClosed = true
+    this.cleanupWebSocket()
+    this.kickedListeners.forEach(listener => listener(reason))
+  }
+
+  /**
+   * P3: 收到服务端 user-role-changed 消息，更新本地用户列表中的角色。
+   */
+  private handleUserRoleChanged(userId: number, role: 'owner' | 'editor' | 'viewer'): void {
+    const user = this.users.find(u => u.userId === userId)
+    if (user && user.role !== role) {
+      user.role = role
+      this.userListeners.forEach(listener => listener(this.users))
+    }
   }
 
   private emptySyncRetryCount = 0
@@ -1345,7 +1446,7 @@ class CollaborationService {
       operation,
       data,
       timestamp,
-      senderId: this.userId || 0,
+      senderId: this.sessionId,
       seq,
       clientVersion: this.serverVersion,
     }
@@ -1387,7 +1488,7 @@ class CollaborationService {
       type: 'batch-operation',
       operations: opEntries,
       timestamp,
-      senderId: this.userId || 0,
+      senderId: this.sessionId,
       seq,
       clientVersion: this.serverVersion,
     }
@@ -1462,6 +1563,21 @@ class CollaborationService {
     const index = this.cursorListeners.indexOf(listener)
     if (index > -1) {
       this.cursorListeners.splice(index, 1)
+    }
+  }
+
+  /**
+   * P3: 注册被踢出回调（owner 移除当前用户成员资格时触发）。
+   * 前端应在回调中提示用户并跳转到项目列表。
+   */
+  onKicked(listener: (reason: string) => void) {
+    this.kickedListeners.push(listener)
+  }
+
+  offKicked(listener: (reason: string) => void) {
+    const index = this.kickedListeners.indexOf(listener)
+    if (index > -1) {
+      this.kickedListeners.splice(index, 1)
     }
   }
 

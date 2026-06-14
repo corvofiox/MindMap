@@ -1,10 +1,12 @@
 import { Router } from 'express'
 import { db, scheduleSave } from '../database/connection.js'
-import { projects, projectMembers, projectInvitations, users } from '../database/schema.js'
+import { projects, projectMembers, projectInvitations, users, canvases } from '../database/schema.js'
 import { eq, and, or } from 'drizzle-orm'
 import { authenticate, type AuthRequest } from '../middleware/auth.middleware.js'
 import { asyncHandler } from '../middleware/error.middleware.js'
 import { transformResponse, getProperty } from '../utils/transformResponse.js'
+import { logError } from '../utils/logger.js'
+import { kickUserFromRoom, updateUserRole } from '../websocket/index.js'
 
 export const collaborationRouter = Router()
 
@@ -426,6 +428,24 @@ collaborationRouter.delete('/projects/:projectId/members/:userId', authenticate,
       eq(projectMembers.userId, userId)
     ))
 
+  // P3: 踢出该用户在项目下所有协作画布的在线 WS 连接。
+  // 否则被移除的成员仍能继续看画布直到自己断开。
+  try {
+    const projectCanvases = await db.query.canvases.findMany({
+      where: eq(canvases.projectId, projectId),
+    })
+    for (const c of projectCanvases) {
+      kickUserFromRoom(c.id, userId, 'removed')
+    }
+  } catch (error) {
+    // 踢人失败不应阻塞 API 响应，记录后继续
+    logError('Failed to kick removed member from rooms', {
+      projectId,
+      userId,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+
   scheduleSave()
 
   res.json({
@@ -549,6 +569,24 @@ collaborationRouter.put('/projects/:projectId/members/:userId/role', authenticat
     return res.status(404).json({
       success: false,
       error: '成员未找到',
+    })
+  }
+
+  // P3: 角色变更立即生效于在线 WS 连接。否则被改角色的成员的 ws.userRole 仍是旧值，
+  // handleOperation 仍按旧角色判定（例如 viewer 提升为 editor 后仍无法编辑，需重连才生效）。
+  try {
+    const projectCanvases = await db.query.canvases.findMany({
+      where: eq(canvases.projectId, projectId),
+    })
+    for (const c of projectCanvases) {
+      updateUserRole(c.id, userId, role)
+    }
+  } catch (error) {
+    logError('Failed to update online user role', {
+      projectId,
+      userId,
+      role,
+      error: error instanceof Error ? error.message : String(error),
     })
   }
 

@@ -71,13 +71,28 @@ interface WebSocketWithUserData extends WebSocket {
   userInfo?: CanvasActiveUser
   isAlive?: boolean
   lastPong?: number
+  // 应用层 pong 时间戳（前端主动发 ping/pong，弥补浏览器无法响应 ws.ping）
+  lastAppPong?: number
 }
 
-interface CanvasRoom {
+export interface CanvasRoom {
   id: number
   clients: Set<WebSocketWithUserData>
   activeUsers: Map<number, CanvasActiveUser>
   userConnectionCounts: Map<number, number>
+}
+
+/**
+ * 测试专用：注入受控的 room 状态，用于验证 kickUserFromRoom / updateUserRole
+ * 的真实行为（send kicked 消息、terminate、广播）。下划线前缀表明仅供测试使用。
+ * 生产代码不应调用。
+ */
+export function _setRoomForTesting(canvasId: number, room: CanvasRoom | null): void {
+  if (room) {
+    canvasRooms.set(canvasId, room)
+  } else {
+    canvasRooms.delete(canvasId)
+  }
 }
 
 interface CollabMessage {
@@ -85,7 +100,9 @@ interface CollabMessage {
   operation: string
   data: unknown
   timestamp: number
-  senderId: number
+  // senderId 由客户端填入 tab 级 sessionId（字符串），后端不消费此字段做过滤，
+  // 仅在 broadcastToRoom 中透传给其他客户端。
+  senderId: number | string
   seq?: number
   clientVersion?: number
 }
@@ -117,8 +134,12 @@ const wsConnectionRates = new Map<string, { count: number; resetTime: number }>(
 const WS_MAX_CONNECTIONS_PER_MINUTE = 100
 const WS_WINDOW_MS = 60 * 1000
 
+// P2: 心跳采用双保险——ws 原生 ping/pong + 应用层 ping/pong。
+// 浏览器 WebSocket 不暴露 ping API，依赖 OS 自动回 pong；设备休眠/切后台时
+// 原生 pong 可能延迟。前端每 25s 主动发应用层 ping，此处收到后更新 lastAppPong。
+// 超时拉长到 120s 容忍短暂休眠，且要求两个通道都超时才判死（避免误杀健康连接）。
 const HEARTBEAT_INTERVAL_MS = 30000
-const HEARTBEAT_TIMEOUT_MS = 60000
+const HEARTBEAT_TIMEOUT_MS = 120000
 
 function checkWsRateLimit(ip: string): boolean {
   const now = Date.now()
@@ -177,7 +198,11 @@ export function setupWebSocket(wss: WebSocketServer) {
 
       for (const client of Array.from(room.clients)) {
         try {
-          if (client.lastPong === undefined || (now - client.lastPong) > HEARTBEAT_TIMEOUT_MS) {
+          // P2 双保险：ws 原生 pong 与应用层 pong 两个通道，任一仍在超时窗口内
+          // 即视为连接存活。避免浏览器在休眠/切后台时因 OS 层 pong 延迟被误杀。
+          const nativeStale = client.lastPong === undefined || (now - client.lastPong) > HEARTBEAT_TIMEOUT_MS
+          const appStale = client.lastAppPong === undefined || (now - client.lastAppPong) > HEARTBEAT_TIMEOUT_MS
+          if (nativeStale && appStale) {
             handleClientDisconnect(client, room, true)
             continue
           }
@@ -226,6 +251,57 @@ export function getProjectActiveUsers(_projectId: number): Map<number, CanvasAct
     }
   }
   return result
+}
+
+/**
+ * P3: 踢出某画布内指定用户的所有 WS 连接（owner 移除成员后调用）。
+ * 先发送 kicked 通知让前端提示用户并跳转，再调用 handleClientDisconnect(..., true)
+ * 触发引用计数清理 + ws.terminate()（复用现有断连逻辑，正确广播 user-leave）。
+ */
+export function kickUserFromRoom(canvasId: number, userId: number, reason: string = 'removed'): void {
+  const room = canvasRooms.get(canvasId)
+  if (!room) return
+
+  for (const client of Array.from(room.clients)) {
+    if (client.userId === userId) {
+      try {
+        if (client.readyState === 1) {
+          client.send(JSON.stringify({ type: 'kicked', reason }))
+        }
+      } catch {
+        // send 失败不阻塞，继续走 close
+      }
+      handleClientDisconnect(client, room, true)
+    }
+  }
+}
+
+/**
+ * P3: 更新某画布内指定用户的在线角色（owner 调整成员角色后调用）。
+ * 同步更新 ws.userRole（handleOperation 的权限判定依据）与 room.activeUsers，
+ * 并广播 user-role-changed 让其他客户端刷新用户列表 UI。
+ */
+export function updateUserRole(canvasId: number, userId: number, newRole: 'editor' | 'viewer'): void {
+  const room = canvasRooms.get(canvasId)
+  if (!room) return
+
+  const userInfo = room.activeUsers.get(userId)
+  if (userInfo) {
+    userInfo.role = newRole
+    room.activeUsers.set(userId, userInfo)
+  }
+
+  for (const client of Array.from(room.clients)) {
+    if (client.userId === userId) {
+      client.userRole = newRole
+    }
+  }
+
+  broadcastToRoom(room, {
+    type: 'user-role-changed',
+    userId,
+    role: newRole,
+  }, null)
 }
 
 async function handleConnection(ws: WebSocketWithUserData, req: any) {
@@ -496,6 +572,14 @@ async function handleMessage(ws: WebSocketWithUserData, room: CanvasRoom, data: 
       case 'sync-request':
         await handleSyncRequest(ws, room)
         break
+      case 'ping':
+        // P2: 应用层心跳——浏览器无法响应 ws.ping，前端主动发 ping，此处回 pong
+        // 并更新 lastAppPong，作为双保险心跳判定的第二通道。
+        ws.lastAppPong = Date.now()
+        if (ws.readyState === 1) {
+          ws.send(JSON.stringify({ type: 'pong', timestamp: Date.now() }))
+        }
+        break
       default:
         break
     }
@@ -684,7 +768,7 @@ async function handleBatchOperation(ws: WebSocketWithUserData, room: CanvasRoom,
   type: 'batch-operation'
   operations: Array<{ operation: string; data: unknown }>
   timestamp: number
-  senderId: number
+  senderId: number | string
   seq: number
   clientVersion: number
 }) {

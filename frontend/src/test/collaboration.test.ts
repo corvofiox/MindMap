@@ -16,7 +16,7 @@ interface BatchCollabMessage {
   type: 'batch-operation'
   operations: Array<{ operation: string; data: unknown }>
   timestamp: number
-  senderId: number
+  senderId: number | string
   seq: number
 }
 
@@ -31,16 +31,19 @@ interface CollabMessage {
   operation: string
   data: unknown
   timestamp: number
-  senderId: number
+  senderId: number | string
 }
 
 class MockCollaborationService {
   private ws: WebSocket | null = null
   private isIntentionallyClosed = false
   private userId: number | null = 1
+  // 与真实 service 对齐：tab 级 sessionId，用于 senderId 与回响过滤
+  private sessionId: string
   private offlineQueue: QueuedOperation[] = []
   private maxQueueSize = 100
   private sentMessages: CollabMessage[] = []
+  private appliedRemoteOps: Array<{ operation: string; data: unknown }> = []
   private pendingNodeChanges = new Map<string, PendingNodeChanges>()
   private pendingConnectionChanges = new Map<string, PendingConnectionChanges>()
   private pendingGroupChanges = new Map<string, PendingGroupChanges>()
@@ -58,15 +61,65 @@ class MockCollaborationService {
   private readonly MAX_EMPTY_SYNC_RETRIES = 3
 
   connect(shouldConnect: boolean = true) {
+    if (!this.sessionId) {
+      this.sessionId = `session-${Math.random().toString(36).slice(2, 10)}`
+    }
     if (shouldConnect) {
+      this.lastPong = 0
       this.ws = {
         readyState: WebSocket.OPEN, send: (msg: string) => {
-          this.sentMessages.push(JSON.parse(msg))
+          const parsed = JSON.parse(msg)
+          this.sentMessages.push(parsed)
+          // P2: 捕获应用层 ping（真实 service 的 sendAppPing 行为）
+          if (parsed.type === 'ping') {
+            this.pingCount++
+          }
         }
       } as unknown as WebSocket
     } else {
       this.ws = null
     }
+  }
+
+  // P2: 应用层心跳状态
+  private pingCount = 0
+  private lastPong = 0
+
+  /** 模拟服务端返回 pong（与真实 handleMessage 的 'pong' case 对齐） */
+  receivePong(): void {
+    this.lastPong = Date.now()
+  }
+
+  /** 模拟 sendAppPing：与真实 service 一致，仅 OPEN 时发送 */
+  sendAppPing(): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return
+    this.ws.send(JSON.stringify({ type: 'ping', timestamp: Date.now() }))
+  }
+
+  getPingCount(): number {
+    return this.pingCount
+  }
+
+  getLastPong(): number {
+    return this.lastPong
+  }
+
+  /**
+   * 与真实 service 的 handleOperation 对齐：按 sessionId 过滤回响。
+   * 测试 P0 场景（同账号多标签页）时，传入另一标签页广播的消息验证是否被正确接收。
+   */
+  handleOperation(message: CollabMessage): boolean {
+    if (message.senderId === this.sessionId) return false
+    this.appliedRemoteOps.push({ operation: message.operation, data: message.data })
+    return true
+  }
+
+  getSessionId(): string {
+    return this.sessionId
+  }
+
+  getAppliedRemoteOps(): Array<{ operation: string; data: unknown }> {
+    return this.appliedRemoteOps
   }
 
   disconnect() {
@@ -144,7 +197,7 @@ class MockCollaborationService {
       type: 'batch-operation',
       operations: batchToOperations(batch),
       timestamp,
-      senderId: this.userId || 0,
+      senderId: this.sessionId,
       seq,
     }
     this.ws.send(JSON.stringify(message))
@@ -213,7 +266,7 @@ class MockCollaborationService {
       operation,
       data,
       timestamp,
-      senderId: this.userId || 0
+      senderId: this.sessionId
     }
 
     // Mirror the real service: track single ops as unacked so handleAck can
@@ -1194,3 +1247,142 @@ describe('sendBatch', () => {
     expect(result.removedNodeIds![0]).toBe('n2')
   })
 })
+
+// P0 修复：同账号多标签页 senderId 必须用 tab 级 sessionId 而非 userId，
+// 否则同账号另一标签页的广播会被误判为"自己的回响"而丢弃。
+describe('senderId — 多标签页回环过滤', () => {
+  it('sendOperation 应填入 sessionId 而非 userId', () => {
+    const service = new MockCollaborationService()
+    service.connect(true)
+    service.clearSentMessages()
+
+    service.sendOperation('update-node', { id: 'n1', updates: { text: 'hi' } })
+
+    const sent = service.getSentMessages()
+    expect(sent).toHaveLength(1)
+    // senderId 必须是字符串 sessionId，而不是 userId (number 1)
+    expect(typeof sent[0].senderId).toBe('string')
+    expect(sent[0].senderId).toBe(service.getSessionId())
+    expect(sent[0].senderId).not.toBe(1)
+  })
+
+  it('sendBatch 应填入 sessionId 而非 userId', () => {
+    const service = new MockCollaborationService()
+    service.connect(true)
+    service.clearSentMessages()
+
+    service.sendBatch({ addedNodes: [{ id: 'n1' } as unknown as never] })
+
+    const sent = service.getSentMessages()
+    expect(sent).toHaveLength(1)
+    expect(typeof sent[0].senderId).toBe('string')
+    expect(sent[0].senderId).toBe(service.getSessionId())
+  })
+
+  it('同账号不同标签页：B 收到 A 的广播不会被吞掉', () => {
+    // 两个标签页同账号（userId 都是 1），但 sessionId 不同
+    const tabA = new MockCollaborationService()
+    const tabB = new MockCollaborationService()
+    tabA.connect(true)
+    tabB.connect(true)
+
+    expect(tabA.getSessionId()).not.toBe(tabB.getSessionId())
+
+    // 模拟 A 发了一个操作（后端已按 WS 连接排除 A，广播给 B）
+    const messageFromA = {
+      type: 'operation' as const,
+      operation: 'update-node',
+      data: { id: 'n1', updates: { text: 'from A' } },
+      timestamp: Date.now(),
+      senderId: tabA.getSessionId(),
+    }
+
+    // B 收到 A 的广播：senderId 是 A 的 sessionId，与 B 的不同 → 应当应用
+    const applied = tabB.handleOperation(messageFromA)
+    expect(applied).toBe(true)
+    expect(tabB.getAppliedRemoteOps()).toHaveLength(1)
+    expect(tabB.getAppliedRemoteOps()[0].operation).toBe('update-node')
+  })
+
+  it('同标签页回响：自己发的操作被正确过滤', () => {
+    const tabA = new MockCollaborationService()
+    tabA.connect(true)
+    tabA.clearSentMessages()
+
+    tabA.sendOperation('update-node', { id: 'n1', updates: { text: 'mine' } })
+    const sent = tabA.getSentMessages()
+
+    // 模拟回环：同 sessionId 的消息到达，应被丢弃（应用返回 false）
+    const echo = {
+      type: 'operation' as const,
+      operation: sent[0].operation,
+      data: sent[0].data,
+      timestamp: sent[0].timestamp,
+      senderId: sent[0].senderId,
+    }
+    const applied = tabA.handleOperation(echo)
+    expect(applied).toBe(false)
+    expect(tabA.getAppliedRemoteOps()).toHaveLength(0)
+  })
+})
+
+// P2 修复：浏览器 WebSocket 无法响应 ws.ping，靠 OS 自动回 pong；设备休眠/切后台
+// 时原生 pong 延迟会被误判僵尸。新增应用层 ping/pong 作为双保险心跳的第二通道。
+describe('应用层 ping/pong 心跳', () => {
+  it('sendAppPing 在 OPEN 时发送 ping 消息', () => {
+    const service = new MockCollaborationService()
+    service.connect(true)
+    service.clearSentMessages()
+
+    const before = service.getPingCount()
+    service.sendAppPing()
+    const after = service.getPingCount()
+
+    expect(after).toBe(before + 1)
+    const sent = service.getSentMessages()
+    expect(sent).toHaveLength(1)
+    expect(sent[0].type).toBe('ping')
+    expect(typeof sent[0].timestamp).toBe('number')
+  })
+
+  it('sendAppPing 在未连接时不发送', () => {
+    const service = new MockCollaborationService()
+    service.connect(false) // 不建立 ws
+    service.clearSentMessages()
+
+    service.sendAppPing()
+    expect(service.getSentMessages()).toHaveLength(0)
+  })
+
+  it('receivePong 更新本地 lastPong 时间戳', () => {
+    const service = new MockCollaborationService()
+    service.connect(true)
+
+    expect(service.getLastPong()).toBe(0)
+    const before = Date.now()
+    service.receivePong()
+    const after = Date.now()
+
+    expect(service.getLastPong()).toBeGreaterThanOrEqual(before)
+    expect(service.getLastPong()).toBeLessThanOrEqual(after)
+  })
+
+  it('多客户端各自独立心跳（不同 service 实例互不干扰）', () => {
+    const a = new MockCollaborationService()
+    const b = new MockCollaborationService()
+    a.connect(true)
+    b.connect(true)
+    a.clearSentMessages()
+    b.clearSentMessages()
+
+    a.sendAppPing()
+    expect(a.getPingCount()).toBe(1)
+    expect(b.getPingCount()).toBe(0)
+
+    b.sendAppPing()
+    b.sendAppPing()
+    expect(b.getPingCount()).toBe(2)
+    expect(a.getPingCount()).toBe(1)
+  })
+})
+

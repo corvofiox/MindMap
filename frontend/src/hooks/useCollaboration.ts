@@ -11,12 +11,19 @@ interface UseCollaborationOptions {
   canvasId: number
   enabled?: boolean
   onRemoteChange?: (canvasId: number) => void
+  /**
+   * P3: 当前用户被 owner 移除项目成员资格时触发（服务端 kicked 消息）。
+   * 前端通常在此提示用户并跳转到项目列表。
+   */
+  onKicked?: (reason: string) => void
 }
 
-export function useCollaboration({ canvasId, enabled = true, onRemoteChange }: UseCollaborationOptions) {
+export function useCollaboration({ canvasId, enabled = true, onRemoteChange, onKicked }: UseCollaborationOptions) {
   const isApplyingRemoteChanges = useRef(false)
   const onRemoteChangeRef = useRef(onRemoteChange)
   onRemoteChangeRef.current = onRemoteChange
+  const onKickedRef = useRef(onKicked)
+  onKickedRef.current = onKicked
 
   useEffect(() => {
     if (!enabled || !canvasId || canvasId <= 0) return
@@ -502,9 +509,16 @@ export function useCollaboration({ canvasId, enabled = true, onRemoteChange }: U
       }
     })
 
+    // P3: 被踢出时通知 CanvasPage 提示用户并跳转
+    const handleKicked = (reason: string) => {
+      if (onKickedRef.current) onKickedRef.current(reason)
+    }
+    collabService.onKicked(handleKicked)
+
     return () => {
       unsubscribe()
       thumbnailUnsubscribe()
+      collabService.offKicked(handleKicked)
       collabService.offOperation('add-node', handleAddNode)
       collabService.offOperation('update-node', handleUpdateNode)
       collabService.offOperation('remove-node', handleRemoveNode)

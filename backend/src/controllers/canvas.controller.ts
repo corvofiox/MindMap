@@ -203,9 +203,9 @@ canvasRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, res
     })
   }
 
-  const { name, yjsData, previewText, thumbnail, folderId, sortOrder } = req.body
+  const { name, yjsData, previewText, thumbnail, folderId, sortOrder, clientVersion } = req.body
 
-  log('PUT canvas - Start', { canvasId, userId: req.user!.id, body: { name, yjsData: typeof yjsData, previewText, thumbnail, folderId, sortOrder } })
+  log('PUT canvas - Start', { canvasId, userId: req.user!.id, body: { name, yjsData: typeof yjsData, previewText, thumbnail, folderId, sortOrder, clientVersion } })
 
   try {
     const canvas = await db.query.canvases.findFirst({
@@ -231,6 +231,71 @@ canvasRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, res
       return res.status(403).json({
         success: false,
         error: '访问被拒绝',
+      })
+    }
+
+    // P1 修复：缩略图并发保护。协作模式下多用户各自生成缩略图并发 PUT，
+    // 旧版本（基于过时画布状态）的缩略图会覆盖新版本。当客户端带 clientVersion
+    // 时，复用 POST /data 的 mutex + 版本检查模式：若服务端内存版本已超过
+    // clientVersion，说明画布已被更新，本次缩略图过期，返回 409 让客户端静默跳过。
+    // 缩略图是"尽力而为"的展示辅助，过期丢弃比覆盖更安全。
+    //
+    // 注意：本分支假定 payload 仅含缩略图（前端 generateThumbnail 只发
+    // { thumbnail, clientVersion }）。若未来在同一请求附带 name/yjsData 等其他
+    // 可写字段，它们会被此分支忽略（仅写 thumbnail+updatedAt）。下方日志会在
+    // 检测到其他字段时记录，便于及时发现该误用模式。
+    if (thumbnail !== undefined && typeof clientVersion === 'number') {
+      if (name !== undefined || yjsData !== undefined || previewText !== undefined
+        || folderId !== undefined || sortOrder !== undefined) {
+        log('PUT canvas - version-checked thumbnail branch received extra writable fields, they will be ignored', {
+          canvasId,
+          hasName: name !== undefined,
+          hasYjsData: yjsData !== undefined,
+          hasPreviewText: previewText !== undefined,
+          hasFolderId: folderId !== undefined,
+          hasSortOrder: sortOrder !== undefined,
+        })
+      }
+      return await withPostSaveMutex(canvasId, async () => {
+        await loadCanvasStateFromDb(canvasId)
+        const state = ensureCanvasState(canvasId)
+        if (state.version > clientVersion) {
+          log('PUT canvas - Rejected stale thumbnail', {
+            canvasId,
+            clientVersion,
+            serverVersion: state.version,
+          })
+          return res.status(409).json({
+            success: false,
+            error: '缩略图版本过期，画布已被更新',
+            data: { serverVersion: state.version, clientVersion },
+          })
+        }
+
+        const updateData: Record<string, unknown> = {
+          updatedAt: Math.floor(Date.now() / 1000),
+          thumbnail,
+        }
+
+        log('PUT canvas - Thumbnail update (version-checked)', { canvasId, clientVersion })
+
+        const [updatedCanvas] = await db
+          .update(canvases)
+          .set(updateData)
+          .where(eq(canvases.id, canvasId))
+          .returning()
+
+        if (canvasProjectId) {
+          await db
+            .update(projects)
+            .set({ updatedAt: Math.floor(Date.now() / 1000) })
+            .where(eq(projects.id, canvasProjectId))
+        }
+
+        scheduleSave()
+
+        const transformedCanvas = transformResponse(updatedCanvas, ['createdAt', 'updatedAt'])
+        res.json({ success: true, data: transformedCanvas })
       })
     }
 

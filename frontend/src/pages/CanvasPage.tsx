@@ -889,6 +889,15 @@ export function CanvasPage() {
     canvasId: id || 0,
     enabled: id !== null && id > 0,
     onRemoteChange: (cid) => onRemoteChangeRef.current?.(cid),
+    // P3: 被 owner 移除成员资格时提示并跳转回项目列表
+    onKicked: () => {
+      addToast({
+        type: 'warning',
+        title: '已被移出项目',
+        message: '你已不再是该项目成员，无法继续协作',
+      })
+      navigate('/')
+    },
   })
 
   // Refs to store latest values for global event listeners
@@ -1309,7 +1318,11 @@ export function CanvasPage() {
           ctx.fillStyle = THUMBNAIL.BACKGROUND_COLOR
           ctx.fillRect(0, 0, canvas.width, canvas.height)
           const thumbnailDataUrl = canvas.toDataURL('image/jpeg', THUMBNAIL.QUALITY)
-          await updateCanvasInStore(canvasId, { thumbnail: thumbnailDataUrl }, true)
+          // P1: 带 clientVersion 让服务端做版本检查，避免旧缩略图覆盖新画布
+          await updateCanvasInStore(canvasId, {
+            thumbnail: thumbnailDataUrl,
+            clientVersion: collabService.getServerVersion(),
+          }, true)
         }
         return
       }
@@ -1342,7 +1355,11 @@ export function CanvasPage() {
       })
 
       if (thumbnailDataUrl) {
-        await updateCanvasInStore(canvasId, { thumbnail: thumbnailDataUrl }, true)
+        // P1: 带 clientVersion 让服务端做版本检查，避免旧缩略图覆盖新画布
+        await updateCanvasInStore(canvasId, {
+          thumbnail: thumbnailDataUrl,
+          clientVersion: collabService.getServerVersion(),
+        }, true)
       }
     } catch {
       // Thumbnail generation failed silently
