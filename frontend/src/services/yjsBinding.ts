@@ -263,12 +263,16 @@ export function bindYjsToStore(
     before: { nodes: Map<string, Node>; groups: Map<string, NodeGroup>; domains: Map<string, Domain>; connections: Map<string, Connection> },
     after: { nodes: Map<string, Node>; groups: Map<string, NodeGroup>; domains: Map<string, Domain>; connections: Map<string, Connection> },
   ) => {
-    // Each entity type gets its own transaction so a failure in one type
-    // (e.g., groups) does not roll back valid changes to other types.
-    doc.transact(() => diffAndApply(before.nodes, after.nodes, yNodes), LOCAL_ORIGIN)
-    doc.transact(() => diffAndApply(before.groups, after.groups, yGroups), LOCAL_ORIGIN)
-    doc.transact(() => diffAndApply(before.domains, after.domains, yDomains), LOCAL_ORIGIN)
-    doc.transact(() => diffAndApply(before.connections, after.connections, yConnections), LOCAL_ORIGIN)
+    // All entity types in a single transaction so a partial failure does not
+    // leave the Y.Doc permanently out of sync with the Zustand store. If one
+    // diffAndApply call throws, Yjs rolls back the entire transaction and the
+    // doc stays consistent; on the next mutation the diff is retried.
+    doc.transact(() => {
+      diffAndApply(before.nodes, after.nodes, yNodes)
+      diffAndApply(before.groups, after.groups, yGroups)
+      diffAndApply(before.domains, after.domains, yDomains)
+      diffAndApply(before.connections, after.connections, yConnections)
+    }, LOCAL_ORIGIN)
   }
 
   return {
