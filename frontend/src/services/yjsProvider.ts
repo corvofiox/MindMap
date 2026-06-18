@@ -362,15 +362,20 @@ export class MindMapYjsProvider {
       if (!this.isConnected()) {
         // Buffer local updates so they can be replayed after reconnect.
         this.pendingUpdates.push(update)
-        // Enforce max queue size — drop oldest entries when over byte limit
+        // Enforce max queue size — compact all pending updates into a single
+        // efficient update when the byte limit is exceeded. Y.mergeUpdates()
+        // is lossless: the combined update is semantically equivalent to
+        // applying each update in order, but typically much smaller because
+        // overlapping changes are collapsed. This avoids the permanent data
+        // loss that would result from dropping entries.
         let totalBytes = this.pendingUpdates.reduce((sum, u) => sum + u.byteLength, 0)
-        while (totalBytes > MindMapYjsProvider.MAX_PENDING_UPDATE_BYTES && this.pendingUpdates.length > 0) {
-          const dropped = this.pendingUpdates.shift()!
-          totalBytes -= dropped.byteLength
+        if (totalBytes > MindMapYjsProvider.MAX_PENDING_UPDATE_BYTES) {
+          const merged = Y.mergeUpdates(this.pendingUpdates)
           console.warn(
-            `[yjs-provider] dropped pending update (${dropped.byteLength} bytes), ` +
-              `queue exceeded ${MindMapYjsProvider.MAX_PENDING_UPDATE_BYTES} bytes`,
+            `[yjs-provider] compacted ${this.pendingUpdates.length} pending updates ` +
+              `(${totalBytes} bytes → ${merged.byteLength} bytes)`,
           )
+          this.pendingUpdates = [merged]
         }
         return
       }
