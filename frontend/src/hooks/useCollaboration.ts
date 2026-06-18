@@ -81,11 +81,13 @@ export function useCollaboration({
       unsubDirty()
       onKickedUnsub()
       onSyncedUnsub()
-      // Detach all Y.Doc observers first so no callbacks fire on a destroyed doc.
-      binding.destroy()
-      // Then disconnect (which internally destroys the Y.Doc and awareness).
-      provider.disconnect()
+      // Clear store binding reference first so any subsequent store mutation
+      // that calls syncDiffToYDoc becomes a no-op before we touch the Y.Doc.
       setYjsBinding(null)
+      // Then detach all Y.Doc observers so no callbacks fire on a destroyed doc.
+      binding.destroy()
+      // Finally disconnect (which internally destroys the Y.Doc and awareness).
+      provider.disconnect()
       activeProviders.delete(canvasId)
     }
   }, [canvasId, enabled])
