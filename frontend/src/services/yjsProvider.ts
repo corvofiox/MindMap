@@ -354,6 +354,11 @@ export class MindMapYjsProvider {
   }
 
   private wireLocalDocUpdates() {
+    // Defense-in-depth: viewers should never send document mutations.
+    // The server enforces this server-side, but blocking at the source
+    // prevents the local Y.Doc from silently diverging from server state.
+    if (this.options.role === 'viewer') return
+
     this.doc.on('update', (update: Uint8Array, origin: unknown) => {
       // Forward every local-origin update to the server. Remote-origin updates
       // (applied via readSyncMessage) have origin === this provider instance and
