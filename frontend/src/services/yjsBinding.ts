@@ -119,6 +119,15 @@ export function bindYjsToStore(
     if (!existing) {
       store.addNode({ ...obj, id })
     } else {
+      // Handle field deletions: keys present in existing but absent from
+      // remote Y.Map are not included by ymapToObject, so explicitly set
+      // them to undefined so the store merge removes them.
+      const newKeys = new Set(Object.keys(obj))
+      for (const key of Object.keys(existing)) {
+        if (!newKeys.has(key) && key !== 'id') {
+          (obj as unknown as Record<string, unknown>)[key] = undefined
+        }
+      }
       store.updateNodeWithoutHistory(id, obj, true)
     }
   }
@@ -128,6 +137,15 @@ export function bindYjsToStore(
     if (!useCanvasStore.getState().groups.get(id)) {
       store.addGroup({ ...obj, id })
     } else {
+      // Handle field deletions: keys present in existing but absent from
+      // remote Y.Map are not included by ymapToObject.
+      const existing = useCanvasStore.getState().groups.get(id)!
+      const newKeys = new Set(Object.keys(obj))
+      for (const key of Object.keys(existing)) {
+        if (!newKeys.has(key) && key !== 'id') {
+          (obj as unknown as Record<string, unknown>)[key] = undefined
+        }
+      }
       store.updateGroupWithoutHistory(id, obj, true)
     }
   }
@@ -137,6 +155,15 @@ export function bindYjsToStore(
     if (!useCanvasStore.getState().domains.get(id)) {
       store.addDomain({ ...obj, id })
     } else {
+      // Handle field deletions: keys present in existing but absent from
+      // remote Y.Map are not included by ymapToObject.
+      const existing = useCanvasStore.getState().domains.get(id)!
+      const newKeys = new Set(Object.keys(obj))
+      for (const key of Object.keys(existing)) {
+        if (!newKeys.has(key) && key !== 'id') {
+          (obj as unknown as Record<string, unknown>)[key] = undefined
+        }
+      }
       store.updateDomainWithoutHistory(id, obj, true)
     }
   }
@@ -146,6 +173,15 @@ export function bindYjsToStore(
     if (!useCanvasStore.getState().connections.get(id)) {
       store.addConnection({ ...obj, id })
     } else {
+      // Handle field deletions: keys present in existing but absent from
+      // remote Y.Map are not included by ymapToObject.
+      const existing = useCanvasStore.getState().connections.get(id)!
+      const newKeys = new Set(Object.keys(obj))
+      for (const key of Object.keys(existing)) {
+        if (!newKeys.has(key) && key !== 'id') {
+          (obj as unknown as Record<string, unknown>)[key] = undefined
+        }
+      }
       store.updateConnectionWithoutHistory(id, obj, true)
     }
   }
@@ -219,12 +255,12 @@ export function bindYjsToStore(
     before: { nodes: Map<string, Node>; groups: Map<string, NodeGroup>; domains: Map<string, Domain>; connections: Map<string, Connection> },
     after: { nodes: Map<string, Node>; groups: Map<string, NodeGroup>; domains: Map<string, Domain>; connections: Map<string, Connection> },
   ) => {
-    doc.transact(() => {
-      diffAndApply(before.nodes, after.nodes, yNodes)
-      diffAndApply(before.groups, after.groups, yGroups)
-      diffAndApply(before.domains, after.domains, yDomains)
-      diffAndApply(before.connections, after.connections, yConnections)
-    }, LOCAL_ORIGIN)
+    // Each entity type gets its own transaction so a failure in one type
+    // (e.g., groups) does not roll back valid changes to other types.
+    doc.transact(() => diffAndApply(before.nodes, after.nodes, yNodes), LOCAL_ORIGIN)
+    doc.transact(() => diffAndApply(before.groups, after.groups, yGroups), LOCAL_ORIGIN)
+    doc.transact(() => diffAndApply(before.domains, after.domains, yDomains), LOCAL_ORIGIN)
+    doc.transact(() => diffAndApply(before.connections, after.connections, yConnections), LOCAL_ORIGIN)
   }
 
   return {

@@ -85,6 +85,9 @@ export class MindMapYjsProvider {
   private roleChangeListeners = new Set<(userId: number, role: 'editor' | 'viewer') => void>()
   private statusListeners = new Set<(connected: boolean) => void>()
 
+  private pendingUpdates: Uint8Array[] = []
+  private static readonly MAX_PENDING_UPDATE_BYTES = 1_000_000 // ~1MB
+
   private activeUsers: CanvasActiveUser[] = []
   private isSynced = false
 
@@ -326,6 +329,8 @@ export class MindMapYjsProvider {
       }
       if (!this.isSynced) {
         this.isSynced = true
+        this.flushPendingUpdates()
+        this.sendLocalAwareness()
         this.syncedListeners.forEach((fn) => fn())
       }
     } else if (messageType === 1) {
@@ -354,7 +359,21 @@ export class MindMapYjsProvider {
       // (applied via readSyncMessage) have origin === this provider instance and
       // should NOT be re-broadcast (the server already has them).
       if (origin === this) return
-      if (!this.isConnected()) return
+      if (!this.isConnected()) {
+        // Buffer local updates so they can be replayed after reconnect.
+        this.pendingUpdates.push(update)
+        // Enforce max queue size — drop oldest entries when over byte limit
+        let totalBytes = this.pendingUpdates.reduce((sum, u) => sum + u.byteLength, 0)
+        while (totalBytes > MindMapYjsProvider.MAX_PENDING_UPDATE_BYTES && this.pendingUpdates.length > 0) {
+          const dropped = this.pendingUpdates.shift()!
+          totalBytes -= dropped.byteLength
+          console.warn(
+            `[yjs-provider] dropped pending update (${dropped.byteLength} bytes), ` +
+              `queue exceeded ${MindMapYjsProvider.MAX_PENDING_UPDATE_BYTES} bytes`,
+          )
+        }
+        return
+      }
       const encoder = encoding.createEncoder()
       encoding.writeVarUint(encoder, 0) // SYNC
       syncProtocol.writeUpdate(encoder, update)
@@ -376,6 +395,35 @@ export class MindMapYjsProvider {
       encoding.writeVarUint8Array(encoder, update)
       this.sendRaw(encoding.toUint8Array(encoder))
     })
+  }
+
+  /** Replay all buffered pending updates that accumulated while disconnected.
+   *  Called after the STEP1/STEP2 sync handshake completes on reconnect.
+   *  The Yjs doc already merged the server state via readSyncMessage, so
+   *  broadcasting these updates merges the local offline edits on top. */
+  private flushPendingUpdates() {
+    if (this.pendingUpdates.length === 0) return
+    const updates = this.pendingUpdates.slice()
+    this.pendingUpdates = []
+    for (const update of updates) {
+      const encoder = encoding.createEncoder()
+      encoding.writeVarUint(encoder, 0) // SYNC
+      syncProtocol.writeUpdate(encoder, update)
+      this.sendRaw(encoding.toUint8Array(encoder))
+    }
+  }
+
+  /** Re-broadcast the local user's awareness state to all peers.
+   *  Called after reconnection sync completes so other users see our
+   *  cursor/selection state again without the user having to move it. */
+  private sendLocalAwareness() {
+    const encoder = encoding.createEncoder()
+    encoding.writeVarUint(encoder, 1) // AWARENESS
+    encoding.writeVarUint8Array(
+      encoder,
+      awarenessProtocol.encodeAwarenessUpdate(this.awareness, [this.doc.clientID]),
+    )
+    this.sendRaw(encoding.toUint8Array(encoder))
   }
 
   private sendRaw(data: Uint8Array) {

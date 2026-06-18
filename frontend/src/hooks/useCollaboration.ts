@@ -81,12 +81,10 @@ export function useCollaboration({
       unsubDirty()
       onKickedUnsub()
       onSyncedUnsub()
-      // Disconnect the provider FIRST so no new WebSocket messages arrive
-      // while the binding is still attached. Otherwise remote updates could
-      // fire the observer, call executeCommand with yjsBinding === null,
-      // and incorrectly push remote commands into the local undo history.
-      provider.disconnect()
+      // Detach all Y.Doc observers first so no callbacks fire on a destroyed doc.
       binding.destroy()
+      // Then disconnect (which internally destroys the Y.Doc and awareness).
+      provider.disconnect()
       setYjsBinding(null)
       activeProviders.delete(canvasId)
     }
