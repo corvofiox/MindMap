@@ -64,12 +64,23 @@ export function useCollaboration({
     // new provider's awareness before connect(), so when sendLocalAwareness()
     // fires automatically after sync completes, the restored state is broadcast
     // to peers immediately — no 'invisible cursor' gap after reconnect.
-    const savedAwareness = MindMapYjsProvider.savedAwarenessStates.get(canvasId)
+    // Reads from sessionStorage (per-tab) to avoid cross-tab contamination.
+    let savedAwareness: Record<string, unknown> | null = null
+    try {
+      const raw = sessionStorage.getItem(`mindmap_awareness_${canvasId}`)
+      if (raw) savedAwareness = JSON.parse(raw) as Record<string, unknown>
+    } catch {
+      // sessionStorage may throw, ignore
+    }
     if (savedAwareness) {
       for (const [key, value] of Object.entries(savedAwareness)) {
         provider.setLocalAwarenessField(key, value)
       }
-      MindMapYjsProvider.savedAwarenessStates.delete(canvasId)
+      try {
+        sessionStorage.removeItem(`mindmap_awareness_${canvasId}`)
+      } catch {
+        // best-effort cleanup
+      }
     }
 
     const onSyncedUnsub = provider.onSynced(() => {

@@ -1059,9 +1059,6 @@ export function CanvasPage() {
     let isMounted = true
 
     const loadFromDatabase = async () => {
-      // Update store canvasId so thumbnail generation works correctly
-      setCanvasId(id)
-
       try {
         setLoading(true)
 
@@ -1071,12 +1068,23 @@ export function CanvasPage() {
         // 2. Ensures the WebSocket sync guard below correctly detects that any
         //    data in the store was put there by the CURRENT canvas's WebSocket sync
         //    (not leaked from a previous canvas).
+        //
+        // IMPORTANT: clearCanvas() MUST run BEFORE setCanvasId() below.
+        // If a pagehide/beforeunload event fires between setCanvasId() and
+        // clearCanvas(), the handlers would save the OLD canvas's data under
+        // the NEW canvas's cache key, causing cross-canvas data corruption.
         const initBinding = getYjsBinding()
         if (initBinding) {
           initBinding.suppressSync(() => { clearCanvas() })
         } else {
           clearCanvas()
         }
+
+        // Update store canvasId AFTER clearing old data, so any page lifecycle
+        // event (pagehide, beforeunload) between these two calls will see the
+        // correct canvasId paired with empty data, rather than the old canvas's
+        // data under the new canvas's ID.
+        setCanvasId(id)
 
         // 如果是临时ID，不尝试从数据库加载数据
         if (id < 0) {
@@ -1615,6 +1623,8 @@ export function CanvasPage() {
 
       try {
         const state = useCanvasStore.getState()
+        // 与 handleBeforeUnload 保持一致，仅在有未保存更改时写入缓存
+        if (state.canvasId !== id || !state.isDirty) return
         const canvasData = collectCanvasData(state)
         if (canvasData.nodes.length > 0 || canvasData.groups.length > 0 || canvasData.domains.length > 0) {
           saveToCache(id, { nodes: canvasData.nodes, groups: canvasData.groups, domains: canvasData.domains, connections: canvasData.connections })

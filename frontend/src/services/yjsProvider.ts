@@ -93,9 +93,16 @@ export class MindMapYjsProvider {
    * disconnect, so it can be restored on reconnect. Prevents the 'invisible
    * cursor' gap where remote users don't see the reconnecting user's cursor
    * until they physically move their mouse.
-   * Keyed by canvasId; entries are cleaned up after restore.
+   *
+   * Uses sessionStorage (per-tab, per-origin) instead of a static Map to
+   * avoid cross-tab contamination: when two tabs both disconnect for the
+   * same canvas, each tab's state is stored in its own sessionStorage and
+   * can't be accidentally read by the other tab.
+   *
+   * sessionStorage survives in-page navigation (canvas switching) but is
+   * dropped when the tab is closed, matching the desired lifecycle.
    */
-  static savedAwarenessStates = new Map<number, Record<string, unknown>>()
+  private static readonly AWARENESS_KEY_PREFIX = 'mindmap_awareness_'
 
   private activeUsers: CanvasActiveUser[] = []
   private isSynced = false
@@ -131,9 +138,18 @@ export class MindMapYjsProvider {
     // re-broadcast to peers immediately — prevents the 'invisible cursor' gap
     // where remote users don't see the reconnecting user's cursor until they
     // move their mouse.
+    // Uses sessionStorage (per-tab) to avoid cross-tab contamination that a
+    // static Map would cause when two tabs both edit the same canvas.
     const state = this.awareness.getLocalState()
     if (state) {
-      MindMapYjsProvider.savedAwarenessStates.set(this.canvasId, state as Record<string, unknown>)
+      try {
+        sessionStorage.setItem(
+          `${MindMapYjsProvider.AWARENESS_KEY_PREFIX}${this.canvasId}`,
+          JSON.stringify(state),
+        )
+      } catch {
+        // sessionStorage may throw (private browsing, storage full)
+      }
     }
     if (this.visibilityHandler) {
       document.removeEventListener('visibilitychange', this.visibilityHandler)
