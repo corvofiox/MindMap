@@ -483,25 +483,48 @@ canvasRouter.post('/:id/data', authenticate, asyncHandler(async (req: AuthReques
   }
 
   await withPostSaveMutex(canvasId, async () => {
-    const { nodes, groups, domains, connections } = req.body
+    const { nodes, groups, domains, connections, yjsData } = req.body
 
-    // Yjs: 单用户保存直接把客户端 JSON 快照合并进 doc。CRDT 自动处理字段级合并，
-    // 不再需要版本号乐观锁——并发保存会被 Y.Doc 的 update 事件正确归并。
-    // 注意：只合并请求体中实际存在的集合，避免把未提供的集合误删为空。
-    const hasContent = nodes !== undefined || groups !== undefined
-      || domains !== undefined || connections !== undefined
-    if (hasContent) {
-      const snapshot: { nodes?: unknown[]; groups?: unknown[]; domains?: unknown[]; connections?: unknown[] } = {}
-      if (Array.isArray(nodes)) snapshot.nodes = nodes
-      if (Array.isArray(groups)) snapshot.groups = groups
-      if (Array.isArray(domains)) snapshot.domains = domains
-      if (Array.isArray(connections)) snapshot.connections = connections
-      await mergeJsonSnapshotIntoCanvas(canvasId, snapshot)
-      // mergeJsonSnapshotIntoCanvas 通过 applyUpdate 触发 doc update 事件，
-      // 进而触发 schedulePersistCanvasState，无需手动写库。
+    // Handle yjsData (base64-encoded JSON snapshot) for backward compatibility
+    // with old clients that send the snapshot as a single base64 field instead
+    // of individual JSON arrays.
+    if (yjsData !== undefined && typeof yjsData === 'string') {
+      try {
+        const jsonStr = Buffer.from(yjsData, 'base64').toString('utf-8')
+        const snapshot = JSON.parse(jsonStr)
+        const yjsSnapshot: { nodes?: unknown[]; groups?: unknown[]; domains?: unknown[]; connections?: unknown[] } = {}
+        if (Array.isArray(snapshot.nodes)) yjsSnapshot.nodes = snapshot.nodes
+        if (Array.isArray(snapshot.groups)) yjsSnapshot.groups = snapshot.groups
+        if (Array.isArray(snapshot.domains)) yjsSnapshot.domains = snapshot.domains
+        if (Array.isArray(snapshot.connections)) yjsSnapshot.connections = snapshot.connections
+        await mergeJsonSnapshotIntoCanvas(canvasId, yjsSnapshot)
+      } catch (err) {
+        log('POST canvas data - Failed to decode yjsData', {
+          canvasId,
+          error: err instanceof Error ? err.message : String(err),
+        })
+        return res.status(400).json({
+          success: false,
+          error: 'Failed to merge canvas data: invalid or corrupt yjsData',
+        })
+      }
     } else {
-      // 无内容变更也要确保 doc 已加载（供后续读取一致）
-      await loadCanvasStateFromDb(canvasId)
+      // Yjs: 单用户保存直接把客户端 JSON 快照合并进 doc。CRDT 自动处理字段级合并，
+      // 不再需要版本号乐观锁——并发保存会被 Y.Doc 的 update 事件正确归并。
+      // 注意：只合并请求体中实际存在的集合，避免把未提供的集合误删为空。
+      const hasContent = nodes !== undefined || groups !== undefined
+        || domains !== undefined || connections !== undefined
+      if (hasContent) {
+        const snapshot: { nodes?: unknown[]; groups?: unknown[]; domains?: unknown[]; connections?: unknown[] } = {}
+        if (Array.isArray(nodes)) snapshot.nodes = nodes
+        if (Array.isArray(groups)) snapshot.groups = groups
+        if (Array.isArray(domains)) snapshot.domains = domains
+        if (Array.isArray(connections)) snapshot.connections = connections
+        await mergeJsonSnapshotIntoCanvas(canvasId, snapshot)
+      } else {
+        // 无内容变更也要确保 doc 已加载（供后续读取一致）
+        await loadCanvasStateFromDb(canvasId)
+      }
     }
 
     scheduleSave()

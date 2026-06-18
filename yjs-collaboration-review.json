@@ -1,0 +1,155 @@
+{
+  "review_meta": {
+    "project": "/opt/data/projects_3p/MindMap",
+    "branch": "yjs",
+    "commit": "6d5602a",
+    "review_date": "2026-06-18",
+    "scope": "Yjs 迁移协作数据完整性审查"
+  },
+  "findings": [
+    {
+      "severity": "critical",
+      "file": "frontend/src/store/useCanvasStore.ts",
+      "line": 999,
+      "title": "Undo/Redo 在协作模式下会破坏远程并发变更",
+      "detail": "undo() (L999-1027) 和 redo() (L1029-1057) 使用全量快照 diff 机制同步回 Y.Doc：捕获 beforeSnapshot → 执行 command.undo() 恢复旧状态 → syncDiffToYDoc(before, after)。该 diff 对远程并发变更无知——若用户在 A 创建节点 X 后，远程用户 B 修改了 X 的内容，A 按 undo 会删除 X（还原到创建前的状态），从而连带销毁 B 的编辑。diff 写入 Yjs 的删除操作抢先于 B 的 CRDT 合并。这是“方案 B”（保留本地 undo 栈）的根本性设计局限；Yjs 自带的 UndoManager 通过 CRDT-aware 「排除远程 origin」可避免此问题。",
+      "action": "fix",
+      "suggestion": "考虑迁移到 Y.UndoManager（yjs 内置）；或限制协作模式下只允许 Undo 影响「最近一次纯本地操作且无中间远程变更」的实体；或添加警告 UI 提示撤销会影响他人编辑。"
+    },
+    {
+      "severity": "critical",
+      "file": "frontend/src/services/yjsBinding.ts",
+      "line": 331,
+      "title": "writeFields 嵌套对象字段删除未向 Y.Map 传播",
+      "detail": "writeFields(L331-374) 处理嵌套对象时（L350-368），仅遍历新对象的 key 并对已有 Y.Map 做 set/delete。如果 store 中的嵌套字段（如 connection.style）删除了某个子字段（style.width），但该字段在远程 Y.Map 中仍有旧值，writeFields 不会主动删除它——它只 set 新值中的 key，不检查旧 Y.Map 中有哪些 key 已不存在于新对象中。这导致嵌套对象的字段删除在 Local→Remote 方向遗漏。顶层字段删除（设置 undefined）有 L333 的 check(L335: ymap.delete(k)) 处理，正确。嵌套层缺失相同处理。",
+      "action": "fix",
+      "suggestion": "在 L354 的 if (existing instanceof Y.Map) 分支后，遍历 existing 的 key 并删除新对象中不存在的 key（类似 Object.keys(existing).filter(k => !(k in v)).forEach(k => existing.delete(k))）。"
+    },
+    {
+      "severity": "critical",
+      "file": "frontend/src/services/yjsProvider.ts",
+      "line": 134,
+      "title": "disconnect() 中 awareness.destroy() 早于 broadcast null awareness 可能导致重启后光标残留",
+      "detail": "disconnect() (L125-159) 的顺序为：1) 保存本地 awareness state → 2) removeAwarenessStates 广播 null → 3) 关闭 ws → 4) awareness.destroy() → 5) doc.destroy()。在步骤 2 中 try-catch 调用 awarenessProtocol.removeAwarenessStates(this.awareness, [this.doc.clientID], this)，如果 awareness 内部的 origin 处理抛出异常，远程房间不会收到 null 消息，其他用户的光标 UI 上该用户仍然可见直到 30s 超时。加上步骤 4 的 destroy 可能和步骤 2 的异步回调有竞态。但步骤 2 是同步操作（removeAwarenessStates 修改 Yjs 本地状态触发 update 事件 → sendRaw 发出），竞态窗口极小但仍存在。",
+      "action": "verify",
+      "suggestion": "将 awarenessProtocol.removeAwarenessStates 的调用拆分为：先编码生成 null update，然后立即 sendRaw 发送，最后再 destroy awareness。避免 destroy 与广播重叠。此外，考虑在 ws.onclose 回调中也做一次 awareness cleanup。"
+    },
+    {
+      "severity": "major",
+      "file": "frontend/src/services/yjsProvider.ts",
+      "line": 378,
+      "title": "角色在线变更后 provider 不重建，wireLocalDocUpdates 的 viewer 守卫永久生效",
+      "detail": "wireLocalDocUpdates (L374-410) 在构造时检查 this.options.role（L378），如果 role === 'viewer' 则直接 return，不注册 doc 'update' 监听器。当用户角色从 viewer 升级为 editor（通过 server 广播的 user-role-changed），roleChangeListeners 被调用（L299），但 provider 已被初始化且 options.role 未更新，wireLocalDocUpdates 的 guard 永久生效——本地编辑不会同步到 Y.Doc。需重建 provider 才能生效。",
+      "action": "fix",
+      "suggestion": "在 onRoleChange 回调中动态切换 wireLocalDocUpdates 行为：移除旧监听器，若新角色为 editor 则重新注册 update 监听器。或将 role 检查移到 sendRaw 调用点，不在构造时一次性检查。"
+    },
+    {
+      "severity": "major",
+      "file": "frontend/src/store/useCanvasStore.ts",
+      "line": 1102,
+      "title": "setCanvasData 与 Yjs STEP2 同步存在时序竞争，可能静默覆盖 CRDT 状态",
+      "detail": "setCanvasData(L1102-1128) 在载入画布时被调用（REST API 返回全量数据）。它先 captureSnapshot → set 全量数据 → syncDiffToYDoc。但 Yjs provider 的 STEP2 同步可能同时发生（useCollaboration.connect() 在相同 useEffect 中）。syncDiffToYDoc 会 diff before（空的初始 state）与 after（REST 数据）并全量写入 Y.Doc。如果 STEP2 已经在 Y.Doc 中合并了 CRDT 状态，这个本地写入（LOCAL_ORIGIN 事务）可能覆盖或撤销远程的并发编辑。虽然 LOCAL_ORIGIN 导致 observer 跳过 store→Y 回环，但 Y→store 方向不受影响：Y.Doc 中的远程合并可能被本地 setCanvasData 写入覆盖。",
+      "action": "fix",
+      "suggestion": "setCanvasData 在协作模式下应跳过 syncDiffToYDoc（因为 Y.Doc 已经有来自 STEP2 的权威状态），或只在 isSynced===false 时执行 diff 写入。建议在 setCanvasData 前检查 provider?.getIsSynced()，如果已同步则 diff 仅用于更新 store 而非写入 Y.Doc。"
+    },
+    {
+      "severity": "major",
+      "file": "backend/src/websocket/canvas-state.ts",
+      "line": 251,
+      "title": "cleanupEmptyRoom 的延迟 setTimeout 在生成守卫下仍可能删除新创建的 doc",
+      "detail": "cleanupEmptyRoom(L251-274) 在持久化失败后设置 5000ms setTimeout 强制 removeCanvasState。虽然组件使用 generation counter (L256: getStateGeneration(canvasId) !== gen) 防止误伤新 doc，但场景如下：房间 A 离开 → teardownEmptyRoom → 生成+1 → persist 失败 → setTimeout 5s → 房间 B 在 3 秒后进入 → 生成再+1 → setTimeout 在 2 秒后触发，此时 getStateGeneration 为+2 不是+1，不会删除。这个场景是安全的。但若房间 B 的进入不经过 teardownEmptyRoom（比如第一次加载画布，incrementStateGeneration 只在 handleConnection 中调用（L529）且生成+1，没有从空房间重建的逻辑），则 setTimeout 触发时生成计数吻合旧值，会误删刚创建的 doc。",
+      "action": "verify",
+      "suggestion": "确认所有房间创建路径都调用 incrementStateGeneration。当前 handleConnection(L528) 和 teardownEmptyRoom(L232) 都会走，但 loadCanvasStateFromDb 不调用。如果另一个入口（如 REST POST /data）也创建画笔状态但未调用 incrementStateGeneration，则存在风险。建议在 createCanvasState 入口处统一递增生成计数。"
+    },
+    {
+      "severity": "major",
+      "file": "frontend/src/services/yjsBinding.ts",
+      "line": 205,
+      "title": "observeCollection 中 firstOrigin 检查可能遗漏某些远程变更来源",
+      "detail": "observeCollection(L200-242) 检查 firstOrigin（L206-210）：若 origin 为 LOCAL_ORIGIN 或 provider 则跳过。但 Yjs 事务可能嵌套或多 origin 链。events[0]?.transaction.origin 仅检查第一个事件的第一个 origin。如果一个批量更新包含多个子事务（例如 Y.applyUpdate 在一次 transaction 中合并多个客户端的操作），origin 可能为 null/undefined 或一个中间包装对象，此时检查不会命中跳过条件，导致远程变更被错误地以 isApplyingRemoteChanges=true 处理——这不会造成数据损坏但会触发非预期的 store 更新路径。",
+      "action": "verify",
+      "suggestion": "检查所有可能涉及多 origin 或嵌套事务的路径。考虑遍历所有 events 检查 origin，或使用更严格的 origin 类型守卫。"
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/src/services/yjsProvider.ts",
+      "line": 98,
+      "title": "savedAwarenessStates 静态 Map 在多标签页同画布时可能恢复错误的 awareness 状态",
+      "detail": "savedAwarenessStates 是 class 静态 Map（L98），key 仅为 canvasId，不含 sessionId。如果同一画布在两个标签页中协作，其中一个标签页断开后保存 awareness state，另一个标签页的 provider 恢复时可能用错 cursor/selection 状态。且 save 操作在 disconnect() 中（L134-137）会覆盖同一 canvasId 的已保存状态（L136: .set(this.canvasId, ...)），导致先断开的标签页状态被后断开的覆盖。",
+      "action": "fix",
+      "suggestion": "增加 sessionId 作为子 key，或使用 Map<number, Map<string, Record>> 结构区分不同标签页的 awareness state。"
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/src/services/yjsProvider.ts",
+      "line": 158,
+      "title": "awareness.destroy() 在 doc.destroy() 之前调用可能导致 Yjs 内部引用错误",
+      "detail": "disconnect() (L158-159) 顺序为：this.awareness.destroy() → this.doc.destroy()。Yjs 的 Awareness 实例持有对 Y.Doc 的引用（它在 doc 上注册了 update 监听器来同步 clientID）。虽然在 destroy 中 Awareness 会清理自己的监听器，但 doc.destroy() 在 awareness.destroy() 之后仍可能尝试通知已销毁的 awareness。当前 Yjs 源码中 awareness.destroy() 正确清理了监听器，顺序安全；但若 Yjs 未来版本改变了清理顺序，则此处有隐患。",
+      "action": "accept",
+      "suggestion": "当前是安全的标准顺序。可添加注释说明 awareness.destroy() 必须在 doc.destroy() 之前。"
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/src/services/yjsBinding.ts",
+      "line": 390,
+      "title": "diffObjectArrayById 中无 id 的元素在更新时总被重新插入，可能产生重复",
+      "detail": "diffObjectArrayById(L425-475) 处理 Y.Array 的增量更新。遍历 target 时，无 id 属性的元素被无条件推入 toAdd（L467-470: toAdd.push(item)），即使该元素已在数组中。虽然在 diffPrimitiveArray 中用 Set 做了去重，但 diffObjectArrayById 对无 id 元素不做去重。如果当前数组已有相同内容但无 id 的对象，会生成重复插入。此路径当前用于 group.nodeIds（纯字符串数组，走 diffPrimitiveArray）和 connection.bendPoints（有 id 的对象数组，id 是强制属性），所以实际不影响当前业务，但值类型对象数组可能出问题。",
+      "action": "document",
+      "suggestion": "在注释中明确标记 diffObjectArrayById 要求数组元素必须有 `id` 属性，或添加无 id 元素的去重逻辑。"
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/websocket/index.ts",
+      "line": 743,
+      "title": "extractFirstAwarenessClientId 只提取第一个 clientID，多 state awareness 更新时遗漏",
+      "detail": "extractFirstAwarenessClientId(L743-752) 仅解码第一个 awareness state 的 clientID（L748）。如果客户端编码的 awareness update 包含多个 client 的状态（通常只有自己，但理论上可通过编码多 client 实现），断连时 removeAwarenessStates 只清理第一个 clientID。其他 client 的光标会在房间中残留直到 30s 超时。客户端通常只编码自己的 awareness，风险较低。",
+      "action": "accept",
+      "suggestion": "可遍历所有 state 收集所有 clientID：while (dec.pos < update.length) { const clientId = readVarUint(dec); ... read clock/stateLength/state; }。但目前 awareness 消息仅代表单个客户端更新，单 ID 提取足够。"
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/src/services/yjs-schema.ts",
+      "line": 42,
+      "title": "entityToYMap 创建新实体时跳过 undefined 字段，CRDT 初始化不完整",
+      "detail": "entityToYMap(L39-58) 在 L42 检查 `if (value === undefined) continue`，跳过 undefined 值。这意味着新创建的实体在 Y.Map 中缺失这些键。后续远程用户通过 ymapToObject 读取该实体时也不会包含这些键，导致 store 中的字段缺失。虽然 `diffAndApply` 在更新时用 `writeFields` 处理 undefined（delete key），但初始创建阶段 undefined 字段根本不存在于 CRDT 中，可能影响后续的字段检测逻辑（如 applyRemoteNode 的 keys diff）。",
+      "action": "fix",
+      "suggestion": "在 entityToYMap 中将 undefined 值显式删除 Y.Map 中对应的 key（若已存在），或直接用 ymap.set(key, null) 占位。"
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/src/services/yjsBinding.ts",
+      "line": 116,
+      "title": "applyRemoteNode 的 field deletion 逻辑每次更新都遍历所有 key，O(n*m) 性能问题",
+      "detail": "applyRemoteNode(L116-133) 及其同类函数 applyRemoteGroup/Domain/Connection 每次远程更新都遍历 existing 的所有 key（L126: for (const key of Object.keys(existing))），与大实体（如数千节点）场景中频繁更新（如光标拖动触发位置更新）结合时可能产生较大计算开销。O(节点数) × O(字段数) × 更新频率。",
+      "action": "suggestion",
+      "suggestion": "可优化为只在 `Object.keys(obj).length < Object.keys(existing).length` 时（即疑似有字段被删除）才执行遍历；否则直接 updateNodeWithoutHistory（已由 writeFields 的 undefined 检查覆盖了字段删除）。"
+    },
+    {
+      "severity": "suggestion",
+      "file": "backend/src/websocket/yjs-schema.ts",
+      "line": 172,
+      "title": "decodeBase64ToDoc 创建临时 doc 并 applyUpdate，若 base64 损坏则静默返回 null",
+      "detail": "decodeBase64ToDoc(L172-183) 在 catch 中静默返回 null（L181: return null）。这在 DB 中 yjs_update 列损坏时导致 createCanvasState 创建的空 doc 被使用（loadCanvasStateFromDb L246 检测 doc 为 null 时不替换，保留最初的空 doc）。用户可能在损坏数据上继续编辑，随后 persist 覆盖 DB 中的原始数据。",
+      "action": "fix",
+      "suggestion": "记录日志警告 yjs_update 解码失败（与 L237-242 的 legacy 转换失败日志一致），并考虑抛出错误或标记 canvas 为不可编辑，而非静默降级为空 doc。"
+    },
+    {
+      "severity": "suggestion",
+      "file": "frontend/src/hooks/useCollaboration.ts",
+      "line": 41,
+      "title": "useEffect 依赖 [canvasId, enabled] 可能产生 React StrictMode 双重效应问题",
+      "detail": "useEffect cleanup(L93-105) 按序执行 setYjsBinding(null) → binding.destroy() → provider.disconnect() → activeProviders.delete()。React 18 StrictMode 在开发模式下会 mount→unmount→re-mount，导致 cleanup 立即执行销毁 provider，然后重新创建。由于 savedAwarenessStates 在 disconnect 时保存了状态，第二次 mount 会恢复。但在生产模式下（StrictMode 不生效）这不是问题。且如果 canvasId 在渲染间变化，先前的 cleanup 销毁旧 provider 同时新 effect 创建新 provider，可能存在短暂 window 内两个 provider 均活跃。",
+      "action": "verify",
+      "suggestion": "确认严格模式下该行为已被验证。可在 useEffect 中添加 ref 追踪 mount 次数，确保 StrictMode 双重执行不导致异常。"
+    },
+    {
+      "severity": "suggestion",
+      "file": "frontend/src/services/yjsProvider.ts",
+      "line": 348,
+      "title": "isSynced 在 handleBinary 中设 true 后立即 flushPendingUpdates，但 STEP2 可能尚未完全 apply",
+      "detail": "handleBinary(L348-353) 调用 syncProtocol.readSyncMessage(L342) 后立即检查 !this.isSynced。readSyncMessage 已同步应用了 STEP2 更新，但此调用是一次性的——如果 STEP2 消息中包含深层嵌套的级联 Yjs 更新，可能在 readSyncMessage 返回后 doc 的 observeDeep 回调尚未全部触发。绑定观察者（observeCollection）注册了 observeDeep，可能在 isSynced=true 且 flushPendingUpdates 发送本地更新后才收到 STEP2 的远程变更事件，导致 store 先接收本地 flush 写入的 state，再被 STEP2 的远程内容覆盖。",
+      "action": "verify",
+      "suggestion": "在 flushPendingUpdates 前添加 Yjs 事务 barrier：doc.transact(() => {}, null) 确保所有待处理的 observeDeep 事件已排空。或使用 setTimeout(0) 延迟 flush 到下一个微任务。"
+    }
+  ]
+}

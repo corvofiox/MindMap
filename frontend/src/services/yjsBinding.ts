@@ -352,11 +352,22 @@ function writeFields(ymap: Y.Map<unknown>, obj: Record<string, unknown>): void {
       // to preserve CRDT merge semantics for concurrent peer edits.
       const existing = ymap.get(k)
       if (existing instanceof Y.Map) {
+        // Update/set fields present in the incoming object
+        const incomingKeys = new Set(Object.keys(v as Record<string, unknown>))
         for (const [nk, nv] of Object.entries(v as Record<string, unknown>)) {
           if (nv === undefined) {
             (existing as Y.Map<unknown>).delete(nk)
           } else {
             (existing as Y.Map<unknown>).set(nk, nv as unknown)
+          }
+        }
+        // Delete fields that exist in the current Y.Map but are absent from
+        // the incoming object (nested field deletion). Without this, a remote
+        // deletion of e.g. connection.style.width would leave the stale value
+        // in the CRDT state because writeFields only writes keys present in obj.
+        for (const nk of (existing as Y.Map<unknown>).keys()) {
+          if (!incomingKeys.has(nk)) {
+            (existing as Y.Map<unknown>).delete(nk)
           }
         }
       } else {

@@ -372,12 +372,16 @@ export class MindMapYjsProvider {
   }
 
   private wireLocalDocUpdates() {
-    // Defense-in-depth: viewers should never send document mutations.
-    // The server enforces this server-side, but blocking at the source
-    // prevents the local Y.Doc from silently diverging from server state.
-    if (this.options.role === 'viewer') return
-
+    // Always register the update listener, but check the role dynamically
+    // inside the handler. This allows the listener to start forwarding updates
+    // when the user's role is upgraded from viewer to editor at runtime
+    // (without requiring a reconnect), while continuing to block viewer-origin
+    // writes if the role is later downgraded.
     this.doc.on('update', (update: Uint8Array, origin: unknown) => {
+      // Defense-in-depth: viewers should never send document mutations.
+      // The server enforces this server-side, but blocking at the source
+      // prevents the local Y.Doc from silently diverging from server state.
+      if (this.options.role === 'viewer') return
       // Forward every local-origin update to the server. Remote-origin updates
       // (applied via readSyncMessage) have origin === this provider instance and
       // should NOT be re-broadcast (the server already has them).
@@ -472,6 +476,16 @@ export class MindMapYjsProvider {
   /** Public helper: clear the local awareness state (e.g. on blur). */
   clearLocalAwareness() {
     this.awareness.setLocalState(null)
+  }
+
+  /**
+   * Update the local user's role at runtime. Called when the server broadcasts
+   * a user-role-changed event for the local user. The wireLocalDocUpdates
+   * handler checks this.options.role dynamically, so viewer→editor and
+   * editor→viewer transitions take effect without a reconnect.
+   */
+  setRole(role: 'owner' | 'editor' | 'viewer'): void {
+    this.options.role = role
   }
 
   // ---- Reconnect ----

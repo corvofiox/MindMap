@@ -1,0 +1,324 @@
+{
+  "审查概要": {
+    "项目": "MindMap Yjs 迁移",
+    "分支": "yjs",
+    "当前Commit": "6d5602a",
+    "变更统计": "28 文件, +3367/-5783",
+    "审查日期": "2026-06-18",
+    "审查范围": [
+      "backend/src/database/migrate-to-yjs.ts — 旧格式→Yjs doc 转换",
+      "backend/src/websocket/canvas-state.ts — 画布加载同时处理Yjs和旧格式",
+      "backend/src/controllers/canvas.controller.ts — PUT/POST向后兼容",
+      "frontend/src/services/api.ts — 下载/分享/画布加载接口",
+      "shared/src/index.ts — 前后端共享常量",
+      "backend/src/database/schema.ts — 数据库schema变更",
+      "backend/src/database/connection.ts — 数据库连接"
+    ]
+  },
+
+  "1_数据库迁移_migrate_to_yjs_ts": {
+    "状态": "通过",
+    "幂等性": {
+      "结论": "✅ 正确实现",
+      "机制": "通过 `where(isNull(canvases.yjsUpdate))` 过滤，已迁移的行不会被再次处理",
+      "补充": "即使迁移中途失败重启，已成功的行也会被跳过"
+    },
+    "错误处理": {
+      "结论": "✅ 充分",
+      "详情": [
+        "每行有独立 try/catch，失败记录日志并递增 skipped 计数器",
+        "无效 base64 返回 null（decodeLegacySnapshot 内 try/catch）",
+        "空 yjs_data 的行会被 seed 一个空 Y.Doc，确保 yjs_update 有值",
+        "迁移失败不会抛出（顶层 catch 捕获），启动不阻塞"
+      ]
+    },
+    "非破坏性": {
+      "结论": "✅ 正确",
+      "详情": "保留 legacy yjs_data 列不变，支持回滚时通过 backfillLegacySnapshotFromYjs() 反填"
+    },
+    "回滚支持": {
+      "结论": "✅ 已实现",
+      "函数": "backfillLegacySnapshotFromYjs()",
+      "行为": "对 yjs_update 有值但 yjs_data 为空的行，从 Yjs doc 重新生成 JSON snapshot",
+      "限制": "不会覆盖已有 yjs_data，仅填补空缺"
+    },
+    "空数据库安全": {
+      "结论": "✅ 安全",
+      "行为": "空数据库时 SELECT 返回空数组，循环直接跳过，返回 migrated=0"
+    },
+    "直接运行": {
+      "结论": "✅ 支持",
+      "命令": "tsx src/database/migrate-to-yjs.ts",
+      "自动导入": "import { initializeDb } from './connection.js'"
+    },
+    "潜在风险": [
+      {
+        "级别": "低",
+        "描述": "大量 canvas 时逐行 UPDATE 性能可能慢，但数据迁移是单次后台操作，可接受",
+        "建议": "如果生产数据库超过数万行，可考虑分批处理（LIMIT/OFFSET）"
+      }
+    ]
+  },
+
+  "2_画布状态管理_canvas_state_ts": {
+    "状态": "通过",
+    "向后兼容_加载": {
+      "结论": "✅ 双路径加载",
+      "路径1": "yjsUpdate 存在 → decodeBase64ToDoc() 解码 Yjs 二进制",
+      "路径2": "yjsUpdate 为空但 yjsData 存在 → 解码 legacy JSON base64 → jsonSnapshotToDoc() 转换 → 自动写回 yjsUpdate",
+      "路径3": "两者都为空 → 返回空 Y.Doc"
+    },
+    "向后兼容_写回": {
+      "结论": "✅ 自动转换",
+      "详情": "通过 legacy 路径加载后，立即 encodeDocToBase64 并写回 yjsUpdate 列，下次加载直接走路径1",
+      "副作用": "同时调用 scheduleSave() 确保磁盘持久化"
+    },
+    "并发安全": {
+      "结论": "✅ 完善",
+      "机制": [
+        "Generation counter：防止 stale persist 回调覆盖新加载的 doc",
+        "isPersisting 标志：防止并发持久化",
+        "lastSeenUpdateCount → lastPersistedUpdateCount：脏检查",
+        "持久化时 snapshot dirty counter：防止 mid-write 更新丢失",
+        "3 次重试（100ms/200ms/500ms 退避）",
+        "persistError 状态暴露给客户端"
+      ]
+    },
+    "JSON快照合并": {
+      "结论": "✅ 完整实现",
+      "函数": "mergeJsonSnapshotIntoCanvas()",
+      "行为": "接收旧格式 JSON snapshot，同步到 Yjs doc（add/update/delete），通过 Yjs update 事件触发自动持久化"
+    },
+    "优雅关闭": {
+      "结论": "✅ 支持",
+      "机制": "stopPeriodicCanvasFlush() + flushAllCanvasStates() 在 shutdown 时调用"
+    },
+    "潜在风险": [
+      {
+        "级别": "中",
+        "描述": "loadCanvasStateFromDb 加载失败时文档保持为空（loaded=false），但并未标记错误状态。后续调用会重试，但如果用户已经开始编辑，编辑的数据可能写入空 doc 并覆盖 DB",
+        "建议": "如果 load 失败后仍有编辑操作，应考虑阻止写入或强制重新加载"
+      },
+      {
+        "级别": "低",
+        "描述": "doc.destroy() 后 doc.on('update', ...) 监听器已注销，但如果有一个正在 pending 的 persist 在 doc destroy 后尝试 encode，会被 encodeDocToBase64 的 try/catch 捕获（注释有说明）"
+      }
+    ]
+  },
+
+  "3_Canvas控制器_canvas_controller_ts": {
+    "状态": "通过",
+    "PUT_id_向后兼容": {
+      "结论": "✅ 完整兼容",
+      "yjsData处理": "当请求体包含 yjsData（legacy base64 JSON）时，解码后通过 mergeJsonSnapshotIntoCanvas() 合并到 Yjs doc，而非直接写入 yjs_data 列",
+      "其他字段": "name, previewText, thumbnail, folderId, sortOrder 照常写入 DB",
+      "关键": "yjsData 不再直接存入 yjs_data 列，而是作为数据源合并到 Yjs doc，通过 persist 机制写入 yjs_update"
+    },
+    "PUT_id_缩略图分支": {
+      "结论": "✅ 版本检查保护",
+      "机制": "clientVersion 与 mutex 结合，过期的缩略图更新返回409",
+      "yjsData共存": "缩略图分支中如果同时有 yjsData，会先合并到 Yjs doc 再写缩略图",
+      "注意": "缩略图分支只写 thumbnail+updatedAt，yjsData 通过 Yjs update 事件触发异步 persist"
+    },
+    "POST_id_data": {
+      "结论": "✅ 旧格式兼容",
+      "输入格式": "接收 { nodes, groups, domains, connections } 数组（旧格式）",
+      "处理": "通过 mergeJsonSnapshotIntoCanvas() 合并到 Yjs doc",
+      "并发保护": "withPostSaveMutex 队列化处理（30s 超时）"
+    },
+    "GET_detail_id": {
+      "结论": "✅ 返回完整记录",
+      "包含": "yjs_data 和 yjs_update 字段均已返回",
+      "前端消费": "前端 loadCanvasNodesData 优先用 yjsUpdate，fallback 到 yjsData"
+    },
+    "潜在风险": [
+      {
+        "级别": "中",
+        "描述": "POST /:id/data 只接收 {nodes,groups,domains,connections} 数组格式。如果旧前端发送 { yjsData: '...' } base64 字符串到该端点，hasContent 检查会返回 false，导致数据不被处理（静默丢弃）",
+        "建议": "添加 yjsData base64 的支持分支，或确认前端不会发送这种格式"
+      },
+      {
+        "级别": "低",
+        "描述": "PUT 缩略图分支中如果 yjsData 合并失败返回 400，但此时 Yjs doc 可能已被部分更新（mergeJsonSnapshotIntoCanvas 是 transact 操作，失败时会回滚？实际上整个 merge 在 try/catch 中，但 Y.applyUpdate 部分应用后抛出异常——取决于 Yjs 实现。当前 mergeJsonSnapshotIntoCanvas 使用 doc.transact()，事务内失败不会部分应用）"
+      }
+    ]
+  },
+
+  "4_前端API_api_ts": {
+    "状态": "通过",
+    "loadCanvasNodesData": {
+      "结论": "✅ 兼容双格式",
+      "路径1_Yjs优先": "yjsUpdate 存在 → atob + Uint8Array → Y.applyUpdate → ensureRoot + ymapToObject 解析",
+      "路径2_Legacy回退": "yjsData 存在 → atob + TextDecoder + JSON.parse",
+      "路径3_空": "两者都不存在 → 返回空结构 {nodes:[], groups:[], domains:[], connections:[]}",
+      "失败处理": "Yjs 解码失败时 fallthrough 到 legacy 路径；获取 canvas 失败返回 null"
+    },
+    "getCanvas类型": {
+      "结论": "⚠️ 类型不严谨",
+      "当前": "`Promise<Canvas & { yjsData?: string }>`",
+      "问题": "未显式包含 yjsUpdate 字段，实际运行时响应包含 yjs_update/yjsUpdate",
+      "影响": "loadCanvasNodesData 使用类型断言 `(canvas as { yjsUpdate?: string }).yjsUpdate` 绕过类型检查",
+      "建议": "将类型更新为 `Canvas & { yjsData?: string; yjsUpdate?: string }` 或使用完整后端类型"
+    },
+    "updateCanvas": {
+      "结论": "✅ 透传正确",
+      "详情": "透传所有字段（包括 clientVersion）到 PUT /api/canvases/:id"
+    },
+    "下载_分享_缩略图": {
+      "结论": "✅ 未受影响",
+      "分析": "下载/分享功能通过 canvasExport.ts 处理（非 API），缩略图通过 updateCanvas 传递 thumbnail 字段，均不受 Yjs 迁移影响"
+    },
+    "潜在风险": [
+      {
+        "级别": "低",
+        "描述": "loadCanvasNodesData 中 yjsUpdate 路径的 fallthrough（catch 块为空）——如果 Yjs 解码失败就静默 fallthrough 到 legacy 路径。这可能导致真正的编码错误被隐藏，但增加了健壮性",
+        "建议": "在 catch 块中添加日志输出，方便排查"
+      }
+    ]
+  },
+
+  "5_共享常量_shared_src_index_ts": {
+    "状态": "通过",
+    "常量导出": {
+      "结论": "✅ 正确",
+      "导出项": [
+        "APIResponse / User / Project / Canvas / Node / NodeGroup / Domain / Connection 类型",
+        "WSMessage / AwarenessUserData / AwarenessState WebSocket 类型",
+        "从 constants.js 重新导出的 SHARED_NODE_DEFAULTS / NODE_DEFAULTS_VALIDATION"
+      ]
+    },
+    "Canvas接口": {
+      "结论": "✅ 包含新字段",
+      "字段": "yjs_data?: string  和  yjs_update?: string",
+      "注意": "shared 包中的 Canvas 接口使用 snake_case（yjs_data, yjs_update），而后端的 schema.ts 使用 camelCase（yjsData, yjsUpdate）。Drizzle ORM 的 transformer 处理映射。前端引用 @shared 的 Canvas 类型时需要注意这一点"
+    },
+    "前后端一致": {
+      "结论": "✅ 前后端引用相同 shared 包",
+      "前端": "frontend/src/constants/index.ts 从 @shared/constants 导入 SHARED_NODE_DEFAULTS",
+      "后端": "backend/src/controllers/user.controller.ts 从 mindmap-shared 导入 SHARED_NODE_DEFAULTS",
+      "一致性": "常量定义在一处，前后端共享"
+    }
+  },
+
+  "6_数据库Schema_schema_ts": {
+    "状态": "通过",
+    "表结构变更": {
+      "结论": "✅ 向后兼容",
+      "新增列": "yjs_update TEXT — 存储 Yjs 二进制状态更新（base64）",
+      "保留列": "yjs_data TEXT — 保留旧格式 JSON snapshot（标记为 Legacy）",
+      "注意": "两个列都可为空（nullable），存量数据不需要迁移即可读取"
+    },
+    "类型导出": {
+      "结论": "✅ 包含两个字段",
+      "导出": "Canvas (select) 和 NewCanvas (insert) 都包含 yjsData 和 yjsUpdate 字段"
+    },
+    "迁移脚本": {
+      "结论": "✅ 自动 DDL 迁移",
+      "文件": "backend/src/database/migration.ts（第372-384行）",
+      "行为": "运行迁移时检测 yjs_update 列是否存在，不存在则 ALTER TABLE ADD COLUMN",
+      "幂等性": "通过 PRAGMA table_info 检查列存在性"
+    },
+    "潜在风险": [
+      {
+        "级别": "低",
+        "描述": "migration.ts 中的 yjs_update 列没有 NOT NULL 约束（正确——需要为存量数据留空过渡期）",
+        "建议": "迁移全部完成后，可考虑在后续版本中添加 NOT NULL"
+      }
+    ]
+  },
+
+  "7_数据库连接_connection_ts": {
+    "状态": "通过",
+    "连接管理": {
+      "结论": "✅ 正确",
+      "启动顺序": "init.ts → getSqlite() → runMigrations() → index.ts → initializeDb() → migrateCanvasesToYjs()",
+      "时机正确": "migration 先添加 yjs_update 列 → 数据迁移填充数据"
+    },
+    "自动保存": {
+      "结论": "✅ debounced 写入磁盘",
+      "间隔": "最长 2s 延迟",
+      "触发": "通过 scheduleSave() 被各处调用",
+      "优雅关闭": "uncaughtException/unhandledRejection/SIGINT/SIGTERM 都会 flush"
+    },
+    "Canvas状态Flush": {
+      "结论": "✅ 关闭时 flush",
+      "实现": "gracefulShutdown() → stopPeriodicCanvasFlush() → flushAllCanvasStates() → saveToDisk()",
+      "安全": "import 在 shutdown 函数内，避免循环依赖"
+    }
+  },
+
+  "8_Yjs Schema常量一致性": {
+    "状态": "通过",
+    "后端 yjs-schema.ts": {
+      "ROOT_KEY": "root",
+      "NODES_KEY": "nodes",
+      "GROUPS_KEY": "groups",
+      "DOMAINS_KEY": "domains",
+      "CONNECTIONS_KEY": "connections"
+    },
+    "前端 yjs-schema.ts": {
+      "ROOT_KEY": "root",
+      "NODES_KEY": "nodes",
+      "GROUPS_KEY": "groups",
+      "DOMAINS_KEY": "domains",
+      "CONNECTIONS_KEY": "connections"
+    },
+    "一致性验证": {
+      "结论": "✅ 有自动化测试",
+      "文件": "frontend/src/test/yjs-schema.test.ts（第133-142行）",
+      "测试": "frontend and backend schemas share the same key constants — 硬编码断言验证常量值"
+    },
+    "差异说明": {
+      "后端独有": "writeEntityToYMap, docToJsonSnapshot, jsonSnapshotToDoc, encodeDocToBase64, decodeBase64ToDoc, applyBase64Update",
+      "前端独有": "entityToYMap",
+      "影响": "前端 inline 在 api.ts 中处理 yjsUpdate 解码逻辑，使用 ensureRoot + ymapToObject，与后端 docToJsonSnapshot 等效"
+    }
+  },
+
+  "9_总体评价": {
+    "向后兼容性": "✅ 优秀",
+    "总结": [
+      "所有 API 端点同时接受新旧格式数据",
+      "存量 yjs_data 数据在加载时自动转换并持久化到 yjs_update",
+      "PUT/DELETE/POST 接口未改变路由和请求格式",
+      "前端 loadCanvasNodesData 实现了三级 fallback（yjsUpdate → yjsData → empty）",
+      "缩略图版本检查机制保护协作场景"
+    ],
+    "数据库迁移": "✅ 稳妥",
+    "总结": [
+      "DDL 迁移通过 migration.ts 自动执行（幂等）",
+      "数据迁移通过 migrateCanvasesToYjs() 自动转换存量数据（幂等、非破坏性）",
+      "保留 yjs_data 列作为回滚保险",
+      "提供 backfillLegacySnapshotFromYjs() 回滚辅助函数",
+      "优雅关闭确保所有内存中 Yjs doc 都持久化到磁盘"
+    ],
+    "需要关注的问题": [
+      {
+        "严重度": "中",
+        "问题": "POST /:id/data 端点不支持 yjsData base64 输入格式，仅支持 {nodes,groups,domains,connections} 数组",
+        "建议": "确认前端保存逻辑不会发送 yjsData base64 到 POST 端点。如有可能，添加兼容分支"
+      },
+      {
+        "严重度": "低",
+        "问题": "getCanvas() 返回类型缺少 yjsUpdate 字段，需用类型断言绕过",
+        "建议": "补充 `yjsUpdate?: string` 类型定义"
+      },
+      {
+        "严重度": "低",
+        "问题": "frontend/src/services/yjs-schema.ts 缺少 docToJsonSnapshot 和 jsonSnapshotToDoc 函数（避免在 api.ts 中内联解码逻辑）",
+        "建议": "添加这两个函数保持前后端对称，便于维护"
+      },
+      {
+        "严重度": "低",
+        "问题": "loadCanvasStateFromDb 失败后没有错误状态用于阻止后续编辑写入",
+        "建议": "增加 failed 标记，在加载失败时阻止持久化操作"
+      }
+    ],
+    "测试覆盖": {
+      "后端": "有 yjs-schema 单元测试（181行），覆盖 round-trip、编码解码、边界情况",
+      "前端": "有 yjs-schema 单元测试（143行），覆盖 round-trip、常量一致性验证",
+      "迁移": "未发现 migrate-to-yjs 的测试用例",
+      "建议": "添加 migrate-to-yjs 的集成测试，模拟存量数据转换和幂等性验证"
+    }
+  }
+}

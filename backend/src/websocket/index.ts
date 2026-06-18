@@ -279,8 +279,16 @@ export function getCanvasActiveUsers(canvasId: number): CanvasActiveUser[] {
   return Array.from(room.activeUsers.values())
 }
 
-export function getProjectActiveUsers(_projectId: number): Map<number, CanvasActiveUser[]> {
+/**
+ * Get active users for each canvas room that has connected users.
+ * NOTE: projectId parameter is kept for API compatibility but currently
+ * unused — this function returns data for ALL canvases regardless of
+ * project. If per-project filtering is needed, add a canvasId→projectId
+ * lookup table.
+ */
+export function getProjectActiveUsers(projectId: number): Map<number, CanvasActiveUser[]> {
   const result = new Map<number, CanvasActiveUser[]>()
+  if (!projectId) return result
   for (const [canvasId, room] of canvasRooms.entries()) {
     if (room.activeUsers.size > 0) {
       result.set(canvasId, Array.from(room.activeUsers.values()))

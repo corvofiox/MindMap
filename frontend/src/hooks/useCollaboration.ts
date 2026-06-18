@@ -80,6 +80,17 @@ export function useCollaboration({
       onKickedRef.current?.(reason)
     })
 
+    // Listen for local role changes (viewer↔editor). When the server
+    // broadcasts a user-role-changed event for the local user, update the
+    // provider so wireLocalDocUpdates dynamically adjusts whether it
+    // forwards doc mutations.
+    const localUserId = user?.id ?? null
+    const onRoleChangeUnsub = provider.onRoleChange((userId, role) => {
+      if (localUserId !== null && userId === localUserId) {
+        provider.setRole(role === 'viewer' ? 'viewer' : 'editor')
+      }
+    })
+
     let lastDirty = useCanvasStore.getState().isDirty
     const unsubDirty = useCanvasStore.subscribe((state) => {
       if (state.isDirty !== lastDirty) {
@@ -92,6 +103,7 @@ export function useCollaboration({
 
     return () => {
       unsubDirty()
+      onRoleChangeUnsub()
       onKickedUnsub()
       onSyncedUnsub()
       // Clear store binding reference first so any subsequent store mutation
