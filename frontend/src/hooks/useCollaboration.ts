@@ -59,6 +59,19 @@ export function useCollaboration({
     const binding = bindYjsToStore(provider, useCanvasStore.getState())
     setYjsBinding(binding)
 
+    // Restore saved awareness state (cursor/selection/editingId) from before
+    // disconnect, if this is a reconnection. The saved state is applied to the
+    // new provider's awareness before connect(), so when sendLocalAwareness()
+    // fires automatically after sync completes, the restored state is broadcast
+    // to peers immediately — no 'invisible cursor' gap after reconnect.
+    const savedAwareness = MindMapYjsProvider.savedAwarenessStates.get(canvasId)
+    if (savedAwareness) {
+      for (const [key, value] of Object.entries(savedAwareness)) {
+        provider.setLocalAwarenessField(key, value)
+      }
+      MindMapYjsProvider.savedAwarenessStates.delete(canvasId)
+    }
+
     const onSyncedUnsub = provider.onSynced(() => {
       onRemoteChangeRef.current?.(canvasId)
     })

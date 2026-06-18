@@ -88,6 +88,15 @@ export class MindMapYjsProvider {
   private pendingUpdates: Uint8Array[] = []
   private static readonly MAX_PENDING_UPDATE_BYTES = 1_000_000 // ~1MB
 
+  /**
+   * Saves awareness state (cursor/selection/editingId) per canvasId during
+   * disconnect, so it can be restored on reconnect. Prevents the 'invisible
+   * cursor' gap where remote users don't see the reconnecting user's cursor
+   * until they physically move their mouse.
+   * Keyed by canvasId; entries are cleaned up after restore.
+   */
+  static savedAwarenessStates = new Map<number, Record<string, unknown>>()
+
   private activeUsers: CanvasActiveUser[] = []
   private isSynced = false
 
@@ -117,6 +126,15 @@ export class MindMapYjsProvider {
     this.isIntentionallyClosed = true
     this.clearReconnect()
     this.stopHeartbeat()
+    // Save the local awareness state (cursor/selection/editingId) before
+    // destroying the Y.Doc, so it can be restored after reconnect sync and
+    // re-broadcast to peers immediately — prevents the 'invisible cursor' gap
+    // where remote users don't see the reconnecting user's cursor until they
+    // move their mouse.
+    const state = this.awareness.getLocalState()
+    if (state) {
+      MindMapYjsProvider.savedAwarenessStates.set(this.canvasId, state as Record<string, unknown>)
+    }
     if (this.visibilityHandler) {
       document.removeEventListener('visibilitychange', this.visibilityHandler)
       this.visibilityHandler = null
