@@ -440,6 +440,7 @@ export async function mergeJsonSnapshotIntoCanvas(
     domains?: unknown[]
     connections?: unknown[]
   },
+  upsertOnly: boolean = false,  // NEW parameter
 ): Promise<boolean> {
   const state = await loadCanvasStateFromDb(canvasId)
   try {
@@ -467,11 +468,14 @@ export async function mergeJsonSnapshotIntoCanvas(
           target.set(id, ymap)
         }
       }
-      // Delete entities that are in the doc but NOT in the incoming snapshot
-      // (the client sent a complete view and omitted them).
-      for (const existingId of Array.from(target.keys())) {
-        if (!incomingIds.has(existingId)) {
-          target.delete(existingId)
+      // Delete entities that are in the doc but NOT in the incoming snapshot.
+      // Skip deletion in upsertOnly mode (used when active WS room exists —
+      // stale REST snapshots must not delete peer edits).
+      if (!upsertOnly) {
+        for (const existingId of Array.from(target.keys())) {
+          if (!incomingIds.has(existingId)) {
+            target.delete(existingId)
+          }
         }
       }
     }

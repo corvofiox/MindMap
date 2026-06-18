@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { useCanvasStore } from '@/store/useCanvasStore'
+import { useCanvasStore, getYjsBinding } from '@/store/useCanvasStore'
 import { useProjectsStore } from '@/store/useProjectsStore'
 import { useUIStore } from '@/store/useUIStore'
 import { useAuthStore } from '@/store/useAuthStore'
@@ -599,7 +599,6 @@ function collectCanvasData(state: ReturnType<typeof useCanvasStore.getState>) {
     groups: Array.from(state.groups.values()),
     domains: Array.from(state.domains.values()),
     connections: Array.from(state.connections.values()),
-    version: collabService.getServerVersion(),
   }
 }
 
@@ -682,7 +681,6 @@ export function CanvasPage() {
   const panStartRef = useRef({ x: 0, y: 0 })
   const cacheTimeoutRef = useRef<ReturnType<typeof setTimeout>>()
   const dbSaveTimeoutRef = useRef<ReturnType<typeof setTimeout>>()
-  const conflictCooldownRef = useRef<number>(0) // Prevent immediate re-save after 409 conflict
   const mouseDownOnContentRef = useRef(false) // Track if mouse down was on content
   const [hasInitializedCamera, setHasInitializedCamera] = useState(false) // Track if camera has been initialized
   const [hasLoadedCanvasData, setHasLoadedCanvasData] = useState(false) // Track if canvas data has been loaded
@@ -1073,9 +1071,12 @@ export function CanvasPage() {
         // 2. Ensures the WebSocket sync guard below correctly detects that any
         //    data in the store was put there by the CURRENT canvas's WebSocket sync
         //    (not leaked from a previous canvas).
-        collabService.isApplyingRemoteUpdate = true
-        clearCanvas()
-        collabService.isApplyingRemoteUpdate = false
+        const initBinding = getYjsBinding()
+        if (initBinding) {
+          initBinding.suppressSync(() => { clearCanvas() })
+        } else {
+          clearCanvas()
+        }
 
         // 如果是临时ID，不尝试从数据库加载数据
         if (id < 0) {
@@ -1125,32 +1126,41 @@ export function CanvasPage() {
         )
 
         if (hasData) {
-          collabService.isApplyingRemoteUpdate = true
-          clearCanvas()
-          setCanvasData(dbData)
-          collabService.isApplyingRemoteUpdate = false
+          const binding = getYjsBinding()
+          if (binding) {
+            binding.suppressSync(() => {
+              clearCanvas()
+              setCanvasData(dbData)
+            })
+          } else {
+            clearCanvas()
+            setCanvasData(dbData)
+          }
           setDirty(false)
           saveToCache(id, dbData)
-          // Only update serverVersion if higher than current (avoid downgrading
-          // in case WebSocket sync arrived between our guard check and here)
-          const currentVersion = collabService.getServerVersion()
-          if (dbData.version > currentVersion) {
-            collabService.setServerVersion(dbData.version)
-          }
         } else {
           // No data in DB, try cache
           const cachedData = loadFromCache(id)
           if (cachedData) {
-            collabService.isApplyingRemoteUpdate = true
-            clearCanvas()
-            setCanvasData(cachedData)
-            collabService.isApplyingRemoteUpdate = false
+            const binding = getYjsBinding()
+            if (binding) {
+              binding.suppressSync(() => {
+                clearCanvas()
+                setCanvasData(cachedData)
+              })
+            } else {
+              clearCanvas()
+              setCanvasData(cachedData)
+            }
             setDirty(false)
           } else {
             // No data anywhere
-            collabService.isApplyingRemoteUpdate = true
-            clearCanvas()
-            collabService.isApplyingRemoteUpdate = false
+            const binding = getYjsBinding()
+            if (binding) {
+              binding.suppressSync(() => { clearCanvas() })
+            } else {
+              clearCanvas()
+            }
           }
         }
       } catch (error) {
@@ -1162,15 +1172,24 @@ export function CanvasPage() {
         // DB load failed, fallback to cache
         const cachedData = loadFromCache(id)
         if (cachedData) {
-          collabService.isApplyingRemoteUpdate = true
-          clearCanvas()
-          setCanvasData(cachedData)
-          collabService.isApplyingRemoteUpdate = false
+          const binding = getYjsBinding()
+          if (binding) {
+            binding.suppressSync(() => {
+              clearCanvas()
+              setCanvasData(cachedData)
+            })
+          } else {
+            clearCanvas()
+            setCanvasData(cachedData)
+          }
           setDirty(false)
         } else {
-          collabService.isApplyingRemoteUpdate = true
-          clearCanvas()
-          collabService.isApplyingRemoteUpdate = false
+          const binding = getYjsBinding()
+          if (binding) {
+            binding.suppressSync(() => { clearCanvas() })
+          } else {
+            clearCanvas()
+          }
         }
       } finally {
         // Only update state if still mounted
@@ -1318,10 +1337,8 @@ export function CanvasPage() {
           ctx.fillStyle = THUMBNAIL.BACKGROUND_COLOR
           ctx.fillRect(0, 0, canvas.width, canvas.height)
           const thumbnailDataUrl = canvas.toDataURL('image/jpeg', THUMBNAIL.QUALITY)
-          // P1: 带 clientVersion 让服务端做版本检查，避免旧缩略图覆盖新画布
           await updateCanvasInStore(canvasId, {
             thumbnail: thumbnailDataUrl,
-            clientVersion: collabService.getServerVersion(),
           }, true)
         }
         return
@@ -1355,10 +1372,8 @@ export function CanvasPage() {
       })
 
       if (thumbnailDataUrl) {
-        // P1: 带 clientVersion 让服务端做版本检查，避免旧缩略图覆盖新画布
         await updateCanvasInStore(canvasId, {
           thumbnail: thumbnailDataUrl,
-          clientVersion: collabService.getServerVersion(),
         }, true)
       }
     } catch {
@@ -1427,12 +1442,6 @@ export function CanvasPage() {
         return
       }
 
-      // Cooldown after 409 conflict: skip one cycle to let sync complete
-      if (conflictCooldownRef.current && Date.now() - conflictCooldownRef.current < AUTO_SAVE_INTERVAL) {
-        dbSaveTimeoutRef.current = setTimeout(saveToDatabase, AUTO_SAVE_INTERVAL)
-        return
-      }
-
       if (!currentIsDirty) {
         dbSaveTimeoutRef.current = setTimeout(saveToDatabase, AUTO_SAVE_INTERVAL)
         return
@@ -1467,10 +1476,7 @@ export function CanvasPage() {
         const snapshotDomains = state.domains
         const snapshotConnections = state.connections
 
-        const result = await apiClient.post<{ message: string; version: number }>(`/api/canvases/${id}/data`, canvasData)
-        if (result && typeof result.version === 'number') {
-          collabService.setServerVersion(result.version)
-        }
+        await apiClient.post<{ message: string; version: number }>(`/api/canvases/${id}/data`, canvasData)
 
         lastSaveTimeRef.current = Date.now()
         const currentState = useCanvasStore.getState()
@@ -1487,10 +1493,7 @@ export function CanvasPage() {
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
-        if (error instanceof ApiError && error.status === 409 && typeof error.data?.serverVersion === 'number') {
-          collabService.setServerVersion(error.data.serverVersion as number)
-          collabService.requestSync()
-          conflictCooldownRef.current = Date.now()
+        if (error instanceof ApiError && error.status === 409) {
           addToast({ type: 'warning', title: '保存冲突', message: '已获取服务端最新版本，可再次保存' })
         } else if (message.includes('网络连接失败')) {
           addToast({ type: 'error', title: '保存失败', message: '网络错误，请检查连接后重试' })
@@ -1544,10 +1547,7 @@ export function CanvasPage() {
     const canvasData = collectCanvasData(state)
 
     try {
-      const result = await apiClient.post<{ message: string; version: number }>(`/api/canvases/${id}/data`, canvasData)
-      if (result && typeof result.version === 'number') {
-        collabService.setServerVersion(result.version)
-      }
+      await apiClient.post<{ message: string; version: number }>(`/api/canvases/${id}/data`, canvasData)
 
       lastSaveTimeRef.current = Date.now()
       setDirty(false)
@@ -1557,10 +1557,7 @@ export function CanvasPage() {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      const conflictData = error instanceof ApiError && error.data?.data as { serverVersion?: number } | undefined
-      if (error instanceof ApiError && error.status === 409 && typeof conflictData?.serverVersion === 'number') {
-        collabService.setServerVersion(conflictData.serverVersion)
-        collabService.requestSync()
+      if (error instanceof ApiError && error.status === 409) {
         addToast({ type: 'warning', title: '保存冲突', message: '已获取服务端最新版本，可再次保存' })
       } else if (message.includes('网络连接失败')) {
         addToast({ type: 'error', title: '保存失败', message: '网络错误，请检查连接后重试' })

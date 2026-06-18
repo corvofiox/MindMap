@@ -256,31 +256,32 @@ canvasRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, res
           hasSortOrder: sortOrder !== undefined,
         })
       }
-      // If yjsData is also present in this request, merge it into the Yjs doc
-      // before continuing with the thumbnail-only update, so it's not discarded.
-      if (yjsData !== undefined) {
-        log('PUT canvas - Thumbnail branch also has yjsData; merging first', { canvasId })
-        try {
-          const jsonStr = Buffer.from(yjsData, 'base64').toString('utf-8')
-          const snapshot = JSON.parse(jsonStr)
-          await mergeJsonSnapshotIntoCanvas(canvasId, {
-            nodes: Array.isArray(snapshot.nodes) ? snapshot.nodes : [],
-            groups: Array.isArray(snapshot.groups) ? snapshot.groups : [],
-            domains: Array.isArray(snapshot.domains) ? snapshot.domains : [],
-            connections: Array.isArray(snapshot.connections) ? snapshot.connections : [],
-          })
-        } catch (err) {
-          log('PUT canvas - Failed to merge yjsData into Yjs doc in thumbnail branch', {
-            canvasId,
-            error: err instanceof Error ? err.message : String(err),
-          })
-          return res.status(400).json({
-            success: false,
-            error: 'Failed to merge canvas data: invalid or corrupt yjsData',
-          })
-        }
-      }
+      // Move yjsData merge inside mutex (Bug 2 fix) — previously this merged
+      // outside the mutex and could interleave with concurrent WS operations.
       return await withPostSaveMutex(canvasId, async () => {
+        if (yjsData !== undefined) {
+          log('PUT canvas - Thumbnail branch also has yjsData; merging first', { canvasId })
+          try {
+            const jsonStr = Buffer.from(yjsData, 'base64').toString('utf-8')
+            const snapshot = JSON.parse(jsonStr)
+            const activeUsers = getCanvasActiveUsers(canvasId)
+            await mergeJsonSnapshotIntoCanvas(canvasId, {
+              nodes: Array.isArray(snapshot.nodes) ? snapshot.nodes : [],
+              groups: Array.isArray(snapshot.groups) ? snapshot.groups : [],
+              domains: Array.isArray(snapshot.domains) ? snapshot.domains : [],
+              connections: Array.isArray(snapshot.connections) ? snapshot.connections : [],
+            }, activeUsers.length > 0)
+          } catch (err) {
+            log('PUT canvas - Failed to merge yjsData into Yjs doc in thumbnail branch', {
+              canvasId,
+              error: err instanceof Error ? err.message : String(err),
+            })
+            return res.status(400).json({
+              success: false,
+              error: 'Failed to merge canvas data: invalid or corrupt yjsData',
+            })
+          }
+        }
 
         const updateData: Record<string, unknown> = {
           updatedAt: Math.floor(Date.now() / 1000),
@@ -323,12 +324,13 @@ canvasRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, res
       try {
         const jsonStr = Buffer.from(yjsData, 'base64').toString('utf-8')
         const snapshot = JSON.parse(jsonStr)
+        const activeUsers = getCanvasActiveUsers(canvasId)
         await mergeJsonSnapshotIntoCanvas(canvasId, {
           nodes: Array.isArray(snapshot.nodes) ? snapshot.nodes : [],
           groups: Array.isArray(snapshot.groups) ? snapshot.groups : [],
           domains: Array.isArray(snapshot.domains) ? snapshot.domains : [],
           connections: Array.isArray(snapshot.connections) ? snapshot.connections : [],
-        })
+        }, activeUsers.length > 0)
       } catch (err) {
         log('PUT canvas - Failed to merge yjsData into Yjs doc, returning error', {
           canvasId,
@@ -485,6 +487,15 @@ canvasRouter.post('/:id/data', authenticate, asyncHandler(async (req: AuthReques
   await withPostSaveMutex(canvasId, async () => {
     const { nodes, groups, domains, connections, yjsData } = req.body
 
+    // Check if there's an active collaboration session (WS room with clients).
+    // If so, use upsertOnly mode to prevent stale REST snapshots from
+    // deleting peer edits that the disconnected client didn't see.
+    const activeUsers = getCanvasActiveUsers(canvasId)
+    const hasActiveCollab = activeUsers.length > 0
+    if (hasActiveCollab) {
+      log('POST canvas data - upsertOnly mode (active collaboration)', { canvasId, activeUsers: activeUsers.length })
+    }
+
     // Handle yjsData (base64-encoded JSON snapshot) for backward compatibility
     // with old clients that send the snapshot as a single base64 field instead
     // of individual JSON arrays.
@@ -497,7 +508,7 @@ canvasRouter.post('/:id/data', authenticate, asyncHandler(async (req: AuthReques
         if (Array.isArray(snapshot.groups)) yjsSnapshot.groups = snapshot.groups
         if (Array.isArray(snapshot.domains)) yjsSnapshot.domains = snapshot.domains
         if (Array.isArray(snapshot.connections)) yjsSnapshot.connections = snapshot.connections
-        await mergeJsonSnapshotIntoCanvas(canvasId, yjsSnapshot)
+        await mergeJsonSnapshotIntoCanvas(canvasId, yjsSnapshot, hasActiveCollab)
       } catch (err) {
         log('POST canvas data - Failed to decode yjsData', {
           canvasId,
@@ -520,7 +531,7 @@ canvasRouter.post('/:id/data', authenticate, asyncHandler(async (req: AuthReques
         if (Array.isArray(groups)) snapshot.groups = groups
         if (Array.isArray(domains)) snapshot.domains = domains
         if (Array.isArray(connections)) snapshot.connections = connections
-        await mergeJsonSnapshotIntoCanvas(canvasId, snapshot)
+        await mergeJsonSnapshotIntoCanvas(canvasId, snapshot, hasActiveCollab)
       } else {
         // 无内容变更也要确保 doc 已加载（供后续读取一致）
         await loadCanvasStateFromDb(canvasId)

@@ -69,6 +69,8 @@ export interface YjsCanvasBinding {
   getYConnections: () => Y.Map<Y.Map<unknown>>
   /** Detach all observers. */
   destroy: () => void
+  /** Temporarily suppress Yjs sync (for initial data loading). */
+  suppressSync: (fn: () => void) => void
 }
 
 /**
@@ -294,6 +296,11 @@ export function bindYjsToStore(
       unobserveGroups()
       unobserveDomains()
       unobserveConnections()
+    },
+    suppressSync: (fn: () => void) => {
+      const prev = isApplyingRemoteChanges
+      isApplyingRemoteChanges = true
+      try { fn() } finally { isApplyingRemoteChanges = prev }
     },
   }
 }

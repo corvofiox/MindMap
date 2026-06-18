@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback } from 'react'
-import { useCanvasStore, setYjsBinding } from '@/store/useCanvasStore'
+import { useCanvasStore, setYjsBinding, getYjsBinding } from '@/store/useCanvasStore'
 import { MindMapYjsProvider, defaultWsUrlRoot, type CanvasActiveUser } from '@/services/yjsProvider'
 import { bindYjsToStore } from '@/services/yjsBinding'
 import { useAuthStore } from '@/store/useAuthStore'
@@ -95,7 +95,16 @@ export function useCollaboration({
     const unsubDirty = useCanvasStore.subscribe((state) => {
       if (state.isDirty !== lastDirty) {
         lastDirty = state.isDirty
-        if (state.isDirty) onRemoteChangeRef.current?.(canvasId)
+        if (state.isDirty) {
+          // Only trigger onRemoteChange for remote-originated dirty changes.
+          // The Yjs binding sets isApplyingRemoteChanges=true during observer
+          // replay (synchronous within Zustand set()), so we can check it here.
+          // Local edits get thumbnails via the auto-save path instead.
+          const binding = getYjsBinding()
+          if (binding?.isApplyingRemoteChanges) {
+            onRemoteChangeRef.current?.(canvasId)
+          }
+        }
       }
     })
 

@@ -18,6 +18,8 @@ type YjsBindingHandle = {
   /** True when the binding is currently applying remote changes to the store
    *  (suppresses Yjs echo-back to avoid feedback loops). */
   isApplyingRemoteChanges: boolean
+  /** Temporarily suppress Yjs sync (for initial data loading). */
+  suppressSync: (fn: () => void) => void  // NEW
 }
 let yjsBinding: YjsBindingHandle | null = null
 
