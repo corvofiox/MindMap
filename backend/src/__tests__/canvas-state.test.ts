@@ -45,6 +45,7 @@ import {
   isCanvasStatePersisted,
 } from '../websocket/canvas-state.js'
 import { encodeDocToBase64, jsonSnapshotToDoc } from '../websocket/yjs-schema.js'
+import { db } from '../database/connection.js'
 
 const CANVAS_ID = 1
 
@@ -84,6 +85,8 @@ describe('Yjs canvas-state', () => {
       const snapshot = getCanvasJsonSnapshot(CANVAS_ID)
       expect(snapshot.nodes).toHaveLength(1)
       expect((snapshot.nodes[0] as any).id).toBe('legacy')
+      // Verify the converted Yjs doc was persisted back to the DB
+      expect(db.update).toHaveBeenCalled()
     })
 
     it('yields an empty doc when neither column is populated', async () => {

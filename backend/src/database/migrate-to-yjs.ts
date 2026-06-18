@@ -28,7 +28,7 @@ interface SnapshotShape {
   version?: number
 }
 
-function decodeLegacySnapshot(yjsData: string | null | undefined): SnapshotShape | null {
+export function decodeLegacySnapshot(yjsData: string | null | undefined): SnapshotShape | null {
   if (!yjsData) return null
   try {
     const json = Buffer.from(yjsData, 'base64').toString('utf-8')
@@ -83,9 +83,6 @@ export async function migrateCanvasesToYjs(): Promise<number> {
         .where(eq(canvases.id, row.id))
 
       migrated += 1
-      if (!snapshot) {
-        empty += 1
-      }
     } catch (err) {
       logError('Failed to migrate canvas to Yjs', { canvasId: row.id, error: (err as Error).message })
       skipped += 1

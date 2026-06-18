@@ -247,7 +247,7 @@ canvasRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, res
     if (thumbnail !== undefined && typeof clientVersion === 'number') {
       if (name !== undefined || yjsData !== undefined || previewText !== undefined
         || folderId !== undefined || sortOrder !== undefined) {
-        log('PUT canvas - version-checked thumbnail branch received extra writable fields, they will be ignored', {
+        log('PUT canvas - version-checked thumbnail branch received extra writable fields', {
           canvasId,
           hasName: name !== undefined,
           hasYjsData: yjsData !== undefined,
@@ -255,6 +255,30 @@ canvasRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, res
           hasFolderId: folderId !== undefined,
           hasSortOrder: sortOrder !== undefined,
         })
+      }
+      // If yjsData is also present in this request, merge it into the Yjs doc
+      // before continuing with the thumbnail-only update, so it's not discarded.
+      if (yjsData !== undefined) {
+        log('PUT canvas - Thumbnail branch also has yjsData; merging first', { canvasId })
+        try {
+          const jsonStr = Buffer.from(yjsData, 'base64').toString('utf-8')
+          const snapshot = JSON.parse(jsonStr)
+          await mergeJsonSnapshotIntoCanvas(canvasId, {
+            nodes: Array.isArray(snapshot.nodes) ? snapshot.nodes : [],
+            groups: Array.isArray(snapshot.groups) ? snapshot.groups : [],
+            domains: Array.isArray(snapshot.domains) ? snapshot.domains : [],
+            connections: Array.isArray(snapshot.connections) ? snapshot.connections : [],
+          })
+        } catch (err) {
+          log('PUT canvas - Failed to merge yjsData into Yjs doc in thumbnail branch', {
+            canvasId,
+            error: err instanceof Error ? err.message : String(err),
+          })
+          return res.status(400).json({
+            success: false,
+            error: 'Failed to merge canvas data: invalid or corrupt yjsData',
+          })
+        }
       }
       return await withPostSaveMutex(canvasId, async () => {
 
@@ -306,9 +330,13 @@ canvasRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, res
           connections: Array.isArray(snapshot.connections) ? snapshot.connections : [],
         })
       } catch (err) {
-        log('PUT canvas - Failed to merge yjsData into Yjs doc', {
+        log('PUT canvas - Failed to merge yjsData into Yjs doc, returning error', {
           canvasId,
           error: err instanceof Error ? err.message : String(err),
+        })
+        return res.status(400).json({
+          success: false,
+          error: 'Failed to merge canvas data: invalid or corrupt yjsData',
         })
       }
     }
