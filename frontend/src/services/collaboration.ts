@@ -85,14 +85,15 @@ class CollaborationService {
     // intentionally empty
   }
 
-  /** No-op. CRDT needs no interaction guard. */
+  /** No-op (formerly a no-op, now handled directly by the Yjs binding's
+   *  startInteraction/endInteraction in yjsBinding.ts). */
   startInteraction(_nodeId: string, _field?: string): void {
-    // intentionally empty
+    console.warn('[collab] startInteraction is deprecated — use getYjsBinding().startInteraction()')
   }
 
   /** No-op. */
   endInteraction(_nodeId: string): void {
-    // intentionally empty
+    console.warn('[collab] endInteraction is deprecated — use getYjsBinding().endInteraction()')
   }
 }
 

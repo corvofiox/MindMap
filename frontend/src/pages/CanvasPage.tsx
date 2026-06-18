@@ -1391,8 +1391,15 @@ export function CanvasPage() {
 
   // Debounced thumbnail generation to avoid excessive updates
   const thumbnailTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const lastRemoteThumbnailRef = useRef<number>(0)
 
   const triggerThumbnailGeneration = useCallback((canvasId: number) => {
+    // During active collaboration, remote changes arrive every 100ms (drag
+    // throttle) or faster. Enforce a minimum 2s interval between remote-triggered
+    // thumbnails so they don't flash on every peer edit.
+    const now = Date.now()
+    if (now - lastRemoteThumbnailRef.current < 2000) return
+    lastRemoteThumbnailRef.current = now
     if (thumbnailTimeoutRef.current) {
       clearTimeout(thumbnailTimeoutRef.current)
     }
@@ -1586,6 +1593,9 @@ export function CanvasPage() {
       const state = useCanvasStore.getState()
 
       if (state.isDirty) {
+        // Guard: skip if canvasId has already changed (race with canvas
+        // switch). Matches the check in handlePageHide below.
+        if (state.canvasId !== id) return
         e.preventDefault()
         e.returnValue = ''
 

@@ -23,6 +23,14 @@ import * as syncProtocol from 'y-protocols/sync'
 import * as awarenessProtocol from 'y-protocols/awareness'
 import { ensureRoot } from './yjs-schema'
 
+/**
+ * Origin tag applied by readSyncMessage when applying remote sync frames to
+ * the local Y.Doc. Using a Symbol instead of the provider instance (this)
+ * avoids accidentally skipping updates that originate from other code paths
+ * that happen to pass the provider as origin.
+ */
+export const REMOTE_ORIGIN = Symbol('yjs-provider-remote')
+
 export type CanvasActiveUser = {
   userId: number
   email: string
@@ -355,7 +363,14 @@ export class MindMapYjsProvider {
     if (messageType === 0) {
       // SYNC: STEP2 (server reply) or UPDATE (broadcast).
       const encoder = encoding.createEncoder()
-      syncProtocol.readSyncMessage(decoder, encoder, this.doc, this)
+      try {
+        syncProtocol.readSyncMessage(decoder, encoder, this.doc, REMOTE_ORIGIN)
+      } catch (err) {
+        console.warn('[yjs-provider] failed to apply sync message', err)
+        // If a sync message fails to apply, do not set isSynced — the doc
+        // may be in an inconsistent state and needs re-sync.
+        return
+      }
       const replyLen = encoding.length(encoder)
       if (replyLen > 1) {
         // Server may also request STEP1 from us; send the reply.
@@ -399,9 +414,9 @@ export class MindMapYjsProvider {
       // prevents the local Y.Doc from silently diverging from server state.
       if (this.options.role === 'viewer') return
       // Forward every local-origin update to the server. Remote-origin updates
-      // (applied via readSyncMessage) have origin === this provider instance and
-      // should NOT be re-broadcast (the server already has them).
-      if (origin === this) return
+      // (applied via readSyncMessage) have origin === REMOTE_ORIGIN and should
+      // NOT be re-broadcast (the server already has them).
+      if (origin === REMOTE_ORIGIN) return
       if (!this.isConnected()) {
         // Buffer local updates so they can be replayed after reconnect.
         this.pendingUpdates.push(update)

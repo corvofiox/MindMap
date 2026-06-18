@@ -65,6 +65,8 @@ interface WebSocketWithUserData extends WebSocket {
   lastAppPong?: number
   /** Per-connection awareness client id, kept so we can clean it up on disconnect. */
   awarenessClientId?: number
+  /** Message timestamps for per-connection sliding-window rate limiting. */
+  msgTimestamps?: number[]
 }
 
 export interface CanvasRoom {
@@ -258,20 +260,27 @@ function cleanupEmptyRoom(canvasId: number): void {
       } else {
         // Persist failed and doc is still dirty. Schedule a final cleanup so
         // the state (and its Y.Doc) doesn't leak forever. If a new client
-        // connects before this fires, the generation guard above will prevent
-        // the removal. The periodic flush gets one more chance in the meantime.
+        // connects before this fires, cancel the pending timeout.
+        // The periodic flush gets one more chance in the meantime.
         log('cleanupEmptyRoom: persist failed, scheduling delayed state removal', { canvasId })
-        setTimeout(() => {
+        const existingTimeout = cleanupTimeouts.get(canvasId)
+        if (existingTimeout) clearTimeout(existingTimeout)
+        cleanupTimeouts.set(canvasId, setTimeout(() => {
+          cleanupTimeouts.delete(canvasId)
           if (getStateGeneration(canvasId) === gen) {
             removeCanvasState(canvasId)
           }
-        }, 5000)
+        }, 5000))
       }
     })
   } else {
     removeCanvasState(canvasId)
   }
 }
+
+// Track pending delayed-cleanup timeouts so they can be cancelled if a new
+// client reconnects before the timer fires.
+const cleanupTimeouts = new Map<number, ReturnType<typeof setTimeout>>()
 
 export function getCanvasActiveUsers(canvasId: number): CanvasActiveUser[] {
   const room = canvasRooms.get(canvasId)
@@ -410,7 +419,14 @@ async function handleConnection(ws: WebSocketWithUserData, req: any) {
     return
   }
 
-  const authHeader = req.headers.authorization?.replace('Bearer ', '') || tokenParam
+  // Supports three transport mechanisms (ordered by security preference):
+  // 1. Authorization: Bearer header (standard, preferred)
+  // 2. Sec-WebSocket-Protocol header (used by browser WebSocket API)
+  // 3. URL query parameter ?token=... (fallback, accepted for compatibility
+  //    but not recommended — tokens in URLs can leak via server logs/Referer)
+  const authHeader = req.headers.authorization?.replace('Bearer ', '')
+    || (req.headers['sec-websocket-protocol'] as string)
+    || tokenParam
   if (!authHeader) {
     cleanupEarlyListeners()
     ws.close(1008, 'Missing authentication')
@@ -521,9 +537,19 @@ async function handleConnection(ws: WebSocketWithUserData, req: any) {
   ws.userInfo = userInfo
   ws.isAlive = true
   ws.lastPong = Date.now()
+  // P2 dual-path heartbeat: initialize app-layer pong alongside native pong so
+  // the first heartbeat cycle doesn't see it as undefined + stale → false positive.
+  ws.lastAppPong = Date.now()
 
   let room = canvasRooms.get(canvasId)
   if (!room) {
+    // Cancel any pending delayed-cleanup timeout — a new client reconnected
+    // before the timer fired.
+    const pendingCleanup = cleanupTimeouts.get(canvasId)
+    if (pendingCleanup) {
+      clearTimeout(pendingCleanup)
+      cleanupTimeouts.delete(canvasId)
+    }
     room = {
       id: canvasId,
       clients: new Set(),
@@ -626,6 +652,24 @@ async function handleConnection(ws: WebSocketWithUserData, req: any) {
  * binary frames carry Yjs sync protocol bytes.
  */
 function handleMessage(ws: WebSocketWithUserData, room: CanvasRoom, data: Buffer, isBinary: boolean) {
+  // Per-connection sliding-window rate limit: max 60 binary messages / 10 text
+  // messages per second. This prevents a single compromised client from flooding
+  // the server with Yjs updates (CPU via Y.applyUpdate + N-way broadcast amplification).
+  try {
+    const now = Date.now()
+    const threshold = isBinary ? 60 : 10
+    const window: number[] = ws.msgTimestamps ?? []
+    // Keep only timestamps within the last 1 second
+    while (window.length > 0 && window[0] < now - 1000) window.shift()
+    if (window.length >= threshold) {
+      ws.send(JSON.stringify({ type: 'error', message: 'rate limited' }))
+      ws.close(1008, 'rate limited')
+      return
+    }
+    window.push(now)
+    ws.msgTimestamps = window
+  } catch { /* rate-limit bookkeeping must never throw */ }
+
   try {
     if (data.length > WS_MAX_MESSAGE_BYTES) {
       logError('WebSocket message exceeds size limit, dropping', {

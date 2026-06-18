@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
-import { useCanvasStore } from '@/store/useCanvasStore'
+import { useCanvasStore, getYjsBinding } from '@/store/useCanvasStore'
 import { useUIStore } from '@/store/useUIStore'
 import { CANVAS_DEFAULTS, DOMAIN_DEFAULTS } from '@/constants'
 import { screenToCanvas, generateId, clamp } from '@/utils/canvas'
@@ -68,7 +68,7 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
       clearTimeout(interactionTimeoutRef.current)
     }
     activeObjectRef.current = nodeId
-    collabService.startInteraction(nodeId, 'position')
+    getYjsBinding()?.startInteraction(nodeId, 'position')
   }, [])
 
   const endObjectInteraction = useCallback(() => {
@@ -77,7 +77,7 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
     }
     interactionTimeoutRef.current = setTimeout(() => {
       if (activeObjectRef.current) {
-        collabService.endInteraction(activeObjectRef.current)
+        getYjsBinding()?.endInteraction(activeObjectRef.current)
         activeObjectRef.current = null
       }
     }, 100)

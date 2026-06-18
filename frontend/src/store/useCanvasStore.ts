@@ -19,11 +19,29 @@ type YjsBindingHandle = {
    *  (suppresses Yjs echo-back to avoid feedback loops). */
   isApplyingRemoteChanges: boolean
   /** Temporarily suppress Yjs sync (for initial data loading). */
-  suppressSync: (fn: () => void) => void  // NEW
+  suppressSync: (fn: () => void) => void
+  /** Mark a node as being interacted with (defers remote position updates
+   *  to prevent tug-of-war on LWW fields during concurrent drags). */
+  startInteraction: (nodeId: string, field?: string) => void
+  /** End an interaction and flush any deferred position updates. */
+  endInteraction: (nodeId: string) => void
+  /** Tear down the binding (unobserve Yjs collections). */
+  destroy: () => void
 }
 let yjsBinding: YjsBindingHandle | null = null
 
 export function setYjsBinding(binding: YjsBindingHandle | null): void {
+  // Multi-tab guard: if a binding already exists for a different canvas,
+  // destroy the old one before replacing it. Without this, two tabs open on
+  // different canvases would share the same module-level binding, causing
+  // cross-canvas data pollution via the Y.Doc observer.
+  if (binding && yjsBinding && yjsBinding !== binding) {
+    console.warn(
+      '[yjs-binding] replacing existing binding — previous binding destroyed ' +
+      'to prevent multi-tab cross-canvas data pollution',
+    )
+    yjsBinding.destroy()
+  }
   yjsBinding = binding
 }
 
@@ -50,6 +68,9 @@ type MapsSnapshot = {
  */
 function captureSnapshot(state: MapsSnapshot): MapsSnapshot | null {
   if (!yjsBinding) return null
+  // During remote updates, syncDiffToYDoc returns immediately anyway (guarded
+  // by isApplyingRemoteChanges), so skip the O(n) clone entirely.
+  if (yjsBinding.isApplyingRemoteChanges) return null
   return {
     nodes: new Map(state.nodes),
     groups: new Map(state.groups),
@@ -1130,7 +1151,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   },
 
   clearCanvas: () => {
-    const before = captureSnapshot(get())
     set({
       nodes: new Map(),
       groups: new Map(),
@@ -1141,6 +1161,9 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       editingId: null,
       isDirty: false,
     })
-    syncDiffToYDoc(before, get())
+    // clearCanvas is a local state reset — it must NOT broadcast empty state
+    // to peers. All callers use it before loading new canvas data or when
+    // navigating away from a deleted canvas; in neither case should the empty
+    // store propagate to the Y.Doc.
   },
 }))

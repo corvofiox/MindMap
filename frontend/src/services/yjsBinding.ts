@@ -71,6 +71,10 @@ export interface YjsCanvasBinding {
   destroy: () => void
   /** Temporarily suppress Yjs sync (for initial data loading). */
   suppressSync: (fn: () => void) => void
+  /** Mark a node as being interacted with (defers remote position updates). */
+  startInteraction: (nodeId: string, field?: string) => void
+  /** End an interaction and flush deferred position updates. */
+  endInteraction: (nodeId: string) => void
 }
 
 /**
@@ -89,6 +93,28 @@ export function bindYjsToStore(
   // Guard against feedback loops: when the observer applies remote changes to
   // the store, set this flag so the store's syncDiffToYDoc skips the echo-back.
   let isApplyingRemoteChanges = false
+
+  // Track which nodes/fields the local user is currently interacting with
+  // (e.g. dragging a node). When applyRemoteNode sees an interacting node,
+  // position/scalar updates are deferred until the interaction ends. Without
+  // this, simultaneous drags on the same node create a tug-of-war because
+  // Yjs position fields are Last-Writer-Wins.
+  const interactingNodes = new Map<string, string | undefined>()
+  const deferredNodeUpdates = new Map<string, Partial<Node>>()
+
+  function startInteraction(nodeId: string, field?: string): void {
+    interactingNodes.set(nodeId, field)
+  }
+  function endInteraction(nodeId: string): void {
+    interactingNodes.delete(nodeId)
+    // Flush deferred position updates so the remote peer's position is
+    // visible as soon as the local interaction ends.
+    const deferred = deferredNodeUpdates.get(nodeId)
+    if (deferred) {
+      deferredNodeUpdates.delete(nodeId)
+      store.updateNodeWithoutHistory(nodeId, deferred, true)
+    }
+  }
 
   // NOTE on the `store` parameter vs `useCanvasStore.getState()`:
   // The `store` argument passed to bindYjsToStore is a snapshot captured at
@@ -121,6 +147,49 @@ export function bindYjsToStore(
     if (!existing) {
       store.addNode({ ...obj, id })
     } else {
+      // If the local user is currently interacting with this node (e.g.
+      // dragging it), defer position/scalar updates to prevent a tug-of-war.
+      // Yjs position fields are LWW, so simultaneous drags would overwrite
+      // each other without this guard. Non-position updates (title, content,
+      // style, etc.) are applied immediately regardless.
+      const interacting = interactingNodes.get(id)
+      if (interacting !== undefined) {
+        // Only defer x/y/width/height changes; let text/style through.
+        const hasPositionChange = (existing.x !== obj.x || existing.y !== obj.y ||
+          existing.width !== obj.width || existing.height !== obj.height)
+        if (hasPositionChange) {
+          // Store the latest remote position so endInteraction can flush it.
+          deferredNodeUpdates.set(id, {
+            x: obj.x,
+            y: obj.y,
+            width: obj.width,
+            height: obj.height,
+          })
+          // Still apply non-position field updates immediately.
+          const nonPositionUpdates: Partial<Node> = {}
+          for (const key of Object.keys(obj) as (keyof Node)[]) {
+            if (key !== 'x' && key !== 'y' && key !== 'width' && key !== 'height') {
+              (nonPositionUpdates as any)[key] = obj[key]
+            }
+          }
+          if (Object.keys(nonPositionUpdates).length > 0) {
+            store.updateNodeWithoutHistory(id, nonPositionUpdates, true)
+          }
+          return  // skip the full apply below; position deferred
+        }
+        // No position change — apply everything normally.
+      }
+      // Detect position field overwrites — Yjs scalar fields are
+      // Last-Writer-Wins, so simultaneous drags by two users can silently
+      // overwrite one user's position. Log when this happens so UX issues
+      // (instant teleport) can be diagnosed.
+      if (existing.x !== obj.x || existing.y !== obj.y) {
+        console.warn(
+          `[yjs-binding] position conflict on node ${id}: ` +
+          `local (${existing.x},${existing.y}) ` +
+          `← remote (${obj.x},${obj.y})`,
+        )
+      }
       // Handle field deletions: keys present in existing but absent from
       // remote Y.Map are not included by ymapToObject, so explicitly set
       // them to undefined so the store merge removes them.
@@ -302,6 +371,8 @@ export function bindYjsToStore(
       isApplyingRemoteChanges = true
       try { fn() } finally { isApplyingRemoteChanges = prev }
     },
+    startInteraction,
+    endInteraction,
   }
 }
 

@@ -1,7 +1,7 @@
 ﻿import { Router } from 'express'
 import { db, scheduleSave } from '../database/connection.js'
 import { canvases, folders, projects, projectMembers } from '../database/schema.js'
-import { eq, inArray, and } from 'drizzle-orm'
+import { eq, inArray, and, lte } from 'drizzle-orm'
 import { authenticate, type AuthRequest } from '../middleware/auth.middleware.js'
 import { asyncHandler } from '../middleware/error.middleware.js'
 import { transformResponse, transformResponseArray, getProperty } from '../utils/transformResponse.js'
@@ -293,8 +293,22 @@ canvasRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, res
         const [updatedCanvas] = await db
           .update(canvases)
           .set(updateData)
-          .where(eq(canvases.id, canvasId))
+          .where(and(
+            eq(canvases.id, canvasId),
+            // Optimistic lock: only update if the row hasn't been modified
+            // since the client's snapshot. clientVersion is the updatedAt
+            // the client knows about.
+            lte(canvases.updatedAt, clientVersion),
+          ))
           .returning()
+
+        if (!updatedCanvas) {
+          log('PUT canvas - Thumbnail version conflict, returning 409', { canvasId, clientVersion })
+          return res.status(409).json({
+            success: false,
+            error: '缩略图版本过期，画布已被更新',
+          })
+        }
 
         if (canvasProjectId) {
           await db
@@ -322,15 +336,20 @@ canvasRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, res
     if (yjsData !== undefined) {
       log('PUT canvas - yjsData provided; merging into Yjs doc instead of legacy column', { canvasId })
       try {
-        const jsonStr = Buffer.from(yjsData, 'base64').toString('utf-8')
-        const snapshot = JSON.parse(jsonStr)
-        const activeUsers = getCanvasActiveUsers(canvasId)
-        await mergeJsonSnapshotIntoCanvas(canvasId, {
-          nodes: Array.isArray(snapshot.nodes) ? snapshot.nodes : [],
-          groups: Array.isArray(snapshot.groups) ? snapshot.groups : [],
-          domains: Array.isArray(snapshot.domains) ? snapshot.domains : [],
-          connections: Array.isArray(snapshot.connections) ? snapshot.connections : [],
-        }, activeUsers.length > 0)
+        // Wrap in withPostSaveMutex to prevent TOCTOU race (C1/C2):
+        // getCanvasActiveUsers decision and mergeJsonSnapshotIntoCanvas must be
+        // atomic with respect to concurrent POST /data and WS save operations.
+        await withPostSaveMutex(canvasId, async () => {
+          const jsonStr = Buffer.from(yjsData, 'base64').toString('utf-8')
+          const snapshot = JSON.parse(jsonStr)
+          const activeUsers = getCanvasActiveUsers(canvasId)
+          await mergeJsonSnapshotIntoCanvas(canvasId, {
+            nodes: Array.isArray(snapshot.nodes) ? snapshot.nodes : [],
+            groups: Array.isArray(snapshot.groups) ? snapshot.groups : [],
+            domains: Array.isArray(snapshot.domains) ? snapshot.domains : [],
+            connections: Array.isArray(snapshot.connections) ? snapshot.connections : [],
+          }, activeUsers.length > 0)
+        })
       } catch (err) {
         log('PUT canvas - Failed to merge yjsData into Yjs doc, returning error', {
           canvasId,

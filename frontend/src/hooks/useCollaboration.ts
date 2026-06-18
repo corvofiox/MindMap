@@ -128,7 +128,11 @@ export function useCollaboration({
       onSyncedUnsub()
       // Clear store binding reference first so any subsequent store mutation
       // that calls syncDiffToYDoc becomes a no-op before we touch the Y.Doc.
-      setYjsBinding(null)
+      // Guard: only null out if this binding is still the active one — prevent
+      // race where a new canvas effect set YjsBinding between old cleanup runs.
+      if (getYjsBinding() === binding) {
+        setYjsBinding(null)
+      }
       // Then detach all Y.Doc observers so no callbacks fire on a destroyed doc.
       binding.destroy()
       // Finally disconnect (which internally destroys the Y.Doc and awareness).
