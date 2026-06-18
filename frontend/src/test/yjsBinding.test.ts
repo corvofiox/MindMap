@@ -176,7 +176,7 @@ describe('yjsBinding', () => {
       binding.destroy()
     })
 
-    it('skips observer when origin is the provider instance', () => {
+    it('fires addNode when origin is the provider instance (R2-2 fix)', () => {
       const doc = new Y.Doc()
       ensureRoot(doc)
       const provider = createMockProvider(doc)
@@ -188,7 +188,10 @@ describe('yjsBinding', () => {
         collections.nodes.set('n1', entityToYMap({ id: 'n1', x: 1, y: 2 }))
       }, provider)
 
-      expect(store.addNode).not.toHaveBeenCalled()
+      // With the R2-2 fix, provider-origin updates MUST propagate to the store.
+      // Previously this was blocked, which broke all remote→store sync in production
+      // (the provider passes itself as origin in handleBinary's readSyncMessage call).
+      expect(store.addNode).toHaveBeenCalledWith(expect.objectContaining({ id: 'n1' }))
       binding.destroy()
     })
 

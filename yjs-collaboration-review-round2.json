@@ -1,0 +1,190 @@
+{
+  "review_meta": {
+    "project": "/opt/data/projects_3p/MindMap",
+    "branch": "yjs",
+    "commit": "b7ebc40",
+    "review_date": "2026-06-18",
+    "round": 2,
+    "scope": "Round 1 遗留 4 个问题审查 + 整体收敛检查",
+    "author": "Hermes Agent"
+  },
+  "verdict": "2 CRITICAL bugs found (one newly discovered), 1 ACCEPTABLE by design, 1 ACCEPTABLE with risk noted, 1 MEDIUM security advisory",
+  "findings": [
+    {
+      "id": "R2-1",
+      "issue": "Undo/redo 与 Yjs 协作的交互",
+      "severity": "info",
+      "verdict": "ACCEPTABLE — by design (方案B)",
+      "files": [
+        "frontend/src/store/useCanvasStore.ts (lines 946-1057)",
+        "frontend/src/services/yjsBinding.ts (lines 13-14, 200-238)"
+      ],
+      "analysis": {
+        "design": "方案B 刻意保留本地 Zustand 命令历史（全量快照 diff）作为 undo 栈，不使用 Yjs UndoManager。本地操作通过 executeCommand → syncDiffToYDoc 写入 Y.Doc，远程变更通过 observer 反写到 store（但此路已被 R2-2 阻断）。",
+        "data_integrity_risks": [
+          "undo() 生成的反向 diff 通过 syncDiffToYDoc 写入 Y.Doc（LOCAL_ORIGIN 事务），远程 peer 会看到 undo 效果 → 这是期望行为",
+          "每个 undo 只撤销当前用户自己的命令（userId 过滤）→ 不会撤销他人的操作",
+          "并发场景：若远程更改了用户 A 刚创建然后 undo 的节点，CRDT 合并保证字段级正确性，但远程添加的字段在 undo 删除节点时会丢失（CRDT 的删除优先于添加）——这是所有 CRDT-based 系统的固有限制，并非本实现特有",
+          "isApplyingRemoteChanges 标志正确阻止远程变更进入命令历史（executeCommand L952）"
+        ],
+        "conclusion": "方案B 在此实现中是正确的。本地 undo 栈只记录本地命令，remote changes 被 isApplyingRemoteChanges 跳过历史。syncDiffToYDoc 在 undo/redo 时广播反向 diff，确保 peer 看到撤销效果。CRDT 合并机制在并发场景下表现符合预期。无需修改。"
+      }
+    },
+    {
+      "id": "R2-2",
+      "issue": "setCanvasData 与 Yjs STEP2 同步竞态 → 新发现：observer 的 provider origin 检查阻断所有远端更新",
+      "severity": "critical",
+      "verdict": "REAL BUG — 需要修复",
+      "files": [
+        "frontend/src/services/yjsBinding.ts (lines 207-210)",
+        "frontend/src/services/yjsProvider.ts (lines 342, 348-353)",
+        "frontend/src/store/useCanvasStore.ts (lines 1102-1128)"
+      ],
+      "analysis": {
+        "origin_check_bug": {
+          "description": "yjsBinding.ts 的 observeCollection handler（L200-238）检查 firstOrigin === provider 时跳过 observer。但在生产环境中，所有远端更新（包括初始 STEP2 同步和后续 peer 广播的 UPDATE）都由 yjsProvider.ts 的 handleBinary（L342）通过 syncProtocol.readSyncMessage(decoder, encoder, this.doc, this) 以 provider 为 origin 应用。这意味着 ALL 远端更新都被 observer 跳过，Zustand store 永远收不到远端变更。",
+          "flow": [
+            "Peer A local edit → syncDiffToYDoc → LOCAL_ORIGIN → Y.Doc → doc.on('update') 转发给 server",
+            "Server broadcast → Peer B handleBinary → readSyncMessage(..., this.doc, this) → provider origin → Y.Map observeDeep fires → firstOrigin === provider → SKIP → store NOT updated",
+            "Peer B 永远看不到 Peer A 的变更（除非手动刷新页面重新加载 REST 数据）"
+          ],
+          "test_evidence": "yjsBinding.test.ts 所有 remote→store 测试均使用 doc.transact(fn) 不带 origin（默认 null），而非 provider origin。null origin 通过 observer 检查，但生产环境所有远端更新都以 provider 为 origin。因此测试通过但生产环境不工作。",
+          "fix": "移除 `if (firstOrigin === provider) return` 检查。LOCAL_ORIGIN 检查已足够防止 echo-back。或者将 provider 的 readSyncMessage 调用改为使用 Symbol 或其他非 provider 的 origin 来区分初始同步与后续更新。"
+        },
+        "setCanvasData_race": {
+          "description": "由于远端更新根本不到 store，setCanvasData 与 STEP2 的竞态实际上是伪问题——STEP2 不会更新 store，所以不存在覆盖本地编辑的风险。但更根本的问题是远端更新不被 store 感知。",
+          "data_loss_scenario": "若 REST 与 Y.Doc 数据不一致（例如在其他标签页中被修改），用户基于 REST 加载的陈旧数据进行编辑，syncDiffToYDoc 会将陈旧数据的字段写回 Y.Doc（因为 diff 基于 store 的快照，而 store 没有收到 Y.Doc 的最新状态），导致远程变更被覆盖。",
+          "fix": "同上——移除 provider origin skip，让初始 STEP2 正常填充 store"
+        }
+      }
+    },
+    {
+      "id": "R2-3",
+      "issue": "文档清理 setTimeout 竞态 (canvas-state.ts)",
+      "severity": "medium",
+      "verdict": "ACCEPTABLE — generation counter 提供了充分保护",
+      "files": [
+        "backend/src/websocket/canvas-state.ts (lines 251-274)"
+      ],
+      "analysis": {
+        "design": "cleanupEmptyRoom 使用 generation counter（stateGenerations）防止延迟回调误删新创建的 doc。每次 handleConnection 创建房间时调用 incrementStateGeneration（index.ts L536）。setTimeout 回调（L264-268）检查 getStateGeneration(canvasId) === gen 才执行 removeCanvasState。",
+        "coverage_check": [
+          "所有房间创建路径（handleConnection L536）都调用 incrementStateGeneration",
+          "teardownEmptyRoom 不调用 incrementStateGeneration（它只拆除旧房间）",
+          "createCanvasState 也不调用（它只是创建状态容器，不是房间生命周期事件）",
+          "无遗漏路径"
+        ],
+        "race_scenarios": [
+          {
+            "scenario": "房间 A 清空 → persist 失败 → setTimeout(5000, gen=1) → 3s 后房间 B 创建 → gen=2 → setTimeout 触发 → gen=1 ≠ 2 → 安全",
+            "safe": true
+          },
+          {
+            "scenario": "房间 A 清空 → persist 失败 → setTimeout(5000, gen=1) → 5s 内无新连接 → setTimeout 触发 → gen=1 == gen=1 → removeCanvasState → 安全（房间已空）",
+            "safe": true
+          },
+          {
+            "scenario": "房间 A 清空 → persist 失败 → setTimeout(5000, gen=1) → 3s 后房间 B 创建 → gen=2 → 房间 B 在 setTimeout 触发前清空 → 新 setTimeout(gen=2) → 旧 setTimeout 触发 → gen=1 ≠ 2 安全 → 新 setTimeout 触发 → gen=2 == 2 → removeCanvasState → 安全（房间 B 已空）",
+            "safe": true
+          }
+        ],
+        "risk": "极低。唯一理论风险是生成计数回绕（从 Number.MAX_SAFE_INTEGER→0），但在实际系统中不可能发生。当前实现正确。"
+      }
+    },
+    {
+      "id": "R2-4",
+      "issue": "WebSocket token 在 URL 查询参数中",
+      "severity": "medium",
+      "verdict": "ACCEPTABLE with recommended mitigations — 浏览器 WebSocket API 限制下的常见折中方案",
+      "files": [
+        "frontend/src/services/yjsProvider.ts (line 209)",
+        "backend/src/websocket/index.ts (lines 398, 413)"
+      ],
+      "analysis": {
+        "current_implementation": {
+          "client": "yjsProvider.ts L209: URL 以查询参数传递 token: `${urlRoot}?canvasId=${canvasId}&token=${encodedToken}`",
+          "server": "index.ts L398: url.searchParams.get('token') → L413: authHeader = Authorization header || tokenParam",
+          "fallback": "服务器支持 Authorization header 优先，但浏览器 WebSocket API 不允许自定义 header，因此只能走 URL 参数"
+        },
+        "security_risks": [
+          {
+            "risk": "Server logs: URL 被 nginx/ELB/应用日志记录 → JWT 泄露",
+            "severity": "high",
+            "mitigation": "日志脱敏，过滤 token 参数"
+          },
+          {
+            "risk": "Referer header: 页面跳转时携带完整 URL",
+            "severity": "medium",
+            "mitigation": "页面使用 <meta name='referrer' content='no-referrer'>"
+          },
+          {
+            "risk": "Browser history/devtools: WebSocket URL 可在 Network 面板看到",
+            "severity": "low",
+            "mitigation": "JWT 短期有效；WSS 加密传输"
+          },
+          {
+            "risk": "Caching proxies: URL 被中间代理缓存",
+            "severity": "low",
+            "mitigation": "WebSocket 通常不被 HTTP 代理缓存"
+          }
+        ],
+        "recommended_fix": "改为连接后立即通过 WebSocket 发送第一条消息进行鉴权。服务器在收到认证消息前不处理任何 Yjs sync 消息。这样 token 只在 WS 加密帧内传输，不暴露于 URL。",
+        "priority": "medium — 建议修复但不是阻塞性问题"
+      }
+    },
+    {
+      "id": "R2-5",
+      "issue": "整体收敛检查 — 新增发现",
+      "severity": "info",
+      "verdict": "追加发现",
+      "findings": [
+        {
+          "title": "测试套件与生产行为不匹配",
+          "severity": "major",
+          "detail": "yjsBinding.test.ts 所有 remote→store 路径测试使用 doc.transact(fn)（默认 null origin）。生产环境远端更新以 provider 为 origin，因 firstOrigin === provider 检查被跳过。测试覆盖了不存在的代码路径。需要在测试中注入 provider origin 并验证 skip 逻辑，同时修复生产代码中的 origin 检查。",
+          "file": "frontend/src/test/yjsBinding.test.ts"
+        },
+        {
+          "title": "setCanvasData 在 Yjs 连接建立前调用，数据一致性依赖 REST 与 Y.Doc 同步",
+          "severity": "info",
+          "detail": "setCanvasData（CanvasPage L1128-1130）在 useCollaboration 的 useEffect 创建 provider 之前被调用（相同渲染阶段但数据加载 effect 先运行）。这避免了直接的并发写入冲突，但由于 R2-2 阻断远端更新，store 始终基于 REST 快照，未与 Y.Doc 实时同步。",
+          "file": "frontend/src/pages/CanvasPage.tsx"
+        },
+        {
+          "title": "writeFields 嵌套对象字段删除已正确修复",
+          "severity": "info",
+          "detail": "Round 1 报告了嵌套对象字段删除未传播的 bug。当前代码（yjsBinding.ts L354-372）已正确实现：遍历 existing Y.Map 的 keys 并删除新对象中不存在的 key。",
+          "file": "frontend/src/services/yjsBinding.ts (lines 364-372)"
+        },
+        {
+          "title": "entityToYMap 跳过 undefined — 低风险",
+          "severity": "minor",
+          "detail": "entityToYMap（yjs-schema.ts L42）跳过 undefined 值。这导致新创建的实体在 Y.Map 中缺失这些键。writeFields 正确处理 undefined（delete key），但 entityToYMap 的初始创建阶段也会跳过 undefined。当前无实际影响因为所有实体字段都有默认值。",
+          "file": "frontend/src/services/yjs-schema.ts (line 42)"
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "needs_fix": [
+      {
+        "id": "R2-2",
+        "priority": "P0",
+        "description": "移除 yjsBinding.ts observeCollection 中的 `if (firstOrigin === provider) return` 检查，此为阻断所有远端更新的 critical bug。同时更新测试以使用 provider origin 验证两种路径。",
+        "impact": "Collaboration 模式下远端用户的编辑完全不显示。store 停留在 REST 初始快照，且本地编辑基于陈旧数据可能覆盖远端变更。",
+        "fix": "删除 yjsBinding.ts L209: `if (firstOrigin === provider) return`"
+      }
+    ],
+    "accept_by_design": ["R2-1 (Undo/redo 方案B)", "R2-3 (setTimeout generation guard)"],
+    "accept_with_mitigation": [
+      {
+        "id": "R2-4",
+        "description": "WebSocket token 在 URL 中，建议改为连接后消息鉴权"
+      }
+    ],
+    "no_action": [
+      "writeFields 嵌套字段删除 — 已修复",
+      "setCanvasData 与 STEP2 竞态 — 被 R2-2 root cause 覆盖"
+    ]
+  }
+}

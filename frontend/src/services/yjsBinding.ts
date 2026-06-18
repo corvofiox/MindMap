@@ -205,9 +205,17 @@ export function bindYjsToStore(
     const handler = (events: Y.YEvent<Y.Map<unknown>>[]) => {
       const firstOrigin = events[0]?.transaction.origin
       // Skip local mutations (command.execute already updated the store).
+      // NOTE: we intentionally do NOT skip when firstOrigin === the provider
+      // instance. The provider applies every incoming remote frame (both the
+      // initial STEP2 sync and subsequent peer broadcasts) to the Y.Doc using
+      // origin===provider. If we skipped those, the Zustand store would never
+      // receive remote changes — collaboration would be broken (Round 2 review
+      // finding R2-2). The LOCAL_ORIGIN check above is sufficient to prevent
+      // echo-back from local mutations; the isApplyingRemoteChanges flag below
+      // prevents the store from re-entering the Y.Doc during observer replay.
+      // The doc.on('update') listener in wireLocalDocUpdates still correctly
+      // skips origin===provider to avoid re-broadcasting received frames.
       if (firstOrigin === LOCAL_ORIGIN) return
-      // Skip updates that originated from our provider applying a remote frame.
-      if (firstOrigin === provider) return
 
       isApplyingRemoteChanges = true
       try {
