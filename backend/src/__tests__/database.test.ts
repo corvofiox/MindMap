@@ -65,6 +65,7 @@ describe('Database Integration Tests', () => {
         project_id INTEGER NOT NULL,
         folder_id INTEGER,
         yjs_data TEXT,
+        yjs_update TEXT,
         preview_text TEXT,
         thumbnail TEXT,
         sort_order INTEGER DEFAULT 0,

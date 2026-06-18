@@ -35,6 +35,7 @@ export interface Canvas {
   project_id: number
   folder_id: number | null
   yjs_data?: string
+  yjs_update?: string
   preview_text?: string
   thumbnail: string | null
   sort_order: number

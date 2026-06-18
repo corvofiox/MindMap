@@ -28,6 +28,7 @@ import { setupWebSocket } from './websocket/index.js'
 import { errorHandler } from './middleware/error.middleware.js'
 import { initDatabase } from './database/init.js'
 import { initializeDb } from './database/connection.js'
+import { migrateCanvasesToYjs } from './database/migrate-to-yjs.js'
 import { getValidatedEnv } from './utils/env.js'
 import { log, logError } from './utils/logger.js'
 
@@ -95,6 +96,12 @@ async function start() {
   try {
     await initDatabase()
     await initializeDb()
+    // Convert legacy JSON snapshots into Yjs binary updates (idempotent, safe
+    // to run on every startup). Must run after the schema migration adds the
+    // yjs_update column.
+    await migrateCanvasesToYjs().catch((err) => {
+      logError('Yjs data migration failed (non-fatal, will retry next start)', err)
+    })
 
     // WebSocket server configuration
     // 生产环境：WebSocket 绑定到 HTTP Server（共享端口）
@@ -135,3 +142,4 @@ async function start() {
 }
 
 start()
+

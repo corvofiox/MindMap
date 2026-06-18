@@ -2,6 +2,73 @@ import { create } from 'zustand'
 import type { Node, NodeGroup, Domain, Connection } from '@/types'
 import { CANVAS_DEFAULTS } from '@/constants'
 
+/**
+ * Yjs binding injection point.
+ *
+ * When set (during collaborative sessions), every store mutation is mirrored
+ * into the Y.Doc inside a LOCAL_ORIGIN transaction so peers receive the change.
+ * When null (single-user mode), the store behaves exactly as before.
+ *
+ * The binding is intentionally typed loosely to avoid a circular import
+ * between this store and services/yjsBinding.
+ */
+type YjsBindingHandle = {
+  /** Apply a before/after snapshot diff to the doc inside LOCAL_ORIGIN. */
+  applyDiff: (before: MapsSnapshot, after: MapsSnapshot) => void
+  /** True when the binding is currently applying remote changes to the store
+   *  (suppresses Yjs echo-back to avoid feedback loops). */
+  isApplyingRemoteChanges: boolean
+}
+let yjsBinding: YjsBindingHandle | null = null
+
+export function setYjsBinding(binding: YjsBindingHandle | null): void {
+  yjsBinding = binding
+}
+
+export function getYjsBinding(): YjsBindingHandle | null {
+  return yjsBinding
+}
+
+/**
+ * Snapshot the four entity maps before a mutation so we can diff afterwards
+ * and write only the delta into the Y.Doc (saves bandwidth and preserves
+ * CRDT field-level merge semantics for concurrent edits).
+ */
+type MapsSnapshot = {
+  nodes: Map<string, Node>
+  groups: Map<string, NodeGroup>
+  domains: Map<string, Domain>
+  connections: Map<string, Connection>
+}
+
+/**
+ * Capture a snapshot of the four entity maps for Yjs diffing. Returns null in
+ * single-user mode (no yjsBinding) to avoid the O(n) copy cost on every
+ * mutation — syncDiffToYDoc tolerates null and is a no-op in that case.
+ */
+function captureSnapshot(state: MapsSnapshot): MapsSnapshot | null {
+  if (!yjsBinding) return null
+  return {
+    nodes: new Map(state.nodes),
+    groups: new Map(state.groups),
+    domains: new Map(state.domains),
+    connections: new Map(state.connections),
+  }
+}
+
+/**
+ * Compare before/after snapshots and forward the diff to the Yjs binding.
+ * No-op when yjsBinding is null (single-user mode), when before is null
+ * (captureSnapshot skipped the copy), or when the binding is currently
+ * applying remote changes (prevents feedback loops).
+ */
+function syncDiffToYDoc(before: MapsSnapshot | null, after: MapsSnapshot): void {
+  if (!before) return
+  if (!yjsBinding) return
+  if (yjsBinding.isApplyingRemoteChanges) return
+  yjsBinding.applyDiff(before, after)
+}
+
 interface Command {
   type: string
   timestamp: number
@@ -218,6 +285,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   },
 
   updateNodeWithoutHistory: (id, updates, markDirty = true) => {
+    const beforeSnapshot = captureSnapshot(get())
     set((state) => {
       const currentNodes = new Map(state.nodes)
       const currentNode = currentNodes.get(id)
@@ -227,6 +295,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       }
       return {}
     })
+    syncDiffToYDoc(beforeSnapshot, get())
   },
 
   updateNodeWithOriginal: (id, updates, originalValues) => {
@@ -366,6 +435,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   },
 
   updateGroupWithoutHistory: (id, updates, markDirty = true) => {
+    const beforeSnapshot = captureSnapshot(get())
     set((state) => {
       const groups = new Map(state.groups)
       const group = groups.get(id)
@@ -375,6 +445,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       }
       return {}
     })
+    syncDiffToYDoc(beforeSnapshot, get())
   },
 
   removeGroup: (id) => {
@@ -456,6 +527,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   },
 
   updateDomainWithoutHistory: (id, updates, markDirty = true) => {
+    const beforeSnapshot = captureSnapshot(get())
     set((state) => {
       const domains = new Map(state.domains)
       const domain = domains.get(id)
@@ -465,6 +537,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       }
       return {}
     })
+    syncDiffToYDoc(beforeSnapshot, get())
   },
 
   removeDomain: (id) => {
@@ -545,6 +618,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   },
 
   updateConnectionWithoutHistory: (id, updates, markDirty = true) => {
+    const beforeSnapshot = captureSnapshot(get())
     set((state) => {
       const connections = new Map(state.connections)
       const connection = connections.get(id)
@@ -554,6 +628,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       }
       return {}
     })
+    syncDiffToYDoc(beforeSnapshot, get())
   },
 
   removeConnection: (id) => {
@@ -872,10 +947,16 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   executeCommand: (command, skipHistory = false, markDirty = true) => {
     const currentUserId = getCurrentUserId()
     const commandWithUser = { ...command, userId: currentUserId ?? undefined }
+    // When the Yjs binding is applying remote changes, force skipHistory so
+    // remote operations never enter the local undo stack.
+    const effectiveSkipHistory = skipHistory || (yjsBinding?.isApplyingRemoteChanges ?? false)
+    // Capture before-snapshot once so both branches can diff into Yjs.
+    const beforeSnapshot = captureSnapshot(get())
 
-    if (skipHistory) {
+    if (effectiveSkipHistory) {
       const commandResult = commandWithUser.execute()
       set(markDirty ? { ...commandResult, isDirty: true } : commandResult)
+      syncDiffToYDoc(beforeSnapshot, get())
       return
     }
 
@@ -905,11 +986,14 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         ...(markDirty ? { isDirty: true } : {}),
       }
     })
+    syncDiffToYDoc(beforeSnapshot, get())
   },
 
   executeCommandWithoutHistory: (command) => {
+    const beforeSnapshot = captureSnapshot(get())
     const commandResult = command.execute()
     set({ ...commandResult, isDirty: true })
+    syncDiffToYDoc(beforeSnapshot, get())
   },
 
   undo: () => {
@@ -927,6 +1011,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
     if (targetIndex < 0) return
 
+    const beforeSnapshot = captureSnapshot(get())
     const command = state.history.commands[targetIndex]
     const commandResult = command.undo()
 
@@ -938,6 +1023,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       },
       isDirty: true,
     }))
+    syncDiffToYDoc(beforeSnapshot, get())
   },
 
   redo: () => {
@@ -955,6 +1041,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
     if (targetIndex >= state.history.commands.length) return
 
+    const beforeSnapshot = captureSnapshot(get())
     const command = state.history.commands[targetIndex]
     const commandResult = command.execute()
 
@@ -966,6 +1053,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       },
       isDirty: true,
     }))
+    syncDiffToYDoc(beforeSnapshot, get())
   },
 
   canUndo: () => {
@@ -1011,7 +1099,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     }),
 
   // Bulk actions
-  setCanvasData: (data) =>
+  setCanvasData: (data) => {
+    const before = captureSnapshot(get())
     set((state) => {
       const currentUserId = getCurrentUserId()
       const ownCommands = state.history.commands.filter(
@@ -1034,9 +1123,12 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           currentIndex: ownCommands.length - 1,
         },
       }
-    }),
+    })
+    syncDiffToYDoc(before, get())
+  },
 
-  clearCanvas: () =>
+  clearCanvas: () => {
+    const before = captureSnapshot(get())
     set({
       nodes: new Map(),
       groups: new Map(),
@@ -1046,5 +1138,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       hoveredId: null,
       editingId: null,
       isDirty: false,
-    }),
+    })
+    syncDiffToYDoc(before, get())
+  },
 }))

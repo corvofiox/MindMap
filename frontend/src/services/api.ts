@@ -139,14 +139,16 @@ export async function deleteCanvas(id: number): Promise<void> {
   return await apiClient.delete<void>(API_ENDPOINTS.CANVAS_BY_ID(id))
 }
 
-export async function saveCanvasData(id: number, yjsData: Uint8Array): Promise<void> {
-  return await apiClient.put<void>(API_ENDPOINTS.CANVAS_BY_ID(id), yjsData, 'application/octet-stream')
-}
-
 /**
- * Load canvas nodes data from yjsData field
- * Returns null if there's an error loading from database
- * Returns empty object if canvas exists but has no data
+ * Load canvas nodes data.
+ *
+ * Post-Yjs-migration order of preference:
+ *   1. `yjsUpdate` — Yjs binary state update (base64). Decode → Y.Doc → JSON.
+ *   2. `yjsData`   — legacy JSON snapshot (base64). Decode → JSON directly.
+ *   3. Empty — canvas has no data yet.
+ *
+ * Returns null if the canvas itself can't be fetched; returns an empty-shaped
+ * object if the canvas exists but has no data.
  */
 export async function loadCanvasNodesData(id: number): Promise<{
   nodes: Node[]
@@ -156,59 +158,72 @@ export async function loadCanvasNodesData(id: number): Promise<{
   drawings?: unknown[]
   version: number
 } | null> {
+  const empty = {
+    nodes: [],
+    groups: [],
+    domains: [],
+    connections: [],
+    drawings: [] as unknown[],
+    version: 0,
+  }
   try {
     const canvas = await getCanvas(id)
+    const yjsUpdate = (canvas as { yjsUpdate?: string }).yjsUpdate
     const yjsData = (canvas as { yjsData?: string }).yjsData
 
-    if (!yjsData) {
-      return {
-        nodes: [],
-        groups: [],
-        domains: [],
-        connections: [],
-        drawings: [],
-        version: 0,
-      }
-    }
-
-    try {
-      const binaryString = atob(yjsData)
-      const utf8Bytes = new Uint8Array(binaryString.length)
-      for (let i = 0; i < binaryString.length; i++) {
-        utf8Bytes[i] = binaryString.charCodeAt(i)
-      }
-      const jsonString = new TextDecoder().decode(utf8Bytes)
-      const data = JSON.parse(jsonString)
-
-      if (data.nodes || data.groups || data.domains || data.connections || data.drawings) {
-        return {
-          nodes: data.nodes || [],
-          groups: data.groups || [],
-          domains: data.domains || [],
-          connections: data.connections || [],
-          drawings: data.drawings || [],
-          version: typeof data.version === 'number' ? data.version : 0,
-        }
-      } else {
-        return {
-          nodes: [],
-          groups: [],
-          domains: [],
-          connections: [],
-          drawings: [],
+    // Path 1: Yjs binary update.
+    if (yjsUpdate) {
+      try {
+        const Y = await import('yjs')
+        const { ensureRoot, ymapToObject } = await import('./yjs-schema')
+        const bytes = Uint8Array.from(atob(yjsUpdate), (c) => c.charCodeAt(0))
+        const doc = new Y.Doc()
+        Y.applyUpdate(doc, bytes)
+        const collections = ensureRoot(doc)
+        const unwrap = (m: { entries: () => IterableIterator<[string, unknown]> }) =>
+          Array.from(m.entries()).map(([, v]) => ymapToObject(v as never))
+        const result = {
+          nodes: unwrap(collections.nodes) as unknown as Node[],
+          groups: unwrap(collections.groups) as unknown as NodeGroup[],
+          domains: unwrap(collections.domains) as unknown as Domain[],
+          connections: unwrap(collections.connections) as unknown as Connection[],
+          drawings: [] as unknown[],
           version: 0,
         }
-      }
-    } catch {
-      return {
-        nodes: [],
-        groups: [],
-        domains: [],
-        connections: [],
-        drawings: [],
-        version: 0,
+        doc.destroy()
+        return result
+      } catch {
+        // Fall through to legacy path if Yjs decoding fails.
       }
     }
+
+    // Path 2: legacy JSON snapshot.
+    if (yjsData) {
+      try {
+        const binaryString = atob(yjsData)
+        const utf8Bytes = new Uint8Array(binaryString.length)
+        for (let i = 0; i < binaryString.length; i++) {
+          utf8Bytes[i] = binaryString.charCodeAt(i)
+        }
+        const jsonString = new TextDecoder().decode(utf8Bytes)
+        const data = JSON.parse(jsonString)
+
+        if (data.nodes || data.groups || data.domains || data.connections || data.drawings) {
+          return {
+            nodes: data.nodes || [],
+            groups: data.groups || [],
+            domains: data.domains || [],
+            connections: data.connections || [],
+            drawings: data.drawings || [],
+            version: typeof data.version === 'number' ? data.version : 0,
+          }
+        }
+      } catch {
+        // fall through to empty
+      }
+    }
+
+    return empty
   } catch {
     return null
   }

@@ -426,6 +426,7 @@ export interface CanvasApiResponse {
   success: boolean
   data: Canvas & {
     yjsData?: string
+    yjsUpdate?: string
   }
 }
 

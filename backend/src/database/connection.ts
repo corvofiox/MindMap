@@ -163,8 +163,13 @@ async function gracefulShutdown() {
   log('Database saved to disk, exiting')
 }
 
-process.on('SIGINT', gracefulShutdown)
-process.on('SIGTERM', gracefulShutdown)
+async function gracefulShutdownAndExit(code: number = 0) {
+  await gracefulShutdown()
+  process.exit(code)
+}
+
+process.on('SIGINT', () => gracefulShutdownAndExit(0))
+process.on('SIGTERM', () => gracefulShutdownAndExit(0))
 
 process.once('beforeExit', gracefulShutdown)
 

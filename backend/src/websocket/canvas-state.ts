@@ -1,59 +1,76 @@
+/**
+ * Yjs-backed canvas state manager.
+ *
+ * Each open canvas has a single Y.Doc held in memory by the server. Clients
+ * never send operation payloads; they send Yjs binary updates over the
+ * WebSocket and the server applies them to its authoritative doc, then
+ * broadcasts the update to every other client in the room.
+ *
+ * Persistence:
+ *   - The doc is encoded via Y.encodeStateAsUpdate and stored base64 in the
+ *     `yjs_update` column (see yjs-schema.ts).
+ *   - Writes are debounced (100ms) and additionally flushed every 1s by a
+ *     periodic timer, plus on graceful shutdown.
+ *
+ * Concurrency safety:
+ *   - A per-canvas generation counter (incremented when a room is created)
+ *     prevents stale async persist callbacks from clobbering a freshly-loaded
+ *     doc after the room is torn down.
+ */
+import * as Y from 'yjs'
 import { db, scheduleSave } from '../database/connection.js'
 import { canvases } from '../database/schema.js'
 import { eq } from 'drizzle-orm'
 import { log, logError } from '../utils/logger.js'
+import {
+  ensureRoot,
+  decodeBase64ToDoc,
+  jsonSnapshotToDoc,
+  encodeDocToBase64,
+  docToJsonSnapshot,
+  writeEntityToYMap,
+} from './yjs-schema.js'
 
-export interface CanvasData {
-  nodes: Map<string, unknown>
-  groups: Map<string, unknown>
-  domains: Map<string, unknown>
-  connections: Map<string, unknown>
-  version: number
-  lastModified: number
+export interface YjsCanvasState {
+  doc: Y.Doc
   loaded: boolean
-  lastPersistedVersion: number
+  /**
+   * Monotonic counter bumped on every accepted doc update. Compared against
+   * `lastPersistedUpdateCount` to decide whether the in-memory doc is ahead
+   * of the persisted snapshot.
+   */
+  lastSeenUpdateCount: number
+  lastPersistedUpdateCount: number
   isPersisting: boolean
   /**
-   * Set when persistCanvasState exhausts its retries. Cleared on the next
-   * successful persist. Surfaced to clients via version-update so they can
-   * warn the user that recent in-memory changes have NOT been saved to DB.
-   * If the server process crashes between now and the next successful
-   * persist, those changes are lost.
+   * Set when persistCanvasState exhausts its retries. Surfaced to clients so
+   * they can warn that recent in-memory changes have NOT been saved to DB.
    */
   persistError: { message: string; attempts: number } | null
-  /**
-   * Per-entity version tracking: maps entity ID → global version at which
-   * this entity was last modified. Used for fine-grained conflict detection:
-   * a client update on entity X only conflicts if another user modified X
-   * since the client's last sync, not if they modified an unrelated entity Y.
-   */
-  entityVersions: Map<string, number>
+  /** Bound update listener used to detect dirty state and broadcast. */
+  updateListener: (update: Uint8Array, origin: unknown) => void
 }
 
-const canvasStates = new Map<number, CanvasData>()
-const loadingPromises = new Map<number, Promise<CanvasData>>()
+const canvasStates = new Map<number, YjsCanvasState>()
+const loadingPromises = new Map<number, Promise<YjsCanvasState>>()
 const pendingPersists: Promise<boolean>[] = []
 const persistPromises = new Map<number, Promise<boolean>>()
 
-// 世代计数器：每次新连接创建 room 时递增，用于防止旧异步回调误删新状态
+// Generation counter: bumped each time a room is created, used to prevent a
+// stale async persist callback from deleting a freshly-loaded doc.
 const stateGenerations = new Map<number, number>()
 
 function trackPersist(promise: Promise<boolean>): Promise<boolean> {
   pendingPersists.push(promise)
-  promise.then(
-    () => {
-      const idx = pendingPersists.indexOf(promise)
-      if (idx !== -1) pendingPersists.splice(idx, 1)
-    },
-    () => {
-      const idx = pendingPersists.indexOf(promise)
-      if (idx !== -1) pendingPersists.splice(idx, 1)
-    }
-  )
+  const cleanup = () => {
+    const idx = pendingPersists.indexOf(promise)
+    if (idx !== -1) pendingPersists.splice(idx, 1)
+  }
+  promise.then(cleanup, cleanup)
   return promise
 }
 
-// Periodic flush: ensure all dirty canvas states are persisted to DB regularly
+// Periodic flush: ensure all dirty canvas docs are persisted to DB regularly.
 const PERIODIC_FLUSH_INTERVAL_MS = 1000
 let periodicFlushTimer: ReturnType<typeof setInterval> | null = null
 
@@ -85,57 +102,55 @@ export async function flushAllCanvasStates(): Promise<void> {
   await Promise.allSettled(results)
 
   if (canvasIds.length > 0) {
-    log('Flushed all canvas states', { count: canvasIds.length })
+    log('Flushed all canvas docs', { count: canvasIds.length })
   }
 }
 
-export function getCanvasStatesSnapshot(): Map<number, CanvasData> {
+export function getCanvasStatesSnapshot(): Map<number, YjsCanvasState> {
   return new Map(canvasStates)
 }
 
-export function getCanvasState(canvasId: number): CanvasData | undefined {
+export function getCanvasState(canvasId: number): YjsCanvasState | undefined {
   return canvasStates.get(canvasId)
+}
+
+export function getCanvasDoc(canvasId: number): Y.Doc | undefined {
+  return canvasStates.get(canvasId)?.doc
 }
 
 export function isCanvasStatePersisted(canvasId: number): boolean {
   const state = canvasStates.get(canvasId)
   if (!state) return false
-  return state.version === state.lastPersistedVersion
-}
-
-export function ensureCanvasState(canvasId: number): CanvasData {
-  let state = canvasStates.get(canvasId)
-  if (!state) {
-    state = {
-      nodes: new Map(),
-      groups: new Map(),
-      domains: new Map(),
-      connections: new Map(),
-      version: 0,
-      lastModified: Date.now(),
-      loaded: false,
-      lastPersistedVersion: 0,
-      isPersisting: false,
-      persistError: null,
-      entityVersions: new Map(),
-    }
-    canvasStates.set(canvasId, state)
-  }
-  return state
+  return state.lastSeenUpdateCount <= state.lastPersistedUpdateCount
 }
 
 /**
- * Ensure canvas state is loaded from DB before applying operations.
- * This prevents the race condition where ensureCanvasState creates an empty state
- * and operations are applied to it before loadCanvasStateFromDb completes.
+ * Create an empty Yjs state container for a canvas (does NOT load from DB).
+ * Used internally by loadCanvasStateFromDb.
  */
-export async function ensureCanvasStateLoaded(canvasId: number): Promise<CanvasData> {
-  const state = canvasStates.get(canvasId)
-  if (state?.loaded) {
-    return state
+function createCanvasState(canvasId: number): YjsCanvasState {
+  const doc = new Y.Doc()
+  ensureRoot(doc)
+  const state: YjsCanvasState = {
+    doc,
+    loaded: false,
+    lastSeenUpdateCount: 0,
+    lastPersistedUpdateCount: 0,
+    isPersisting: false,
+    persistError: null,
+    updateListener: (_update, _origin) => {
+      // Mark dirty: any update advances the high-water counter.
+      const s = canvasStates.get(canvasId)
+      if (!s) return
+      s.lastSeenUpdateCount++
+      schedulePersistCanvasState(canvasId)
+    },
   }
-  // State doesn't exist or hasn't been loaded yet — wait for DB load
-  return loadCanvasStateFromDb(canvasId)
+  // Note: broadcasting is wired up by the WS layer (websocket/index.ts) so this
+  // file stays free of room/socket concerns. The listener here only tracks dirtiness.
+  doc.on('update', state.updateListener)
+  canvasStates.set(canvasId, state)
+  return state
 }
 
 export function incrementStateGeneration(canvasId: number): number {
@@ -149,18 +164,28 @@ export function getStateGeneration(canvasId: number): number {
 }
 
 export function removeCanvasState(canvasId: number): void {
+  const existing = canvasStates.get(canvasId)
+  if (existing) {
+    existing.doc.off('update', existing.updateListener)
+    existing.doc.destroy()
+  }
   canvasStates.delete(canvasId)
   loadingPromises.delete(canvasId)
   persistPromises.delete(canvasId)
   stateGenerations.delete(canvasId)
-  const existing = persistTimeouts.get(canvasId)
-  if (existing) {
-    clearTimeout(existing)
+  const timeout = persistTimeouts.get(canvasId)
+  if (timeout) {
+    clearTimeout(timeout)
     persistTimeouts.delete(canvasId)
   }
 }
 
-export async function loadCanvasStateFromDb(canvasId: number): Promise<CanvasData> {
+/**
+ * Load a canvas doc from DB. Reads the authoritative `yjs_update` column;
+ * falls back to the legacy `yjs_data` JSON snapshot (then writes the converted
+ * doc back to `yjs_update`) for canvases not yet touched by the migration.
+ */
+export async function loadCanvasStateFromDb(canvasId: number): Promise<YjsCanvasState> {
   const existing = canvasStates.get(canvasId)
   if (existing?.loaded) {
     return existing
@@ -171,34 +196,63 @@ export async function loadCanvasStateFromDb(canvasId: number): Promise<CanvasDat
     return inProgress
   }
 
-  const loadPromise = (async () => {
-    const state = ensureCanvasState(canvasId)
+  const loadPromise = (async (): Promise<YjsCanvasState> => {
+    const state = canvasStates.get(canvasId) ?? createCanvasState(canvasId)
 
     try {
       const canvas = await db.query.canvases.findFirst({
         where: eq(canvases.id, canvasId),
       })
+      if (!canvas) {
+        state.loaded = true
+        return state
+      }
 
-      if (canvas && (canvas as any).yjsData && !state.loaded) {
-        const base64Data = (canvas as any).yjsData
-        const jsonString = Buffer.from(base64Data, 'base64').toString('utf-8')
-        const data = JSON.parse(jsonString)
+      const yjsUpdateBase64 = canvas.yjsUpdate
+      const yjsDataBase64 = canvas.yjsData
 
-        for (const n of data.nodes || []) {
-          state.nodes.set(n.id, n)
+      let doc: Y.Doc | null = null
+      if (yjsUpdateBase64) {
+        doc = decodeBase64ToDoc(yjsUpdateBase64)
+      }
+      if (!doc && yjsDataBase64) {
+        // Legacy path: convert JSON snapshot into a fresh Yjs doc.
+        try {
+          const json = Buffer.from(yjsDataBase64, 'base64').toString('utf-8')
+          const parsed = JSON.parse(json) as {
+            nodes?: unknown[]
+            groups?: unknown[]
+            domains?: unknown[]
+            connections?: unknown[]
+          }
+          doc = jsonSnapshotToDoc(parsed)
+          // Persist the converted doc so future loads skip this branch.
+          const converted = encodeDocToBase64(doc)
+          await db
+            .update(canvases)
+            .set({ yjsUpdate: converted, updatedAt: Math.floor(Date.now() / 1000) })
+            .where(eq(canvases.id, canvasId))
+          scheduleSave()
+        } catch (err) {
+          logError('Failed to convert legacy yjs_data to Yjs doc', {
+            canvasId,
+            error: err instanceof Error ? err.message : String(err),
+          })
+          doc = null
         }
-        for (const g of data.groups || []) {
-          state.groups.set(g.id, g)
-        }
-        for (const d of data.domains || []) {
-          state.domains.set(d.id, d)
-        }
-        for (const c of data.connections || []) {
-          state.connections.set(c.id, c)
-        }
-        state.version = Math.max(state.version, data.version || 0)
-        state.lastModified = Date.now()
-        log('Canvas state loaded from DB', { canvasId, version: state.version })
+      }
+
+      if (doc) {
+        // Swap into the existing state container without losing listeners.
+        state.doc.off('update', state.updateListener)
+        state.doc.destroy()
+        state.doc = doc
+        ensureRoot(doc)
+        doc.on('update', state.updateListener)
+        // A freshly loaded doc matches its persisted snapshot exactly.
+        state.lastSeenUpdateCount = 0
+        state.lastPersistedUpdateCount = 0
+        log('Canvas doc loaded from DB', { canvasId })
       }
       state.loaded = true
     } catch (error) {
@@ -206,6 +260,9 @@ export async function loadCanvasStateFromDb(canvasId: number): Promise<CanvasDat
         canvasId,
         error: error instanceof Error ? error.message : String(error),
       })
+      // Do NOT mark as loaded on failure so the next call retries the load
+      // instead of returning a permanently empty doc that could overwrite
+      // the real data if the user starts editing.
     } finally {
       loadingPromises.delete(canvasId)
     }
@@ -225,7 +282,7 @@ export async function persistCanvasState(canvasId: number): Promise<boolean> {
   if (!state) return false
 
   if (state.isPersisting) return false
-  if (state.version === state.lastPersistedVersion) return false
+  if (state.lastSeenUpdateCount <= state.lastPersistedUpdateCount) return false
 
   state.isPersisting = true
 
@@ -235,43 +292,55 @@ export async function persistCanvasState(canvasId: number): Promise<boolean> {
 
       for (let attempt = 0; attempt <= MAX_PERSIST_RETRIES; attempt++) {
         try {
-          // 每次尝试使用当前最新版本号，避免重试时版本号滞后于实际数据
-          const currentVersion = state.version
-          const data = {
-            nodes: Array.from(state.nodes.values()),
-            groups: Array.from(state.groups.values()),
-            domains: Array.from(state.domains.values()),
-            connections: Array.from(state.connections.values()),
-            version: currentVersion,
+          // Guard: the doc may have been destroyed by a concurrent
+          // removeCanvasState (e.g. room torn down while persist runs).
+          // Re-read the state from the map; if gone, abort without writing.
+          const currentState = canvasStates.get(canvasId)
+          if (!currentState) {
+            return false
+          }
+          // Snapshot the dirty counter BEFORE encoding so we don't mark a newer
+          // state persisted if a concurrent update arrives mid-write.
+          const snapshotCount = currentState.lastSeenUpdateCount
+          let base64: string
+          try {
+            base64 = encodeDocToBase64(currentState.doc)
+          } catch (encodeErr) {
+            // Doc was destroyed mid-persist — abort without corrupting the DB.
+            logError('Yjs doc destroyed during persist, aborting', {
+              canvasId,
+              error: encodeErr instanceof Error ? encodeErr.message : String(encodeErr),
+            })
+            return false
           }
 
-          const jsonString = JSON.stringify(data)
-          const base64Data = Buffer.from(jsonString, 'utf-8').toString('base64')
+          if (!base64 || base64.length < 4) {
+            // Empty/invalid encoding — refuse to overwrite the DB row.
+            logError('Refusing to persist empty/corrupt Yjs update', { canvasId })
+            return false
+          }
 
           await db
             .update(canvases)
             .set({
-              yjsData: base64Data,
+              yjsUpdate: base64,
               updatedAt: Math.floor(Date.now() / 1000),
             })
             .where(eq(canvases.id, canvasId))
 
-          const currentState = canvasStates.get(canvasId)
-          if (currentState && currentState.version === currentVersion) {
-            currentState.lastPersistedVersion = currentVersion
-            // Successful persist — clear any previous persist error
+          if (currentState.lastSeenUpdateCount === snapshotCount) {
+            currentState.lastPersistedUpdateCount = snapshotCount
             if (currentState.persistError) {
               currentState.persistError = null
             }
           }
 
           scheduleSave()
-          log('Canvas state persisted', { canvasId, version: currentVersion, attempt })
+          log('Canvas doc persisted', { canvasId, updateCount: snapshotCount, attempt })
           return true
         } catch (error) {
           lastError = error
           if (attempt < MAX_PERSIST_RETRIES) {
-            // 重试前重新检查状态是否仍有效
             const currentState = canvasStates.get(canvasId)
             if (!currentState) return false
             await new Promise((resolve) => setTimeout(resolve, PERSIST_RETRY_DELAYS[attempt]))
@@ -287,7 +356,7 @@ export async function persistCanvasState(canvasId: number): Promise<boolean> {
           attempts: MAX_PERSIST_RETRIES,
         }
       }
-      logError('Failed to persist canvas state after retries', {
+      logError('Failed to persist canvas doc after retries', {
         canvasId,
         attempts: MAX_PERSIST_RETRIES,
         error: errorMessage,
@@ -319,10 +388,8 @@ export function schedulePersistCanvasState(canvasId: number): void {
   const timeout = setTimeout(async () => {
     persistTimeouts.delete(canvasId)
     await persistCanvasState(canvasId)
-    // After persist attempt, schedule another if there are still unpersisted changes
-    // Handles: isPersisting was true, new operations came in during persist, etc.
     const state = canvasStates.get(canvasId)
-    if (state && state.version !== state.lastPersistedVersion) {
+    if (state && state.lastSeenUpdateCount > state.lastPersistedUpdateCount) {
       schedulePersistCanvasState(canvasId)
     }
   }, PERSIST_DELAY_MS)
@@ -338,391 +405,115 @@ export function flushPendingPersist(canvasId: number): void {
   }
 }
 
-// Apply operations to server state
-export async function applyAddNode(canvasId: number, node: any): Promise<boolean> {
-  const state = await ensureCanvasStateLoaded(canvasId)
-  if (state.nodes.has(node.id)) {
-    return false
-  }
-  state.nodes.set(node.id, node)
-  state.version++
-  state.entityVersions.set(node.id, state.version)
-  state.lastModified = Date.now()
-  schedulePersistCanvasState(canvasId)
-  return true
-}
-
-export async function applyUpdateNode(canvasId: number, nodeId: string, updates: any, clientVersion?: number): Promise<boolean> {
-  const state = await ensureCanvasStateLoaded(canvasId)
-  const existing = state.nodes.get(nodeId)
-  if (!existing) {
-    return false
-  }
-  const entityVer = state.entityVersions.get(nodeId) ?? 0
-  if (typeof clientVersion === 'number' && entityVer > clientVersion) {
-    return false
-  }
-  if (updates && Object.keys(updates).some(k => (existing as Record<string, unknown>)[k] !== (updates as Record<string, unknown>)[k])) {
-    const updated = { ...(existing as object), ...updates }
-    state.nodes.set(nodeId, updated)
-    state.version++
-    state.entityVersions.set(nodeId, state.version)
-    state.lastModified = Date.now()
-    schedulePersistCanvasState(canvasId)
+/**
+ * Apply a remote Yjs update to a canvas doc (used by the REST POST /data
+ * endpoint when a single-user client uploads a fresh snapshot).
+ * Returns true on success.
+ */
+export async function applyUpdateToCanvas(canvasId: number, update: Uint8Array): Promise<boolean> {
+  const state = await loadCanvasStateFromDb(canvasId)
+  try {
+    Y.applyUpdate(state.doc, update)
     return true
-  }
-  return false
-}
-
-export async function applyRemoveNode(canvasId: number, nodeId: string): Promise<boolean> {
-  const state = await ensureCanvasStateLoaded(canvasId)
-  const existed = state.nodes.delete(nodeId)
-  if (!existed) return false
-
-  // Also remove connections that reference this node
-  for (const [connId, conn] of state.connections) {
-    const c = conn as any
-    if (c.fromNodeId === nodeId || c.toNodeId === nodeId) {
-      state.connections.delete(connId)
-      state.entityVersions.delete(connId)
-    }
-  }
-
-  state.entityVersions.delete(nodeId)
-  state.version++
-  state.lastModified = Date.now()
-  schedulePersistCanvasState(canvasId)
-  return true
-}
-
-export async function applyAddGroup(canvasId: number, group: any): Promise<boolean> {
-  const state = await ensureCanvasStateLoaded(canvasId)
-  if (state.groups.has(group.id)) {
+  } catch (err) {
+    logError('Failed to apply Yjs update to canvas', {
+      canvasId,
+      error: err instanceof Error ? err.message : String(err),
+    })
     return false
-  }
-  state.groups.set(group.id, group)
-  state.version++
-  state.entityVersions.set(group.id, state.version)
-  state.lastModified = Date.now()
-  schedulePersistCanvasState(canvasId)
-  return true
-}
-
-export async function applyUpdateGroup(canvasId: number, groupId: string, updates: any, clientVersion?: number): Promise<boolean> {
-  const state = await ensureCanvasStateLoaded(canvasId)
-  const existing = state.groups.get(groupId)
-  if (!existing) return false
-  const entityVer = state.entityVersions.get(groupId) ?? 0
-  if (typeof clientVersion === 'number' && entityVer > clientVersion) {
-    return false
-  }
-  if (updates && Object.keys(updates).some(k => (existing as Record<string, unknown>)[k] !== (updates as Record<string, unknown>)[k])) {
-    const updated = { ...(existing as object), ...updates }
-    state.groups.set(groupId, updated)
-    state.version++
-    state.entityVersions.set(groupId, state.version)
-    state.lastModified = Date.now()
-    schedulePersistCanvasState(canvasId)
-    return true
-  }
-  return false
-}
-
-export async function applyRemoveGroup(canvasId: number, groupId: string): Promise<boolean> {
-  const state = await ensureCanvasStateLoaded(canvasId)
-  const existed = state.groups.delete(groupId)
-  if (!existed) return false
-  state.entityVersions.delete(groupId)
-  state.version++
-  state.lastModified = Date.now()
-  schedulePersistCanvasState(canvasId)
-  return true
-}
-
-export async function applyAddDomain(canvasId: number, domain: any): Promise<boolean> {
-  const state = await ensureCanvasStateLoaded(canvasId)
-  if (state.domains.has(domain.id)) {
-    return false
-  }
-  state.domains.set(domain.id, domain)
-  state.version++
-  state.entityVersions.set(domain.id, state.version)
-  state.lastModified = Date.now()
-  schedulePersistCanvasState(canvasId)
-  return true
-}
-
-export async function applyUpdateDomain(canvasId: number, domainId: string, updates: any, clientVersion?: number): Promise<boolean> {
-  const state = await ensureCanvasStateLoaded(canvasId)
-  const existing = state.domains.get(domainId)
-  if (!existing) return false
-  const entityVer = state.entityVersions.get(domainId) ?? 0
-  if (typeof clientVersion === 'number' && entityVer > clientVersion) {
-    return false
-  }
-  if (updates && Object.keys(updates).some(k => (existing as Record<string, unknown>)[k] !== (updates as Record<string, unknown>)[k])) {
-    const updated = { ...(existing as object), ...updates }
-    state.domains.set(domainId, updated)
-    state.version++
-    state.entityVersions.set(domainId, state.version)
-    state.lastModified = Date.now()
-    schedulePersistCanvasState(canvasId)
-    return true
-  }
-  return false
-}
-
-export async function applyRemoveDomain(canvasId: number, domainId: string): Promise<boolean> {
-  const state = await ensureCanvasStateLoaded(canvasId)
-  const existed = state.domains.delete(domainId)
-  if (!existed) return false
-  state.entityVersions.delete(domainId)
-  state.version++
-  state.lastModified = Date.now()
-  schedulePersistCanvasState(canvasId)
-  return true
-}
-
-export async function applyAddConnection(canvasId: number, connection: any): Promise<boolean> {
-  const state = await ensureCanvasStateLoaded(canvasId)
-  if (state.connections.has(connection.id)) {
-    return false
-  }
-  state.connections.set(connection.id, connection)
-  state.version++
-  state.entityVersions.set(connection.id, state.version)
-  state.lastModified = Date.now()
-  schedulePersistCanvasState(canvasId)
-  return true
-}
-
-export async function applyUpdateConnection(canvasId: number, connectionId: string, updates: any, clientVersion?: number): Promise<boolean> {
-  const state = await ensureCanvasStateLoaded(canvasId)
-  const existing = state.connections.get(connectionId)
-  if (!existing) return false
-  const entityVer = state.entityVersions.get(connectionId) ?? 0
-  if (typeof clientVersion === 'number' && entityVer > clientVersion) {
-    return false
-  }
-  if (updates && Object.keys(updates).some(k => (existing as Record<string, unknown>)[k] !== (updates as Record<string, unknown>)[k])) {
-    const updated = { ...(existing as object), ...updates }
-    state.connections.set(connectionId, updated)
-    state.version++
-    state.entityVersions.set(connectionId, state.version)
-    state.lastModified = Date.now()
-    schedulePersistCanvasState(canvasId)
-    return true
-  }
-  return false
-}
-
-export async function applyRemoveConnection(canvasId: number, connectionId: string): Promise<boolean> {
-  const state = await ensureCanvasStateLoaded(canvasId)
-  const existed = state.connections.delete(connectionId)
-  if (!existed) return false
-  state.entityVersions.delete(connectionId)
-  state.version++
-  state.lastModified = Date.now()
-  schedulePersistCanvasState(canvasId)
-  return true
-}
-
-export function getSyncData(canvasId: number): {
-  nodes: unknown[]
-  groups: unknown[]
-  domains: unknown[]
-  connections: unknown[]
-  version: number
-} {
-  const state = canvasStates.get(canvasId)
-  if (!state) {
-    return { nodes: [], groups: [], domains: [], connections: [], version: 0 }
-  }
-  return {
-    nodes: Array.from(state.nodes.values()),
-    groups: Array.from(state.groups.values()),
-    domains: Array.from(state.domains.values()),
-    connections: Array.from(state.connections.values()),
-    version: state.version,
   }
 }
 
 /**
- * 批量应用一组操作，所有操作共享同一个版本检查，整体只递增一次版本号。
- * 用于客户端发送 batch-operation 消息的场景，避免逐个操作因版本递增导致 NAK。
- *
- * 无回滚机制：循环内各操作（Map set/delete、对象展开、Object.keys 浅比较）均不抛异常，
- * 版本号仅在全部操作应用成功后递增，单操作 handler 也遵循同一模式。
- * 外层 try-catch 兜底仅用于 VM 级异常（OOM 等）。
+ * Merge a legacy JSON snapshot into the canvas doc (used by the REST POST /data
+ * endpoint for backward compatibility with single-user clients that still send
+ * JSON). The client sends a COMPLETE snapshot, so this is a replace operation:
+ * entities present in the snapshot are added/updated, entities absent from the
+ * snapshot but present in the doc are deleted. We cannot use Y.applyUpdate with
+ * a temporary doc because two docs produce independent root Y.Map objects.
  */
-export async function applyBatchOperations(
+export async function mergeJsonSnapshotIntoCanvas(
   canvasId: number,
-  operations: Array<{ operation: string; data: unknown }>,
-  clientVersion?: number
+  snapshot: {
+    nodes?: unknown[]
+    groups?: unknown[]
+    domains?: unknown[]
+    connections?: unknown[]
+  },
 ): Promise<boolean> {
-  if (!operations || operations.length === 0) return false
-
-  const state = await ensureCanvasStateLoaded(canvasId)
-
-  let anyApplied = false
-  const modifiedIds: string[] = []
-
-  for (const op of operations) {
-    let applied = false
-    let entityId: string | undefined
-    switch (op.operation) {
-      case 'add-node': {
-        const node = op.data as { id: string }
-        entityId = node.id
-        if (!state.nodes.has(node.id)) {
-          state.nodes.set(node.id, node)
-          applied = true
-        }
-        break
-      }
-      case 'update-node': {
-        const { id, updates } = op.data as { id: string; updates: unknown }
-        entityId = id
-        const existing = state.nodes.get(id)
+  const state = await loadCanvasStateFromDb(canvasId)
+  try {
+    const collections = ensureRoot(state.doc)
+    const syncCollection = (
+      target: Y.Map<Y.Map<unknown>>,
+      items: unknown[] | undefined,
+    ) => {
+      if (!Array.isArray(items)) return
+      // Build the set of ids present in the incoming snapshot.
+      const incomingIds = new Set<string>()
+      for (const item of items) {
+        if (!item || typeof item !== 'object') continue
+        const record = item as Record<string, unknown>
+        const id = record.id
+        if (typeof id !== 'string') continue
+        incomingIds.add(id)
+        const existing = target.get(id)
         if (existing) {
-          const entityVer = state.entityVersions.get(id) ?? 0
-          const isStale = typeof clientVersion === 'number' && entityVer > clientVersion
-          if (!isStale && updates && typeof updates === 'object' && Object.keys(updates).some(k => (existing as Record<string, unknown>)[k] !== (updates as Record<string, unknown>)[k])) {
-            const updated = { ...(existing as object), ...(updates as object) }
-            state.nodes.set(id, updated)
-            applied = true
-          }
+          // Field-level merge into the existing entity Y.Map.
+          writeEntityToYMap(existing, record)
+        } else {
+          const ymap = new Y.Map<unknown>()
+          writeEntityToYMap(ymap, record)
+          target.set(id, ymap)
         }
-        break
       }
-      case 'remove-node': {
-        const { id } = op.data as { id: string }
-        if (state.nodes.delete(id)) {
-          state.entityVersions.delete(id)
-          for (const [connId, conn] of state.connections) {
-            const c = conn as { fromNodeId?: string; toNodeId?: string }
-            if (c.fromNodeId === id || c.toNodeId === id) {
-              state.connections.delete(connId)
-              state.entityVersions.delete(connId)
-            }
-          }
-          applied = true
+      // Delete entities that are in the doc but NOT in the incoming snapshot
+      // (the client sent a complete view and omitted them).
+      for (const existingId of Array.from(target.keys())) {
+        if (!incomingIds.has(existingId)) {
+          target.delete(existingId)
         }
-        break
-      }
-      case 'add-group': {
-        const group = op.data as { id: string }
-        entityId = group.id
-        if (!state.groups.has(group.id)) {
-          state.groups.set(group.id, group)
-          applied = true
-        }
-        break
-      }
-      case 'update-group': {
-        const { id, updates } = op.data as { id: string; updates: unknown }
-        entityId = id
-        const existing = state.groups.get(id)
-        if (existing) {
-          const entityVer = state.entityVersions.get(id) ?? 0
-          const isStale = typeof clientVersion === 'number' && entityVer > clientVersion
-          if (!isStale && updates && typeof updates === 'object' && Object.keys(updates).some(k => (existing as Record<string, unknown>)[k] !== (updates as Record<string, unknown>)[k])) {
-            const updated = { ...(existing as object), ...(updates as object) }
-            state.groups.set(id, updated)
-            applied = true
-          }
-        }
-        break
-      }
-      case 'remove-group': {
-        const { id } = op.data as { id: string }
-        if (state.groups.delete(id)) {
-          state.entityVersions.delete(id)
-          applied = true
-        }
-        break
-      }
-      case 'add-domain': {
-        const domain = op.data as { id: string }
-        entityId = domain.id
-        if (!state.domains.has(domain.id)) {
-          state.domains.set(domain.id, domain)
-          applied = true
-        }
-        break
-      }
-      case 'update-domain': {
-        const { id, updates } = op.data as { id: string; updates: unknown }
-        entityId = id
-        const existing = state.domains.get(id)
-        if (existing) {
-          const entityVer = state.entityVersions.get(id) ?? 0
-          const isStale = typeof clientVersion === 'number' && entityVer > clientVersion
-          if (!isStale && updates && typeof updates === 'object' && Object.keys(updates).some(k => (existing as Record<string, unknown>)[k] !== (updates as Record<string, unknown>)[k])) {
-            const updated = { ...(existing as object), ...(updates as object) }
-            state.domains.set(id, updated)
-            applied = true
-          }
-        }
-        break
-      }
-      case 'remove-domain': {
-        const { id } = op.data as { id: string }
-        if (state.domains.delete(id)) {
-          state.entityVersions.delete(id)
-          applied = true
-        }
-        break
-      }
-      case 'add-connection': {
-        const connection = op.data as { id: string }
-        entityId = connection.id
-        if (!state.connections.has(connection.id)) {
-          state.connections.set(connection.id, connection)
-          applied = true
-        }
-        break
-      }
-      case 'update-connection': {
-        const { id, updates } = op.data as { id: string; updates: unknown }
-        entityId = id
-        const existing = state.connections.get(id)
-        if (existing) {
-          const entityVer = state.entityVersions.get(id) ?? 0
-          const isStale = typeof clientVersion === 'number' && entityVer > clientVersion
-          if (!isStale && updates && typeof updates === 'object' && Object.keys(updates).some(k => (existing as Record<string, unknown>)[k] !== (updates as Record<string, unknown>)[k])) {
-            const updated = { ...(existing as object), ...(updates as object) }
-            state.connections.set(id, updated)
-            applied = true
-          }
-        }
-        break
-      }
-      case 'remove-connection': {
-        const { id } = op.data as { id: string }
-        if (state.connections.delete(id)) {
-          state.entityVersions.delete(id)
-          applied = true
-        }
-        break
       }
     }
-    if (applied) {
-      anyApplied = true
-      if (entityId) {
-        modifiedIds.push(entityId)
-      }
-    }
+    state.doc.transact(() => {
+      syncCollection(collections.nodes, snapshot.nodes)
+      syncCollection(collections.groups, snapshot.groups)
+      syncCollection(collections.domains, snapshot.domains)
+      syncCollection(collections.connections, snapshot.connections)
+    })
+    return true
+  } catch (err) {
+    logError('Failed to merge JSON snapshot into canvas doc', {
+      canvasId,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return false
   }
+}
 
-  if (anyApplied) {
-    state.version++
-    for (const id of modifiedIds) {
-      state.entityVersions.set(id, state.version)
-    }
-    state.lastModified = Date.now()
-    schedulePersistCanvasState(canvasId)
+/**
+ * Serialize a canvas doc to the legacy JSON snapshot shape, used by REST GET
+ * endpoints and AI prompt builders.
+ */
+export function getCanvasJsonSnapshot(canvasId: number): {
+  nodes: Record<string, unknown>[]
+  groups: Record<string, unknown>[]
+  domains: Record<string, unknown>[]
+  connections: Record<string, unknown>[]
+} {
+  const state = canvasStates.get(canvasId)
+  if (!state) {
+    return { nodes: [], groups: [], domains: [], connections: [] }
   }
+  return docToJsonSnapshot(state.doc)
+}
 
-  return anyApplied
+/**
+ * Encode a canvas doc as base64 Yjs update. Used when a REST client requests
+ * the raw binary form (e.g. provider bootstrap).
+ */
+export function getCanvasYjsUpdateBase64(canvasId: number): string | null {
+  const state = canvasStates.get(canvasId)
+  if (!state) return null
+  return encodeDocToBase64(state.doc)
 }

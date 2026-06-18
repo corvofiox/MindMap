@@ -1,4 +1,4 @@
-import { Router } from 'express'
+﻿import { Router } from 'express'
 import { db, scheduleSave } from '../database/connection.js'
 import { canvases, folders, projects, projectMembers } from '../database/schema.js'
 import { eq, inArray, and } from 'drizzle-orm'
@@ -6,8 +6,8 @@ import { authenticate, type AuthRequest } from '../middleware/auth.middleware.js
 import { asyncHandler } from '../middleware/error.middleware.js'
 import { transformResponse, transformResponseArray, getProperty } from '../utils/transformResponse.js'
 import { log } from '../utils/logger.js'
-import { getCanvasActiveUsers, broadcastVersionUpdate } from '../websocket/index.js'
-import { ensureCanvasState, loadCanvasStateFromDb } from '../websocket/canvas-state.js'
+import { getCanvasActiveUsers } from '../websocket/index.js'
+import { loadCanvasStateFromDb, mergeJsonSnapshotIntoCanvas } from '../websocket/canvas-state.js'
 
 export const canvasRouter = Router()
 
@@ -257,20 +257,6 @@ canvasRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, res
         })
       }
       return await withPostSaveMutex(canvasId, async () => {
-        await loadCanvasStateFromDb(canvasId)
-        const state = ensureCanvasState(canvasId)
-        if (state.version > clientVersion) {
-          log('PUT canvas - Rejected stale thumbnail', {
-            canvasId,
-            clientVersion,
-            serverVersion: state.version,
-          })
-          return res.status(409).json({
-            success: false,
-            error: '缩略图版本过期，画布已被更新',
-            data: { serverVersion: state.version, clientVersion },
-          })
-        }
 
         const updateData: Record<string, unknown> = {
           updatedAt: Math.floor(Date.now() / 1000),
@@ -309,7 +295,22 @@ canvasRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, res
       updateData.name = name
     }
     if (yjsData !== undefined) {
-      updateData.yjsData = yjsData
+      log('PUT canvas - yjsData provided; merging into Yjs doc instead of legacy column', { canvasId })
+      try {
+        const jsonStr = Buffer.from(yjsData, 'base64').toString('utf-8')
+        const snapshot = JSON.parse(jsonStr)
+        await mergeJsonSnapshotIntoCanvas(canvasId, {
+          nodes: Array.isArray(snapshot.nodes) ? snapshot.nodes : [],
+          groups: Array.isArray(snapshot.groups) ? snapshot.groups : [],
+          domains: Array.isArray(snapshot.domains) ? snapshot.domains : [],
+          connections: Array.isArray(snapshot.connections) ? snapshot.connections : [],
+        })
+      } catch (err) {
+        log('PUT canvas - Failed to merge yjsData into Yjs doc', {
+          canvasId,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
     }
     if (previewText !== undefined) {
       updateData.previewText = previewText
@@ -454,85 +455,33 @@ canvasRouter.post('/:id/data', authenticate, asyncHandler(async (req: AuthReques
   }
 
   await withPostSaveMutex(canvasId, async () => {
-    const { nodes, groups, domains, connections, version: clientVersion } = req.body
+    const { nodes, groups, domains, connections } = req.body
 
-    await loadCanvasStateFromDb(canvasId)
-    const state = ensureCanvasState(canvasId)
-
-    // 使用内存版本做过期检测，可捕获尚未持久化到 DB 的 WS 更新
-    // 如果客户端版本落在服务端版本之后，拒绝保存，让客户端先同步再保存
-    if (typeof clientVersion === 'number' && state.version > clientVersion) {
-      log('POST canvas data - Rejected stale save', {
-        canvasId,
-        clientVersion,
-        serverVersion: state.version,
-      })
-      return res.status(409).json({
-        success: false,
-        error: '版本冲突：画布数据已被其他用户更新，请刷新后重试',
-        data: { serverVersion: state.version, clientVersion },
-      })
+    // Yjs: 单用户保存直接把客户端 JSON 快照合并进 doc。CRDT 自动处理字段级合并，
+    // 不再需要版本号乐观锁——并发保存会被 Y.Doc 的 update 事件正确归并。
+    // 注意：只合并请求体中实际存在的集合，避免把未提供的集合误删为空。
+    const hasContent = nodes !== undefined || groups !== undefined
+      || domains !== undefined || connections !== undefined
+    if (hasContent) {
+      const snapshot: { nodes?: unknown[]; groups?: unknown[]; domains?: unknown[]; connections?: unknown[] } = {}
+      if (Array.isArray(nodes)) snapshot.nodes = nodes
+      if (Array.isArray(groups)) snapshot.groups = groups
+      if (Array.isArray(domains)) snapshot.domains = domains
+      if (Array.isArray(connections)) snapshot.connections = connections
+      await mergeJsonSnapshotIntoCanvas(canvasId, snapshot)
+      // mergeJsonSnapshotIntoCanvas 通过 applyUpdate 触发 doc update 事件，
+      // 进而触发 schedulePersistCanvasState，无需手动写库。
+    } else {
+      // 无内容变更也要确保 doc 已加载（供后续读取一致）
+      await loadCanvasStateFromDb(canvasId)
     }
-
-    if (nodes || groups || domains || connections) {
-      state.version = typeof clientVersion === 'number' ? clientVersion + 1 : state.version + 1
-
-      const mergeEntityMap = <T extends { id: string }>(
-        serverMap: Map<string, unknown>,
-        clientArray: T[] | undefined,
-      ) => {
-        if (!Array.isArray(clientArray)) return
-        for (const item of clientArray) {
-          const existing = serverMap.get(item.id)
-          if (existing && typeof existing === 'object') {
-            // Field-level merge: preserve server-side updates from other users
-            serverMap.set(item.id, { ...(existing as object), ...item })
-          } else {
-            serverMap.set(item.id, item)
-          }
-        }
-      }
-
-      mergeEntityMap(state.nodes, nodes)
-      mergeEntityMap(state.groups, groups)
-      mergeEntityMap(state.domains, domains)
-      mergeEntityMap(state.connections, connections)
-
-      state.lastModified = Date.now()
-    }
-
-    const snapshotVersion = state.version
-    const jsonString = JSON.stringify({
-      nodes: Array.from(state.nodes.values()),
-      groups: Array.from(state.groups.values()),
-      domains: Array.from(state.domains.values()),
-      connections: Array.from(state.connections.values()),
-      version: snapshotVersion,
-    })
-    const utf8Bytes = new TextEncoder().encode(jsonString)
-    const binaryString = Array.from(utf8Bytes, byte => String.fromCharCode(byte)).join('')
-    const base64Data = btoa(binaryString)
-
-    await db
-      .update(canvases)
-      .set({
-        yjsData: base64Data,
-        updatedAt: Math.floor(Date.now() / 1000),
-      })
-      .where(eq(canvases.id, canvasId))
-
-    if (state.version === snapshotVersion) {
-      state.lastPersistedVersion = snapshotVersion
-    }
-
-    broadcastVersionUpdate(canvasId, state.version)
 
     scheduleSave()
-    log('POST canvas data - Saved', { canvasId, clientVersion })
+    log('POST canvas data - Saved (Yjs merge)', { canvasId })
 
     res.json({
       success: true,
-      data: { message: 'Canvas data saved', version: state.version },
+      data: { message: 'Canvas data saved' },
     })
   })
 }))

@@ -103,6 +103,7 @@ export async function runMigrations(sqlite: any) {
           project_id INTEGER NOT NULL REFERENCES projects(id),
           folder_id INTEGER REFERENCES folders(id),
           yjs_data TEXT,
+          yjs_update TEXT,
           preview_text TEXT,
           thumbnail TEXT,
           sort_order INTEGER NOT NULL DEFAULT 0,
@@ -365,6 +366,20 @@ export async function runMigrations(sqlite: any) {
         sqlite.run('ALTER TABLE node_pool_folders_new RENAME TO node_pool_folders')
 
         log('node_cards and node_pool_folders migrated to user_id successfully')
+      }
+    }
+
+    // Add yjs_update column to canvases table if it doesn't exist
+    // This column stores the Yjs binary state update (base64) and is the authoritative
+    // canvas data store after the Yjs migration. The legacy yjs_data column (JSON base64)
+    // is retained for rollback safety.
+    const canvasesTableInfo = sqlite.exec('PRAGMA table_info(canvases)')
+    if (canvasesTableInfo.length > 0) {
+      const canvasColumns = canvasesTableInfo[0].values.map((row: any) => row[1])
+      if (!canvasColumns.includes('yjs_update')) {
+        log('Adding yjs_update column to canvases table')
+        sqlite.run('ALTER TABLE canvases ADD COLUMN yjs_update TEXT')
+        log('yjs_update column added successfully')
       }
     }
 

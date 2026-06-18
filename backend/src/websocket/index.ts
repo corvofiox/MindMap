@@ -1,10 +1,15 @@
-import { WebSocketServer } from 'ws'
+﻿import { WebSocketServer } from 'ws'
 import type { WebSocket } from 'ws'
 import { db } from '../database/connection.js'
 import { canvases, projects, projectMembers, users } from '../database/schema.js'
 import { eq, and } from 'drizzle-orm'
 import { getValidatedEnv } from '../utils/env.js'
 import { log, logError } from '../utils/logger.js'
+import * as encoding from 'lib0/encoding'
+import * as decoding from 'lib0/decoding'
+import * as Y from 'yjs'
+import * as syncProtocol from 'y-protocols/sync'
+import * as awarenessProtocol from 'y-protocols/awareness'
 
 // Type-safe property accessors for database records that may have
 // either camelCase or snake_case property names due to Drizzle ORM inconsistencies
@@ -29,30 +34,15 @@ function getProjectOwnerId(project: Record<string, unknown>): number | undefined
 }
 import {
   loadCanvasStateFromDb,
-  ensureCanvasStateLoaded,
-  getSyncData,
   persistCanvasState,
-  applyAddNode,
-  applyUpdateNode,
-  applyRemoveNode,
-  applyAddGroup,
-  applyUpdateGroup,
-  applyRemoveGroup,
-  applyAddDomain,
-  applyUpdateDomain,
-  applyRemoveDomain,
-  applyAddConnection,
-  applyUpdateConnection,
-  applyRemoveConnection,
-  applyBatchOperations,
   removeCanvasState,
   flushPendingPersist,
-  getCanvasState,
   isCanvasStatePersisted,
   startPeriodicCanvasFlush,
   stopPeriodicCanvasFlush,
   incrementStateGeneration,
   getStateGeneration,
+  getCanvasDoc,
 } from './canvas-state.js'
 
 interface CanvasActiveUser {
@@ -73,6 +63,8 @@ interface WebSocketWithUserData extends WebSocket {
   lastPong?: number
   // 应用层 pong 时间戳（前端主动发 ping/pong，弥补浏览器无法响应 ws.ping）
   lastAppPong?: number
+  /** Per-connection awareness client id, kept so we can clean it up on disconnect. */
+  awarenessClientId?: number
 }
 
 export interface CanvasRoom {
@@ -80,6 +72,8 @@ export interface CanvasRoom {
   clients: Set<WebSocketWithUserData>
   activeUsers: Map<number, CanvasActiveUser>
   userConnectionCounts: Map<number, number>
+  /** Shared Yjs awareness state for this canvas room. */
+  awareness: awarenessProtocol.Awareness
 }
 
 /**
@@ -95,27 +89,6 @@ export function _setRoomForTesting(canvasId: number, room: CanvasRoom | null): v
   }
 }
 
-interface CollabMessage {
-  type: 'operation'
-  operation: string
-  data: unknown
-  timestamp: number
-  // senderId 由客户端填入 tab 级 sessionId（字符串），后端不消费此字段做过滤，
-  // 仅在 broadcastToRoom 中透传给其他客户端。
-  senderId: number | string
-  seq?: number
-  clientVersion?: number
-}
-
-interface SyncMessage {
-  type: 'sync'
-  nodes: unknown[]
-  groups: unknown[]
-  domains: unknown[]
-  connections: unknown[]
-  version: number
-}
-
 interface UserJoinMessage {
   type: 'user-join' | 'user-leave'
   user: CanvasActiveUser
@@ -128,11 +101,46 @@ interface CursorMessage {
   y: number
 }
 
+/** Per-room broadcast handler + its owning doc id (stored as extra fields). */
+type RoomWithBroadcast = CanvasRoom & {
+  _broadcastHandler?: (u: Uint8Array, o: unknown) => void
+  _docId?: number
+}
+
 const canvasRooms = new Map<number, CanvasRoom>()
+
+/**
+ * Register a single doc 'update' → broadcast handler on the room, ONCE.
+ * Subsequent connections reuse it. The handler excludes the sender by reading
+ * the transaction origin (the sender's ws instance). This prevents the
+ * O(N)-handlers problem where N connections each register their own handler.
+ */
+function ensureRoomBroadcastHandler(room: CanvasRoom, doc: Y.Doc | undefined) {
+  const rw = room as RoomWithBroadcast
+  if (rw._broadcastHandler || !doc) return
+  const handler = (update: Uint8Array, origin: unknown) => {
+    broadcastYjsUpdate(room, update, (origin as WebSocketWithUserData | null) ?? null)
+  }
+  doc.on('update', handler)
+  rw._broadcastHandler = handler
+  rw._docId = room.id
+}
+
+/** Detach the room-level broadcast handler (called when room empties). */
+function detachRoomBroadcastHandler(room: CanvasRoom) {
+  const rw = room as RoomWithBroadcast
+  if (rw._broadcastHandler && rw._docId !== undefined) {
+    const doc = getCanvasDoc(rw._docId)
+    doc?.off('update', rw._broadcastHandler)
+    rw._broadcastHandler = undefined
+    rw._docId = undefined
+  }
+}
 
 const wsConnectionRates = new Map<string, { count: number; resetTime: number }>()
 const WS_MAX_CONNECTIONS_PER_MINUTE = 100
 const WS_WINDOW_MS = 60 * 1000
+const WS_MAX_MESSAGE_BYTES = 5 * 1024 * 1024
 
 // P2: 心跳采用双保险——ws 原生 ping/pong + 应用层 ping/pong。
 // 浏览器 WebSocket 不暴露 ping API，依赖 OS 自动回 pong；设备休眠/切后台时
@@ -178,22 +186,8 @@ export function setupWebSocket(wss: WebSocketServer) {
 
     for (const [canvasId, room] of canvasRooms.entries()) {
       if (room.clients.size === 0) {
-        flushPendingPersist(canvasId)
-        // Always remove the room so it doesn't leak
-        canvasRooms.delete(canvasId)
-        if (!isCanvasStatePersisted(canvasId)) {
-          const gen = getStateGeneration(canvasId)
-          persistCanvasState(canvasId).then((success) => {
-            // 防止竞态：新连接可能在异步持久化期间创建了新的 CanvasData
-            if (getStateGeneration(canvasId) !== gen) return
-            if (success || isCanvasStatePersisted(canvasId)) {
-              removeCanvasState(canvasId)
-            }
-          })
-        } else {
-          removeCanvasState(canvasId)
-        }
-    continue
+        teardownEmptyRoom(canvasId, room)
+        continue
       }
 
       for (const client of Array.from(room.clients)) {
@@ -225,16 +219,58 @@ export function setupWebSocket(wss: WebSocketServer) {
   })
 }
 
-export function broadcastVersionUpdate(canvasId: number, version: number): void {
-  const room = canvasRooms.get(canvasId)
-  if (!room) return
+/**
+ * Tear down an empty room: flush pending persist, detach the room-level
+ * broadcast handler, remove the room from the map, destroy shared awareness,
+ * and trigger generation-guarded doc cleanup.
+ *
+ * Single source of truth for the 5-step teardown used by both the heartbeat
+ * callback (when a room empties out between connections) and
+ * handleClientDisconnect (when the last client leaves). Keeps the two paths
+ * in sync so future changes don't have to be applied in two places.
+ */
+function teardownEmptyRoom(canvasId: number, room: CanvasRoom): void {
+  flushPendingPersist(canvasId)
+  detachRoomBroadcastHandler(room)
+  canvasRooms.delete(canvasId)
+  // Awareness may be absent in unit tests that inject a minimal room.
+  try {
+    room.awareness?.destroy()
+  } catch {
+    // best-effort
+  }
+  cleanupEmptyRoom(canvasId)
+}
 
-  const state = getCanvasState(canvasId)
-  broadcastToRoom(room, {
-    type: 'version-update',
-    version,
-    persistError: state?.persistError ?? null,
-  }, null)
+/**
+ * Tear down a room's in-memory doc once every client has left.
+ * Generation-guarded so a late persist callback cannot wipe a freshly recreated doc.
+ * Even if persist fails, the state is removed after a short delay to avoid a
+ * permanent memory leak; the periodic flush will have had one more chance by then.
+ */
+function cleanupEmptyRoom(canvasId: number): void {
+  if (!isCanvasStatePersisted(canvasId)) {
+    const gen = getStateGeneration(canvasId)
+    persistCanvasState(canvasId).then((success) => {
+      if (getStateGeneration(canvasId) !== gen) return
+      if (success || isCanvasStatePersisted(canvasId)) {
+        removeCanvasState(canvasId)
+      } else {
+        // Persist failed and doc is still dirty. Schedule a final cleanup so
+        // the state (and its Y.Doc) doesn't leak forever. If a new client
+        // connects before this fires, the generation guard above will prevent
+        // the removal. The periodic flush gets one more chance in the meantime.
+        log('cleanupEmptyRoom: persist failed, scheduling delayed state removal', { canvasId })
+        setTimeout(() => {
+          if (getStateGeneration(canvasId) === gen) {
+            removeCanvasState(canvasId)
+          }
+        }, 5000)
+      }
+    })
+  } else {
+    removeCanvasState(canvasId)
+  }
 }
 
 export function getCanvasActiveUsers(canvasId: number): CanvasActiveUser[] {
@@ -310,16 +346,19 @@ async function handleConnection(ws: WebSocketWithUserData, req: any) {
   // Buffer early messages before async setup completes.
   // ws (EventEmitter) silently drops messages when no 'message' listener is registered.
   // Since this function is async with multiple awaits, the client may send messages
-  // (e.g. sync-request) before we reach ws.on('message', ...) — those would be lost.
-  const earlyMessages: Buffer[] = []
-  const earlyMessageListener = (data: Buffer) => { earlyMessages.push(data) }
+  // (e.g. a Yjs SYNC STEP1) before we reach ws.on('message', ...) — those would be lost.
+  const earlyMessages: Array<{ isBinary: boolean; data: Buffer }> = []
+  const earlyMessageListener = (data: Buffer, isBinary: boolean) => {
+    earlyMessages.push({ isBinary, data })
+  }
   ws.on('message', earlyMessageListener)
 
   // Also register pong/close/error early to avoid missing these events during async setup
-  ws.on('pong', () => {
+  const earlyPongHandler = () => {
     ws.isAlive = true
     ws.lastPong = Date.now()
-  })
+  }
+  ws.on('pong', earlyPongHandler)
 
   let earlyClose = false
   ws.on('close', () => { earlyClose = true })
@@ -334,6 +373,7 @@ async function handleConnection(ws: WebSocketWithUserData, req: any) {
   // Helper to clean up early listeners when connection is rejected during setup
   const cleanupEarlyListeners = () => {
     ws.off('message', earlyMessageListener)
+    ws.off('pong', earlyPongHandler)
     ws.removeAllListeners('close')
     ws.removeAllListeners('error')
   }
@@ -481,6 +521,7 @@ async function handleConnection(ws: WebSocketWithUserData, req: any) {
       clients: new Set(),
       activeUsers: new Map(),
       userConnectionCounts: new Map(),
+      awareness: new awarenessProtocol.Awareness(new Y.Doc()),
     }
     canvasRooms.set(canvasId, room)
     // 递增世代计数，防止旧异步回调误删新创建的 CanvasData
@@ -493,8 +534,16 @@ async function handleConnection(ws: WebSocketWithUserData, req: any) {
   const currentCount = room.userConnectionCounts.get(userId) || 0
   room.userConnectionCounts.set(userId, currentCount + 1)
 
-  // Load canvas state from DB if not already in memory
+  // Load the authoritative Yjs doc from DB.
   await loadCanvasStateFromDb(canvasId)
+
+  // Register the doc's broadcast handler ONCE per room (not per connection).
+  // The handler uses the transaction origin (the sender's ws instance) to
+  // exclude the sender from the broadcast, so a single handler serves all N
+  // clients. Without this, N connections would register N handlers and each
+  // update would be broadcast N times (O(N) redundant traffic).
+  const doc = getCanvasDoc(canvasId)
+  ensureRoomBroadcastHandler(room!, doc)
 
   // Check if client disconnected during async state loading
   if (earlyClose) {
@@ -516,8 +565,8 @@ async function handleConnection(ws: WebSocketWithUserData, req: any) {
 
   // Replace early message listener with the real one
   ws.off('message', earlyMessageListener)
-  ws.on('message', (data: Buffer) => {
-    handleMessage(ws, room!, data)
+  ws.on('message', (data: Buffer, isBinary: boolean) => {
+    handleMessage(ws, room!, data, isBinary)
   })
 
   // Replace early close listener with the real one
@@ -538,9 +587,9 @@ async function handleConnection(ws: WebSocketWithUserData, req: any) {
     handleClientDisconnect(ws, room!, true)
   })
 
-  // Process buffered early messages (e.g. sync-request sent right after connect)
-  for (const msg of earlyMessages) {
-    handleMessage(ws, room!, msg)
+  // Process buffered early messages (e.g. Yjs SYNC STEP1 sent right after connect)
+  for (const { isBinary, data } of earlyMessages) {
+    handleMessage(ws, room!, data, isBinary)
   }
 
   } catch (error) {
@@ -549,28 +598,49 @@ async function handleConnection(ws: WebSocketWithUserData, req: any) {
       error: error instanceof Error ? error.message : String(error),
     })
     cleanupEarlyListeners()
+    // If the ws was already added to a room before the error, detach it so
+    // the room's client set and reference counts don't leak. The room variable
+    // is assigned inside the try block; check it via canvasRooms lookup.
+    if (ws.canvasId !== undefined) {
+      const room = canvasRooms.get(ws.canvasId)
+      if (room && room.clients.has(ws)) {
+        handleClientDisconnect(ws, room)
+      }
+    }
     if (ws.readyState === 1) {
       ws.close(1011, 'Internal server error')
     }
   }
 }
 
-async function handleMessage(ws: WebSocketWithUserData, room: CanvasRoom, data: Buffer) {
+/**
+ * Message dispatcher. Text frames carry business JSON (cursor/ping/kicked/etc.),
+ * binary frames carry Yjs sync protocol bytes.
+ */
+function handleMessage(ws: WebSocketWithUserData, room: CanvasRoom, data: Buffer, isBinary: boolean) {
   try {
-    const message = JSON.parse(data.toString())
+    if (data.length > WS_MAX_MESSAGE_BYTES) {
+      logError('WebSocket message exceeds size limit, dropping', {
+        userId: ws.userId,
+        canvasId: ws.canvasId,
+        size: data.length,
+        limit: WS_MAX_MESSAGE_BYTES,
+      })
+      return
+    }
+    if (isBinary && data.length > 0) {
+      const view = new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+      handleYjsBinaryMessage(ws, room, view)
+      return
+    }
+
+    const text = data.toString()
+    if (!text) return
+    const message = JSON.parse(text)
 
     switch (message.type) {
-      case 'operation':
-        await handleOperation(ws, room, message as CollabMessage)
-        break
-      case 'batch-operation':
-        await handleBatchOperation(ws, room, message)
-        break
       case 'cursor':
         handleCursor(ws, room, message as CursorMessage)
-        break
-      case 'sync-request':
-        await handleSyncRequest(ws, room)
         break
       case 'ping':
         // P2: 应用层心跳——浏览器无法响应 ws.ping，前端主动发 ping，此处回 pong
@@ -592,14 +662,168 @@ async function handleMessage(ws: WebSocketWithUserData, room: CanvasRoom, data: 
   }
 }
 
+/**
+ * Parse a Yjs sync-protocol binary frame (y-websocket compatible).
+ *
+ * 标准信封：[varUint messageType, payload...]
+ *   messageType 0 = SYNC：内部再用 syncProtocol 的标准格式 [varUint subType, ...]
+ *     subType 0 = STEP1（客户端发 state vector，服务端回 STEP2）
+ *     subType 1 = STEP2（客户端发 update，服务端 apply）
+ *     subType 2 = UPDATE（等价于 STEP2，y-websocket 对客户端更新的标记）
+ *   messageType 1 = AWARENESS：awareness 二进制 update
+ *
+ * 用 syncProtocol.readSyncMessage 一次性处理 STEP1/STEP2/UPDATE，它会按需写入 encoder 作为回复。
+ * STEP2/UPDATE 是写操作：viewer 角色在 apply 前拦截（CRDT 不可撤销）。
+ */
+function handleYjsBinaryMessage(ws: WebSocketWithUserData, room: CanvasRoom, data: Uint8Array) {
+  const doc = getCanvasDoc(room.id)
+  if (!doc) return
+  if (data.length === 0) return
+
+  const decoder = decoding.createDecoder(data)
+  const messageType = decoding.readVarUint(decoder)
+  // Bytes after the messageType varUint — reused for both the permission peek
+  // and the actual syncProtocol call (each gets a fresh decoder view over them).
+  const remaining = decoding.readTailAsUint8Array(decoder)
+
+  if (messageType === 0) {
+    // SYNC：readSyncMessage 把读+apply 耦合，一旦调用无法回滚（CRDT 不可撤销），
+    // 所以必须先 peek subType 判断角色，对 viewer 的写操作在 apply 前拦截。
+    const peekDecoder = decoding.createDecoder(remaining)
+    const subType = decoding.readVarUint(peekDecoder)
+
+    // viewer 权限拦截：STEP2(1)/UPDATE(2) 是写操作，STEP1(0) 是读操作（请求状态）。
+    if (ws.userRole === 'viewer' && subType !== syncProtocol.messageYjsSyncStep1) {
+      log('Viewer SYNC write blocked before apply', {
+        userId: ws.userId,
+        canvasId: ws.canvasId,
+        subType,
+      })
+      return
+    }
+
+    // 权限通过，用全新 decoder 从 subType 开始交给 syncProtocol 处理。
+    const syncDecoder = decoding.createDecoder(remaining)
+    const encoder = encoding.createEncoder()
+    syncProtocol.readSyncMessage(syncDecoder, encoder, doc, ws as unknown)
+
+    // 若 encoder 有回复内容（STEP1 的回复是 STEP2），发回客户端。
+    const reply = encoding.length(encoder)
+    if (reply > 1) {
+      sendRaw(ws, encoding.toUint8Array(encoder))
+    }
+  } else if (messageType === 1) {
+    // AWARENESS：二进制 update。记录该连接对应的 awareness clientID，
+    // 断连时用于清理（removeAwarenessStates）。
+    try {
+      const update = decoding.readVarUint8Array(decoder)
+      // awareness update 格式：[length, [clientID, clock, state], ...]
+      // 提取涉及的 clientID 用于断连清理。
+      ws.awarenessClientId = extractFirstAwarenessClientId(update)
+      awarenessProtocol.applyAwarenessUpdate(room.awareness, update, ws)
+      // 转发给房间内其他客户端。
+      const wrapped = encoding.createEncoder()
+      encoding.writeVarUint(wrapped, 1)
+      encoding.writeVarUint8Array(wrapped, update)
+      broadcastYjsBinary(room, encoding.toUint8Array(wrapped), ws)
+    } catch (error) {
+      logError('Failed to apply awareness update', {
+        canvasId: room.id,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+}
+
+/**
+ * Extract the first awareness clientID from a y-protocols awareness update.
+ * Format: [varUint numStates, varUint clientID, varUint clock, varUint stateLength, ...stateBytes]*
+ * Returns null if parsing fails.
+ */
+function extractFirstAwarenessClientId(update: Uint8Array): number | undefined {
+  try {
+    const dec = decoding.createDecoder(update)
+    const numStates = decoding.readVarUint(dec)
+    if (numStates === 0) return undefined
+    return decoding.readVarUint(dec)
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * 把 doc 'update' 事件产生的 update 广播给房间内除来源外的所有客户端。
+ * update 用标准信封包裹：[varUint 0(SYNC), varUint 2(UPDATE), update bytes]。
+ */
+function broadcastYjsUpdate(room: CanvasRoom, update: Uint8Array, excludeClient: WebSocketWithUserData | null) {
+  const encoder = encoding.createEncoder()
+  encoding.writeVarUint(encoder, 0) // SYNC
+  syncProtocol.writeUpdate(encoder, update)
+  const wrapped = encoding.toUint8Array(encoder)
+  broadcastYjsBinary(room, wrapped, excludeClient)
+}
+
+/** Broadcast a raw Yjs binary frame to every client except the sender. */
+function broadcastYjsBinary(room: CanvasRoom, data: Uint8Array, excludeClient: WebSocketWithUserData | null) {
+  for (const client of room.clients) {
+    if (client !== excludeClient && client.readyState === 1) {
+      sendRaw(client, data)
+    }
+  }
+}
+
+function sendRaw(ws: WebSocketWithUserData, data: Uint8Array) {
+  if (ws.readyState !== 1) return
+  try {
+    ws.send(data)
+  } catch (error) {
+    logError('Failed to send Yjs binary frame', {
+      userId: ws.userId,
+      canvasId: ws.canvasId,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
+function handleCursor(ws: WebSocketWithUserData, room: CanvasRoom, message: CursorMessage) {
+  broadcastToRoom(room, message, ws)
+}
+
 function handleClientDisconnect(ws: WebSocketWithUserData, room: CanvasRoom, shouldTerminate = false) {
   if (!room) return
 
   const wasInRoom = room.clients.delete(ws)
   if (!wasInRoom) return
 
+  // Note: broadcast handler is now room-level (ensureRoomBroadcastHandler),
+  // so there's no per-ws update handler to detach here.
+
+  // 从共享 awareness 中移除该客户端，其他客户端将不再渲染它的光标
+  try {
+    if (ws.awarenessClientId !== undefined) {
+      awarenessProtocol.removeAwarenessStates(
+        room.awareness,
+        [ws.awarenessClientId],
+        ws as unknown,
+      )
+      // Broadcast the awareness removal so other clients immediately drop the
+      // disconnected user's cursor, instead of waiting for the 30s timeout.
+      const removedUpdate = awarenessProtocol.encodeAwarenessUpdate(
+        room.awareness,
+        [ws.awarenessClientId],
+      )
+      const encoder = encoding.createEncoder()
+      encoding.writeVarUint(encoder, 1) // AWARENESS
+      encoding.writeVarUint8Array(encoder, removedUpdate)
+      broadcastYjsBinary(room, encoding.toUint8Array(encoder), null)
+    }
+  } catch {
+    // Best-effort cleanup.
+  }
+
   if (ws.userId) {
-    const currentCount = (room.userConnectionCounts.get(ws.userId) || 1) - 1
+    const prevCount = room.userConnectionCounts.get(ws.userId) ?? 0
+    const currentCount = prevCount - 1
     if (currentCount <= 0) {
       room.userConnectionCounts.delete(ws.userId)
       room.activeUsers.delete(ws.userId)
@@ -616,18 +840,7 @@ function handleClientDisconnect(ws: WebSocketWithUserData, room: CanvasRoom, sho
   }
 
   if (room.clients.size === 0) {
-    flushPendingPersist(room.id)
-    // Always remove the room so it doesn't leak, even if persist hasn't completed yet.
-    // The canvas state stays in memory and will be flushed by the periodic persist.
-    canvasRooms.delete(room.id)
-    const gen = getStateGeneration(room.id)
-    persistCanvasState(room.id).then((success) => {
-      // 防止竞态：新连接可能在异步持久化期间创建了新的 CanvasData
-      if (getStateGeneration(room.id) !== gen) return
-      if (success || isCanvasStatePersisted(room.id)) {
-        removeCanvasState(room.id)
-      }
-    })
+    teardownEmptyRoom(room.id, room)
   }
 
   if (shouldTerminate && ws.readyState === 1) {
@@ -635,238 +848,23 @@ function handleClientDisconnect(ws: WebSocketWithUserData, room: CanvasRoom, sho
   }
 }
 
-function extractEntityId(operation: string, data: unknown): string | null {
-  if (!data || typeof data !== 'object') return null
-  const d = data as Record<string, unknown>
-  if (typeof d.id === 'string') return d.id
-  return null
-}
-
-function getEntityVersion(canvasId: number, entityId: string): number {
-  const state = getCanvasState(canvasId)
-  return state?.entityVersions?.get(entityId) ?? 0
-}
-
-async function handleOperation(ws: WebSocketWithUserData, room: CanvasRoom, message: CollabMessage) {
-  // Only editors and owners can modify
-  if (ws.userRole === 'viewer') {
-    return
-  }
-
-  const canvasId = room.id
-
-  let applied = false
-
-  try {
-    switch (message.operation) {
-      case 'add-node':
-        applied = await applyAddNode(canvasId, message.data)
-        break
-      case 'update-node': {
-        const { id, updates } = message.data as { id: string; updates: unknown }
-        applied = await applyUpdateNode(canvasId, id, updates, message.clientVersion)
-        break
-      }
-      case 'remove-node': {
-        const { id } = message.data as { id: string }
-        applied = await applyRemoveNode(canvasId, id)
-        break
-      }
-      case 'add-group':
-        applied = await applyAddGroup(canvasId, message.data)
-        break
-      case 'update-group': {
-        const { id, updates } = message.data as { id: string; updates: unknown }
-        applied = await applyUpdateGroup(canvasId, id, updates, message.clientVersion)
-        break
-      }
-      case 'remove-group': {
-        const { id } = message.data as { id: string }
-        applied = await applyRemoveGroup(canvasId, id)
-        break
-      }
-      case 'add-domain':
-        applied = await applyAddDomain(canvasId, message.data)
-        break
-      case 'update-domain': {
-        const { id, updates } = message.data as { id: string; updates: unknown }
-        applied = await applyUpdateDomain(canvasId, id, updates, message.clientVersion)
-        break
-      }
-      case 'remove-domain': {
-        const { id } = message.data as { id: string }
-        applied = await applyRemoveDomain(canvasId, id)
-        break
-      }
-      case 'add-connection':
-        applied = await applyAddConnection(canvasId, message.data)
-        break
-      case 'update-connection': {
-        const { id, updates } = message.data as { id: string; updates: unknown }
-        applied = await applyUpdateConnection(canvasId, id, updates, message.clientVersion)
-        break
-      }
-      case 'remove-connection': {
-        const { id } = message.data as { id: string }
-        applied = await applyRemoveConnection(canvasId, id)
-        break
-      }
-      default:
-        break
-    }
-  } catch (error) {
-    logError('Failed to apply operation', {
-      canvasId,
-      operation: message.operation,
-      error: error instanceof Error ? error.message : String(error),
-    })
-
-    if (typeof message.seq === 'number' && ws.readyState === 1) {
-      ws.send(JSON.stringify({
-        type: 'nak',
-        seq: message.seq,
-        reason: 'server-error',
-      }))
-    }
-    return
-  }
-
-  if (applied) {
-    broadcastToRoom(room, message, ws)
-    broadcastVersionUpdate(canvasId, getCanvasState(canvasId)!.version)
-
-    if (typeof message.seq === 'number' && ws.readyState === 1) {
-      ws.send(JSON.stringify({
-        type: 'ack',
-        seq: message.seq,
-      }))
-    }
-  } else if (typeof message.seq === 'number' && ws.readyState === 1) {
-    const entityId = extractEntityId(message.operation, message.data)
-    const entityVer = entityId ? getEntityVersion(canvasId, entityId) : 0
-    if (typeof message.clientVersion === 'number' && entityVer > message.clientVersion) {
-      ws.send(JSON.stringify({
-        type: 'nak',
-        seq: message.seq,
-        reason: 'version-conflict',
-        serverVersion: getCanvasState(canvasId)?.version,
-      }))
-    } else {
-      ws.send(JSON.stringify({
-        type: 'nak',
-        seq: message.seq,
-        reason: 'operation-failed',
-      }))
-    }
-  }
-}
-
-/**
- * 处理批量操作请求，所有操作共享同一个版本检查，整体只递增一次版本号。
- */
-async function handleBatchOperation(ws: WebSocketWithUserData, room: CanvasRoom, message: {
-  type: 'batch-operation'
-  operations: Array<{ operation: string; data: unknown }>
-  timestamp: number
-  senderId: number | string
-  seq: number
-  clientVersion: number
-}) {
-  if (ws.userRole === 'viewer') {
-    return
-  }
-
-  const canvasId = room.id
-
-  let applied = false
-
-  try {
-    applied = await applyBatchOperations(canvasId, message.operations, message.clientVersion)
-  } catch (error) {
-    logError('Batch operation application error', {
-      canvasId,
-      error: error instanceof Error ? error.message : String(error),
-    })
-    if (typeof message.seq === 'number' && ws.readyState === 1) {
-      ws.send(JSON.stringify({
-        type: 'nak',
-        seq: message.seq,
-        reason: 'server-error',
-      }))
-    }
-    return
-  }
-
-  if (applied) {
-    broadcastToRoom(room, message, ws)
-    broadcastVersionUpdate(canvasId, getCanvasState(canvasId)!.version)
-
-    if (typeof message.seq === 'number' && ws.readyState === 1) {
-      ws.send(JSON.stringify({
-        type: 'ack',
-        seq: message.seq,
-      }))
-    }
-  } else if (typeof message.seq === 'number' && ws.readyState === 1) {
-    let anyStale = false
-    if (typeof message.clientVersion === 'number') {
-      for (const op of message.operations) {
-        const entityId = extractEntityId(op.operation, op.data)
-        if (entityId && getEntityVersion(canvasId, entityId) > message.clientVersion) {
-          anyStale = true
-          break
-        }
-      }
-    }
-    if (anyStale) {
-      ws.send(JSON.stringify({
-        type: 'nak',
-        seq: message.seq,
-        reason: 'version-conflict',
-        serverVersion: getCanvasState(canvasId)?.version,
-      }))
-    } else {
-      ws.send(JSON.stringify({
-        type: 'ack',
-        seq: message.seq,
-      }))
-    }
-  }
-}
-
-function handleCursor(ws: WebSocketWithUserData, room: CanvasRoom, message: CursorMessage) {
-  broadcastToRoom(room, message, ws)
-}
-
-async function handleSyncRequest(ws: WebSocketWithUserData, room: CanvasRoom) {
-  try {
-    // Ensure state is loaded from DB before returning sync data
-    await ensureCanvasStateLoaded(room.id)
-
-    const syncData = getSyncData(room.id)
-
-    ws.send(JSON.stringify({
-      type: 'sync',
-      nodes: syncData.nodes,
-      groups: syncData.groups,
-      domains: syncData.domains,
-      connections: syncData.connections,
-      version: syncData.version,
-    } as SyncMessage))
-  } catch (error) {
-    logError('Failed to sync canvas data', {
-      canvasId: room.id,
-      error: error instanceof Error ? error.message : String(error),
-    })
-  }
-}
 
 function broadcastToRoom(room: CanvasRoom, message: unknown, excludeClient: WebSocketWithUserData | null) {
   const messageStr = JSON.stringify(message)
 
   for (const client of room.clients) {
     if (client !== excludeClient && client.readyState === 1) {
-      client.send(messageStr)
+      // Per-client try/catch: a single broken socket must not prevent the
+      // broadcast from reaching the rest of the room (user-join/leave, kicked).
+      try {
+        client.send(messageStr)
+      } catch (error) {
+        logError('Failed to broadcast to a client (others still notified)', {
+          userId: client.userId,
+          canvasId: client.canvasId,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }
     }
   }
 }

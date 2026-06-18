@@ -82,7 +82,8 @@ export const canvases = sqliteTable('canvases', {
   name: text('name').notNull(),
   projectId: integer('project_id').notNull().references(() => projects.id),
   folderId: integer('folder_id').references(() => folders.id),
-  yjsData: text('yjs_data'), // Canvas data as JSON base64 (legacy field name)
+  yjsData: text('yjs_data'), // Legacy: Canvas data as JSON base64 (pre-Yjs snapshot, kept for rollback)
+  yjsUpdate: text('yjs_update'), // Yjs binary state update, base64 encoded (authoritative since Yjs migration)
   previewText: text('preview_text'),
   thumbnail: text('thumbnail'),
   sortOrder: integer('sort_order').notNull().default(0),
