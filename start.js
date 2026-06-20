@@ -283,54 +283,33 @@ async function setupEnvironmentFiles() {
 async function initializeDatabase() {
   logSection('Module 2: Initialize Database');
 
+  // The backend itself (connection.ts + init.ts) resolves DB_FILE, creates the
+  // parent directory, and runs migrations on startup. This module only ensures
+  // the target directory exists ahead of time so volume mounts and permissions
+  // are handled gracefully before the server starts.
   const backendDir = path.join(__dirname, 'backend');
-  const dataDir = path.join(backendDir, 'data');
+  const dbFile = process.env.DB_FILE
+    ? path.resolve(process.env.DB_FILE)
+    : path.join(backendDir, 'data', 'mindmap.db');
+  const dataDir = path.dirname(dbFile);
 
   ensureDirectoryExists(dataDir);
 
-  const dbFile = path.join(dataDir, 'mindmap.db');
   const dbExists = fs.existsSync(dbFile);
 
   if (dbExists) {
     logStep('SKIP', 'Database file already exists - skipping initialization');
-
-    if (isProduction() || isDockerEnvironment()) {
-      logStep('INFO', 'Production/Docker mode - database will be initialized by backend server');
-    } else {
-      logStep('INFO', 'Development mode - database initialization skipped');
-    }
-
-    return true;
+  } else {
+    logStep('INFO', 'Database file will be created by the backend server on startup');
   }
 
-  logStep('INIT', 'Initializing new database...');
-
-  try {
-    const dataDir = path.join(backendDir, 'data');
-    const dbFile = path.join(dataDir, 'mindmap.db');
-
-    ensureDirectoryExists(dataDir);
-
-    if (!fs.existsSync(dbFile)) {
-      logStep('CREATE', 'Creating new database file...');
-
-      const { default: initSqlJs } = await import('sql.js');
-      const SQL = await initSqlJs();
-      const db = new SQL.Database();
-      const data = db.export();
-      const buffer = Buffer.from(data);
-      fs.writeFileSync(dbFile, buffer);
-      db.close();
-
-      logSuccess('Database file created');
-    }
-
-    logSuccess('Database module completed');
-    return false;
-  } catch (error) {
-    logError(`Failed to initialize database: ${error.message}`);
-    throw error;
+  if (isProduction() || isDockerEnvironment()) {
+    logStep('INFO', 'Production/Docker mode - database will be initialized by backend server');
+  } else {
+    logStep('INFO', 'Development mode - database initialization will be handled by backend server');
   }
+
+  return dbExists;
 }
 
 async function startBackend() {

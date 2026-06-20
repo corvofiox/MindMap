@@ -1,22 +1,32 @@
-import initSqlJs from 'sql.js'
-import * as fs from 'fs'
+import Database from 'better-sqlite3'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import { log, logError } from './src/utils/logger.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
-const dbPath = path.join(__dirname, 'data', 'mindmap.db')
+const dbPath = process.env.DB_FILE
+  ? path.resolve(process.env.DB_FILE)
+  : path.join(__dirname, 'data', 'mindmap.db')
 
-async function checkTables() {
-  const SQL = await initSqlJs()
-  const dbFile = fs.readFileSync(dbPath)
-  const db = new SQL.Database(new Uint8Array(dbFile))
-  
-  const result = db.exec("SELECT name FROM sqlite_master WHERE type='table'")
-  console.log('Tables:', result[0]?.values)
-  
-  db.close()
+function checkTables() {
+  log('Checking database tables', { path: dbPath })
+
+  try {
+    const db = new Database(dbPath)
+
+    const rows = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+      .all() as Array<{ name: string }>
+    log('Tables:', rows.map((row) => row.name))
+
+    db.close()
+    log('Table check completed')
+  } catch (error) {
+    logError('Failed to check database tables', error)
+    process.exit(1)
+  }
 }
 
 checkTables()

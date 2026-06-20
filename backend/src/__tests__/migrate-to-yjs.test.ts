@@ -53,7 +53,7 @@ function mockSelectDb(rows: any[]) {
       })),
     })),
   }
-  mockGetDb.mockResolvedValue(mockDb)
+  mockGetDb.mockReturnValue(mockDb)
   return mockDb
 }
 
@@ -71,7 +71,7 @@ function mockSelectAllDb(rows: any[]) {
       })),
     })),
   }
-  mockGetDb.mockResolvedValue(mockDb)
+  mockGetDb.mockReturnValue(mockDb)
   return mockDb
 }
 
@@ -219,7 +219,7 @@ describe('migrateCanvasesToYjs', () => {
       })),
       update: vi.fn(),
     }
-    mockGetDb.mockResolvedValue(errorDb)
+    mockGetDb.mockReturnValue(errorDb)
     vi.mocked(logError).mockClear()
     vi.mocked(log).mockClear()
 

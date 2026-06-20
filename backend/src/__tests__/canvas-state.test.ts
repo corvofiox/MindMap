@@ -27,7 +27,6 @@ vi.mock('../database/connection', () => ({
       set: vi.fn(() => ({ where: vi.fn(async () => undefined) })),
     })),
   },
-  scheduleSave: vi.fn(),
 }))
 
 vi.mock('drizzle-orm', () => ({

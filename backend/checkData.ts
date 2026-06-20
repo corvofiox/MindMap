@@ -1,35 +1,43 @@
-import initSqlJs from 'sql.js'
-import * as fs from 'fs'
+import Database from 'better-sqlite3'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import { log, logError } from './src/utils/logger.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
-const dbPath = path.join(__dirname, 'data', 'mindmap.db')
+const dbPath = process.env.DB_FILE
+  ? path.resolve(process.env.DB_FILE)
+  : path.join(__dirname, 'data', 'mindmap.db')
 
-async function checkData() {
-  const SQL = await initSqlJs()
-  const dbFile = fs.readFileSync(dbPath)
-  const db = new SQL.Database(new Uint8Array(dbFile))
+function checkData() {
+  log('Checking database data', { path: dbPath })
 
-  console.log('=== project_members ===')
-  const members = db.exec('SELECT * FROM project_members')
-  console.log(members[0]?.values || 'No data')
+  try {
+    const db = new Database(dbPath)
 
-  console.log('\n=== project_invitations ===')
-  const invitations = db.exec('SELECT * FROM project_invitations')
-  console.log(invitations[0]?.values || 'No data')
+    log('=== project_members ===')
+    const members = db.prepare('SELECT * FROM project_members').all()
+    log(members.length ? members : 'No data')
 
-  console.log('\n=== users ===')
-  const users = db.exec('SELECT id, email, nickname FROM users')
-  console.log(users[0]?.values || 'No data')
+    log('=== project_invitations ===')
+    const invitations = db.prepare('SELECT * FROM project_invitations').all()
+    log(invitations.length ? invitations : 'No data')
 
-  console.log('\n=== projects ===')
-  const projects = db.exec('SELECT id, name, owner_id FROM projects')
-  console.log(projects[0]?.values || 'No data')
+    log('=== users ===')
+    const users = db.prepare('SELECT id, email, nickname FROM users').all()
+    log(users.length ? users : 'No data')
 
-  db.close()
+    log('=== projects ===')
+    const projects = db.prepare('SELECT id, name, owner_id FROM projects').all()
+    log(projects.length ? projects : 'No data')
+
+    db.close()
+    log('Data check completed')
+  } catch (error) {
+    logError('Failed to check database data', error)
+    process.exit(1)
+  }
 }
 
 checkData()

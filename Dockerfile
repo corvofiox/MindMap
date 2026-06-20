@@ -8,7 +8,6 @@ FROM node:${NODE_VERSION} AS builder
 
 WORKDIR /app
 
-ENV NODE_ENV=production
 ENV DOCKER_CONTAINER=true
 
 # 安装构建依赖
@@ -24,13 +23,14 @@ COPY package.json package-lock.json* start.js ./
 
 # 复制源代码
 COPY shared ./shared
-COPY shared ./backend/shared
 COPY backend ./backend
 COPY frontend ./frontend
 
-# 安装所有依赖（包括开发依赖）
-RUN npm install --include=dev && \
-    npm install --workspaces --include=dev
+# 安装所有依赖（包括开发依赖）以便执行 tsc/vite build
+RUN npm install --workspaces --include=dev
+
+# 构建阶段使用生产环境变量
+ENV NODE_ENV=production
 
 # 注意：环境文件在容器启动时动态初始化，而不是在构建时
 # 这样每个容器实例可以有不同的 JWT_SECRET（通过环境变量注入）
@@ -41,8 +41,8 @@ RUN cd shared && npm run build && \
     cd ../backend && npm run build && \
     cd ../frontend && npm run build
 
-# 清理开发依赖，仅保留生产依赖
-RUN npm install --workspaces --omit=dev
+# 清理开发依赖，仅保留生产依赖（prune 不会触发 native 模块重新编译）
+RUN npm prune --workspaces --omit=dev
 
 # 生产镜像
 FROM node:${NODE_VERSION}
@@ -65,28 +65,25 @@ COPY --from=builder /app/frontend/package.json ./frontend/package.json
 COPY --from=builder /app/shared/package.json ./shared/package.json
 COPY --from=builder /app/backend/node_modules ./backend/node_modules
 COPY --from=builder /app/frontend/node_modules ./frontend/node_modules
-# 复制构建产物
+# 复制构建产物（shared 只复制 package.json + dist，减小镜像体积）
 COPY --from=builder /app/backend/dist ./backend/dist
 COPY --from=builder /app/frontend/dist ./frontend/dist
-COPY --from=builder /app/shared ./shared
+COPY --from=builder /app/shared/package.json ./shared/package.json
+COPY --from=builder /app/shared/dist ./shared/dist
 
 # 复制 .env.example 文件（不复制 .env，环境文件在容器启动时动态创建）
 COPY --from=builder /app/backend/.env.example ./backend/.env.example
 COPY --from=builder /app/frontend/.env.example ./frontend/.env.example
 
-# Shared 模块已通过 npm 依赖方式处理，无需手动复制
-
 # 注意：不要复制 .env 文件，环境文件在容器启动时动态创建
 # 敏感信息（如 JWT_SECRET）应该通过环境变量注入
-
-
 
 EXPOSE 9000
 
 # 设置默认环境变量（可以被 docker run 覆盖）
 ENV PORT=9000
-ENV DB_FILE=data/mindmap.db
-ENV LOG_FILE=data/app.log
+ENV DB_FILE=backend/data/mindmap.db
+ENV LOG_FILE=backend/data/app.log
 ENV ALLOWED_ORIGINS=*
 
 # 健康检查

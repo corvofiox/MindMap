@@ -1,4 +1,6 @@
 {
+  "_note": "本文档审查于项目仍使用 sql.js 内存数据库时期。当前项目已迁移到 better-sqlite3 文件数据库，scheduleSave() 等机制已移除，文中相关描述仅作历史参考。",
+
   "审查概要": {
     "项目": "MindMap Yjs 迁移",
     "分支": "yjs",

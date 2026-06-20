@@ -1,5 +1,5 @@
 ﻿import { Router } from 'express'
-import { db, scheduleSave } from '../database/connection.js'
+import { db } from '../database/connection.js'
 import { canvases, folders, projects, projectMembers } from '../database/schema.js'
 import { eq, inArray, and, lte } from 'drizzle-orm'
 import { authenticate, type AuthRequest } from '../middleware/auth.middleware.js'
@@ -183,8 +183,6 @@ canvasRouter.post('/:projectId', authenticate, asyncHandler(async (req: AuthRequ
     .set({ updatedAt: Math.floor(Date.now() / 1000) })
     .where(eq(projects.id, projectId))
 
-  scheduleSave()
-
   const transformedCanvas = transformResponse(newCanvas, ['createdAt', 'updatedAt'])
 
   res.json({
@@ -317,8 +315,6 @@ canvasRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, res
             .where(eq(projects.id, canvasProjectId))
         }
 
-        scheduleSave()
-
         const transformedCanvas = transformResponse(updatedCanvas, ['createdAt', 'updatedAt'])
         res.json({ success: true, data: transformedCanvas })
       })
@@ -389,8 +385,6 @@ canvasRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, res
         .where(eq(projects.id, canvasProjectId))
     }
 
-    scheduleSave()
-
     log('PUT canvas - Success', { canvasId })
 
     const transformedCanvas = transformResponse(updatedCanvas, ['createdAt', 'updatedAt'])
@@ -457,8 +451,6 @@ canvasRouter.delete('/:id', authenticate, asyncHandler(async (req: AuthRequest, 
         .set({ updatedAt: Math.floor(Date.now() / 1000) })
         .where(eq(projects.id, canvasProjectId))
     }
-
-    scheduleSave()
 
     log('DELETE canvas - Success', { canvasId })
     res.json({
@@ -557,7 +549,6 @@ canvasRouter.post('/:id/data', authenticate, asyncHandler(async (req: AuthReques
       }
     }
 
-    scheduleSave()
     log('POST canvas data - Saved (Yjs merge)', { canvasId })
 
     res.json({
@@ -636,8 +627,6 @@ canvasRouter.post(
 
     const [newFolder] = result || []
 
-    scheduleSave()
-
     res.json({
       success: true,
       data: newFolder,
@@ -698,8 +687,6 @@ canvasRouter.put(
         .set({ updatedAt: Math.floor(Date.now() / 1000) })
         .where(eq(projects.id, folderProjectId))
     }
-
-    scheduleSave()
 
     res.json({
       success: true,

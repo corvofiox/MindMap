@@ -1,0 +1,15 @@
+# Enforce LF line endings to match Prettier config (endOfLine: lf)
+* text=auto eol=lf
+
+# Binary files should not be modified
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary

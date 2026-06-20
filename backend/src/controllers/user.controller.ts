@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import bcrypt from 'bcrypt'
-import { db, scheduleSave } from '../database/connection.js'
+import { db } from '../database/connection.js'
 import { users, projects, projectMembers, groupMembers, nodeCards, files, canvases, folders, canvasRecycleBin, nodePoolFolders, settings } from '../database/schema.js'
 import { eq, and, or, like } from 'drizzle-orm'
 import { authenticate, type AuthRequest } from '../middleware/auth.middleware.js'
@@ -126,8 +126,6 @@ userRouter.put('/password', authenticate, asyncHandler(async (req: AuthRequest, 
       updatedAt: Math.floor(Date.now() / 1000),
     })
     .where(eq(users.id, req.user!.id))
-
-  scheduleSave()
 
   res.json({
     success: true,
@@ -273,8 +271,6 @@ userRouter.delete('/account', authenticate, asyncHandler(async (req: AuthRequest
     .delete(users)
     .where(eq(users.id, userId))
 
-  scheduleSave()
-
   res.json({
     success: true,
     data: { message: 'Account deleted successfully' },
@@ -403,8 +399,6 @@ userRouter.put('/settings/node-defaults', authenticate, asyncHandler(async (req:
     })
   }
 
-  scheduleSave()
-
   res.json({
     success: true,
     data: { textNode, imageNode },
@@ -505,8 +499,6 @@ userRouter.post('/node-pool', authenticate, asyncHandler(async (req: AuthRequest
     })
     .returning()
 
-  scheduleSave()
-
   const transformedNode = transformResponse(newNode, ['createdAt'])
 
   res.json({
@@ -559,8 +551,6 @@ userRouter.put('/node-pool/:id', authenticate, asyncHandler(async (req: AuthRequ
     .where(eq(nodeCards.id, nodeId))
     .returning()
 
-  scheduleSave()
-
   const transformedNode = transformResponse(updatedNode, ['createdAt'])
 
   res.json({
@@ -599,8 +589,6 @@ userRouter.delete('/node-pool/:id', authenticate, asyncHandler(async (req: AuthR
   }
 
   await db.delete(nodeCards).where(eq(nodeCards.id, nodeId))
-
-  scheduleSave()
 
   res.json({
     success: true,
@@ -647,8 +635,6 @@ userRouter.post('/node-pool/:id/increment-use', authenticate, asyncHandler(async
     .where(eq(nodeCards.id, nodeId))
     .returning()
 
-  scheduleSave()
-
   const transformedNode = transformResponse(updatedNode, ['createdAt'])
 
   res.json({
@@ -693,8 +679,6 @@ userRouter.post('/node-pool-folders', authenticate, asyncHandler(async (req: Aut
     .returning()
 
   const [newFolder] = result || []
-
-  scheduleSave()
 
   const transformedFolder = transformResponse(newFolder, ['createdAt'])
 
@@ -768,8 +752,6 @@ userRouter.put('/node-pool-folders/:id', authenticate, asyncHandler(async (req: 
 
   const [updatedFolder] = result || []
 
-  scheduleSave()
-
   const transformedFolder = transformResponse(updatedFolder, ['createdAt'])
 
   res.json({
@@ -816,8 +798,6 @@ userRouter.delete('/node-pool-folders/:id', authenticate, asyncHandler(async (re
 
     await tx.delete(nodePoolFolders).where(eq(nodePoolFolders.id, folderId))
   })
-
-  scheduleSave()
 
   res.json({
     success: true,

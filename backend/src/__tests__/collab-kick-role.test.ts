@@ -17,7 +17,6 @@ vi.mock('../database/connection', () => ({
     insert: vi.fn().mockReturnValue({ values: vi.fn().mockReturnValue({ run: vi.fn() }) }),
     update: vi.fn().mockReturnValue({ set: vi.fn().mockReturnValue({ where: vi.fn().mockReturnValue({ run: vi.fn() }) }) }),
   },
-  scheduleSave: vi.fn(),
 }))
 
 vi.mock('drizzle-orm', () => ({

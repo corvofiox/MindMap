@@ -15,7 +15,7 @@ import { eq, isNull } from 'drizzle-orm'
 import * as Y from 'yjs'
 import { pathToFileURL } from 'url'
 import { canvases } from './schema.js'
-import { getDb as getDbAsync } from './connection.js'
+import { getDb } from './connection.js'
 import { jsonSnapshotToDoc, encodeDocToBase64 } from '../websocket/yjs-schema.js'
 import { log, logError } from '../utils/logger.js'
 
@@ -42,11 +42,11 @@ export function decodeLegacySnapshot(yjsData: string | null | undefined): Snapsh
 }
 
 /**
- * Run the migration against the live drizzle/sql.js database.
+ * Run the migration against the live drizzle/better-sqlite3 database.
  * Returns the number of canvases migrated.
  */
 export async function migrateCanvasesToYjs(): Promise<number> {
-  const db = await getDbAsync()
+  const db = getDb()
   let migrated = 0
   let skipped = 0
   let empty = 0
@@ -102,7 +102,7 @@ export async function migrateCanvasesToYjs(): Promise<number> {
  * the new column. Use it as a safety net when reverting to the pre-Yjs code.
  */
 export async function backfillLegacySnapshotFromYjs(): Promise<number> {
-  const db = await getDbAsync()
+  const db = getDb()
   let backfilled = 0
 
   const rows = await db
@@ -141,6 +141,5 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   await initializeDb()
   const count = await migrateCanvasesToYjs()
   log('Standalone Yjs migration finished', { migrated: count })
-  // Give sql.js a chance to flush, then exit.
-  setTimeout(() => process.exit(0), 500)
+  process.exit(0)
 }

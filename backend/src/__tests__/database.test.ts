@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import initSqlJs from 'sql.js'
-import { drizzle } from 'drizzle-orm/sql-js'
+import Database from 'better-sqlite3'
+import { drizzle } from 'drizzle-orm/better-sqlite3'
 import { eq, and, or, like } from 'drizzle-orm'
 import { sql } from 'drizzle-orm'
 import { users, groups, projects, canvases, folders, nodeCards } from '../database/schema.js'
@@ -12,14 +12,13 @@ describe('Database Integration Tests', () => {
   let drizzleInstance: any
 
   beforeEach(async () => {
-    const SQL = await initSqlJs()
-    db = new SQL.Database()
+    db = new Database(':memory:')
 
     // Enable foreign key constraints
-    db.run('PRAGMA foreign_keys = ON')
+    db.pragma('foreign_keys = ON')
 
     // Create tables
-    db.run(`
+    db.exec(`
       CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         email TEXT NOT NULL UNIQUE,
@@ -31,7 +30,7 @@ describe('Database Integration Tests', () => {
       )
     `)
 
-    db.run(`
+    db.exec(`
       CREATE TABLE IF NOT EXISTS groups (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
@@ -42,7 +41,7 @@ describe('Database Integration Tests', () => {
       )
     `)
 
-    db.run(`
+    db.exec(`
       CREATE TABLE IF NOT EXISTS projects (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
@@ -58,7 +57,7 @@ describe('Database Integration Tests', () => {
       )
     `)
 
-    db.run(`
+    db.exec(`
       CREATE TABLE IF NOT EXISTS canvases (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
@@ -75,7 +74,7 @@ describe('Database Integration Tests', () => {
       )
     `)
 
-    db.run(`
+    db.exec(`
       CREATE TABLE IF NOT EXISTS folders (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
@@ -86,19 +85,22 @@ describe('Database Integration Tests', () => {
       )
     `)
 
-    db.run(`
+    db.exec(`
       CREATE TABLE IF NOT EXISTS node_cards (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        project_id INTEGER NOT NULL,
+        user_id INTEGER NOT NULL,
         name TEXT NOT NULL,
         content TEXT NOT NULL,
-        type TEXT DEFAULT 'text',
-        color TEXT DEFAULT '#ffffff',
+        type TEXT NOT NULL DEFAULT 'text',
+        color TEXT NOT NULL DEFAULT '#ffffff',
         tags TEXT,
-        use_count INTEGER DEFAULT 0,
+        use_count INTEGER NOT NULL DEFAULT 0,
         created_by INTEGER NOT NULL,
-        created_at INTEGER DEFAULT (strftime('%s', 'now')),
-        updated_at INTEGER DEFAULT (strftime('%s', 'now'))
+        folder_id INTEGER,
+        description TEXT,
+        thumbnail TEXT,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER DEFAULT (strftime('%s', 'now'))
       )
     `)
 

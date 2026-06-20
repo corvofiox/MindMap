@@ -18,7 +18,7 @@
  *     doc after the room is torn down.
  */
 import * as Y from 'yjs'
-import { db, scheduleSave } from '../database/connection.js'
+import { db } from '../database/connection.js'
 import { canvases } from '../database/schema.js'
 import { eq } from 'drizzle-orm'
 import { log, logError } from '../utils/logger.js'
@@ -232,7 +232,6 @@ export async function loadCanvasStateFromDb(canvasId: number): Promise<YjsCanvas
             .update(canvases)
             .set({ yjsUpdate: converted, updatedAt: Math.floor(Date.now() / 1000) })
             .where(eq(canvases.id, canvasId))
-          scheduleSave()
         } catch (err) {
           logError('Failed to convert legacy yjs_data to Yjs doc', {
             canvasId,
@@ -335,7 +334,6 @@ export async function persistCanvasState(canvasId: number): Promise<boolean> {
             }
           }
 
-          scheduleSave()
           log('Canvas doc persisted', { canvasId, updateCount: snapshotCount, attempt })
           return true
         } catch (error) {

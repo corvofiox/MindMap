@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import { db, scheduleSave } from '../database/connection.js'
+import { db } from '../database/connection.js'
 import { projects, projectMembers } from '../database/schema.js'
 import { eq, and } from 'drizzle-orm'
 import { authenticate, type AuthRequest } from '../middleware/auth.middleware.js'
@@ -121,8 +121,6 @@ projectRouter.post('/', authenticate, asyncHandler(async (req: AuthRequest, res)
     })
     .returning()
 
-  scheduleSave()
-
   const transformedProject = transformResponse(newProject, ['createdAt', 'updatedAt'])
     ; (transformedProject as any).memberRole = 'owner'
 
@@ -182,8 +180,6 @@ projectRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, re
     .where(eq(projects.id, projectId))
     .returning()
 
-  scheduleSave()
-
   const transformedProject = transformResponse(updatedProject, ['createdAt', 'updatedAt'])
   // 添加 memberRole 字段，表示所有者是所有者
   ;(transformedProject as any).memberRole = 'owner'
@@ -226,8 +222,6 @@ projectRouter.delete('/:id', authenticate, asyncHandler(async (req: AuthRequest,
   }
 
   await db.delete(projects).where(eq(projects.id, projectId))
-
-  scheduleSave()
 
   res.json({
     success: true,
@@ -272,8 +266,6 @@ projectRouter.post(
         role: role || 'viewer',
       })
       .returning()
-
-    scheduleSave()
 
     res.json({
       success: true,
@@ -324,8 +316,6 @@ projectRouter.delete(
           eq(projectMembers.userId, userId)
         )
       )
-
-    scheduleSave()
 
     res.json({
       success: true,

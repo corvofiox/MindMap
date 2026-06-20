@@ -3,7 +3,14 @@
 .trae/
 .vscode/
 .idea/
+# Ignore generated markdown, but track key project documentation
 *.md
+!README.md
+!AGENTS.md
+!backend/src/AGENTS.md
+!backend/src/database/AGENTS.md
+!frontend/src/AGENTS.md
+
 *.swp
 *.swo
 *~

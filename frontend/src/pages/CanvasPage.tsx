@@ -1137,10 +1137,9 @@ export function CanvasPage() {
         }
 
         // During the async DB load above, WebSocket sync may have completed
-        // and set fresh data directly from server in-memory state. The server's
-        // in-memory state includes changes that haven't yet been flushed to DB
-        // (debounced persist with 200ms delay). Loading stale DB data after sync
-        // would:
+        // and already populated the canvas store with fresh data. The API
+        // response below was generated before those synced changes were committed
+        // to the database, so loading it after sync would:
         // 1. Overwrite fresh canvas data with stale DB data
         // 2. Reset serverVersion to a stale value, causing every subsequent
         //    operation to be NAKed with version-conflict → full sync cycle on

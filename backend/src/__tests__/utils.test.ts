@@ -6,15 +6,17 @@ describe('Database Utilities', () => {
     it('should export database connection functions', () => {
       const exports = {
         db: {},
-        scheduleSave: () => {},
-        init: () => {},
-        check: () => {},
+        getSqlite: () => {},
+        getDb: () => {},
+        initializeDb: () => {},
+        registerShutdownHandlers: () => {},
       }
 
       expect(exports.db).toBeDefined()
-      expect(typeof exports.scheduleSave).toBe('function')
-      expect(typeof exports.init).toBe('function')
-      expect(typeof exports.check).toBe('function')
+      expect(typeof exports.getSqlite).toBe('function')
+      expect(typeof exports.getDb).toBe('function')
+      expect(typeof exports.initializeDb).toBe('function')
+      expect(typeof exports.registerShutdownHandlers).toBe('function')
     })
 
     it('should have schema exports', () => {

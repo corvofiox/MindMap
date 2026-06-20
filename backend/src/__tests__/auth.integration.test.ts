@@ -2,9 +2,9 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import supertest from 'supertest'
 import express from 'express'
 import cookieParser from 'cookie-parser'
-import initSqlJs from 'sql.js'
-import { drizzle } from 'drizzle-orm/sql-js'
-import type { SqlJsDatabase } from 'drizzle-orm/sql-js'
+import Database from 'better-sqlite3'
+import { drizzle } from 'drizzle-orm/better-sqlite3'
+import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import * as schema from '../database/schema.js'
 import { runMigrations } from '../database/migration.js'
 
@@ -17,7 +17,7 @@ process.env.DB_FILE = ':memory:'
 process.env.ALLOWED_ORIGINS = 'http://localhost:5173'
 
 // Store for the test database instance
-let _testDb: SqlJsDatabase<typeof schema> | null = null
+let _testDb: BetterSQLite3Database<typeof schema> | null = null
 
 // We need to mock before any imports, but also need the test to set the db.
 // The approach: mock connection.js to export a plain getter/setter.
@@ -28,14 +28,14 @@ let _testDb: SqlJsDatabase<typeof schema> | null = null
 vi.mock('../database/connection.js', () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const mod: Record<string, any> = {
-    scheduleSave: vi.fn(),
     getSqlite: vi.fn(),
     getDb: vi.fn(),
     initializeDb: vi.fn(),
+    registerShutdownHandlers: vi.fn(),
   }
   Object.defineProperty(mod, 'db', {
     get() { return _testDb },
-    set(val: SqlJsDatabase<typeof schema>) { _testDb = val },
+    set(val: BetterSQLite3Database<typeof schema>) { _testDb = val },
     enumerable: true,
     configurable: true,
   })
@@ -54,12 +54,11 @@ import { authRouter } from '../controllers/auth.controller.js'
 describe('Auth Controller Integration', () => {
   let app: express.Express
 
-  beforeEach(async () => {
+  beforeEach(() => {
     // Create a fresh in-memory database for each test
-    const SQL = await initSqlJs()
-    const rawDb = new SQL.Database()
-    rawDb.run('PRAGMA foreign_keys = ON')
-    await runMigrations(rawDb)
+    const rawDb = new Database(':memory:')
+    rawDb.pragma('foreign_keys = ON')
+    runMigrations(rawDb)
     _testDb = drizzle(rawDb, { schema })
 
     // Set up Express app

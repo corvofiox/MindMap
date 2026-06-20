@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import { db, scheduleSave } from '../database/connection.js'
+import { db } from '../database/connection.js'
 import { projects, projectMembers, projectInvitations, users, canvases } from '../database/schema.js'
 import { eq, and, or } from 'drizzle-orm'
 import { authenticate, type AuthRequest } from '../middleware/auth.middleware.js'
@@ -224,8 +224,6 @@ collaborationRouter.post('/projects/:projectId/invite', authenticate, asyncHandl
     })
     .returning()
 
-  scheduleSave()
-
   const invitee = await db.query.users.findFirst({
     where: eq(users.id, userId),
   })
@@ -333,8 +331,6 @@ collaborationRouter.post('/invitations/:id/accept', authenticate, asyncHandler(a
     })
   })
 
-  scheduleSave()
-
   res.json({
     success: true,
     data: { message: '已接受邀请' },
@@ -373,8 +369,6 @@ collaborationRouter.post('/invitations/:id/reject', authenticate, asyncHandler(a
       respondedAt: Math.floor(Date.now() / 1000),
     })
     .where(eq(projectInvitations.id, invitationId))
-
-  scheduleSave()
 
   res.json({
     success: true,
@@ -446,8 +440,6 @@ collaborationRouter.delete('/projects/:projectId/members/:userId', authenticate,
     })
   }
 
-  scheduleSave()
-
   res.json({
     success: true,
     data: { message: '成员已移除' },
@@ -507,8 +499,6 @@ collaborationRouter.delete('/invitations/:id', authenticate, asyncHandler(async 
   await db
     .delete(projectInvitations)
     .where(eq(projectInvitations.id, invitationId))
-
-  scheduleSave()
 
   res.json({
     success: true,
@@ -589,8 +579,6 @@ collaborationRouter.put('/projects/:projectId/members/:userId/role', authenticat
       error: error instanceof Error ? error.message : String(error),
     })
   }
-
-  scheduleSave()
 
   res.json({
     success: true,

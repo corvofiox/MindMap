@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import bcrypt from 'bcrypt'
 import jwt from 'jsonwebtoken'
-import { db, scheduleSave } from '../database/connection.js'
+import { db } from '../database/connection.js'
 import { users } from '../database/schema.js'
 import { eq } from 'drizzle-orm'
 import { asyncHandler } from '../middleware/error.middleware.js'
@@ -60,9 +60,6 @@ authRouter.post('/register', authLimiter(), asyncHandler(async (req, res) => {
       expiresIn: env.JWT_EXPIRES_IN || '7d',
     } as any
   )
-
-  // Save database immediately
-  scheduleSave()
 
   res.json({
     success: true,
