@@ -1,4 +1,4 @@
-﻿import { Router } from 'express'
+import { Router } from 'express'
 import { db } from '../database/connection.js'
 import { canvases, folders, projects, projectMembers } from '../database/schema.js'
 import { eq, inArray, and, lte } from 'drizzle-orm'
@@ -322,7 +322,7 @@ canvasRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, res
 
     log('PUT canvas - About to update', { canvasId, updateData: { name, yjsData: typeof yjsData, previewText, thumbnail, folderId, sortOrder } })
 
-    const updateData: any = {
+    const updateData: Record<string, unknown> = {
       updatedAt: Math.floor(Date.now() / 1000),
     }
 

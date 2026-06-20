@@ -165,13 +165,11 @@ async function setupEnvironmentFiles() {
   let envCreated = false;
 
   // Backend环境文件配置
-  // 在Docker/生产环境中，backend从 /app/backend/dist/backend/.env 加载
-  // 在开发环境中，从 /app/backend/.env 加载
-  const backendDistPath = path.join(__dirname, 'backend', 'dist', 'backend', '.env');
-  const backendDevPath = path.join(__dirname, 'backend', '.env');
+  // 后端 index.ts 通过 dotenv 从 <cwd>/backend/.env 加载（编译后 __dirname 为 backend/dist，向上取一级）
+  // 因此无论 Docker/生产还是开发，目标路径都统一为 backend/.env
+  const backendTargetPath = path.join(__dirname, 'backend', '.env');
   const backendExamplePath = path.join(__dirname, 'backend', '.env.example');
   const backendDevExamplePath = path.join(__dirname, 'backend', '.env.development');
-  const backendTargetPath = (isDocker || isProd) ? backendDistPath : backendDevPath;
 
   // 根据环境选择模板文件
   const backendTemplatePath = (isDocker || isProd) ? backendExamplePath : 
@@ -245,14 +243,6 @@ async function setupEnvironmentFiles() {
       logSuccess(`Generated and set CSRF_SECRET for Backend`);
     }
 
-    // 在Docker/生产环境中，同时创建 /app/backend/.env 作为备份
-    if ((isDocker || isProd) && backendTargetPath !== backendDevPath) {
-      if (!fs.existsSync(backendDevPath)) {
-        ensureDirectoryExists(path.dirname(backendDevPath));
-        copyEnvFile(backendTargetPath, backendDevPath);
-        logStep('CREATE', `Also created backup .env at ${backendDevPath}`);
-      }
-    }
   } else {
     logWarning(`Backend .env.example not found: ${backendExamplePath}`);
   }
@@ -312,6 +302,79 @@ async function initializeDatabase() {
   return dbExists;
 }
 
+function getEnvValue(envPath, key) {
+  if (!fs.existsSync(envPath)) return undefined;
+  const content = fs.readFileSync(envPath, 'utf-8');
+  const regex = new RegExp(`^${key}=(.*)$`, 'm');
+  const match = content.match(regex);
+  return match ? match[1].trim() : undefined;
+}
+
+async function waitForProcessReady(childProcess, healthUrl, name, options = {}) {
+  const timeoutMs = options.timeoutMs || 30000;
+  const intervalMs = options.intervalMs || 500;
+
+  return new Promise((resolve, reject) => {
+    let timeoutId;
+    let intervalId;
+    let resolved = false;
+
+    const cleanup = () => {
+      clearTimeout(timeoutId);
+      clearInterval(intervalId);
+    };
+
+    const markResolved = () => {
+      if (!resolved) {
+        resolved = true;
+        cleanup();
+        resolve();
+      }
+    };
+
+    timeoutId = setTimeout(() => {
+      if (!resolved) {
+        logWarning(`${name} health check timed out after ${timeoutMs}ms, proceeding anyway`);
+        markResolved();
+      }
+    }, timeoutMs);
+
+    childProcess.once('error', (error) => {
+      if (!resolved) {
+        cleanup();
+        reject(error);
+      }
+    });
+
+    childProcess.once('exit', (code) => {
+      if (!resolved && code !== null && code !== 0) {
+        cleanup();
+        reject(new Error(`${name} process exited with code ${code}`));
+      }
+    });
+
+    const checkReady = async () => {
+      const controller = new AbortController();
+      const abortTimeoutId = setTimeout(() => controller.abort(), intervalMs);
+      try {
+        const response = await fetch(healthUrl, { signal: controller.signal });
+        clearTimeout(abortTimeoutId);
+        // 后端 /health 返回 200；前端 dev server 任意非 5xx 响应均视为已就绪
+        if (response.ok || response.status < 500) {
+          markResolved();
+        }
+      } catch {
+        clearTimeout(abortTimeoutId);
+        // Not ready yet, continue polling
+      }
+    };
+
+    intervalId = setInterval(checkReady, intervalMs);
+    // Initial check after a short delay to let the server start binding
+    setTimeout(checkReady, 200);
+  });
+}
+
 async function startBackend() {
   logSection('Starting Backend');
 
@@ -319,8 +382,9 @@ async function startBackend() {
 
   try {
     let command, args;
+    const isProdOrDocker = isProduction() || isDockerEnvironment();
 
-    if (isProduction() || isDockerEnvironment()) {
+    if (isProdOrDocker) {
       logStep('START', 'Starting backend in production mode...');
 
       const possiblePaths = [
@@ -356,7 +420,7 @@ async function startBackend() {
       shell: isWindows(),
       env: {
         ...process.env,
-        NODE_ENV: isProduction() || isDockerEnvironment() ? 'production' : 'development',
+        NODE_ENV: isProdOrDocker ? 'production' : 'development',
       },
     });
 
@@ -365,23 +429,8 @@ async function startBackend() {
       throw error;
     });
 
-    await new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        resolve();
-      }, 5000);
-
-      backendProcess.once('error', (error) => {
-        clearTimeout(timeout);
-        reject(error);
-      });
-
-      backendProcess.once('exit', (code, signal) => {
-        if (code !== null && code !== 0) {
-          clearTimeout(timeout);
-          reject(new Error(`Backend process exited with code ${code}`));
-        }
-      });
-    });
+    const backendPort = process.env.PORT || getEnvValue(path.join(backendDir, '.env'), 'PORT') || (isProdOrDocker ? '9000' : '3000');
+    await waitForProcessReady(backendProcess, `http://localhost:${backendPort}/health`, 'Backend');
 
     logSuccess(`Backend started (PID: ${backendProcess.pid})`);
     return backendProcess;
@@ -416,23 +465,8 @@ async function startFrontend() {
         throw error;
       });
 
-      await new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          resolve();
-        }, 5000);
-
-        frontendProcess.once('error', (error) => {
-          clearTimeout(timeout);
-          reject(error);
-        });
-
-        frontendProcess.once('exit', (code, signal) => {
-          if (code !== null && code !== 0) {
-            clearTimeout(timeout);
-            reject(new Error(`Frontend process exited with code ${code}`));
-          }
-        });
-      });
+      const frontendPort = process.env.FRONTEND_PORT || getEnvValue(path.join(frontendDir, '.env'), 'PORT') || '5173';
+      await waitForProcessReady(frontendProcess, `http://localhost:${frontendPort}/`, 'Frontend');
 
       logSuccess(`Frontend started (PID: ${frontendProcess.pid})`);
       return frontendProcess;

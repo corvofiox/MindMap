@@ -77,4 +77,35 @@ describe('nodeCache — 画布缓存基本契约', () => {
     const loadedOther = loadFromCache(43)
     expect(loadedOther).toBeNull()
   })
+
+  it('超大画布数据超出 localStorage 配额时不保存，避免抛错', () => {
+    // 构造超过 4MB 的 payload（UTF-16 每个字符 2 bytes）
+    const hugeText = 'x'.repeat(3 * 1024 * 1024)
+    const bigNode = { ...mockNode('big'), text: hugeText } as unknown as Node
+    saveToCache(42, { nodes: [bigNode], groups: [], domains: [], connections: [] })
+
+    expect(hasCache(42)).toBe(false)
+    expect(loadFromCache(42)).toBeNull()
+  })
+
+  it('QuotaExceededError 时优雅跳过，不抛错、不破坏已有缓存', () => {
+    // 先写入一个已有缓存
+    saveToCache(1, { nodes: [mockNode('existing')], groups: [], domains: [], connections: [] })
+    expect(hasCache(1)).toBe(true)
+
+    const originalSetItem = localStorage.setItem.bind(localStorage)
+    localStorage.setItem = function () {
+      throw new DOMException('Quota exceeded', 'QuotaExceededError')
+    }
+
+    try {
+      saveToCache(42, { nodes: [mockNode('n1')], groups: [], domains: [], connections: [] })
+    } finally {
+      localStorage.setItem = originalSetItem
+    }
+
+    // 新画布缓存未写入，已有缓存不被破坏
+    expect(hasCache(42)).toBe(false)
+    expect(hasCache(1)).toBe(true)
+  })
 })

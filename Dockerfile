@@ -64,11 +64,10 @@ COPY --from=builder /app/backend/package.json ./backend/package.json
 COPY --from=builder /app/frontend/package.json ./frontend/package.json
 COPY --from=builder /app/shared/package.json ./shared/package.json
 COPY --from=builder /app/backend/node_modules ./backend/node_modules
-COPY --from=builder /app/frontend/node_modules ./frontend/node_modules
+# 前端产物已构建为静态文件并由后端提供，无需保留 frontend/node_modules
 # 复制构建产物（shared 只复制 package.json + dist，减小镜像体积）
 COPY --from=builder /app/backend/dist ./backend/dist
 COPY --from=builder /app/frontend/dist ./frontend/dist
-COPY --from=builder /app/shared/package.json ./shared/package.json
 COPY --from=builder /app/shared/dist ./shared/dist
 
 # 复制 .env.example 文件（不复制 .env，环境文件在容器启动时动态创建）

@@ -403,21 +403,23 @@ async function handleConnection(ws: WebSocketWithUserData, req: any) {
   ws.on('pong', earlyPongHandler)
 
   let earlyClose = false
-  ws.on('close', () => { earlyClose = true })
+  const earlyCloseHandler = () => { earlyClose = true }
+  ws.on('close', earlyCloseHandler)
 
-  ws.on('error', (error) => {
+  const earlyErrorHandler = (error: Error) => {
     logError('WebSocket connection error during setup', {
       error: error instanceof Error ? error.message : String(error),
     })
     earlyClose = true
-  })
+  }
+  ws.on('error', earlyErrorHandler)
 
   // Helper to clean up early listeners when connection is rejected during setup
   const cleanupEarlyListeners = () => {
     ws.off('message', earlyMessageListener)
     ws.off('pong', earlyPongHandler)
-    ws.removeAllListeners('close')
-    ws.removeAllListeners('error')
+    ws.off('close', earlyCloseHandler)
+    ws.off('error', earlyErrorHandler)
   }
 
   try {
@@ -629,13 +631,13 @@ async function handleConnection(ws: WebSocketWithUserData, req: any) {
   })
 
   // Replace early close listener with the real one
-  ws.removeAllListeners('close')
+  ws.off('close', earlyCloseHandler)
   ws.on('close', () => {
     handleClientDisconnect(ws, room!)
   })
 
   // Replace early error listener with the real one
-  ws.removeAllListeners('error')
+  ws.off('error', earlyErrorHandler)
   ws.on('error', (error) => {
     logError('WebSocket connection error', {
       userId: ws.userId,

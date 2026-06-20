@@ -1,12 +1,18 @@
 import { Router } from 'express'
 import { db } from '../database/connection.js'
 import { projects, projectMembers } from '../database/schema.js'
-import { eq, and } from 'drizzle-orm'
+import { eq, and, type InferSelectModel } from 'drizzle-orm'
 import { authenticate, type AuthRequest } from '../middleware/auth.middleware.js'
 import { asyncHandler } from '../middleware/error.middleware.js'
 import { transformResponse, transformResponseArray, getProperty } from '../utils/transformResponse.js'
 
 export const projectRouter = Router()
+
+type Project = InferSelectModel<typeof projects>
+
+interface ProjectResponse extends Project {
+  memberRole: 'owner' | 'editor' | 'viewer'
+}
 
 // Get all projects (owned + collaborated)
 projectRouter.get('/', authenticate, asyncHandler(async (req: AuthRequest, res) => {
@@ -94,8 +100,10 @@ projectRouter.get('/:id', authenticate, asyncHandler(async (req: AuthRequest, re
     })
   }
 
-  const transformedProject = transformResponse(project, ['createdAt', 'updatedAt'])
-    ; (transformedProject as any).memberRole = isOwner ? 'owner' : member?.role
+  const transformedProject: ProjectResponse = {
+    ...(transformResponse(project, ['createdAt', 'updatedAt']) as Project),
+    memberRole: isOwner ? 'owner' : ((member?.role || 'viewer') as ProjectResponse['memberRole']),
+  }
 
   res.json({
     success: true,
@@ -121,8 +129,10 @@ projectRouter.post('/', authenticate, asyncHandler(async (req: AuthRequest, res)
     })
     .returning()
 
-  const transformedProject = transformResponse(newProject, ['createdAt', 'updatedAt'])
-    ; (transformedProject as any).memberRole = 'owner'
+  const transformedProject: ProjectResponse = {
+    ...(transformResponse(newProject, ['createdAt', 'updatedAt']) as Project),
+    memberRole: 'owner',
+  }
 
   res.json({
     success: true,
@@ -180,9 +190,10 @@ projectRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, re
     .where(eq(projects.id, projectId))
     .returning()
 
-  const transformedProject = transformResponse(updatedProject, ['createdAt', 'updatedAt'])
-  // 添加 memberRole 字段，表示所有者是所有者
-  ;(transformedProject as any).memberRole = 'owner'
+  const transformedProject: ProjectResponse = {
+    ...(transformResponse(updatedProject, ['createdAt', 'updatedAt']) as Project),
+    memberRole: 'owner',
+  }
 
   res.json({
     success: true,

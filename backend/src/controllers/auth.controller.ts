@@ -58,7 +58,7 @@ authRouter.post('/register', authLimiter(), asyncHandler(async (req, res) => {
     env.JWT_SECRET,
     {
       expiresIn: env.JWT_EXPIRES_IN || '7d',
-    } as any
+    } as jwt.SignOptions
   )
 
   res.json({
@@ -112,7 +112,7 @@ authRouter.post('/login', authLimiter(), asyncHandler(async (req, res) => {
     env.JWT_SECRET,
     {
       expiresIn: env.JWT_EXPIRES_IN || '7d',
-    } as any
+    } as jwt.SignOptions
   )
 
   res.json({
@@ -172,7 +172,7 @@ authRouter.post('/refresh', authLimiter(), asyncHandler(async (req, res) => {
       env.JWT_SECRET,
       {
         expiresIn: env.JWT_EXPIRES_IN || '7d',
-      } as any
+      } as jwt.SignOptions
     )
 
     res.json({

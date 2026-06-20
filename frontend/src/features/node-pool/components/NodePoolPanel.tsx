@@ -105,7 +105,7 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
           color: node.color,
           tags: null,
           sortOrder: 0,
-          thumbnail: node.type === 'image' ? (node as any).imageUrl : undefined,
+          thumbnail: node.type === 'image' ? node.imageUrl : undefined,
         })
 
         // 从画布中移除原始节点

@@ -97,8 +97,8 @@ export function registerShutdownHandlers() {
   }
   shutdownHandlersRegistered = true
 
-  process.on('SIGINT', () => gracefulShutdownAndExit(0))
-  process.on('SIGTERM', () => gracefulShutdownAndExit(0))
+  process.once('SIGINT', () => gracefulShutdownAndExit(0))
+  process.once('SIGTERM', () => gracefulShutdownAndExit(0))
 
   process.on('uncaughtException', async (error) => {
     logError('Uncaught exception, attempting graceful shutdown', error)

@@ -12,6 +12,7 @@
  */
 
 import { isCollabConnected } from '@/hooks/useCollaboration'
+import { logger } from '@/utils/logger'
 
 // Re-export BatchOperations shape so call sites that type against it still work.
 export interface BatchOperations {
@@ -88,12 +89,12 @@ class CollaborationService {
   /** No-op (formerly a no-op, now handled directly by the Yjs binding's
    *  startInteraction/endInteraction in yjsBinding.ts). */
   startInteraction(_nodeId: string, _field?: string): void {
-    console.warn('[collab] startInteraction is deprecated — use getYjsBinding().startInteraction()')
+    logger.warn('[collab] startInteraction is deprecated — use getYjsBinding().startInteraction()')
   }
 
   /** No-op. */
   endInteraction(_nodeId: string): void {
-    console.warn('[collab] endInteraction is deprecated — use getYjsBinding().endInteraction()')
+    logger.warn('[collab] endInteraction is deprecated — use getYjsBinding().endInteraction()')
   }
 }
 

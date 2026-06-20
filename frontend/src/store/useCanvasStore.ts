@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import type { Node, NodeGroup, Domain, Connection } from '@/types'
 import { CANVAS_DEFAULTS } from '@/constants'
 import { logger } from '@/utils/logger'
+import { useAuthStore } from '@/store/useAuthStore'
 
 /**
  * Yjs binding injection point.
@@ -117,14 +118,7 @@ interface Command {
 }
 
 function getCurrentUserId(): number | null {
-  try {
-    const authData = localStorage.getItem('mindmap-auth')
-    if (!authData) return null
-    const parsed = JSON.parse(authData)
-    return parsed?.state?.user?.id ?? null
-  } catch {
-    return null
-  }
+  return useAuthStore.getState().user?.id ?? null
 }
 
 interface HistoryState {

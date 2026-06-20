@@ -3492,7 +3492,7 @@ export function CanvasPage() {
                 tags: null,
                 sortOrder: 0,
                 folderId: targetFolderId ?? null,
-                thumbnail: node.type === 'image' ? (node as any).imageUrl : undefined,
+                thumbnail: node.type === 'image' ? node.imageUrl : undefined,
               })
             },
             async () => {

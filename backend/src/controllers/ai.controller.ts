@@ -37,7 +37,7 @@ router.get(
   '/conversation/:canvasId',
   asyncHandler(async (req: AuthRequest, res) => {
     const userId = req.user?.id
-    const canvasId = parseInt(req.params.canvasId)
+    const canvasId = parseInt(req.params.canvasId, 10)
 
     if (!userId || isNaN(canvasId)) {
       return res.status(400).json({ success: false, error: 'Invalid parameters' })
@@ -75,7 +75,7 @@ router.post(
   '/conversation/:canvasId',
   asyncHandler(async (req: AuthRequest, res) => {
     const userId = req.user?.id
-    const canvasId = parseInt(req.params.canvasId)
+    const canvasId = parseInt(req.params.canvasId, 10)
     const { messages, contextDividerIndex } = req.body
 
     if (!userId || isNaN(canvasId)) {
@@ -121,7 +121,7 @@ router.delete(
   '/conversation/:canvasId',
   asyncHandler(async (req: AuthRequest, res) => {
     const userId = req.user?.id
-    const canvasId = parseInt(req.params.canvasId)
+    const canvasId = parseInt(req.params.canvasId, 10)
 
     if (!userId || isNaN(canvasId)) {
       return res.status(400).json({ success: false, error: 'Invalid parameters' })

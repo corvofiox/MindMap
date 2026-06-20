@@ -4,6 +4,8 @@ import { logger } from '@/utils/logger'
 const CACHE_KEY_PREFIX = 'mindmap_canvas_cache_'
 const CACHE_VERSION = 'v4' // Updated to remove drawings
 const CACHE_EXPIRY_MS = 24 * 60 * 60 * 1000 // 24 hours
+// localStorage 各浏览器配额约 5-10MB，预留 headroom，超过则直接跳过缓存
+const MAX_CACHE_SIZE_BYTES = 4 * 1024 * 1024
 
 /**
  * P4: tab 级 sessionId，用于画布缓存 key 隔离。
@@ -35,8 +37,32 @@ export interface CanvasCacheData {
   version: string
 }
 
+function estimateSize(value: string): number {
+  // UTF-16 字符串在 localStorage 中每个字符占 2 bytes
+  return value.length * 2
+}
+
+function isQuotaExceededError(error: unknown): boolean {
+  return (
+    error instanceof DOMException &&
+    (error.name === 'QuotaExceededError' || error.name === 'NS_ERROR_DOM_QUOTA_REACHED')
+  )
+}
+
+// 避免同一画布反复触发大缓存/配额日志导致刷屏，每个 tab 会话只提示一次
+const loggedOversizedCanvasIds = new Set<number>()
+const loggedQuotaCanvasIds = new Set<number>()
+
+function logOnce(canvasId: number, message: string, data: Record<string, unknown>, bucket: Set<number>): void {
+  if (bucket.has(canvasId)) return
+  bucket.add(canvasId)
+  logger.info(message, data)
+}
+
 /**
- * Save canvas data to localStorage cache
+ * Save canvas data to localStorage cache.
+ * If the serialized data exceeds MAX_CACHE_SIZE_BYTES, skip caching silently.
+ * If localStorage quota is exceeded, log an info and skip instead of warning.
  */
 export function saveToCache(canvasId: number, data: {
   nodes: Node[]
@@ -50,10 +76,35 @@ export function saveToCache(canvasId: number, data: {
       timestamp: Date.now(),
       version: CACHE_VERSION
     }
+    const payload = JSON.stringify(cacheData)
+    const size = estimateSize(payload)
+    if (size > MAX_CACHE_SIZE_BYTES) {
+      logOnce(
+        canvasId,
+        'Canvas cache payload too large, skipping localStorage cache',
+        { canvasId, size },
+        loggedOversizedCanvasIds
+      )
+      return
+    }
+
     const key = getCacheKey(canvasId)
-    localStorage.setItem(key, JSON.stringify(cacheData))
+    try {
+      localStorage.setItem(key, payload)
+    } catch (error) {
+      if (isQuotaExceededError(error)) {
+        logOnce(
+          canvasId,
+          'localStorage quota exceeded, skipping canvas cache',
+          { canvasId, size },
+          loggedQuotaCanvasIds
+        )
+        return
+      }
+      logger.warn('Failed to save canvas cache to localStorage', { canvasId, error })
+    }
   } catch (error) {
-    logger.warn('Failed to save canvas cache to localStorage', { canvasId, error })
+    logger.warn('Failed to serialize canvas cache', { canvasId, error })
   }
 }
 
@@ -111,7 +162,7 @@ export function hasCache(canvasId: number): boolean {
   try {
     const data = JSON.parse(cached) as CanvasCacheData
     const age = Date.now() - data.timestamp
-    
+
     // Check if cache is expired
     if (age > CACHE_EXPIRY_MS) {
       clearCache(canvasId)
