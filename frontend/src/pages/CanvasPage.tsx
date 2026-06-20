@@ -33,6 +33,24 @@ const AUTO_SAVE_INTERVAL = 5000
 const CACHE_SAVE_DELAY = 500
 const CANVAS_VIEW_STORAGE_KEY = 'mindmap_canvas_views'
 
+/**
+ * Resolve an optimistic-lock clientVersion from a Canvas's updatedAt field.
+ *
+ * `updatedAt` is always an ISO-8601 string (see shared types: Canvas.updatedAt:
+ * string). Earlier code used `parseInt(updatedAt, 10)` for the non-numeric
+ * branch, but `parseInt('2026-06-19T...')` stops at the first non-digit and
+ * returns `2026`, which is truthy — so the `|| new Date(...).getTime() / 1000`
+ * fallback was dead code and a wrong version (2026) was sent to the server.
+ *
+ * The real source of truth is the UNIX timestamp (seconds). Parse the ISO
+ * string via Date; fall back to undefined (no lock) if it is missing/invalid.
+ */
+function resolveClientVersion(updatedAt: string | undefined): number | undefined {
+  if (!updatedAt) return undefined
+  const t = new Date(updatedAt).getTime()
+  return Number.isFinite(t) ? Math.floor(t / 1000) : undefined
+}
+
 // Helper functions to save/load canvas view state from localStorage
 const saveCanvasView = (canvasId: number, zoom: number, panX: number, panY: number) => {
   const views = JSON.parse(localStorage.getItem(CANVAS_VIEW_STORAGE_KEY) || '{}')
@@ -679,6 +697,8 @@ export function CanvasPage() {
   const connectionContextMenuStartRef = useRef({ x: 0, y: 0 })
   const nodeContextMenuStartRef = useRef({ x: 0, y: 0 })
   const panStartRef = useRef({ x: 0, y: 0 })
+  const panRafRef = useRef<number | null>(null)
+  const pendingPanRef = useRef<{ x: number; y: number } | null>(null)
   const cacheTimeoutRef = useRef<ReturnType<typeof setTimeout>>()
   const dbSaveTimeoutRef = useRef<ReturnType<typeof setTimeout>>()
   const mouseDownOnContentRef = useRef(false) // Track if mouse down was on content
@@ -880,13 +900,9 @@ export function CanvasPage() {
 
   const id = canvasId ? parseInt(canvasId) : null
 
-  // Ref to hold thumbnail generation callback (defined later) for collaboration hook
-  const onRemoteChangeRef = useRef<((canvasId: number) => void) | undefined>(undefined)
-
   const { sendCursor } = useCollaboration({
     canvasId: id || 0,
     enabled: id !== null && id > 0,
-    onRemoteChange: (cid) => onRemoteChangeRef.current?.(cid),
     // P3: 被 owner 移除成员资格时提示并跳转回项目列表
     onKicked: () => {
       addToast({
@@ -909,6 +925,16 @@ export function CanvasPage() {
     panYRef.current = panY
     zoomRef.current = zoom
   }, [panX, panY, zoom])
+
+  // Cancel any pending pan rAF on unmount
+  useEffect(() => {
+    return () => {
+      if (panRafRef.current) {
+        cancelAnimationFrame(panRafRef.current)
+        panRafRef.current = null
+      }
+    }
+  }, [])
 
   // Handle canvas drop event from node pool (copy to canvas)
   useEffect(() => {
@@ -1345,8 +1371,17 @@ export function CanvasPage() {
           ctx.fillStyle = THUMBNAIL.BACKGROUND_COLOR
           ctx.fillRect(0, 0, canvas.width, canvas.height)
           const thumbnailDataUrl = canvas.toDataURL('image/jpeg', THUMBNAIL.QUALITY)
+          // Skip the optimistic-lock clientVersion in collaboration mode — same
+          // rationale as the non-empty branch below: multiple peers may PUT
+          // thumbnails concurrently and version-checking would cause a storm of
+          // 409s for a best-effort preview.
+          const canvasMeta = collabService.isConnected()
+            ? undefined
+            : useProjectsStore.getState().canvases.find((c) => c.id === canvasId)
+          const clientVersion = resolveClientVersion(canvasMeta?.updatedAt)
           await updateCanvasInStore(canvasId, {
             thumbnail: thumbnailDataUrl,
+            clientVersion,
           }, true)
         }
         return
@@ -1380,8 +1415,19 @@ export function CanvasPage() {
       })
 
       if (thumbnailDataUrl) {
+        // In collaboration mode we intentionally skip the optimistic-lock
+        // clientVersion. Multiple peers generate thumbnails concurrently, so
+        // version-checking would produce a storm of 409 responses and stale
+        // previews. The last thumbnail wins, which is acceptable for a
+        // best-effort preview.
+        const clientVersion = collabService.isConnected()
+          ? undefined
+          : resolveClientVersion(
+            useProjectsStore.getState().canvases.find((c) => c.id === canvasId)?.updatedAt,
+          )
         await updateCanvasInStore(canvasId, {
           thumbnail: thumbnailDataUrl,
+          clientVersion,
         }, true)
       }
     } catch {
@@ -1407,7 +1453,6 @@ export function CanvasPage() {
       generateThumbnail(canvasId)
     }, THUMBNAIL.DEBOUNCE_DELAY)
   }, [generateThumbnail])
-  onRemoteChangeRef.current = triggerThumbnailGeneration
 
   // Log canvas page lifecycle
   useEffect(() => {
@@ -1462,10 +1507,10 @@ export function CanvasPage() {
         return
       }
 
-      // In collaboration mode, changes are saved in real-time via WebSocket, skip REST API auto-save
-      // Still schedule next check to resume auto-save when collaboration disconnects
+      // In collaboration mode, changes are saved in real-time via WebSocket, skip REST API auto-save.
+      // Still generate a thumbnail for local edits, then clear the dirty flag so
+      // we don't keep re-triggering thumbnail PUTs on every timer tick.
       if (collabService.isConnected()) {
-        // Still generate thumbnail for local changes even in collaboration mode
         const state = useCanvasStore.getState()
         if (state.canvasId === id) {
           const { nodes, domains } = collectCanvasData(state)
@@ -1473,6 +1518,7 @@ export function CanvasPage() {
             triggerThumbnailGeneration(id)
           }
         }
+        setDirty(false)
         dbSaveTimeoutRef.current = setTimeout(saveToDatabase, AUTO_SAVE_INTERVAL)
         return
       }
@@ -2411,7 +2457,19 @@ export function CanvasPage() {
     if (isDragging) {
       const dx = e.clientX - dragStartRef.current.x
       const dy = e.clientY - dragStartRef.current.y
-      setPan(panStartRef.current.x + dx, panStartRef.current.y + dy)
+      pendingPanRef.current = {
+        x: panStartRef.current.x + dx,
+        y: panStartRef.current.y + dy,
+      }
+      if (!panRafRef.current) {
+        panRafRef.current = requestAnimationFrame(() => {
+          panRafRef.current = null
+          if (pendingPanRef.current) {
+            setPan(pendingPanRef.current.x, pendingPanRef.current.y)
+            pendingPanRef.current = null
+          }
+        })
+      }
     } else if (isBoxSelecting && containerRef.current) {
       const rect = containerRef.current.getBoundingClientRect()
       const mouseX = e.clientX - rect.left
@@ -2636,6 +2694,15 @@ export function CanvasPage() {
   // Handle mouse up
   const handleMouseUp = useCallback(async (e: React.MouseEvent) => {
     setIsDragging(false)
+
+    if (panRafRef.current) {
+      cancelAnimationFrame(panRafRef.current)
+      panRafRef.current = null
+    }
+    if (pendingPanRef.current) {
+      setPan(pendingPanRef.current.x, pendingPanRef.current.y)
+      pendingPanRef.current = null
+    }
 
     if (isBoxSelecting) {
       setIsBoxSelecting(false)

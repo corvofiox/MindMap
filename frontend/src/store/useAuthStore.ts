@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import type { User, LoginCredentials, RegisterData, NodeDefaults } from '@/types'
+import type { User, LoginCredentials, RegisterData } from '@/types'
 import * as api from '@/services/api'
 import { loadUIStore } from '@/utils/moduleLoader'
 import { clearAllStorage } from '@/utils/clearStorage'

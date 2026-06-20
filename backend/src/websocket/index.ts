@@ -1,4 +1,4 @@
-﻿import { WebSocketServer } from 'ws'
+import { WebSocketServer } from 'ws'
 import type { WebSocket } from 'ws'
 import { db } from '../database/connection.js'
 import { canvases, projects, projectMembers, users } from '../database/schema.js'
@@ -10,6 +10,13 @@ import * as decoding from 'lib0/decoding'
 import * as Y from 'yjs'
 import * as syncProtocol from 'y-protocols/sync'
 import * as awarenessProtocol from 'y-protocols/awareness'
+
+// Per-connection rate limits for WebSocket messages. SYNC messages are
+// CPU-heavy (Y.applyUpdate + N-way broadcast); AWARENESS is high-frequency
+// cursor/selection; text frames are low-frequency business JSON.
+const SYNC_RATE_LIMIT = 50   // per second
+const AWARE_RATE_LIMIT = 200 // per second
+const TEXT_RATE_LIMIT = 10   // per second
 
 // Type-safe property accessors for database records that may have
 // either camelCase or snake_case property names due to Drizzle ORM inconsistencies
@@ -63,10 +70,12 @@ interface WebSocketWithUserData extends WebSocket {
   lastPong?: number
   // 应用层 pong 时间戳（前端主动发 ping/pong，弥补浏览器无法响应 ws.ping）
   lastAppPong?: number
-  /** Per-connection awareness client id, kept so we can clean it up on disconnect. */
-  awarenessClientId?: number
-  /** Message timestamps for per-connection sliding-window rate limiting. */
-  msgTimestamps?: number[]
+  /** Per-connection awareness client ids, kept so we can clean them up on disconnect. */
+  awarenessClientIds?: number[]
+  /** Per-connection sliding-window rate-limit timestamps. */
+  syncTimestamps?: number[]
+  awarenessTimestamps?: number[]
+  textTimestamps?: number[]
 }
 
 export interface CanvasRoom {
@@ -357,8 +366,24 @@ export function updateUserRole(canvasId: number, userId: number, newRole: 'edito
   }, null)
 }
 
+function normalizeClientIp(ip: string): string {
+  if (ip.startsWith('::ffff:')) {
+    return ip.slice(7)
+  }
+  return ip
+}
+
+function getClientIp(req: { socket: { remoteAddress?: string }; headers: { 'x-forwarded-for'?: string | string[] } }): string {
+  const forwarded = req.headers['x-forwarded-for']
+  if (typeof forwarded === 'string' && forwarded) {
+    const first = forwarded.split(',')[0].trim()
+    if (first) return normalizeClientIp(first)
+  }
+  return normalizeClientIp(req.socket.remoteAddress || 'unknown')
+}
+
 async function handleConnection(ws: WebSocketWithUserData, req: any) {
-  const clientIp = (req.socket.remoteAddress || (req.headers['x-forwarded-for'] as string) || 'unknown')
+  const clientIp = getClientIp(req)
 
   // Buffer early messages before async setup completes.
   // ws (EventEmitter) silently drops messages when no 'message' listener is registered.
@@ -652,23 +677,52 @@ async function handleConnection(ws: WebSocketWithUserData, req: any) {
  * binary frames carry Yjs sync protocol bytes.
  */
 function handleMessage(ws: WebSocketWithUserData, room: CanvasRoom, data: Buffer, isBinary: boolean) {
-  // Per-connection sliding-window rate limit: max 60 binary messages / 10 text
-  // messages per second. This prevents a single compromised client from flooding
-  // the server with Yjs updates (CPU via Y.applyUpdate + N-way broadcast amplification).
+  // Per-connection rate limit with separate windows for SYNC (doc edits)
+  // and AWARENESS (cursor movements). Text messages share one window.
+  // SYNC messages are CPU-heavy (Y.applyUpdate + N-way broadcast).
+  //
+  // The category is determined first. Binary frames default to the SYNC
+  // window; if the leading varUint cannot be decoded the frame is still
+  // counted as SYNC so malformed frames cannot bypass the rate limit.
+  let cat: 'sync' | 'awareness' | 'text' = isBinary ? 'sync' : 'text'
+  if (isBinary && data.length > 0) {
+    try {
+      // Yjs envelope: first varUint is the message type (0=SYNC, 1=AWARENESS).
+      // Use decoding.readVarUint so multi-byte varUints are handled correctly.
+      const messageType = decoding.readVarUint(decoding.createDecoder(data))
+      if (messageType === 1) cat = 'awareness'
+    } catch {
+      // Keep cat='sync' so malformed binary frames are rate-limited instead of
+      // dropped silently. The actual frame will be rejected later in handling.
+    }
+  }
+
   try {
     const now = Date.now()
-    const threshold = isBinary ? 60 : 10
-    const window: number[] = ws.msgTimestamps ?? []
-    // Keep only timestamps within the last 1 second
+    const limit = cat === 'sync' ? SYNC_RATE_LIMIT : cat === 'awareness' ? AWARE_RATE_LIMIT : TEXT_RATE_LIMIT
+    const window: number[] =
+      cat === 'sync'
+        ? (ws.syncTimestamps ??= [])
+        : cat === 'awareness'
+          ? (ws.awarenessTimestamps ??= [])
+          : (ws.textTimestamps ??= [])
     while (window.length > 0 && window[0] < now - 1000) window.shift()
-    if (window.length >= threshold) {
+    if (window.length >= limit) {
       ws.send(JSON.stringify({ type: 'error', message: 'rate limited' }))
       ws.close(1008, 'rate limited')
       return
     }
     window.push(now)
-    ws.msgTimestamps = window
-  } catch { /* rate-limit bookkeeping must never throw */ }
+  } catch {
+    // rate-limit bookkeeping must never throw; log and drop the frame.
+    log('WebSocket rate-limit bookkeeping error, dropping frame', {
+      userId: ws.userId,
+      canvasId: ws.canvasId,
+      isBinary,
+      length: data.length,
+    })
+    return
+  }
 
   try {
     if (data.length > WS_MAX_MESSAGE_BYTES) {
@@ -757,9 +811,16 @@ function handleYjsBinaryMessage(ws: WebSocketWithUserData, room: CanvasRoom, dat
     // 权限通过，用全新 decoder 从 subType 开始交给 syncProtocol 处理。
     const syncDecoder = decoding.createDecoder(remaining)
     const encoder = encoding.createEncoder()
+    // 必须先写外层 SYNC 信封（messageType 0），客户端 handleBinary 依赖它区分
+    // SYNC(0)/AWARENESS(1)。readSyncMessage 只写 sub-protocol 内容（subType +
+    // payload），不包含外层信封。漏写会导致 STEP2 回复被客户端误判为 AWARENESS，
+    // applyAwarenessUpdate 解析二进制 Yjs update 为 JSON 时抛出 SyntaxError，
+    // isSynced 永远不为 true，后续本地编辑全部堆积在 pendingUpdates 无法发送。
+    encoding.writeVarUint(encoder, 0) // SYNC envelope
     syncProtocol.readSyncMessage(syncDecoder, encoder, doc, ws as unknown)
 
     // 若 encoder 有回复内容（STEP1 的回复是 STEP2），发回客户端。
+    // encoder 至少包含 1 byte 的 SYNC 信封，所以 reply > 1 表示有 sub-protocol 内容。
     const reply = encoding.length(encoder)
     if (reply > 1) {
       sendRaw(ws, encoding.toUint8Array(encoder))
@@ -767,11 +828,19 @@ function handleYjsBinaryMessage(ws: WebSocketWithUserData, room: CanvasRoom, dat
   } else if (messageType === 1) {
     // AWARENESS：二进制 update。记录该连接对应的 awareness clientID，
     // 断连时用于清理（removeAwarenessStates）。
+    // 注意：上面已经用 readTailAsUint8Array(decoder) 把 payload 读到 remaining，
+    // 所以 awareness update 必须从 remaining 读取，不能再用已耗尽的 decoder。
     try {
-      const update = decoding.readVarUint8Array(decoder)
+      const awarenessDecoder = decoding.createDecoder(remaining)
+      const update = decoding.readVarUint8Array(awarenessDecoder)
       // awareness update 格式：[length, [clientID, clock, state], ...]
-      // 提取涉及的 clientID 用于断连清理。
-      ws.awarenessClientId = extractFirstAwarenessClientId(update)
+      // 累积所有涉及的 clientID，断连时一次性清理，避免多 clientID 场景下残留状态。
+      const newClientIds = extractAllAwarenessClientIds(update)
+      const existing = new Set(ws.awarenessClientIds ?? [])
+      for (const id of newClientIds) {
+        existing.add(id)
+      }
+      ws.awarenessClientIds = Array.from(existing)
       awarenessProtocol.applyAwarenessUpdate(room.awareness, update, ws)
       // 转发给房间内其他客户端。
       const wrapped = encoding.createEncoder()
@@ -788,18 +857,27 @@ function handleYjsBinaryMessage(ws: WebSocketWithUserData, room: CanvasRoom, dat
 }
 
 /**
- * Extract the first awareness clientID from a y-protocols awareness update.
+ * Extract all awareness clientIDs from a y-protocols awareness update.
  * Format: [varUint numStates, varUint clientID, varUint clock, varUint stateLength, ...stateBytes]*
- * Returns null if parsing fails.
+ * Returns an empty array if parsing fails.
  */
-function extractFirstAwarenessClientId(update: Uint8Array): number | undefined {
+function extractAllAwarenessClientIds(update: Uint8Array): number[] {
   try {
     const dec = decoding.createDecoder(update)
     const numStates = decoding.readVarUint(dec)
-    if (numStates === 0) return undefined
-    return decoding.readVarUint(dec)
+    const clientIds: number[] = []
+    for (let i = 0; i < numStates; i++) {
+      clientIds.push(decoding.readVarUint(dec))
+      // Skip clock and state bytes to reach the next state entry.
+      decoding.readVarUint(dec) // clock
+      const stateLength = decoding.readVarUint(dec)
+      if (stateLength > 0) {
+        decoding.readUint8Array(dec, stateLength)
+      }
+    }
+    return clientIds
   } catch {
-    return undefined
+    return []
   }
 }
 
@@ -827,7 +905,14 @@ function broadcastYjsBinary(room: CanvasRoom, data: Uint8Array, excludeClient: W
 function sendRaw(ws: WebSocketWithUserData, data: Uint8Array) {
   if (ws.readyState !== 1) return
   try {
-    ws.send(data)
+    // Convert Uint8Array to Buffer explicitly — ws.send(Uint8Array) can silently
+    // send 0 bytes in some Node.js/ws versions because the internal getBuffer()
+    // may not handle Uint8Array views correctly when the underlying ArrayBuffer
+    // is larger than the view (lib0's encoder reuses a growable buffer).
+    // Buffer.from(Uint8Array) copies the viewed bytes into a new Buffer, avoiding
+    // shared-memory hazards if the encoder later reuses its growable buffer.
+    const buf = Buffer.from(data)
+    ws.send(buf, { binary: true })
   } catch (error) {
     logError('Failed to send Yjs binary frame', {
       userId: ws.userId,
@@ -852,17 +937,18 @@ function handleClientDisconnect(ws: WebSocketWithUserData, room: CanvasRoom, sho
 
   // 从共享 awareness 中移除该客户端，其他客户端将不再渲染它的光标
   try {
-    if (ws.awarenessClientId !== undefined) {
+    const clientIds = ws.awarenessClientIds ?? []
+    if (clientIds.length > 0) {
       awarenessProtocol.removeAwarenessStates(
         room.awareness,
-        [ws.awarenessClientId],
+        clientIds,
         ws as unknown,
       )
       // Broadcast the awareness removal so other clients immediately drop the
       // disconnected user's cursor, instead of waiting for the 30s timeout.
       const removedUpdate = awarenessProtocol.encodeAwarenessUpdate(
         room.awareness,
-        [ws.awarenessClientId],
+        clientIds,
       )
       const encoder = encoding.createEncoder()
       encoding.writeVarUint(encoder, 1) // AWARENESS

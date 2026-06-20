@@ -16,22 +16,22 @@ function shouldLog(level: LogLevel): boolean {
 }
 
 export const logger = {
-  info: (message: string, data?: any) => {
+  info: (message: string, data?: unknown) => {
     if (shouldLog('info')) {
       console.info(`[INFO] ${message}`, data || '')
     }
   },
-  warn: (message: string, data?: any) => {
+  warn: (message: string, data?: unknown) => {
     if (shouldLog('warn')) {
       console.warn(`[WARN] ${message}`, data || '')
     }
   },
-  error: (message: string, error?: any) => {
+  error: (message: string, error?: unknown) => {
     if (shouldLog('error')) {
       console.error(`[ERROR] ${message}`, error || '')
     }
   },
-  debug: (message: string, data?: any) => {
+  debug: (message: string, data?: unknown) => {
     if (shouldLog('debug')) {
       console.debug(`[DEBUG] ${message}`, data || '')
     }

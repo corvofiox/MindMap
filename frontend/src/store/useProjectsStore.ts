@@ -395,7 +395,7 @@ export const useProjectsStore = create<ProjectsState>()(
             await api.deleteCanvas(id)
           } catch (error) {
             // API失败：回滚到原始状态
-            set((state) => ({
+            set((_state) => ({
               canvases: originalCanvases,
             }))
 
@@ -516,7 +516,7 @@ export const useProjectsStore = create<ProjectsState>()(
             await api.deleteFolder(id)
           } catch (error) {
             // API失败：回滚到原始状态
-            set((state) => ({
+            set((_state) => ({
               folders: originalFolders,
               canvases: originalCanvases,
             }))

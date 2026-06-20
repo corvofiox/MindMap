@@ -20,13 +20,7 @@ import { apiClient } from './apiClient.js'
 export { apiClient }
 
 // Import API response types
-import type {
-  AuthApiResponse,
-  UploadAvatarResponse,
-  ChangePasswordResponse,
-  DeleteAccountResponse,
-  UploadImageResponse,
-} from '@/types'
+import type { AuthApiResponse } from '@/types'
 
 // Auth API
 export async function register(data: RegisterData): Promise<AuthApiResponse> {

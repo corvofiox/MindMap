@@ -21,7 +21,7 @@ import * as encoding from 'lib0/encoding'
 import * as decoding from 'lib0/decoding'
 import * as syncProtocol from 'y-protocols/sync'
 import * as awarenessProtocol from 'y-protocols/awareness'
-import { ensureRoot } from './yjs-schema'
+import { logger } from '@/utils/logger'
 
 /**
  * Origin tag applied by readSyncMessage when applying remote sync frames to
@@ -124,7 +124,10 @@ export class MindMapYjsProvider {
         ? crypto.randomUUID()
         : `${Date.now()}-${Math.random().toString(36).slice(2)}`)
     this.doc = new Y.Doc()
-    ensureRoot(this.doc)
+    // Keep the client doc empty before the initial sync handshake. Creating
+    // root Y.Maps here would give them this client's CRDT origin; the server
+    // would then see that origin in the STEP1 state vector and skip sending
+    // its own root maps, leaving the client with an empty parallel structure.
     this.awareness = new awarenessProtocol.Awareness(this.doc)
     this.wireLocalDocUpdates()
     this.wireLocalAwareness()
@@ -133,6 +136,12 @@ export class MindMapYjsProvider {
   /** Begin the connection. Safe to call once. */
   connect(): void {
     this.isIntentionallyClosed = false
+    // Prevent any deferred awareness flush from a previous connection window
+    // from firing on this fresh connection.
+    if (this.awarenessThrottleTimer) {
+      clearTimeout(this.awarenessThrottleTimer)
+      this.awarenessThrottleTimer = null
+    }
     this.openSocket()
   }
 
@@ -141,6 +150,11 @@ export class MindMapYjsProvider {
     this.isIntentionallyClosed = true
     this.clearReconnect()
     this.stopHeartbeat()
+    // Prevent any deferred awareness flush from firing after disconnect.
+    if (this.awarenessThrottleTimer) {
+      clearTimeout(this.awarenessThrottleTimer)
+      this.awarenessThrottleTimer = null
+    }
     // Save the local awareness state (cursor/selection/editingId) before
     // destroying the Y.Doc, so it can be restored after reconnect sync and
     // re-broadcast to peers immediately — prevents the 'invisible cursor' gap
@@ -195,6 +209,11 @@ export class MindMapYjsProvider {
     return this.isSynced
   }
 
+  /** Current user role; can change at runtime via setRole(). */
+  getRole(): 'owner' | 'editor' | 'viewer' {
+    return this.options.role
+  }
+
   // ---- Event subscription API ----
 
   onSynced(fn: () => void): () => void {
@@ -238,7 +257,7 @@ export class MindMapYjsProvider {
       ws = new WebSocket(url)
       ws.binaryType = 'arraybuffer'
     } catch (err) {
-      console.warn('[yjs-provider] WebSocket construction failed', err)
+      logger.warn('[yjs-provider] WebSocket construction failed', err)
       this.scheduleReconnect()
       return
     }
@@ -249,9 +268,9 @@ export class MindMapYjsProvider {
       // Reset isSynced so that the onSynced callback fires again after the
       // reconnection handshake completes. Without this, a reconnect after a
       // transient dropout would leave isSynced === true and skip the callback,
-      // so subscribers (e.g. useCollaboration's onRemoteChange) would never
-      // learn that the doc was re-synchronized — potentially missing remote
-      // changes that arrived while we were disconnected.
+      // so subscribers would never learn that the doc was re-synchronized —
+      // potentially missing remote changes that arrived while we were
+      // disconnected.
       this.isSynced = false
       this.startHeartbeat()
       this.statusListeners.forEach((fn) => fn(true))
@@ -361,22 +380,41 @@ export class MindMapYjsProvider {
     const messageType = decoding.readVarUint(decoder)
 
     if (messageType === 0) {
-      // SYNC: STEP2 (server reply) or UPDATE (broadcast).
+      // SYNC: STEP2 (server reply) or UPDATE (broadcast) or STEP1 (server
+      // asking for our state). Only STEP2 marks the initial sync handshake
+      // as complete. Treating a peer UPDATE that arrives before STEP2 as
+      // "synced" would reconnect observers on the empty doc's Y.Maps; when
+      // STEP2 later replaces those top-level maps, the store would stop
+      // receiving remote changes.
+      let subType: number
+      try {
+        subType = decoding.peekVarUint(decoder)
+      } catch (err) {
+        logger.warn('[yjs-provider] malformed sync message header', err)
+        return
+      }
+      const isStep2 = subType === syncProtocol.messageYjsSyncStep2
       const encoder = encoding.createEncoder()
+      // Wrap the readSyncMessage reply in the outer SYNC envelope. The server
+      // distinguishes SYNC(0) from AWARENESS(1) by the first varUint, so a
+      // bare STEP2 reply would be mis-parsed as awareness and dropped.
+      encoding.writeVarUint(encoder, 0)
       try {
         syncProtocol.readSyncMessage(decoder, encoder, this.doc, REMOTE_ORIGIN)
       } catch (err) {
-        console.warn('[yjs-provider] failed to apply sync message', err)
+        logger.warn('[yjs-provider] failed to apply sync message', err)
         // If a sync message fails to apply, do not set isSynced — the doc
         // may be in an inconsistent state and needs re-sync.
         return
       }
       const replyLen = encoding.length(encoder)
       if (replyLen > 1) {
-        // Server may also request STEP1 from us; send the reply.
+        // Server may also request STEP1 from us; send the reply. The encoder
+        // already includes the outer SYNC envelope, so replyLen > 1 means
+        // there is actual sub-protocol content.
         this.sendRaw(encoding.toUint8Array(encoder))
       }
-      if (!this.isSynced) {
+      if (!this.isSynced && isStep2) {
         this.isSynced = true
         this.flushPendingUpdates()
         this.sendLocalAwareness()
@@ -388,7 +426,7 @@ export class MindMapYjsProvider {
         const update = decoding.readVarUint8Array(decoder)
         awarenessProtocol.applyAwarenessUpdate(this.awareness, update, this)
       } catch (err) {
-        console.warn('[yjs-provider] failed to apply awareness update', err)
+        logger.warn('[yjs-provider] failed to apply awareness update', err)
       }
     }
   }
@@ -426,10 +464,10 @@ export class MindMapYjsProvider {
         // applying each update in order, but typically much smaller because
         // overlapping changes are collapsed. This avoids the permanent data
         // loss that would result from dropping entries.
-        let totalBytes = this.pendingUpdates.reduce((sum, u) => sum + u.byteLength, 0)
+        const totalBytes = this.pendingUpdates.reduce((sum, u) => sum + u.byteLength, 0)
         if (totalBytes > MindMapYjsProvider.MAX_PENDING_UPDATE_BYTES) {
           const merged = Y.mergeUpdates(this.pendingUpdates)
-          console.warn(
+          logger.warn(
             `[yjs-provider] compacted ${this.pendingUpdates.length} pending updates ` +
               `(${totalBytes} bytes → ${merged.byteLength} bytes)`,
           )
@@ -444,13 +482,49 @@ export class MindMapYjsProvider {
     })
   }
 
+  private lastAwarenessSend = 0
+  private awarenessThrottleTimer: ReturnType<typeof setTimeout> | null = null
+  /** True when an awareness update arrived inside the throttle window and
+   *  may not have been reflected by the scheduled flush. Checked after the
+   *  deferred flush fires so the latest state is always sent. */
+  private awarenessPendingFlush = false
+
   private wireLocalAwareness() {
+    const MIN_MS = 30
     this.awareness.on('update', ({ added, updated, removed }: { added: number[]; updated: number[]; removed: number[] }, origin: unknown) => {
-      // Skip awareness updates that originated from a remote frame we just
-      // applied (origin === this provider). Only forward local awareness
-      // changes to the server to avoid an echo loop.
       if (origin === this) return
       if (!this.isConnected()) return
+
+      const now = Date.now()
+      const elapsed = now - this.lastAwarenessSend
+      if (elapsed < MIN_MS) {
+        // Defer to avoid flooding the server rate limiter (AWARE_RATE_LIMIT=200 msg/s)
+        this.awarenessPendingFlush = true
+        if (this.awarenessThrottleTimer) return // already scheduled
+        this.awarenessThrottleTimer = setTimeout(() => {
+          this.awarenessThrottleTimer = null
+          this.lastAwarenessSend = Date.now()
+          this.flushAwareness()
+          // If another update arrived while we were throttled, the deferred
+          // flush may have sent stale state (e.g. null followed by non-null).
+          // Flush once more to ensure peers see the latest cursor/selection.
+          if (this.awarenessPendingFlush) {
+            this.awarenessPendingFlush = false
+            this.lastAwarenessSend = Date.now()
+            this.flushAwareness()
+          }
+        }, MIN_MS - elapsed)
+        return
+      }
+
+      // An update arrived after the throttle window; send immediately and
+      // cancel any pending deferred flush so the same state is not sent twice.
+      if (this.awarenessThrottleTimer) {
+        clearTimeout(this.awarenessThrottleTimer)
+        this.awarenessThrottleTimer = null
+      }
+      this.awarenessPendingFlush = false
+      this.lastAwarenessSend = now
       const changedClients = added.concat(updated, removed)
       const update = awarenessProtocol.encodeAwarenessUpdate(this.awareness, changedClients)
       const encoder = encoding.createEncoder()
@@ -460,33 +534,51 @@ export class MindMapYjsProvider {
     })
   }
 
+  private flushAwareness() {
+    // Always send for the local client: if a state exists it is broadcast;
+    // if null/undefined a removal update is generated so peers drop the
+    // cursor immediately.
+    const encoder = encoding.createEncoder()
+    encoding.writeVarUint(encoder, 1)
+    encoding.writeVarUint8Array(
+      encoder,
+      awarenessProtocol.encodeAwarenessUpdate(this.awareness, [this.doc.clientID]),
+    )
+    this.sendRaw(encoding.toUint8Array(encoder))
+  }
+
   /** Replay all buffered pending updates that accumulated while disconnected.
    *  Called after the STEP1/STEP2 sync handshake completes on reconnect.
    *  The Yjs doc already merged the server state via readSyncMessage, so
-   *  broadcasting these updates merges the local offline edits on top. */
+   *  broadcasting these updates merges the local offline edits on top.
+   *
+   *  Viewers must not flush offline mutations: if the local role was downgraded
+   *  to viewer while disconnected, replaying queued editor updates would violate
+   *  the read-only contract and be rejected by the server anyway.
+   *
+   *  All pending updates are merged into a single UPDATE message before sending.
+   *  This avoids flooding the server SYNC rate limiter with many small messages
+   *  after a long offline period. Y.mergeUpdates is lossless: the merged update
+   *  is semantically equivalent to applying each queued update in order. */
   private flushPendingUpdates() {
     if (this.pendingUpdates.length === 0) return
-    const updates = this.pendingUpdates.slice()
-    this.pendingUpdates = []
-    for (const update of updates) {
-      const encoder = encoding.createEncoder()
-      encoding.writeVarUint(encoder, 0) // SYNC
-      syncProtocol.writeUpdate(encoder, update)
-      this.sendRaw(encoding.toUint8Array(encoder))
+    if (this.options.role === 'viewer') {
+      this.pendingUpdates = []
+      return
     }
+    const merged = Y.mergeUpdates(this.pendingUpdates)
+    this.pendingUpdates = []
+    const encoder = encoding.createEncoder()
+    encoding.writeVarUint(encoder, 0) // SYNC
+    syncProtocol.writeUpdate(encoder, merged)
+    this.sendRaw(encoding.toUint8Array(encoder))
   }
 
   /** Re-broadcast the local user's awareness state to all peers.
    *  Called after reconnection sync completes so other users see our
    *  cursor/selection state again without the user having to move it. */
   private sendLocalAwareness() {
-    const encoder = encoding.createEncoder()
-    encoding.writeVarUint(encoder, 1) // AWARENESS
-    encoding.writeVarUint8Array(
-      encoder,
-      awarenessProtocol.encodeAwarenessUpdate(this.awareness, [this.doc.clientID]),
-    )
-    this.sendRaw(encoding.toUint8Array(encoder))
+    this.flushAwareness()
   }
 
   private sendRaw(data: Uint8Array) {
@@ -495,7 +587,7 @@ export class MindMapYjsProvider {
     try {
       ws.send(data)
     } catch (err) {
-      console.warn('[yjs-provider] send failed', err)
+      logger.warn('[yjs-provider] send failed', err)
     }
   }
 

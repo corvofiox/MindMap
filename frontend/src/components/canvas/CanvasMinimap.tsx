@@ -2,6 +2,9 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { Z_INDEX } from '@/constants'
 import type { Node, NodeGroup, Domain, Connection } from '@/types'
 
+const MINIMAP_DEFAULT_WIDTH = 200
+const MINIMAP_DEFAULT_HEIGHT = 150
+
 interface CanvasMinimapProps {
   nodes: Map<string, Node>
   groups: Map<string, NodeGroup>
@@ -45,8 +48,31 @@ export function CanvasMinimap({
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 })
   const hasDraggedRef = useRef(false)
   const [contentBounds, setContentBounds] = useState<Bounds>({ x: -500, y: -500, width: 1000, height: 1000 })
-  const [minimapSize, setMinimapSize] = useState({ width: 200, height: 150 })
+  const [minimapSize, setMinimapSize] = useState({ width: MINIMAP_DEFAULT_WIDTH, height: MINIMAP_DEFAULT_HEIGHT })
   const scaleRef = useRef(0.2)
+
+  // Calculate minimap size from bounds, guarding against invalid aspect ratios.
+  const calculateMinimapSize = useCallback((bounds: Bounds) => {
+    const maxMinimapWidth = 220
+    const maxMinimapHeight = 165
+    const aspectRatio =
+      bounds.width > 0 && bounds.height > 0 && Number.isFinite(bounds.width) && Number.isFinite(bounds.height)
+        ? bounds.width / bounds.height
+        : maxMinimapWidth / maxMinimapHeight
+
+    let width = maxMinimapWidth
+    let height = maxMinimapWidth / aspectRatio
+
+    if (!Number.isFinite(height) || height > maxMinimapHeight) {
+      height = maxMinimapHeight
+      width = maxMinimapHeight * aspectRatio
+    }
+
+    return {
+      width: Number.isFinite(width) && width > 0 ? width : maxMinimapWidth,
+      height: Number.isFinite(height) && height > 0 ? height : maxMinimapHeight,
+    }
+  }, [])
 
   // Calculate content bounds based on all elements
   useEffect(() => {
@@ -63,18 +89,7 @@ export function CanvasMinimap({
     if (allElements.length === 0) {
       const bounds = { x: -MIN_BOUNDS_WIDTH / 2, y: -MIN_BOUNDS_HEIGHT / 2, width: MIN_BOUNDS_WIDTH, height: MIN_BOUNDS_HEIGHT }
       setContentBounds(bounds)
-
-      // 空画布时也计算 minimapSize
-      const maxMinimapWidth = 220
-      const maxMinimapHeight = 165
-      const aspectRatio = bounds.width / bounds.height
-      let width = maxMinimapWidth
-      let height = maxMinimapWidth / aspectRatio
-      if (height > maxMinimapHeight) {
-        height = maxMinimapHeight
-        width = maxMinimapHeight * aspectRatio
-      }
-      setMinimapSize({ width, height })
+      setMinimapSize(calculateMinimapSize(bounds))
       return
     }
 
@@ -116,22 +131,8 @@ export function CanvasMinimap({
     }
 
     setContentBounds(bounds)
-
-    // Calculate minimap size to maintain aspect ratio
-    const maxMinimapWidth = 220
-    const maxMinimapHeight = 165
-    const aspectRatio = bounds.width / bounds.height
-
-    let width = maxMinimapWidth
-    let height = maxMinimapWidth / aspectRatio
-
-    if (height > maxMinimapHeight) {
-      height = maxMinimapHeight
-      width = maxMinimapHeight * aspectRatio
-    }
-
-    setMinimapSize({ width, height })
-  }, [nodes, groups, domains])
+    setMinimapSize(calculateMinimapSize(bounds))
+  }, [nodes, groups, domains, calculateMinimapSize])
 
   // Helper function to get node center point
   const getNodeCenter = useCallback((node: Node): { x: number; y: number } => {
@@ -273,8 +274,8 @@ export function CanvasMinimap({
     if (!ctx) return
 
     // Set Canvas dimensions
-    const targetWidth = Math.max(1, Math.floor(minimapSize.width))
-    const targetHeight = Math.max(1, Math.floor(minimapSize.height))
+    const targetWidth = Math.max(1, Math.floor(Number.isFinite(minimapSize.width) ? minimapSize.width : MINIMAP_DEFAULT_WIDTH))
+    const targetHeight = Math.max(1, Math.floor(Number.isFinite(minimapSize.height) ? minimapSize.height : MINIMAP_DEFAULT_HEIGHT))
 
     if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
       canvas.width = targetWidth
@@ -282,15 +283,19 @@ export function CanvasMinimap({
     }
 
     // Calculate scale to fit content bounds in minimap
-    const scaleX = targetWidth / contentBounds.width
-    const scaleY = targetHeight / contentBounds.height
+    const safeBoundsWidth = contentBounds.width > 0 && Number.isFinite(contentBounds.width) ? contentBounds.width : 1
+    const safeBoundsHeight = contentBounds.height > 0 && Number.isFinite(contentBounds.height) ? contentBounds.height : 1
+    const scaleX = targetWidth / safeBoundsWidth
+    const scaleY = targetHeight / safeBoundsHeight
     const newScale = Math.min(scaleX, scaleY)
 
     scaleRef.current = newScale
 
     // Calculate center offset to center content in minimap
-    const offsetX = (targetWidth - contentBounds.width * newScale) / 2
-    const offsetY = (targetHeight - contentBounds.height * newScale) / 2
+    // Use safe bounds (already guarded against NaN/invalid) so offset does not
+    // become NaN when node coordinates are malformed.
+    const offsetX = (targetWidth - safeBoundsWidth * newScale) / 2
+    const offsetY = (targetHeight - safeBoundsHeight * newScale) / 2
 
     // Clear canvas
     ctx.clearRect(0, 0, canvas.width, canvas.height)
@@ -481,11 +486,15 @@ export function CanvasMinimap({
     const y = e.clientY - rect.top
 
     // Recalculate scale and offset
-    const scaleX = minimapSize.width / contentBounds.width
-    const scaleY = minimapSize.height / contentBounds.height
+    const clickBoundsWidth = contentBounds.width > 0 && Number.isFinite(contentBounds.width) ? contentBounds.width : 1
+    const clickBoundsHeight = contentBounds.height > 0 && Number.isFinite(contentBounds.height) ? contentBounds.height : 1
+    const safeMinimapWidth = Number.isFinite(minimapSize.width) && minimapSize.width > 0 ? minimapSize.width : MINIMAP_DEFAULT_WIDTH
+    const safeMinimapHeight = Number.isFinite(minimapSize.height) && minimapSize.height > 0 ? minimapSize.height : MINIMAP_DEFAULT_HEIGHT
+    const scaleX = safeMinimapWidth / clickBoundsWidth
+    const scaleY = safeMinimapHeight / clickBoundsHeight
     const newScale = Math.min(scaleX, scaleY)
-    const offsetX = (minimapSize.width - contentBounds.width * newScale) / 2
-    const offsetY = (minimapSize.height - contentBounds.height * newScale) / 2
+    const offsetX = (safeMinimapWidth - clickBoundsWidth * newScale) / 2
+    const offsetY = (safeMinimapHeight - clickBoundsHeight * newScale) / 2
 
     // Convert minimap position to canvas position
     const canvasX = (x - offsetX) / newScale + contentBounds.x
@@ -518,8 +527,8 @@ export function CanvasMinimap({
         top: secondaryToolbarOpen ? '64px' : '16px',
         left: 'auto',
         right: getRightOffset(),
-        width: `${minimapSize.width + 8}px`,
-        height: `${minimapSize.height + 8}px`,
+        width: `${(Number.isFinite(minimapSize.width) ? minimapSize.width : MINIMAP_DEFAULT_WIDTH) + 8}px`,
+        height: `${(Number.isFinite(minimapSize.height) ? minimapSize.height : MINIMAP_DEFAULT_HEIGHT) + 8}px`,
         zIndex: Z_INDEX.ZOOM_CONTROLS,
       }}
       onMouseDown={(e) => e.stopPropagation()}
@@ -527,8 +536,8 @@ export function CanvasMinimap({
     >
       <canvas
         ref={canvasRef}
-        width={Math.max(1, Math.floor(minimapSize.width))}
-        height={Math.max(1, Math.floor(minimapSize.height))}
+        width={Math.max(1, Math.floor(Number.isFinite(minimapSize.width) ? minimapSize.width : MINIMAP_DEFAULT_WIDTH))}
+        height={Math.max(1, Math.floor(Number.isFinite(minimapSize.height) ? minimapSize.height : MINIMAP_DEFAULT_HEIGHT))}
         className={`${isDragging ? 'cursor-grabbing' : 'cursor-crosshair'}`}
         style={{
           margin: 4,

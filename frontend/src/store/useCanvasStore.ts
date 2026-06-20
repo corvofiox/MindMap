@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { Node, NodeGroup, Domain, Connection } from '@/types'
 import { CANVAS_DEFAULTS } from '@/constants'
+import { logger } from '@/utils/logger'
 
 /**
  * Yjs binding injection point.
@@ -25,6 +26,21 @@ type YjsBindingHandle = {
   startInteraction: (nodeId: string, field?: string) => void
   /** End an interaction and flush any deferred position updates. */
   endInteraction: (nodeId: string) => void
+  /** Re-register observers on current Y.Map instances (after STEP2 sync). */
+  reconnectObservers: () => void
+  /** Copy all entities from the Zustand store into the Y.Doc (initial sync). */
+  syncLocalStateToYDoc: () => void
+  /** Copy entities present in the Y.Doc but missing from the store back into
+   *  the store (doc → store). Called after STEP2 sync so server-only entities
+   *  appear in the UI.
+   *  @param options.skipRemoval If true, entities present locally but missing
+   *    from the doc are NOT removed. Use on the very first sync so API-loaded
+   *    data for a brand-new canvas is not wiped.
+   *  @param options.skipExistingUpdates If true or a Set of entity IDs,
+   *    existing local entities are NOT refreshed from the doc. Use for IDs
+   *    edited locally while the handshake was in flight so they are not
+   *    overwritten by the server snapshot. */
+  syncYDocToLocalState: (options?: { skipRemoval?: boolean; skipExistingUpdates?: boolean | Set<string> }) => void
   /** Tear down the binding (unobserve Yjs collections). */
   destroy: () => void
 }
@@ -36,7 +52,7 @@ export function setYjsBinding(binding: YjsBindingHandle | null): void {
   // different canvases would share the same module-level binding, causing
   // cross-canvas data pollution via the Y.Doc observer.
   if (binding && yjsBinding && yjsBinding !== binding) {
-    console.warn(
+    logger.warn(
       '[yjs-binding] replacing existing binding — previous binding destroyed ' +
       'to prevent multi-tab cross-canvas data pollution',
     )
@@ -143,6 +159,12 @@ interface CanvasState {
   isDirty: boolean
   isLoading: boolean
 
+  // Bulk-load marker. Incremented every time setCanvasData replaces the
+  // entity maps (e.g. API load or cache restore). Subscribers can compare
+  // this version against the previous state to distinguish bulk loads from
+  // incremental local mutations.
+  bulkLoadVersion: number
+
   // History state
   history: HistoryState
 
@@ -242,6 +264,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   canvasName: null,
   isDirty: false,
   isLoading: false,
+  bulkLoadVersion: 0,
 
   history: {
     commands: [],
@@ -1145,6 +1168,10 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           commands: ownCommands,
           currentIndex: ownCommands.length - 1,
         },
+        // Bump the bulk-load marker so subscribers can tell that the entire
+        // entity map was replaced (e.g. after API/cache load) rather than
+        // incrementally mutated by the user.
+        bulkLoadVersion: state.bulkLoadVersion + 1,
       }
     })
     syncDiffToYDoc(before, get())

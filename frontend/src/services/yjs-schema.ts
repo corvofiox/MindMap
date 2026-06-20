@@ -35,6 +35,27 @@ export function ensureRoot(doc: Y.Doc) {
   }
 }
 
+/**
+ * Read the existing root structure. This is critical on the client side
+ * before the initial STEP2 sync: calling doc.getMap() on a fresh doc would
+ * create an empty root map with this client's own CRDT origin and break
+ * sync. We first check `doc.share` to see if the root type has been
+ * materialized by an incoming update; only then do we call doc.getMap(),
+ * which converts the generic AbstractType stored by Yjs into a concrete
+ * Y.Map without creating a new one.
+ */
+export function getExistingRoot(doc: Y.Doc) {
+  if (!doc.share.has(ROOT_KEY)) return null
+  const root = doc.getMap(ROOT_KEY)
+  return {
+    root,
+    nodes: root.get(NODES_KEY) as Y.Map<Y.Map<unknown>> | undefined,
+    groups: root.get(GROUPS_KEY) as Y.Map<Y.Map<unknown>> | undefined,
+    domains: root.get(DOMAINS_KEY) as Y.Map<Y.Map<unknown>> | undefined,
+    connections: root.get(CONNECTIONS_KEY) as Y.Map<Y.Map<unknown>> | undefined,
+  }
+}
+
 /** Convert a plain object entity into a Y.Map (scalar fields only). */
 export function entityToYMap(data: Record<string, unknown>): Y.Map<unknown> {
   const ymap = new Y.Map<unknown>()

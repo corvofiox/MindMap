@@ -11,7 +11,7 @@
  */
 import { describe, it, expect, vi } from 'vitest'
 import * as Y from 'yjs'
-import { ensureRoot, entityToYMap } from '../services/yjs-schema'
+import { ensureRoot, getExistingRoot, entityToYMap } from '../services/yjs-schema'
 import type { Node, NodeGroup, Domain, Connection } from '@/types'
 
 /**
@@ -95,9 +95,13 @@ function createMockStore() {
   }
 }
 
-/** Minimal mock provider — just needs a doc property. */
-function createMockProvider(doc: Y.Doc) {
-  return { doc } as any
+/** Minimal mock provider — needs doc, sync status and role. */
+function createMockProvider(doc: Y.Doc, isSynced = true, role: 'owner' | 'editor' | 'viewer' = 'editor') {
+  return {
+    doc,
+    getIsSynced: () => isSynced,
+    getRole: () => role,
+  } as any
 }
 
 describe('yjsBinding', () => {
@@ -493,6 +497,104 @@ describe('yjsBinding', () => {
       })
 
       expect(store.addNode).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('initial sync helpers', () => {
+    it('syncLocalStateToYDoc writes local store entities into the doc', () => {
+      const doc = new Y.Doc()
+      const store = createMockStore()
+      store.nodes.set('n1', { id: 'n1', x: 10, y: 20, title: 'Local' } as any)
+      const binding = bindYjsToStore(createMockProvider(doc, true), store as any)
+
+      binding.syncLocalStateToYDoc()
+
+      const collections = ensureRoot(doc)
+      expect(collections.nodes.has('n1')).toBe(true)
+      expect(collections.nodes.get('n1')!.get('x')).toBe(10)
+      expect(collections.nodes.get('n1')!.get('title')).toBe('Local')
+      binding.destroy()
+    })
+
+    it('syncLocalStateToYDoc does nothing before STEP2 sync', () => {
+      const doc = new Y.Doc()
+      const store = createMockStore()
+      store.nodes.set('n1', { id: 'n1', x: 10, y: 20, title: 'Local' } as any)
+      const binding = bindYjsToStore(createMockProvider(doc, false), store as any)
+
+      binding.syncLocalStateToYDoc()
+
+      expect(getExistingRoot(doc)).toBeNull()
+      binding.destroy()
+    })
+
+    it('syncLocalStateToYDoc does nothing for viewers', () => {
+      const doc = new Y.Doc()
+      const store = createMockStore()
+      store.nodes.set('n1', { id: 'n1', x: 10, y: 20 } as any)
+      const binding = bindYjsToStore(createMockProvider(doc, false, 'viewer'), store as any)
+
+      binding.syncLocalStateToYDoc()
+
+      const collections = ensureRoot(doc)
+      expect(collections.nodes.has('n1')).toBe(false)
+      binding.destroy()
+    })
+
+    it('syncYDocToLocalState adds server-only entities to the store', () => {
+      const doc = new Y.Doc()
+      ensureRoot(doc)
+      doc.transact(() => {
+        ensureRoot(doc).nodes.set('n1', entityToYMap({ id: 'n1', x: 1, y: 2, title: 'Server' }))
+      })
+      const store = createMockStore()
+      const binding = bindYjsToStore(createMockProvider(doc, true), store as any)
+
+      binding.syncYDocToLocalState()
+
+      expect(store.addNode).toHaveBeenCalledWith(expect.objectContaining({ id: 'n1', title: 'Server' }))
+      binding.destroy()
+    })
+
+    it('syncYDocToLocalState removes entities deleted on the server', () => {
+      const doc = new Y.Doc()
+      ensureRoot(doc)
+      const store = createMockStore()
+      store.nodes.set('n1', { id: 'n1', x: 1, y: 2 } as any)
+      store.nodes.set('n2', { id: 'n2', x: 3, y: 4 } as any)
+
+      // Server doc only retains n1.
+      doc.transact(() => {
+        ensureRoot(doc).nodes.set('n1', entityToYMap({ id: 'n1', x: 10, y: 20 }))
+      })
+
+      const binding = bindYjsToStore(createMockProvider(doc, true), store as any)
+      binding.syncYDocToLocalState()
+
+      expect(store.removeNode).toHaveBeenCalledWith('n2')
+      expect(store.removeNode).not.toHaveBeenCalledWith('n1')
+      binding.destroy()
+    })
+
+    it('reconnectObservers attaches observers once root maps exist', () => {
+      const doc = new Y.Doc()
+      const store = createMockStore()
+      const binding = bindYjsToStore(createMockProvider(doc, false), store as any)
+
+      // Before root maps exist no observer is attached.
+      expect(store.addNode).not.toHaveBeenCalled()
+
+      // Simulate STEP2 creating the authoritative root maps.
+      ensureRoot(doc)
+      binding.reconnectObservers()
+
+      const collections = ensureRoot(doc)
+      doc.transact(() => {
+        collections.nodes.set('n1', entityToYMap({ id: 'n1', x: 1, y: 2 }))
+      })
+
+      expect(store.addNode).toHaveBeenCalledWith(expect.objectContaining({ id: 'n1' }))
+      binding.destroy()
     })
   })
 })

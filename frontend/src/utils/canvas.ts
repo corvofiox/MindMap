@@ -576,10 +576,6 @@ export function calculateConnectionLabelPosition(
   fromPort: PortDirection,
   labelOffset: number = 30
 ): ConnectionLabelPosition {
-  const dx = toX - fromX
-  const dy = toY - fromY
-  const distance = Math.sqrt(dx * dx + dy * dy) || 1
-
   const portOffset = getPortOffsetVector(fromPort)
 
   const labelX = fromX + portOffset.dx * labelOffset

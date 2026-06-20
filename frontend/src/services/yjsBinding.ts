@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Bind a Y.Doc (from MindMapYjsProvider) to the Zustand useCanvasStore.
  *
  * Two-way data flow:
@@ -15,7 +15,7 @@
  */
 import * as Y from 'yjs'
 import type { Node, NodeGroup, Domain, Connection } from '@/types'
-import { ensureRoot, entityToYMap, ymapToObject } from './yjs-schema'
+import { ensureRoot, getExistingRoot, entityToYMap, ymapToObject } from './yjs-schema'
 import type { MindMapYjsProvider } from './yjsProvider'
 import { useCanvasStore } from '@/store/useCanvasStore'
 
@@ -62,13 +62,28 @@ export interface YjsCanvasBinding {
   readonly isApplyingRemoteChanges: boolean
   /** Run a doc mutation as a local transaction (LOCAL_ORIGIN). */
   writeToYDoc: (fn: () => void) => void
-  /** Accessor for the nodes Y.Map. */
-  getYNodes: () => Y.Map<Y.Map<unknown>>
-  getYGroups: () => Y.Map<Y.Map<unknown>>
-  getYDomains: () => Y.Map<Y.Map<unknown>>
-  getYConnections: () => Y.Map<Y.Map<unknown>>
+  /** Accessor for the nodes Y.Map. Returns undefined before STEP2 sync. */
+  getYNodes: () => Y.Map<Y.Map<unknown>> | undefined
+  getYGroups: () => Y.Map<Y.Map<unknown>> | undefined
+  getYDomains: () => Y.Map<Y.Map<unknown>> | undefined
+  getYConnections: () => Y.Map<Y.Map<unknown>> | undefined
+  /** Copy all entities from the Zustand store into the Y.Doc (initial sync). */
+  syncLocalStateToYDoc: () => void
+  /** Copy entities present in the Y.Doc but missing from the store back into
+   *  the store (doc → store). Called after STEP2 sync so entities the server
+   *  already had (but the local API load did not include) appear in the UI.
+   *  @param options.skipRemoval If true, entities present locally but missing
+   *    from the doc are NOT removed. Use on the very first sync so API-loaded
+   *    data for a brand-new canvas is not wiped.
+   *  @param options.skipExistingUpdates If true or a Set of entity IDs,
+   *    existing local entities are NOT refreshed from the doc. Use for IDs
+   *    edited locally while the handshake was in flight so they are not
+   *    overwritten by the server snapshot. */
+  syncYDocToLocalState: (options?: { skipRemoval?: boolean; skipExistingUpdates?: boolean | Set<string> }) => void
   /** Detach all observers. */
   destroy: () => void
+  /** Re-register observers on current Y.Map instances (after STEP2 sync). */
+  reconnectObservers: () => void
   /** Temporarily suppress Yjs sync (for initial data loading). */
   suppressSync: (fn: () => void) => void
   /** Mark a node as being interacted with (defers remote position updates). */
@@ -87,8 +102,17 @@ export function bindYjsToStore(
   store: CanvasStoreBinding,
 ): YjsCanvasBinding {
   const doc = provider.doc
-  const collections = ensureRoot(doc)
-  const { nodes: yNodes, groups: yGroups, domains: yDomains, connections: yConnections } = collections
+
+  // Dynamic getters: resolve the current Y.Map references from the doc WITHOUT
+  // creating missing maps. Creating maps before STEP2 would give them this
+  // client's CRDT origin and break the initial sync (the server would see that
+  // origin in the state vector and skip sending its own root maps). After
+  // STEP2 the server's root maps exist, so these resolve to the authoritative
+  // shared types.
+  const getYNodes = () => getExistingRoot(doc)?.nodes
+  const getYGroups = () => getExistingRoot(doc)?.groups
+  const getYDomains = () => getExistingRoot(doc)?.domains
+  const getYConnections = () => getExistingRoot(doc)?.connections
 
   // Guard against feedback loops: when the observer applies remote changes to
   // the store, set this flag so the store's syncDiffToYDoc skips the echo-back.
@@ -116,6 +140,16 @@ export function bindYjsToStore(
     }
   }
 
+  /** Temporarily set isApplyingRemoteChanges so the store's syncDiffToYDoc
+   *  skips echoing these mutations back into the doc (which is already the
+   *  source of truth for the data being applied). Extracted as a named
+   *  function so both syncYDocToLocalState and the returned handle can use it. */
+  function suppressSync(fn: () => void): void {
+    const prev = isApplyingRemoteChanges
+    isApplyingRemoteChanges = true
+    try { fn() } finally { isApplyingRemoteChanges = prev }
+  }
+
   // NOTE on the `store` parameter vs `useCanvasStore.getState()`:
   // The `store` argument passed to bindYjsToStore is a snapshot captured at
   // binding-creation time. Its METHODS (addNode, removeNode, update*…) are
@@ -133,14 +167,9 @@ export function bindYjsToStore(
    *  `store.nodes` is a snapshot captured at binding-creation time and goes
    *  stale immediately after the first remote sync populates the store.
    *
-   *  KNOWN LIMITATION: updateNodeWithoutHistory uses merge semantics
-   *  ({ ...current, ...obj }), so fields present in the local node but absent
-   *  from the remote Y.Map (i.e. fields the peer deleted) are NOT removed
-   *  from the store. This is acceptable today because the app never deletes
-   *  optional fields at runtime (imageUrl/aspectRatio/expandedHeight are set
-   *  at creation and only overwritten, never cleared). If field deletion
-   *  becomes a feature, applyRemote* must diff Object.keys(existing) vs
-   *  Object.keys(obj) and explicitly set missing keys to undefined. */
+   *  Field deletions are handled explicitly: keys present in the local node
+   *  but absent from the remote Y.Map are set to undefined before the update,
+   *  so the store's merge ({ ...current, ...obj }) removes them. */
   const applyRemoteNode = (id: string, ymap: Y.Map<unknown>) => {
     const obj = ymapToObject(ymap) as unknown as Node
     const existing = useCanvasStore.getState().nodes.get(id)
@@ -169,7 +198,18 @@ export function bindYjsToStore(
           const nonPositionUpdates: Partial<Node> = {}
           for (const key of Object.keys(obj) as (keyof Node)[]) {
             if (key !== 'x' && key !== 'y' && key !== 'width' && key !== 'height') {
-              (nonPositionUpdates as any)[key] = obj[key]
+              (nonPositionUpdates as Record<string, unknown>)[key] = obj[key]
+            }
+          }
+          // Handle field deletions: keys present in existing but absent from
+          // remote Y.Map are not included by ymapToObject, so explicitly set
+          // them to undefined so the store merge removes them. Position keys
+          // are intentionally skipped here because they are deferred above.
+          const newKeys = new Set(Object.keys(obj))
+          for (const key of Object.keys(existing)) {
+            if (!newKeys.has(key) && key !== 'id' &&
+              key !== 'x' && key !== 'y' && key !== 'width' && key !== 'height') {
+              (nonPositionUpdates as Record<string, unknown>)[key] = undefined
             }
           }
           if (Object.keys(nonPositionUpdates).length > 0) {
@@ -179,17 +219,11 @@ export function bindYjsToStore(
         }
         // No position change — apply everything normally.
       }
-      // Detect position field overwrites — Yjs scalar fields are
+      // Position field overwrites are expected here: Yjs scalar fields are
       // Last-Writer-Wins, so simultaneous drags by two users can silently
-      // overwrite one user's position. Log when this happens so UX issues
-      // (instant teleport) can be diagnosed.
-      if (existing.x !== obj.x || existing.y !== obj.y) {
-        console.warn(
-          `[yjs-binding] position conflict on node ${id}: ` +
-          `local (${existing.x},${existing.y}) ` +
-          `← remote (${obj.x},${obj.y})`,
-        )
-      }
+      // overwrite one user's position. We intentionally do not warn in
+      // production because high-frequency collaboration generates a flood of
+      // these messages and they are not actionable.
       // Handle field deletions: keys present in existing but absent from
       // remote Y.Map are not included by ymapToObject, so explicitly set
       // them to undefined so the store merge removes them.
@@ -269,10 +303,16 @@ export function bindYjsToStore(
    * updateXxxWithoutHistory overwrites all fields.
    */
   const observeCollection = (
-    ymap: Y.Map<Y.Map<unknown>>,
+    ymap: Y.Map<Y.Map<unknown>> | undefined,
     applyAddOrUpdate: (id: string, entity: Y.Map<unknown>) => void,
     applyRemove: (id: string) => void,
   ): (() => void) => {
+    if (!ymap) {
+      // Collection does not exist yet (before STEP2 sync). Return a no-op
+      // unsubscriber; reconnectObservers() will attach the real observer once
+      // the server's root maps are applied to the doc.
+      return () => { }
+    }
     const handler = (events: Y.YEvent<Y.Map<unknown>>[]) => {
       const firstOrigin = events[0]?.transaction.origin
       // Skip local mutations (command.execute already updated the store).
@@ -320,10 +360,26 @@ export function bindYjsToStore(
     return () => ymap.unobserveDeep(handler)
   }
 
-  const unobserveNodes = observeCollection(yNodes, applyRemoteNode, (id) => store.removeNode(id))
-  const unobserveGroups = observeCollection(yGroups, applyRemoteGroup, (id) => store.removeGroup(id))
-  const unobserveDomains = observeCollection(yDomains, applyRemoteDomain, (id) => store.removeDomain(id))
-  const unobserveConnections = observeCollection(yConnections, applyRemoteConnection, (id) => store.removeConnection(id))
+  // Register observers using dynamic getters. Before STEP2 the top-level maps
+  // do not exist yet, so attach a no-op unsubscriber and wait for
+  // reconnectObservers() after sync completes.
+  let unobserveNodes = observeCollection(getYNodes(), applyRemoteNode, (id) => store.removeNode(id))
+  let unobserveGroups = observeCollection(getYGroups(), applyRemoteGroup, (id) => store.removeGroup(id))
+  let unobserveDomains = observeCollection(getYDomains(), applyRemoteDomain, (id) => store.removeDomain(id))
+  let unobserveConnections = observeCollection(getYConnections(), applyRemoteConnection, (id) => store.removeConnection(id))
+
+  /** Re-register observers on the current Y.Map instances. Called after
+   *  STEP2 sync to pick up the possibly-replaced Y.Map references. */
+  function reconnectObservers() {
+    unobserveNodes()
+    unobserveGroups()
+    unobserveDomains()
+    unobserveConnections()
+    unobserveNodes = observeCollection(getYNodes(), applyRemoteNode, (id) => store.removeNode(id))
+    unobserveGroups = observeCollection(getYGroups(), applyRemoteGroup, (id) => store.removeGroup(id))
+    unobserveDomains = observeCollection(getYDomains(), applyRemoteDomain, (id) => store.removeDomain(id))
+    unobserveConnections = observeCollection(getYConnections(), applyRemoteConnection, (id) => store.removeConnection(id))
+  }
 
   /**
    * Diff a before/after snapshot of the four entity maps and write the delta
@@ -334,16 +390,165 @@ export function bindYjsToStore(
     before: { nodes: Map<string, Node>; groups: Map<string, NodeGroup>; domains: Map<string, Domain>; connections: Map<string, Connection> },
     after: { nodes: Map<string, Node>; groups: Map<string, NodeGroup>; domains: Map<string, Domain>; connections: Map<string, Connection> },
   ) => {
-    // All entity types in a single transaction so a partial failure does not
-    // leave the Y.Doc permanently out of sync with the Zustand store. If one
-    // diffAndApply call throws, Yjs rolls back the entire transaction and the
-    // doc stays consistent; on the next mutation the diff is retried.
+    // Keep the doc empty before the initial STEP2 sync so the server's root
+    // maps are authoritative. If root maps already exist (we are already
+    // synced or reconnecting to a doc that has them), write the diff normally;
+    // otherwise skip until syncLocalStateToYDoc can backfill local entities
+    // after the handshake.
+    const existingRoot = getExistingRoot(doc)
+    if (!existingRoot && !provider.getIsSynced()) return
+    const collections = existingRoot ?? ensureRoot(doc)
     doc.transact(() => {
-      diffAndApply(before.nodes, after.nodes, yNodes)
-      diffAndApply(before.groups, after.groups, yGroups)
-      diffAndApply(before.domains, after.domains, yDomains)
-      diffAndApply(before.connections, after.connections, yConnections)
+      diffAndApply(before.nodes, after.nodes, collections.nodes)
+      diffAndApply(before.groups, after.groups, collections.groups)
+      diffAndApply(before.domains, after.domains, collections.domains)
+      diffAndApply(before.connections, after.connections, collections.connections)
     }, LOCAL_ORIGIN)
+  }
+
+  /** Copy all entities from the current Zustand store into the Y.Doc.
+   *  Called after initial connection sync to ensure the Y.Doc contains
+   *  all entities loaded from the API, not only those changed by local
+   *  mutations (which is what applyDiff/diffAndApply handles). */
+  function syncLocalStateToYDoc() {
+    // Viewers have no business writing local state into the shared doc.
+    // Defense-in-depth: even though wireLocalDocUpdates blocks outgoing
+    // viewer mutations, mutating the local doc violates the read-only contract.
+    if (provider.getRole() === 'viewer') return
+    // Guard against writing before STEP2: creating root maps now would give
+    // them this client's CRDT origin and break the authoritative server snapshot.
+    const existingRoot = getExistingRoot(doc)
+    if (!existingRoot && !provider.getIsSynced()) return
+    const s = useCanvasStore.getState()
+    // After STEP2 the server's root maps exist and ensureRoot simply returns them;
+    // on a fresh empty canvas (no existing root and already synced) it creates the
+    // structure so local API-loaded data can be mirrored into the doc.
+    const collections = existingRoot ?? ensureRoot(doc)
+    doc.transact(() => {
+      for (const [id, entity] of s.nodes) {
+        if (!collections.nodes.has(id)) collections.nodes.set(id, entityToYMap(entity as unknown as Record<string, unknown>))
+      }
+      for (const [id, entity] of s.groups) {
+        if (!collections.groups.has(id)) collections.groups.set(id, entityToYMap(entity as unknown as Record<string, unknown>))
+      }
+      for (const [id, entity] of s.domains) {
+        if (!collections.domains.has(id)) collections.domains.set(id, entityToYMap(entity as unknown as Record<string, unknown>))
+      }
+      for (const [id, entity] of s.connections) {
+        if (!collections.connections.has(id)) collections.connections.set(id, entityToYMap(entity as unknown as Record<string, unknown>))
+      }
+    }, LOCAL_ORIGIN)
+  }
+
+  /** Copy entities from the Y.Doc into the store when they are missing locally.
+   *  STEP2 (server → client state vector reply) applies the server's full doc
+   *  state to the local doc, but it runs INSIDE readSyncMessage, which fires
+   *  BEFORE the onSynced callback re-registers observers — so the observer
+   *  never sees those initial entities. This function performs the doc → store
+   *  direction that the observer would have done, ensuring entities the server
+   *  already had (and the local API load did not include) appear in the UI.
+   *
+   *  Uses getExistingRoot (read-only): if STEP2 has not arrived the doc has no
+   *  root structure and there is nothing to mirror. Wrapped in a single
+   *  suppressSync block so the store mutations it performs are NOT echoed back
+   *  to the doc (the doc is already the source of truth for these entities). */
+  function syncYDocToLocalState(options?: {
+    /** If true, never remove local entities that are missing from the doc.
+     *  Use on the very first sync so API-loaded data for a brand-new canvas
+     *  is not wiped before syncLocalStateToYDoc can mirror it into the doc. */
+    skipRemoval?: boolean
+    /** Entities whose existing local state should not be overwritten by the
+     *  server snapshot. Can be a boolean (legacy coarse-grained) or a Set of
+     *  entity IDs edited locally while the handshake was in flight. */
+    skipExistingUpdates?: boolean | Set<string>
+  }) {
+    const skipRemoval = options?.skipRemoval ?? false
+    const skipExistingUpdates = options?.skipExistingUpdates ?? false
+    const shouldSkipExistingUpdate = (id: string) => {
+      if (typeof skipExistingUpdates === 'boolean') return skipExistingUpdates
+      return skipExistingUpdates.has(id)
+    }
+
+    const collections = getExistingRoot(doc)
+    if (!collections) return
+    suppressSync(() => {
+      const liveState = useCanvasStore.getState()
+
+      // Remove local entities that no longer exist in the authoritative doc.
+      // Observers are not attached while STEP2 is applied, so peer deletions
+      // that happened while offline would otherwise remain in the store.
+      // On the very first sync we skip this cleanup: the local store may contain
+      // API-loaded data for a brand-new canvas that the server doc has not yet
+      // received. Removing here would wipe that data before syncLocalStateToYDoc
+      // has a chance to mirror it into the shared doc.
+      if (!skipRemoval) {
+        if (collections.nodes) {
+          const docIds = new Set(collections.nodes.keys())
+          for (const id of liveState.nodes.keys()) {
+            if (!docIds.has(id)) store.removeNode(id)
+          }
+        }
+        if (collections.groups) {
+          const docIds = new Set(collections.groups.keys())
+          for (const id of liveState.groups.keys()) {
+            if (!docIds.has(id)) store.removeGroup(id)
+          }
+        }
+        if (collections.domains) {
+          const docIds = new Set(collections.domains.keys())
+          for (const id of liveState.domains.keys()) {
+            if (!docIds.has(id)) store.removeDomain(id)
+          }
+        }
+        if (collections.connections) {
+          const docIds = new Set(collections.connections.keys())
+          for (const id of liveState.connections.keys()) {
+            if (!docIds.has(id)) store.removeConnection(id)
+          }
+        }
+      }
+
+      // Add server-only entities. Skip refreshing specific entities that were
+      // edited locally while the handshake was in flight, so those edits are not
+      // overwritten by the server snapshot; they will propagate to the doc on
+      // the next local mutation via applyDiff.
+      if (collections.nodes) {
+        for (const [id, ymap] of collections.nodes) {
+          if (!liveState.nodes.has(id)) {
+            store.addNode({ ...(ymapToObject(ymap) as unknown as Node), id })
+          } else if (!shouldSkipExistingUpdate(id)) {
+            applyRemoteNode(id, ymap)
+          }
+        }
+      }
+      if (collections.groups) {
+        for (const [id, ymap] of collections.groups) {
+          if (!liveState.groups.has(id)) {
+            store.addGroup({ ...(ymapToObject(ymap) as unknown as NodeGroup), id })
+          } else if (!shouldSkipExistingUpdate(id)) {
+            applyRemoteGroup(id, ymap)
+          }
+        }
+      }
+      if (collections.domains) {
+        for (const [id, ymap] of collections.domains) {
+          if (!liveState.domains.has(id)) {
+            store.addDomain({ ...(ymapToObject(ymap) as unknown as Domain), id })
+          } else if (!shouldSkipExistingUpdate(id)) {
+            applyRemoteDomain(id, ymap)
+          }
+        }
+      }
+      if (collections.connections) {
+        for (const [id, ymap] of collections.connections) {
+          if (!liveState.connections.has(id)) {
+            store.addConnection({ ...(ymapToObject(ymap) as unknown as Connection), id })
+          } else if (!shouldSkipExistingUpdate(id)) {
+            applyRemoteConnection(id, ymap)
+          }
+        }
+      }
+    })
   }
 
   return {
@@ -354,23 +559,20 @@ export function bindYjsToStore(
     writeToYDoc: (fn: () => void) => {
       doc.transact(fn, LOCAL_ORIGIN)
     },
-    getYNodes: () => yNodes,
-    getYGroups: () => yGroups,
-    getYDomains: () => yDomains,
-    getYConnections: () => yConnections,
+    getYNodes,
+    getYGroups,
+    getYDomains,
+    getYConnections,
+    syncLocalStateToYDoc,
+    syncYDocToLocalState,
+    reconnectObservers,
     destroy: () => {
-      // Explicitly unobserve all collections so the binding can be torn down
-      // even if the Y.Doc is not immediately destroyed.
       unobserveNodes()
       unobserveGroups()
       unobserveDomains()
       unobserveConnections()
     },
-    suppressSync: (fn: () => void) => {
-      const prev = isApplyingRemoteChanges
-      isApplyingRemoteChanges = true
-      try { fn() } finally { isApplyingRemoteChanges = prev }
-    },
+    suppressSync,
     startInteraction,
     endInteraction,
   }
@@ -503,23 +705,16 @@ function diffAndUpdateYArray(arr: Y.Array<unknown>, current: unknown[], target: 
 }
 
 function diffPrimitiveArray(arr: Y.Array<unknown>, current: unknown[], target: unknown[]): void {
-  const targetSet = new Set<unknown>(target)
-  for (let i = current.length - 1; i >= 0; i--) {
-    if (!targetSet.has(current[i])) {
-      arr.delete(i, 1)
-    }
+  // Replace the whole array in-place so the target order is preserved exactly.
+  // The previous Set-based implementation treated the array as an unordered bag,
+  // which destroyed order for primitive arrays (e.g. tag lists). For primitive
+  // values there is no object identity to merge, so a full ordered replacement
+  // is both correct and simple.
+  if (current.length > 0) {
+    arr.delete(0, current.length)
   }
-  const currentArray = arr.toArray()
-  const currentSet = new Set<unknown>(currentArray)
-  const toAdd: unknown[] = []
-  for (const item of target) {
-    if (!currentSet.has(item)) {
-      toAdd.push(item)
-      currentSet.add(item)
-    }
-  }
-  if (toAdd.length > 0) {
-    arr.insert(arr.length, toAdd)
+  if (target.length > 0) {
+    arr.insert(0, target)
   }
 }
 

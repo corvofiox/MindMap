@@ -1,18 +1,24 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { useCanvasStore } from '@/store/useCanvasStore'
+import { useCanvasStore, getYjsBinding } from '@/store/useCanvasStore'
 import { useUIStore } from '@/store/useUIStore'
 import { snapToGrid } from '@/utils/canvas'
-import { CANVAS_DEFAULTS, Z_INDEX } from '@/constants'
+import { CANVAS_DEFAULTS, NODE_DEFAULTS, Z_INDEX } from '@/constants'
 import { loadApiModule } from '@/utils/moduleLoader'
 import { logger } from '@/utils/logger'
 import { execFormatCommand } from '@/utils/richTextCommands'
 import { setEditingFieldForCollab, getEditingState, setLocalEditingUpdate } from '@/hooks/useCollabEditing'
-import { collabService } from '@/services/collaboration'
 import type { Node } from '@/types'
 
 // Helper function to check if in default selection mode
 function isDefaultSelectionTool(tool: string): boolean {
   return tool === 'select'
+}
+
+function toFinite(value: number | undefined | null, fallback: number): number {
+  if (value === undefined || value === null || Number.isNaN(value) || !Number.isFinite(value)) {
+    return fallback
+  }
+  return value
 }
 
 interface NodeItemProps {
@@ -58,15 +64,21 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
   const [isHovered, setIsHovered] = useState(false)
   const [highlightState, setHighlightState] = useState<HighlightState | null>(null)
   // 本地状态用于拖动时的实时更新，避免频繁更新全局状态
-  const [localPosition, setLocalPosition] = useState({ x: node.x, y: node.y })
-  const [localSize, setLocalSize] = useState({ width: node.width, height: node.height })
+  const [localPosition, setLocalPosition] = useState({
+    x: toFinite(node.x, 0),
+    y: toFinite(node.y, 0),
+  })
+  const [localSize, setLocalSize] = useState({
+    width: toFinite(node.width, NODE_DEFAULTS.WIDTH),
+    height: toFinite(node.height, NODE_DEFAULTS.HEIGHT),
+  })
 
   const nodeRef = useRef<HTMLDivElement>(null)
   const titleRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   const contentAreaRef = useRef<HTMLDivElement>(null)
-  const dragStartRef = useRef({ x: 0, y: 0, nodeX: node.x, nodeY: node.y })
-  const resizeStartRef = useRef({ x: 0, y: 0, width: node.width, height: node.height })
+  const dragStartRef = useRef({ x: 0, y: 0, nodeX: toFinite(node.x, 0), nodeY: toFinite(node.y, 0) })
+  const resizeStartRef = useRef({ x: 0, y: 0, width: toFinite(node.width, NODE_DEFAULTS.WIDTH), height: toFinite(node.height, NODE_DEFAULTS.HEIGHT) })
   const justFinishedDragRef = useRef(false)
   const lastSyncedNodeRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null)
   const editingTitleRef = useRef<string>('')
@@ -78,6 +90,12 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
   const timerRefsRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set())
   const imageRef = useRef<HTMLImageElement | null>(null)
   const inputSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const dragSyncThrottleRef = useRef<number>(0)
+  const resizeSyncThrottleRef = useRef<number>(0)
+  const isDraggingRef = useRef(false)
+  const isResizingRef = useRef(false)
+  const localPositionRef = useRef(localPosition)
+  const localSizeRef = useRef(localSize)
   const { addToast } = useUIStore()
 
   const dispatchEditingFieldChange = useCallback((field: 'title' | 'content' | null, nodeId: string | null) => {
@@ -101,8 +119,24 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
         imageRef.current.onerror = null
         imageRef.current = null
       }
+      // Commit the current drag/resize position on unmount so intermediate
+      // positions are not lost if the component is destroyed mid-interaction.
+      if (isDraggingRef.current) {
+        updateNode(node.id, {
+          x: localPositionRef.current.x,
+          y: localPositionRef.current.y,
+        })
+      }
+      if (isResizingRef.current) {
+        updateNode(node.id, {
+          x: localPositionRef.current.x,
+          y: localPositionRef.current.y,
+          width: localSizeRef.current.width,
+          height: localSizeRef.current.height,
+        })
+      }
     }
-  }, [])
+  }, [node.id, updateNode])
 
   useEffect(() => {
     const handleHighlight = (e: Event) => {
@@ -143,7 +177,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
           imageUrl: url,
           aspectRatio: aspectRatio,
           type: 'image',
-          height: node.width / aspectRatio
+          height: toFinite(node.width, NODE_DEFAULTS.WIDTH) / toFinite(aspectRatio, 1)
         })
         addToast({ type: 'success', title: '上传成功', message: '图片已上传' })
       }
@@ -170,10 +204,56 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
     return result
   }, [])
 
+  /** Highlight keywords in an HTML string without breaking tags or attributes.
+   *  HTML tags are temporarily replaced with placeholders, the remaining plain
+   *  text is highlighted, then tags are restored. This prevents keywords from
+   *  being matched inside tag names/attributes (e.g. `color` inside
+   *  `style="color: red"` or `example` inside `href="...example..."`). */
+  const safeHighlightHtml = useCallback((html: string, keywords: string[]): string => {
+    if (!html || keywords.length === 0) return html
+
+    const placeholders: string[] = []
+    const protectedHtml = html.replace(/<[^>]+>/g, (tag) => {
+      placeholders.push(tag)
+      return `\0${placeholders.length - 1}\0`
+    })
+
+    let highlighted = protectedHtml
+    keywords.forEach((keyword) => {
+      const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      highlighted = highlighted.replace(
+        new RegExp(`(${escaped})`, 'gi'),
+        '<mark class="bg-yellow-300 dark:bg-yellow-500 px-0.5 rounded">$1</mark>'
+      )
+    })
+
+    return highlighted.replace(/\0(\d+)\0/g, (_, index) => placeholders[Number(index)])
+  }, [])
+
+  /** Strip HTML tags and decode entities, returning plain text for display. */
+  const stripHtml = useCallback((html: string): string => {
+    if (!html) return ''
+    const doc = new DOMParser().parseFromString(html, 'text/html')
+    return doc.body.textContent || ''
+  }, [])
+
+  // Keep refs in sync with latest interaction state / local geometry so the
+  // unmount cleanup can commit the current position if the component is
+  // destroyed mid-drag/resize.
+  useEffect(() => {
+    isDraggingRef.current = isDragging
+    isResizingRef.current = isResizing
+    localPositionRef.current = localPosition
+    localSizeRef.current = localSize
+  })
+
   useEffect(() => {
     if (editingField !== null) return
 
-    if (!isDragging && !isResizing) {
+    // Guard against overwriting the local drag/resize result with a stale node
+    // prop immediately after mouseup. The mouseup handler sets this ref while it
+    // commits the final local position to the store.
+    if (!isDragging && !isResizing && !justFinishedDragRef.current) {
       const shouldSync = !lastSyncedNodeRef.current ||
         lastSyncedNodeRef.current.x !== node.x ||
         lastSyncedNodeRef.current.y !== node.y ||
@@ -181,34 +261,48 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
         lastSyncedNodeRef.current.height !== node.height
 
       if (shouldSync) {
-        setLocalPosition({ x: node.x, y: node.y })
-        setLocalSize({ width: node.width, height: node.height })
-        lastSyncedNodeRef.current = { x: node.x, y: node.y, width: node.width, height: node.height }
+        const safeX = toFinite(node.x, 0)
+        const safeY = toFinite(node.y, 0)
+        const safeWidth = toFinite(node.width, NODE_DEFAULTS.WIDTH)
+        const safeHeight = toFinite(node.height, NODE_DEFAULTS.HEIGHT)
+        setLocalPosition({ x: safeX, y: safeY })
+        setLocalSize({ width: safeWidth, height: safeHeight })
+        lastSyncedNodeRef.current = { x: safeX, y: safeY, width: safeWidth, height: safeHeight }
       }
     }
   }, [node.x, node.y, node.width, node.height, isDragging, isResizing, editingField])
 
-  // 将文本转换为安全HTML（转义HTML标签，保留换行）
+  // 将文本转换为安全HTML（始终转义HTML标签，保留换行）
   const textToSafeHtml = useCallback((text: string): string => {
     if (!text) return ''
 
-    // 检查是否包含 HTML 标签
-    const hasHtmlTags = /<[a-z][\s\S]*>/i.test(text)
-
-    if (hasHtmlTags) {
-      // 如果已经包含 HTML 标签，直接返回（假设是安全的 HTML）
-      return text
-    } else {
-      // 如果是纯文本，转义 HTML 特殊字符并将换行符转换为 <br>
-      const escaped = text
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#x27;')
-      return escaped.replace(/\n/g, '<br>')
-    }
+    // 标题字段按纯文本处理：始终转义 HTML 特殊字符并将换行符转换为 <br>。
+    // 不再信任输入中已有的 HTML 标签，以防止远程用户通过 node.title 注入
+    // 恶意脚本（XSS）。
+    const escaped = text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#x27;')
+    return escaped.replace(/\n/g, '<br>')
   }, [])
+
+  /** Highlight keywords in a node title, then escape the text portions so the
+   *  resulting string is safe for dangerouslySetInnerHTML. The <mark> tags
+   *  produced by highlightKeywords are preserved; everything else is escaped.
+   *  This prevents keywords from matching inside HTML entities (e.g. &lt;). */
+  const safeHighlightTitle = useCallback((title: string, keywords: string[]): string => {
+    const highlighted = highlightKeywords(title, keywords)
+    return highlighted
+      .split(/(<mark[^>]*>.*?<\/mark>)/gi)
+      .map((part, index) => {
+        // Even-indexed parts are plain text; odd-indexed parts are <mark> tags.
+        if (index % 2 === 1) return part
+        return textToSafeHtml(part)
+      })
+      .join('')
+  }, [highlightKeywords, textToSafeHtml])
 
   // 将 HTML 转换为纯文本（提取换行符）
   const htmlToText = useCallback((html: string): string => {
@@ -621,9 +715,10 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
         resizeStartRef.current = {
           x: e.clientX,
           y: e.clientY,
-          width: node.width,
-          height: node.height,
+          width: toFinite(node.width, NODE_DEFAULTS.WIDTH),
+          height: toFinite(node.height, NODE_DEFAULTS.HEIGHT),
         }
+        getYjsBinding()?.startInteraction(node.id, 'position')
         return
       }
 
@@ -685,10 +780,11 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
         dragStartRef.current = {
           x: e.clientX,
           y: e.clientY,
-          nodeX: node.x,
-          nodeY: node.y,
+          nodeX: toFinite(node.x, 0),
+          nodeY: toFinite(node.y, 0),
         }
         onDragStart?.(node.id, e)
+        getYjsBinding()?.startInteraction(node.id, 'position')
         // 触发自定义事件，通知 CanvasPage 开始拖动
         window.dispatchEvent(new CustomEvent('nodeDragStart', {
           detail: { nodeId: node.id, x: node.x, y: node.y }
@@ -747,6 +843,14 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
           detail: { nodeId: node.id, x: newPos.x, y: newPos.y }
         }))
 
+        // Throttled store update during drag so Yjs binding syncs to peers.
+        // markDirty=false: only the final mouseup should trigger autosave/cache.
+        const now = Date.now()
+        if (now - dragSyncThrottleRef.current >= 100) {
+          dragSyncThrottleRef.current = now
+          updateNodeWithoutHistory(node.id, { x: newPos.x, y: newPos.y }, false)
+        }
+
         // 检测鼠标是否进入节点池区域
         const nodePoolElement = document.querySelector('[data-node-pool]')
         if (nodePoolElement) {
@@ -799,23 +903,31 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
         let newY = localPosition.y
 
         if (resizeDirection.includes('e')) {
-          newWidth = Math.max(100, resizeStartRef.current.width + dx)
+          newWidth = Math.max(NODE_DEFAULTS.MIN_WIDTH, resizeStartRef.current.width + dx)
         }
         if (resizeDirection.includes('w')) {
-          newWidth = Math.max(100, resizeStartRef.current.width - dx)
+          newWidth = Math.max(NODE_DEFAULTS.MIN_WIDTH, resizeStartRef.current.width - dx)
           newX = dragStartRef.current.nodeX + dx
         }
         if (resizeDirection.includes('s')) {
-          newHeight = Math.max(60, resizeStartRef.current.height + dy)
+          newHeight = Math.max(NODE_DEFAULTS.MIN_HEIGHT, resizeStartRef.current.height + dy)
         }
         if (resizeDirection.includes('n')) {
-          newHeight = Math.max(60, resizeStartRef.current.height - dy)
+          newHeight = Math.max(NODE_DEFAULTS.MIN_HEIGHT, resizeStartRef.current.height - dy)
           newY = dragStartRef.current.nodeY + dy
         }
 
         // 只更新本地状态
         setLocalPosition({ x: newX, y: newY })
         setLocalSize({ width: newWidth, height: newHeight })
+
+        // Throttled store update during resize so Yjs binding syncs to peers.
+        // markDirty=false: only the final mouseup should trigger autosave/cache.
+        const now = Date.now()
+        if (now - resizeSyncThrottleRef.current >= 100) {
+          resizeSyncThrottleRef.current = now
+          updateNodeWithoutHistory(node.id, { x: newX, y: newY, width: newWidth, height: newHeight }, false)
+        }
       }
     }
 
@@ -836,16 +948,22 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
             setIsOverNodePool(false)
             setCanvasDragGhostPosition(null)
             setOverFolderId(null)
+            getYjsBinding()?.endInteraction(node.id)
           } else {
-            // 正常释放，更新节点位置
+            // 先结束交互并 flush 被推迟的远程位置，再用本地最终位置覆盖；
+            // 这样用户拖拽的结果优先于远端协作位置。
+            getYjsBinding()?.endInteraction(node.id)
+            // 正常释放，更新节点位置（从 ref 读取避免 effect 依赖本地 state）
+            const finalPosition = localPositionRef.current
+            const finalSize = localSizeRef.current
             updateNode(node.id, {
-              x: localPosition.x,
-              y: localPosition.y,
+              x: finalPosition.x,
+              y: finalPosition.y,
             })
             // 设置标志，防止 useEffect 立即重置位置
             justFinishedDragRef.current = true
             // 更新 lastSyncedNodeRef 为新位置，防止被覆盖
-            lastSyncedNodeRef.current = { x: localPosition.x, y: localPosition.y, width: localSize.width, height: localSize.height }
+            lastSyncedNodeRef.current = { x: finalPosition.x, y: finalPosition.y, width: finalSize.width, height: finalSize.height }
             // 延迟清除标志，允许 React 状态更新完成
             const timer = setTimeout(() => {
               justFinishedDragRef.current = false
@@ -861,20 +979,28 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
           }
         }
         if (isResizing) {
+          // End interaction first so the local final size takes precedence
+          // over any deferred remote position/size updates.
+          getYjsBinding()?.endInteraction(node.id)
+          const finalPosition = localPositionRef.current
+          const finalSize = localSizeRef.current
           updateNode(node.id, {
-            x: localPosition.x,
-            y: localPosition.y,
-            width: localSize.width,
-            height: localSize.height,
+            x: finalPosition.x,
+            y: finalPosition.y,
+            width: finalSize.width,
+            height: finalSize.height,
           })
           justFinishedDragRef.current = true
-          setTimeout(() => {
+          const timer = setTimeout(() => {
             justFinishedDragRef.current = false
           }, 100)
+          timerRefsRef.current.add(timer)
         }
         setIsDragging(false)
         setIsResizing(false)
         setResizeDirection('')
+        dragSyncThrottleRef.current = 0
+        resizeSyncThrottleRef.current = 0
         onDragEnd?.()
       }
     }
@@ -892,7 +1018,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
         window.removeEventListener('mouseup', handleMouseUp)
       }
     }
-  }, [isDragging, isResizing, resizeDirection, node.id, node.locked, zoom, updateNode, onDragEnd, localPosition, localSize])
+  }, [isDragging, isResizing, resizeDirection, node.id, node.locked, zoom, updateNode, onDragEnd])
 
   // Handle double click to edit
   const handleDoubleClick = useCallback(
@@ -957,7 +1083,6 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
           setLocalEditingUpdate(true)
           try {
             updateNodeWithoutHistory(node.id, { title })
-            collabService.sendOperation('update-node', { id: node.id, updates: { title } })
           } finally {
             setLocalEditingUpdate(false)
           }
@@ -975,7 +1100,6 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
           setLocalEditingUpdate(true)
           try {
             updateNodeWithoutHistory(node.id, { content })
-            collabService.sendOperation('update-node', { id: node.id, updates: { content } })
           } finally {
             setLocalEditingUpdate(false)
           }
@@ -1159,21 +1283,23 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
   // Toggle collapsed state
   const toggleCollapsed = useCallback(() => {
     const newCollapsed = !node.collapsed
+    const safeWidth = toFinite(node.width, NODE_DEFAULTS.WIDTH)
 
     if (newCollapsed) {
+      const safeHeight = toFinite(node.height, NODE_DEFAULTS.HEIGHT)
       updateNode(node.id, {
         collapsed: newCollapsed,
-        expandedHeight: node.height,
+        expandedHeight: safeHeight,
         height: 36
       })
-      setLocalSize({ width: node.width, height: 36 })
+      setLocalSize({ width: safeWidth, height: 36 })
     } else {
-      const expandedHeight = node.expandedHeight || node.height
+      const expandedHeight = toFinite(node.expandedHeight, toFinite(node.height, NODE_DEFAULTS.HEIGHT))
       updateNode(node.id, {
         collapsed: newCollapsed,
         height: expandedHeight
       })
-      setLocalSize({ width: node.width, height: expandedHeight })
+      setLocalSize({ width: safeWidth, height: expandedHeight })
     }
   }, [node.id, node.collapsed, node.height, node.expandedHeight, node.width, updateNode])
 
@@ -1213,10 +1339,10 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
       <div
         style={{
           position: 'absolute',
-          left: (groupDragOffset ? localPosition.x + groupDragOffset.x : localPosition.x) - 16,
-          top: (groupDragOffset ? localPosition.y + groupDragOffset.y : localPosition.y) - 16,
-          width: localSize.width + 32,
-          height: localSize.height + 32,
+          left: toFinite((groupDragOffset ? localPosition.x + groupDragOffset.x : localPosition.x) - 16, -16),
+          top: toFinite((groupDragOffset ? localPosition.y + groupDragOffset.y : localPosition.y) - 16, -16),
+          width: toFinite(localSize.width + 32, NODE_DEFAULTS.WIDTH + 32),
+          height: toFinite(localSize.height + 32, NODE_DEFAULTS.HEIGHT + 32),
           opacity: isBeingDraggedToPool ? 0 : opacity,
           visibility: isBeingDraggedToPool ? 'hidden' : 'visible',
           transition: 'opacity 0.2s ease',
@@ -1243,9 +1369,16 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
                 resizeStartRef.current = {
                   x: e.clientX,
                   y: e.clientY,
-                  width: node.width,
-                  height: node.height,
+                  width: toFinite(node.width, NODE_DEFAULTS.WIDTH),
+                  height: toFinite(node.height, NODE_DEFAULTS.HEIGHT),
                 }
+                dragStartRef.current = {
+                  x: e.clientX,
+                  y: e.clientY,
+                  nodeX: toFinite(node.x, 0),
+                  nodeY: toFinite(node.y, 0),
+                }
+                getYjsBinding()?.startInteraction(node.id, 'position')
               }}
             >
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
@@ -1270,9 +1403,16 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
                 resizeStartRef.current = {
                   x: e.clientX,
                   y: e.clientY,
-                  width: node.width,
-                  height: node.height,
+                  width: toFinite(node.width, NODE_DEFAULTS.WIDTH),
+                  height: toFinite(node.height, NODE_DEFAULTS.HEIGHT),
                 }
+                dragStartRef.current = {
+                  x: e.clientX,
+                  y: e.clientY,
+                  nodeX: toFinite(node.x, 0),
+                  nodeY: toFinite(node.y, 0),
+                }
+                getYjsBinding()?.startInteraction(node.id, 'position')
               }}
             >
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
@@ -1297,9 +1437,16 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
                 resizeStartRef.current = {
                   x: e.clientX,
                   y: e.clientY,
-                  width: node.width,
-                  height: node.height,
+                  width: toFinite(node.width, NODE_DEFAULTS.WIDTH),
+                  height: toFinite(node.height, NODE_DEFAULTS.HEIGHT),
                 }
+                dragStartRef.current = {
+                  x: e.clientX,
+                  y: e.clientY,
+                  nodeX: toFinite(node.x, 0),
+                  nodeY: toFinite(node.y, 0),
+                }
+                getYjsBinding()?.startInteraction(node.id, 'position')
               }}
             >
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
@@ -1324,9 +1471,16 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
                 resizeStartRef.current = {
                   x: e.clientX,
                   y: e.clientY,
-                  width: node.width,
-                  height: node.height,
+                  width: toFinite(node.width, NODE_DEFAULTS.WIDTH),
+                  height: toFinite(node.height, NODE_DEFAULTS.HEIGHT),
                 }
+                dragStartRef.current = {
+                  x: e.clientX,
+                  y: e.clientY,
+                  nodeX: toFinite(node.x, 0),
+                  nodeY: toFinite(node.y, 0),
+                }
+                getYjsBinding()?.startInteraction(node.id, 'position')
               }}
             >
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
@@ -1346,8 +1500,8 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
             cursor: isDragging ? 'move' : undefined,
             left: 16,
             top: 16,
-            width: localSize.width,
-            height: localSize.height,
+            width: toFinite(localSize.width, NODE_DEFAULTS.WIDTH),
+            height: toFinite(localSize.height, NODE_DEFAULTS.HEIGHT),
             boxShadow: isSelected
               ? '0 4px 12px rgba(0, 0, 0, 0.15)'
               : isDragging || groupDragOffset
@@ -1431,9 +1585,9 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
                   ...getTitleAlign(node, true),
                 }}
                 onDoubleClick={(e) => handleDoubleClick(e, 'title')}
-                title={node.title?.replace(/<[^>]*>/g, '') || node.content?.replace(/<[^>]*>/g, '')}
+                title={node.title || stripHtml(node.content) || ''}
               >
-                {node.title?.replace(/<[^>]*>/g, '') || node.content?.replace(/<[^>]*>/g, '') || '双击添加标题'}
+                {node.title || stripHtml(node.content) || '双击添加标题'}
               </div>
             )
           ) : node.type === 'image' ? (
@@ -1475,7 +1629,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
                       whiteSpace: 'pre-wrap',
                     }}
                     onDoubleClick={(e) => handleDoubleClick(e, 'title')}
-                    dangerouslySetInnerHTML={{ __html: highlightState?.keywords ? highlightKeywords(node.title || '', highlightState.keywords) : node.title || '' }}
+                    dangerouslySetInnerHTML={{ __html: highlightState?.keywords ? safeHighlightTitle(node.title || '', highlightState.keywords) : textToSafeHtml(node.title || '') }}
                   />
                 )}
               </div>
@@ -1571,7 +1725,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
                       whiteSpace: 'pre-wrap',
                     }}
                     onDoubleClick={(e) => handleDoubleClick(e, 'title')}
-                    dangerouslySetInnerHTML={{ __html: highlightState?.keywords ? highlightKeywords(node.title || '', highlightState.keywords) : node.title || '' }}
+                    dangerouslySetInnerHTML={{ __html: highlightState?.keywords ? safeHighlightTitle(node.title || '', highlightState.keywords) : textToSafeHtml(node.title || '') }}
                   />
                 )}
               </div>
@@ -1616,7 +1770,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
                       textAlign: node.contentAlign || node.textAlign,
                     }}
                     onDoubleClick={(e) => handleDoubleClick(e, 'content')}
-                    dangerouslySetInnerHTML={{ __html: highlightState?.keywords ? highlightKeywords(node.content || '双击添加内容', highlightState.keywords) : node.content || '双击添加内容' }}
+                    dangerouslySetInnerHTML={{ __html: highlightState?.keywords ? safeHighlightHtml(cleanHtmlContent(node.content || '双击添加内容'), highlightState.keywords) : cleanHtmlContent(node.content || '双击添加内容') }}
                   />
                 )}
               </div>

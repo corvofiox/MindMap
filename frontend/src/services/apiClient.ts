@@ -277,6 +277,11 @@ export class ApiClient {
         throw new Error(this.handleError(new Error(ERROR_MESSAGES.NETWORK_ERROR), ERROR_MESSAGES.NETWORK_ERROR))
       }
 
+      // 保留 ApiError 以便调用方根据 status 做结构化处理（如 409 乐观锁冲突）
+      if (error instanceof ApiError) {
+        throw error
+      }
+
       // 处理其他错误
       throw new Error(this.handleError(error, ERROR_MESSAGES.UNKNOWN_ERROR))
     }
