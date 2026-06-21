@@ -576,6 +576,58 @@ describe('yjsBinding', () => {
       binding.destroy()
     })
 
+    it('preserves local store when server doc is brand-new empty on reconnect', () => {
+      // Regression test for: real-time collaboration clears the canvas when
+      // the server reconnects to a brand-new empty doc (e.g. process restart or
+      // empty yjsUpdate column). The local store must be preserved and mirrored
+      // back to the doc instead of being deleted.
+      const doc = new Y.Doc()
+      ensureRoot(doc) // server STEP2 delivered an empty root structure only
+      const store = createMockStore()
+      store.nodes.set('n1', { id: 'n1', x: 1, y: 2, title: 'Local' } as any)
+      store.domains.set('d1', { id: 'd1', name: 'Domain' } as any)
+
+      const binding = bindYjsToStore(createMockProvider(doc, true), store as any)
+      binding.syncYDocToLocalState()
+
+      // Local entities must NOT be removed.
+      expect(store.removeNode).not.toHaveBeenCalled()
+      expect(store.removeDomain).not.toHaveBeenCalled()
+      // They must be mirrored into the empty doc.
+      const collections = ensureRoot(doc)
+      expect(collections.nodes.has('n1')).toBe(true)
+      expect(collections.nodes.get('n1')!.get('title')).toBe('Local')
+      expect(collections.domains.has('d1')).toBe(true)
+      binding.destroy()
+    })
+
+    it('wipes local store when server doc was intentionally emptied by peers', () => {
+      // If peers deleted all entities while we were offline, the server doc
+      // still carries deletion history. We must trust that authoritative empty
+      // state and remove our stale local entities.
+      const doc = new Y.Doc()
+      ensureRoot(doc)
+      doc.transact(() => {
+        ensureRoot(doc).nodes.set('n1', entityToYMap({ id: 'n1', x: 0, y: 0, title: 'Server' }))
+      })
+      doc.transact(() => {
+        ensureRoot(doc).nodes.delete('n1')
+      })
+      expect(ensureRoot(doc).nodes.size).toBe(0)
+
+      const store = createMockStore()
+      store.nodes.set('n1', { id: 'n1', x: 1, y: 2, title: 'Stale' } as any)
+
+      const binding = bindYjsToStore(createMockProvider(doc, true), store as any)
+      binding.syncYDocToLocalState()
+
+      // Stale local entity must be removed because the doc has deletion history.
+      expect(store.removeNode).toHaveBeenCalledWith('n1')
+      // The local entity must NOT be mirrored back to the authoritative doc.
+      expect(ensureRoot(doc).nodes.has('n1')).toBe(false)
+      binding.destroy()
+    })
+
     it('reconnectObservers attaches observers once root maps exist', () => {
       const doc = new Y.Doc()
       const store = createMockStore()

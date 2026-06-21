@@ -170,12 +170,17 @@ export function useCollaboration({
         // edited locally while the handshake was in flight. On reconnects,
         // remove local entities deleted by peers and apply server updates
         // normally.
-        binding.syncYDocToLocalState({
+        // If the server doc is empty but the local store still has entities,
+        // syncYDocToLocalState already mirrors local state back into the doc
+        // and returns true; skip the redundant syncLocalStateToYDoc() call.
+        const emptyDocMirrored = binding.syncYDocToLocalState({
           skipRemoval: isFirstSync,
           skipExistingUpdates: isFirstSync ? editedDuringHandshake : false,
         })
         if (isFirstSync) {
-          binding.syncLocalStateToYDoc()
+          if (!emptyDocMirrored) {
+            binding.syncLocalStateToYDoc()
+          }
           isFirstSync = false
         }
       }

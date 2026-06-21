@@ -40,8 +40,11 @@ type YjsBindingHandle = {
    *  @param options.skipExistingUpdates If true or a Set of entity IDs,
    *    existing local entities are NOT refreshed from the doc. Use for IDs
    *    edited locally while the handshake was in flight so they are not
-   *    overwritten by the server snapshot. */
-  syncYDocToLocalState: (options?: { skipRemoval?: boolean; skipExistingUpdates?: boolean | Set<string> }) => void
+   *    overwritten by the server snapshot.
+   *  @returns true if the doc was empty but the local store had entities and
+   *    the function already mirrored local state back into the doc; callers
+   *    should skip a follow-up syncLocalStateToYDoc() call. */
+  syncYDocToLocalState: (options?: { skipRemoval?: boolean; skipExistingUpdates?: boolean | Set<string> }) => boolean
   /** Tear down the binding (unobserve Yjs collections). */
   destroy: () => void
 }

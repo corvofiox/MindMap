@@ -1183,7 +1183,10 @@ export function CanvasPage() {
         //    every edit (the "canvas clears on each edit" bug).
         const storeState = useCanvasStore.getState()
         if (collabService.isConnected() &&
-          (storeState.nodes.size > 0 || storeState.domains.size > 0)) {
+          (storeState.nodes.size > 0 ||
+            storeState.groups.size > 0 ||
+            storeState.domains.size > 0 ||
+            storeState.connections.size > 0)) {
           setDirty(false)
           return
         }

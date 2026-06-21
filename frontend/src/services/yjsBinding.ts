@@ -18,6 +18,7 @@ import type { Node, NodeGroup, Domain, Connection } from '@/types'
 import { ensureRoot, getExistingRoot, entityToYMap, ymapToObject } from './yjs-schema'
 import type { MindMapYjsProvider } from './yjsProvider'
 import { useCanvasStore } from '@/store/useCanvasStore'
+import { logger } from '@/utils/logger'
 
 /**
  * Origin tag applied to every local transaction. The observer checks against
@@ -78,8 +79,11 @@ export interface YjsCanvasBinding {
    *  @param options.skipExistingUpdates If true or a Set of entity IDs,
    *    existing local entities are NOT refreshed from the doc. Use for IDs
    *    edited locally while the handshake was in flight so they are not
-   *    overwritten by the server snapshot. */
-  syncYDocToLocalState: (options?: { skipRemoval?: boolean; skipExistingUpdates?: boolean | Set<string> }) => void
+   *    overwritten by the server snapshot.
+   *  @returns true if the doc was empty but the local store had entities and
+   *    the function already mirrored local state back into the doc; callers
+   *    should skip a follow-up syncLocalStateToYDoc() call. */
+  syncYDocToLocalState: (options?: { skipRemoval?: boolean; skipExistingUpdates?: boolean | Set<string> }) => boolean
   /** Detach all observers. */
   destroy: () => void
   /** Re-register observers on current Y.Map instances (after STEP2 sync). */
@@ -471,9 +475,52 @@ export function bindYjsToStore(
 
     const collections = getExistingRoot(doc)
     if (!collections) return
-    suppressSync(() => {
-      const liveState = useCanvasStore.getState()
 
+    // Safety guard: if the authoritative doc is completely empty but the local
+    // store still has entities, do NOT wipe the local store. This happens when
+    // the server loses its in-memory doc (e.g. last client left, process
+    // restarted, or persisted yjsUpdate was empty/corrupted) and reconnects the
+    // client to an empty doc before the local offline edits have been replayed.
+    // In that case the local store is the only surviving copy of the data; we
+    // mirror it back into the doc instead of deleting it.
+    const docEntityCount =
+      (collections.nodes?.size ?? 0) +
+      (collections.groups?.size ?? 0) +
+      (collections.domains?.size ?? 0) +
+      (collections.connections?.size ?? 0)
+    const liveState = useCanvasStore.getState()
+    const localEntityCount =
+      liveState.nodes.size +
+      liveState.groups.size +
+      liveState.domains.size +
+      liveState.connections.size
+    if (docEntityCount === 0 && localEntityCount > 0) {
+      // Distinguish between:
+      // 1. Brand-new empty doc (server lost in-memory state / yjsUpdate missing):
+      //    the local store is the only surviving copy, so preserve it.
+      // 2. Doc with history but currently empty (peers intentionally deleted all
+      //    entities while we were offline): trust the server snapshot and let
+      //    the normal removal logic clear the local store.
+      // An empty doc that only contains the root structure has a deterministic
+      // update size; anything larger means real edit history exists.
+      const emptyWithRoot = new Y.Doc()
+      ensureRoot(emptyWithRoot)
+      const emptyUpdateLen = Y.encodeStateAsUpdate(emptyWithRoot).length
+      const currentUpdateLen = Y.encodeStateAsUpdate(doc).length
+
+      if (currentUpdateLen <= emptyUpdateLen) {
+        logger.warn(
+          '[yjs-binding] server doc is empty (no history) but local store has entities; ' +
+            'preserving local state and mirroring it back to the doc',
+          { localEntityCount },
+        )
+        syncLocalStateToYDoc()
+        return true
+      }
+      // Fall through: doc has deletion history, apply the authoritative empty state.
+    }
+
+    suppressSync(() => {
       // Remove local entities that no longer exist in the authoritative doc.
       // Observers are not attached while STEP2 is applied, so peer deletions
       // that happened while offline would otherwise remain in the store.
@@ -549,6 +596,7 @@ export function bindYjsToStore(
         }
       }
     })
+    return false
   }
 
   return {
