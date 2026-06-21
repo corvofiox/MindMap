@@ -81,6 +81,13 @@ authRouter.post('/register', authLimiter(), asyncHandler(async (req, res) => {
 authRouter.post('/login', authLimiter(), asyncHandler(async (req, res) => {
   const { email, password } = req.body
 
+  if (!email || !password || typeof email !== 'string' || typeof password !== 'string') {
+    return res.status(400).json({
+      success: false,
+      error: '邮箱和密码不能为空',
+    })
+  }
+
   // Find user
   const usersList = await db
     .select()

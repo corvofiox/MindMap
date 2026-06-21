@@ -3,6 +3,7 @@
  * 使用 document.execCommand 实现可靠的富文本编辑
  * 支持：加粗、斜体、下划线、删除线、文字颜色
  */
+import { logger } from './logger'
 
 const FORMAT_COMMANDS = {
   bold: 'bold',
@@ -432,7 +433,7 @@ export function execFormatCommand(command: string, value?: string): boolean {
 
     return result
   } catch (error) {
-    console.error('execFormatCommand error:', error)
+    logger.error('execFormatCommand error', error)
     return false
   }
 }

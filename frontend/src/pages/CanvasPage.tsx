@@ -22,6 +22,7 @@ import { ConnectionLine } from '@/components/canvas/ConnectionLine'
 import { CONNECTION_DEFAULTS, Z_INDEX } from '@/constants'
 import { generateId, colorToHex, hexToRgba, calculateCurveControlPoints, getCurveThroughPoints, getStepPath, pointsToPath, calculateSmartPortPosition, buildConnectionInfoMap, getPortOffsetVector, type PortDirection, type ConnectionInfo } from '@/utils/canvas'
 import { saveToCache, loadFromCache } from '@/utils/nodeCache'
+import { logger } from '@/utils/logger'
 import { execFormatCommand } from '@/utils/richTextCommands'
 import { loadCanvasNodesData, apiClient } from '@/services/api'
 import { ApiError } from '@/services/apiClient'
@@ -57,8 +58,8 @@ const saveCanvasView = (canvasId: number, zoom: number, panX: number, panY: numb
     const views = JSON.parse(localStorage.getItem(CANVAS_VIEW_STORAGE_KEY) || '{}')
     views[canvasId] = { zoom, panX, panY, timestamp: Date.now() }
     localStorage.setItem(CANVAS_VIEW_STORAGE_KEY, JSON.stringify(views))
-  } catch {
-    // Storage may be unavailable or quota exceeded; ignore gracefully.
+  } catch (error) {
+    logger.warn('Failed to save canvas view to localStorage', { canvasId, error })
   }
 }
 
@@ -66,7 +67,8 @@ const loadCanvasView = (canvasId: number) => {
   try {
     const views = JSON.parse(localStorage.getItem(CANVAS_VIEW_STORAGE_KEY) || '{}')
     return views[canvasId] || null
-  } catch {
+  } catch (error) {
+    logger.warn('Failed to load canvas view from localStorage', { canvasId, error })
     return null
   }
 }

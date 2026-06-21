@@ -111,11 +111,25 @@ export class ApiClient {
     addErrorToast(message, '操作失败')
   }
 
-  // Create an AbortController with timeout
-  private createTimeoutController(timeout: number): { controller: AbortController; timeoutId: ReturnType<typeof setTimeout> } {
+  // Create an AbortController with timeout, optionally chaining an external signal
+  private createTimeoutController(
+    timeout: number,
+    externalSignal?: AbortSignal
+  ): { controller: AbortController; timeoutId: ReturnType<typeof setTimeout>; cleanup: () => void } {
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(), timeout)
-    return { controller, timeoutId }
+    let externalAbortHandler: (() => void) | null = null
+    if (externalSignal) {
+      externalAbortHandler = () => controller.abort()
+      externalSignal.addEventListener('abort', externalAbortHandler)
+    }
+    const cleanup = () => {
+      clearTimeout(timeoutId)
+      if (externalAbortHandler && externalSignal) {
+        externalSignal.removeEventListener('abort', externalAbortHandler)
+      }
+    }
+    return { controller, timeoutId, cleanup }
   }
 
 
@@ -216,7 +230,8 @@ export class ApiClient {
   // 通用请求方法
   private async request<T>(
     endpoint: string,
-    options: RequestInit = {}
+    options: RequestInit = {},
+    timeout: number = this.defaultTimeout
   ): Promise<T> {
     try {
       // 确保CSRF token有效（针对非GET请求）
@@ -231,13 +246,15 @@ export class ApiClient {
         contentType = 'multipart/form-data'
       }
 
+      const { controller, cleanup } = this.createTimeoutController(timeout, options.signal)
       const response = await fetch(`${this.baseUrl}${endpoint}`, {
         ...options,
+        signal: controller.signal,
         headers: {
           ...this.buildHeaders(contentType),
           ...options.headers,
         },
-      })
+      }).finally(cleanup)
 
       // 检查响应状态
       if (!response.ok) {

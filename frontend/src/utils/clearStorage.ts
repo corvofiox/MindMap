@@ -1,3 +1,5 @@
+import { logger } from './logger'
+
 const STORAGE_KEYS = {
   TOKEN: 'mindmap_token',
   AUTH: 'mindmap-auth',
@@ -8,7 +10,7 @@ const STORAGE_KEYS = {
 
 function logWarning(message: string) {
   if (import.meta.env.DEV) {
-    console.warn(`[WARN] ${message}`)
+    logger.warn(message)
   }
 }
 

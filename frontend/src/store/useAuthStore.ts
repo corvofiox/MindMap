@@ -99,6 +99,7 @@ export const useAuthStore = create<AuthState>()(
         },
 
         login: async (credentials) => {
+          if (get().isLoading) return
           set({ isLoading: true, error: null })
           try {
             const oldToken = safeStorage.getItem(TOKEN_KEY)
@@ -152,6 +153,7 @@ export const useAuthStore = create<AuthState>()(
         },
 
         register: async (data) => {
+          if (get().isLoading) return
           set({ isLoading: true, error: null })
           try {
             const oldToken = safeStorage.getItem(TOKEN_KEY)

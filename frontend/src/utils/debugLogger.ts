@@ -28,17 +28,17 @@ class DebugLogger {
     }
 
     const logLine = `[${timestamp}] [${type.toUpperCase()}] [${category}] ${message}${data ? ' ' + JSON.stringify(data) : ''}`
-    console.log(logLine)
-    
+    logger.info(logLine)
+
     this.logs.push(logLine)
     this.logEntries.push(logEntry)
-    
+
     try {
       const existingLogs = JSON.parse(localStorage.getItem('debugLogs') || '[]')
       existingLogs.push(logEntry)
       localStorage.setItem('debugLogs', JSON.stringify(existingLogs.slice(-500)))
     } catch (e) {
-      console.error('Failed to save log to localStorage:', e)
+      logger.error('Failed to save log to localStorage', e)
     }
   }
 

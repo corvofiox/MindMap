@@ -593,6 +593,11 @@ export class MindMapYjsProvider {
 
   /** Public helper: update the local cursor / selection / editing state. */
   setLocalAwarenessField(field: string, value: unknown) {
+    const allowedFields = ['cursor', 'selection', 'editingId', 'user']
+    if (!allowedFields.includes(field)) {
+      logger.warn('[yjs-provider] rejected unknown awareness field', { field })
+      return
+    }
     this.awareness.setLocalStateField(field, value)
   }
 
