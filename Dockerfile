@@ -81,7 +81,7 @@ EXPOSE 9000
 
 # 设置默认环境变量（可以被 docker run 覆盖）
 ENV PORT=9000
-ENV DB_FILE=backend/data/mindmap.db
+ENV DB_FILE=data/mindmap.db
 ENV LOG_FILE=backend/data/app.log
 ENV ALLOWED_ORIGINS=*
 
