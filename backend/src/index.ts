@@ -35,6 +35,10 @@ import { log, logError } from './utils/logger.js'
 const app = express()
 const server = createServer(app)
 
+// Trust the first proxy (e.g. nginx, cloudflare, k8s ingress) so that
+// express-rate-limit can correctly derive the client IP from X-Forwarded-For.
+app.set('trust proxy', 1)
+
 const env = getValidatedEnv()
 const PORT = parseInt(env.PORT || '3000', 10)
 const WS_PORT = parseInt(env.WS_PORT || '3001', 10)
