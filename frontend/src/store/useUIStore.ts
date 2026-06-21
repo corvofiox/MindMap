@@ -50,11 +50,6 @@ interface UIState {
   zoomStep: number
   setZoomStep: (step: number) => void
 
-  // Drag Ghost (for node pool copy to canvas)
-  dragGhostCard: NodeCard | null
-  dragGhostPosition: { x: number; y: number } | null
-  setDragGhost: (card: NodeCard | null, position: { x: number; y: number } | null) => void
-
   // Drag from canvas to node pool
   draggingNodeFromCanvas: { nodeId: string; nodeData: Node } | null
   isOverNodePool: boolean
@@ -217,11 +212,6 @@ export const useUIStore = create<UIState>()(
         // Zoom Step (default 0.1 = 10%)
         zoomStep: 0.1,
         setZoomStep: (step) => set({ zoomStep: Math.max(0.01, Math.min(0.5, step)) }),
-
-        // Drag Ghost (for node pool copy to canvas)
-        dragGhostCard: null,
-        dragGhostPosition: null,
-        setDragGhost: (card, position) => set({ dragGhostCard: card, dragGhostPosition: position }),
 
         // Drag from canvas to node pool
         draggingNodeFromCanvas: null,

@@ -5,6 +5,7 @@ import { useProjectsStore } from '@/store/useProjectsStore'
 import { useUIStore } from '@/store/useUIStore'
 import { useAuthStore } from '@/store/useAuthStore'
 import { useNodePoolStore } from '@/features/node-pool/stores/useNodePoolStore'
+import { createNodeFromCard, parseCardNodeData } from '@/features/node-pool/utils/createNodeFromCard'
 import { useCollaboration } from '@/hooks/useCollaboration'
 import { CanvasToolbar } from '@/components/canvas/CanvasToolbar'
 import { CanvasGrid } from '@/components/canvas/CanvasGrid'
@@ -950,33 +951,58 @@ export function CanvasPage() {
   // Handle canvas drop event from node pool (copy to canvas)
   useEffect(() => {
     const handleCanvasDrop = async (e: CustomEvent) => {
-      const { card } = e.detail
+      const { card, clientX, clientY } = e.detail
       if (!card || !containerRef.current) return
 
       const rect = containerRef.current.getBoundingClientRect()
 
-      // 计算视图中央的屏幕坐标
-      const screenCenterX = rect.width / 2
-      const screenCenterY = rect.height / 2
+      // 计算落点。事件携带的是 viewport 坐标，需先换算为容器内坐标；未携带时回退到画布中心。
+      const screenX = clientX ?? (rect.left + rect.width / 2)
+      const screenY = clientY ?? (rect.top + rect.height / 2)
 
-      // 将屏幕坐标转换为画布坐标
-      const canvasCenterX = (screenCenterX - panX) / zoom
-      const canvasCenterY = (screenCenterY - panY) / zoom
+      // 将容器内坐标转换为画布坐标
+      const canvasX = (screenX - rect.left - panX) / zoom
+      const canvasY = (screenY - rect.top - panY) / zoom
 
       try {
-        const nodeData = JSON.parse(card.content)
-        const newNode = {
-          ...nodeData,
-          id: `${nodeData.id}-pool-${Date.now()}`,
-          x: canvasCenterX - (nodeData.width || 200) / 2,
-          y: canvasCenterY - (nodeData.height || 120) / 2,
-        }
-        addNode(newNode)
+        const nodeData = parseCardNodeData(card)
+        const nodeWidth = nodeData.width || 200
+        const nodeHeight = nodeData.height || 120
+        const newNode = createNodeFromCard(card, {
+          x: canvasX - nodeWidth / 2,
+          y: canvasY - nodeHeight / 2,
+        })
+        const { moveNodeFromPool } = useCanvasStore.getState()
 
-        // Remove from pool after adding to canvas (Move operation)
-        // Using direct store access to avoid adding dependency to useEffect
-        const { removeCard } = useNodePoolStore.getState()
-        removeCard(card.id)
+        // 用于在 undo 后跟踪被重新添加的卡片 ID，保证 redo 时仍能正确移除。
+        let cardIdToRemove = card.id
+
+        moveNodeFromPool(
+          newNode,
+          async () => {
+            const { removeCard, temporaryCards } = useNodePoolStore.getState()
+            const tempCardInfo = temporaryCards.get(cardIdToRemove)
+            if (tempCardInfo?.realCardId) {
+              await removeCard(tempCardInfo.realCardId)
+            } else {
+              await removeCard(cardIdToRemove)
+            }
+          },
+          async () => {
+            const { addCard } = useNodePoolStore.getState()
+            const restoredCard = await addCard({
+              name: card.name,
+              content: JSON.stringify(newNode),
+              type: card.type,
+              color: card.color,
+              tags: card.tags,
+              sortOrder: card.sortOrder,
+              folderId: card.folderId,
+              thumbnail: card.thumbnail,
+            })
+            cardIdToRemove = restoredCard.id
+          }
+        )
 
         addToast({ type: 'success', title: '移动成功', message: '节点已移动到画布' })
 
@@ -995,7 +1021,7 @@ export function CanvasPage() {
     return () => {
       document.removeEventListener('canvasDrop', handleCanvasDrop as EventListener)
     }
-  }, [addNode, addToast, panX, panY, zoom])
+  }, [addToast, panX, panY, zoom])
 
   const { loadProjects, restoreCurrentProject, canvases, updateCanvas: updateCanvasInStore, currentMemberRole } = useProjectsStore()
   const { user } = useAuthStore()
@@ -1850,7 +1876,7 @@ export function CanvasPage() {
 
   // Handle keyboard shortcuts
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
+    const handleKeyDown = async (e: KeyboardEvent) => {
       // Don't handle shortcuts when typing in input fields
       if (
         e.target instanceof HTMLInputElement ||
@@ -1924,7 +1950,7 @@ export function CanvasPage() {
       if ((e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
         e.preventDefault()
         if (canUndo()) {
-          undo()
+          await undo()
         }
         return
       }
@@ -1934,7 +1960,7 @@ export function CanvasPage() {
         ((e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey) && e.shiftKey)) {
         e.preventDefault()
         if (canRedo()) {
-          redo()
+          await redo()
         }
         return
       }
@@ -3472,7 +3498,7 @@ export function CanvasPage() {
       setDragRenderCounter(c => c + 1)
     }
 
-    const handleNodeDragEnd = (e: Event) => {
+    const handleNodeDragEnd = async (e: Event) => {
       const customEvent = e as CustomEvent<{ nodeId: string; droppedInNodePool?: boolean; targetFolderId?: number | null }>
       const { nodeId, droppedInNodePool, targetFolderId } = customEvent.detail
 
@@ -3482,22 +3508,34 @@ export function CanvasPage() {
       // 如果在节点池区域释放，则添加节点到节点池
       if (droppedInNodePool) {
         const { draggingNodeFromCanvas } = useUIStore.getState()
-        if (draggingNodeFromCanvas) {
-          const { currentProject } = useProjectsStore.getState()
-          const { addCard } = useNodePoolStore.getState()
-          const { moveNodeToPool } = useCanvasStore.getState()
-          const { addToast } = useUIStore.getState()
+        if (!draggingNodeFromCanvas) return
 
-          const node = draggingNodeFromCanvas.nodeData as Node
-          // 使用 moveNodeToPool 将节点移动到节点池（支持撤销/重做）
-          // onExecute: 添加卡片到节点池
-          // onUndo: 从节点池移除卡片
-          moveNodeToPool(
-            nodeId,
+        const { currentProject } = useProjectsStore.getState()
+        if (!currentProject) return
+
+        const { addCard } = useNodePoolStore.getState()
+        const { moveNodeToPool, waitForCommandEffect } = useCanvasStore.getState()
+        const { addToast } = useUIStore.getState()
+
+        const sourceNode = draggingNodeFromCanvas.nodeData as Node
+
+        // 如果拖拽的节点在当前选区中，则批量移动所有选中节点到节点池
+        const targetNodeIds = selectedIds.includes(nodeId) && selectedIds.length > 1
+          ? selectedIds
+          : [nodeId]
+
+        const createdCardIds = new Map<string, number>()
+        const commandIds: number[] = []
+
+        for (const id of targetNodeIds) {
+          const node = id === nodeId ? sourceNode : nodes.get(id)
+          if (!node) continue
+
+          const commandId = moveNodeToPool(
+            id,
             node,
             async () => {
-              // execute: 添加卡片到节点池
-              await addCard({
+              const card = await addCard({
                 name: node.title || node.content || '未命名',
                 content: JSON.stringify(node),
                 type: node.type || 'text',
@@ -3507,18 +3545,25 @@ export function CanvasPage() {
                 folderId: targetFolderId ?? null,
                 thumbnail: node.type === 'image' ? node.imageUrl : undefined,
               })
+              createdCardIds.set(id, card.id)
             },
             async () => {
-              // undo: 需要从节点池找到并移除对应的卡片
-              // 由于卡片ID是后端生成的，我们需要通过内容匹配来找到它
-              const { cardsMap, removeCard } = useNodePoolStore.getState()
-              // 查找匹配的卡片（通过内容匹配）
-              for (const [cardId, card] of cardsMap) {
+              // undo: 删除刚添加的卡片。优先使用创建时记录的 realCardId，
+              // 因为 afterExecute 已被 await 完成，createdCardIds 一定已写入。
+              const cardId = createdCardIds.get(id)
+              const { removeCard } = useNodePoolStore.getState()
+              if (cardId) {
+                await removeCard(cardId)
+                return
+              }
+
+              // Fallback: 通过内容匹配查找卡片
+              const { cardsMap } = useNodePoolStore.getState()
+              for (const [cid, card] of cardsMap) {
                 try {
                   const cardNodeData = JSON.parse(card.content)
-                  // 如果内容匹配，则移除该卡片
                   if (cardNodeData.id === node.id) {
-                    await removeCard(cardId)
+                    await removeCard(cid)
                     break
                   }
                 } catch {
@@ -3527,9 +3572,16 @@ export function CanvasPage() {
               }
             }
           )
-          const folderMessage = targetFolderId ? '节点已添加到指定文件夹' : '节点已添加到节点池'
-          addToast({ type: 'success', title: '已添加到节点池', message: folderMessage })
+
+          if (commandId !== undefined) {
+            commandIds.push(commandId)
+          }
         }
+
+        await Promise.all(commandIds.map((id) => waitForCommandEffect(id)))
+
+        const folderMessage = targetFolderId ? '节点已添加到指定文件夹' : '节点已添加到节点池'
+        addToast({ type: 'success', title: '已添加到节点池', message: folderMessage })
       }
     }
 
@@ -3542,7 +3594,7 @@ export function CanvasPage() {
       window.removeEventListener('nodeDragMove', handleNodeDragMove as EventListener)
       window.removeEventListener('nodeDragEnd', handleNodeDragEnd as EventListener)
     }
-  }, [nodes])
+  }, [nodes, selectedIds])
 
   // Show/hide rich text toolbar based on editing state
   useEffect(() => {

@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { useCanvasStore, getYjsBinding } from '@/store/useCanvasStore'
 import { useUIStore } from '@/store/useUIStore'
 import { snapToGrid } from '@/utils/canvas'
@@ -19,6 +19,156 @@ function toFinite(value: number | undefined | null, fallback: number): number {
     return fallback
   }
   return value
+}
+
+// 判断一段 HTML 是否没有任何可见文本（用于显示占位符）
+function isVisuallyEmpty(html: string | undefined | null): boolean {
+  if (!html) return true
+  const div = document.createElement('div')
+  div.innerHTML = html
+  return (div.textContent || '').replace(/\s+/g, '').length === 0
+}
+
+// 清理 HTML 内容，保留基本的文字格式标签
+function cleanHtmlContent(html: string): string {
+  // 创建临时元素来解析 HTML
+  const temp = document.createElement('div')
+  temp.innerHTML = html
+
+  // 允许保留的标签及其属性白名单
+  const allowedTags = new Set([
+    'b', 'strong', 'i', 'em', 'u', 's', 'strike', 'sub', 'sup',
+    'span', 'br', 'div', 'p', 'font'
+  ])
+  const allowedAttributes = new Set(['style', 'class', 'color', 'face'])
+
+  // 清理样式属性，只保留安全的 CSS 属性
+  const cleanStyle = (style: string): string => {
+    const allowedStyles = new Set([
+      'color', 'background-color', 'font-weight', 'font-style',
+      'text-decoration', 'text-decoration-line',
+      'text-decoration-style', 'text-decoration-color', 'line-height',
+      'letter-spacing', 'word-spacing', 'text-transform', 'font-family'
+    ])
+
+    const styles = style.split(';').filter(s => s.trim())
+    return styles
+      .filter(s => {
+        const [property] = s.split(':').map(p => p.trim().toLowerCase())
+        return allowedStyles.has(property)
+      })
+      .join(';')
+  }
+
+  // 递归清理函数
+  const cleanNode = (node: globalThis.Node): globalThis.Node => {
+    if (node.nodeType === globalThis.Node.TEXT_NODE) {
+      return node
+    }
+
+    if (node.nodeType === globalThis.Node.ELEMENT_NODE) {
+      const element = node as Element
+      const tagName = element.tagName.toLowerCase()
+
+      // 如果是允许的标签，保留它并清理其属性
+      if (allowedTags.has(tagName)) {
+        const newElement = element.cloneNode(false) as Element
+
+        // 特殊处理 font 标签，将其属性转换为内联样式
+        if (tagName === 'font') {
+          const color = element.getAttribute('color')
+          const face = element.getAttribute('face')
+          const styleParts: string[] = []
+
+          if (color) {
+            styleParts.push(`color: ${color}`)
+          }
+          if (face) {
+            styleParts.push(`font-family: ${face}`)
+          }
+
+          if (styleParts.length > 0) {
+            const existingStyle = element.getAttribute('style') || ''
+            const safeStyle = cleanStyle(existingStyle)
+            const combinedStyle = safeStyle
+              ? `${safeStyle}; ${styleParts.join('; ')}`
+              : styleParts.join('; ')
+            if (combinedStyle) {
+              newElement.setAttribute('style', combinedStyle)
+            }
+          }
+        }
+
+        // 只保留允许的属性
+        Array.from(element.attributes).forEach(attr => {
+          if (allowedAttributes.has(attr.name.toLowerCase())) {
+            // 清理 style 属性，只保留安全的 CSS 属性
+            if (attr.name.toLowerCase() === 'style') {
+              const safeStyle = cleanStyle(attr.value)
+              if (safeStyle) {
+                newElement.setAttribute('style', safeStyle)
+              }
+            } else if (tagName !== 'font' ||
+              (attr.name.toLowerCase() !== 'color' &&
+                attr.name.toLowerCase() !== 'size' &&
+                attr.name.toLowerCase() !== 'face')) {
+              // 对于非 font 标签，保留其他允许的属性
+              newElement.setAttribute(attr.name, attr.value)
+            }
+          }
+        })
+
+        // 递归清理子节点
+        Array.from(element.childNodes).forEach(child => {
+          newElement.appendChild(cleanNode(child))
+        })
+
+        return newElement
+      } else {
+        // 不允许的标签，只保留其子节点
+        const fragment = document.createDocumentFragment()
+        Array.from(element.childNodes).forEach(child => {
+          fragment.appendChild(cleanNode(child))
+        })
+        return fragment
+      }
+    }
+
+    return node
+  }
+
+  // 清理所有节点
+  const cleanedNodes = Array.from(temp.childNodes).map(child => cleanNode(child))
+  temp.innerHTML = ''
+  cleanedNodes.forEach(node => temp.appendChild(node))
+
+  // 简化换行处理
+  let result = temp.innerHTML
+
+  // 移除零宽空格（用于光标定位的辅助字符，不应保存）
+  result = result.replace(/\u200B/g, '')
+
+  // 移除真正空的 span 标签（不包含任何内容），但保留只含空格的 span
+  result = result.replace(/<span[^>]*><\/span>/g, '')
+
+  // 规范化：将块级换行元素转换为 <br>
+  // 重要：先处理结束标签转换为换行，再移除开始标签
+  result = result
+    .replace(/<\/(?:div|p)>/gi, '<br>')  // 结束标签转换为换行
+    .replace(/<(?:div|p)[^>]*>/gi, '')   // 移除开始标签
+
+  // 清理连续换行之间的多余空白字符，但保留用户输入的换行数量
+  result = result.replace(/(<br\s*\/?>)[ \t]+(?=<br\s*\/?>)/gi, '$1')
+
+  // 清理开头换行（保留用户在开头的换行意图），只清理结尾多余换行保留一个
+  result = result.replace(/(<br\s*\/?>\s*)+$/i, '<br>')
+
+  // 确保非空内容有换行标记
+  if (result && !result.includes('<br>')) {
+    result = result + '<br>'
+  }
+
+  return result || '<br>'
 }
 
 interface NodeItemProps {
@@ -384,14 +534,15 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
     } else if (editingField === 'content') {
       const isEnteringEdit = !hasInitializedEditRef.current.content
       if (isEnteringEdit) {
-        editingContentRef.current = node.content || ''
+        // 内容字段是富文本 HTML，初始化时应清理而不是转义，否则 <br> 等标签会被二次转义。
+        editingContentRef.current = cleanHtmlContent(node.content || '')
         hasInitializedEditRef.current.content = true
       }
       document.body.classList.add('allow-text-selection')
       const timer = setTimeout(() => {
         if (contentRef.current) {
           if (isEnteringEdit) {
-            contentRef.current.innerHTML = textToSafeHtml(editingContentRef.current)
+            contentRef.current.innerHTML = editingContentRef.current
           }
           contentRef.current.focus()
           const range = document.createRange()
@@ -418,7 +569,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
     return () => {
       document.body.classList.remove('allow-text-selection')
     }
-  }, [editingField, textToSafeHtml])
+  }, [editingField, textToSafeHtml, cleanHtmlContent])
 
   const getTitleAlign = useCallback((node: Node, isCollapsed: boolean) => {
     if (isCollapsed) {
@@ -435,147 +586,6 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
     }
   }, [])
 
-  // 清理 HTML 内容，保留基本的文字格式标签
-  const cleanHtmlContent = useCallback((html: string): string => {
-    // 创建临时元素来解析 HTML
-    const temp = document.createElement('div')
-    temp.innerHTML = html
-
-    // 允许保留的标签及其属性白名单
-    const allowedTags = new Set([
-      'b', 'strong', 'i', 'em', 'u', 's', 'strike', 'sub', 'sup',
-      'span', 'br', 'div', 'p', 'font'
-    ])
-    const allowedAttributes = new Set(['style', 'class', 'color', 'face'])
-
-    // 递归清理函数
-    const cleanNode = (node: globalThis.Node): globalThis.Node => {
-      if (node.nodeType === globalThis.Node.TEXT_NODE) {
-        return node
-      }
-
-      if (node.nodeType === globalThis.Node.ELEMENT_NODE) {
-        const element = node as Element
-        const tagName = element.tagName.toLowerCase()
-
-        // 如果是允许的标签，保留它并清理其属性
-        if (allowedTags.has(tagName)) {
-          const newElement = element.cloneNode(false) as Element
-
-          // 特殊处理 font 标签，将其属性转换为内联样式
-          if (tagName === 'font') {
-            const color = element.getAttribute('color')
-            const face = element.getAttribute('face')
-            const styleParts: string[] = []
-
-            if (color) {
-              styleParts.push(`color: ${color}`)
-            }
-            if (face) {
-              styleParts.push(`font-family: ${face}`)
-            }
-
-            if (styleParts.length > 0) {
-              const existingStyle = element.getAttribute('style') || ''
-              const safeStyle = cleanStyle(existingStyle)
-              const combinedStyle = safeStyle
-                ? `${safeStyle}; ${styleParts.join('; ')}`
-                : styleParts.join('; ')
-              if (combinedStyle) {
-                newElement.setAttribute('style', combinedStyle)
-              }
-            }
-          }
-
-          // 只保留允许的属性
-          Array.from(element.attributes).forEach(attr => {
-            if (allowedAttributes.has(attr.name.toLowerCase())) {
-              // 清理 style 属性，只保留安全的 CSS 属性
-              if (attr.name.toLowerCase() === 'style') {
-                const safeStyle = cleanStyle(attr.value)
-                if (safeStyle) {
-                  newElement.setAttribute('style', safeStyle)
-                }
-              } else if (tagName !== 'font' ||
-                (attr.name.toLowerCase() !== 'color' &&
-                  attr.name.toLowerCase() !== 'size' &&
-                  attr.name.toLowerCase() !== 'face')) {
-                // 对于非 font 标签，保留其他允许的属性
-                newElement.setAttribute(attr.name, attr.value)
-              }
-            }
-          })
-
-          // 递归清理子节点
-          Array.from(element.childNodes).forEach(child => {
-            newElement.appendChild(cleanNode(child))
-          })
-
-          return newElement
-        } else {
-          // 不允许的标签，只保留其子节点
-          const fragment = document.createDocumentFragment()
-          Array.from(element.childNodes).forEach(child => {
-            fragment.appendChild(cleanNode(child))
-          })
-          return fragment
-        }
-      }
-
-      return node
-    }
-
-    // 清理样式属性，只保留安全的 CSS 属性
-    const cleanStyle = (style: string): string => {
-      const allowedStyles = new Set([
-        'color', 'background-color', 'font-weight', 'font-style',
-        'text-decoration', 'text-decoration-line',
-        'text-decoration-style', 'text-decoration-color', 'line-height',
-        'letter-spacing', 'word-spacing', 'text-transform', 'font-family'
-      ])
-
-      const styles = style.split(';').filter(s => s.trim())
-      return styles
-        .filter(s => {
-          const [property] = s.split(':').map(p => p.trim().toLowerCase())
-          return allowedStyles.has(property)
-        })
-        .join(';')
-    }
-
-    // 清理所有节点
-    const cleanedNodes = Array.from(temp.childNodes).map(child => cleanNode(child))
-    temp.innerHTML = ''
-    cleanedNodes.forEach(node => temp.appendChild(node))
-
-    // 简化换行处理
-    let result = temp.innerHTML
-
-    // 移除零宽空格（用于光标定位的辅助字符，不应保存）
-    result = result.replace(/\u200B/g, '')
-
-    // 移除真正空的 span 标签（不包含任何内容），但保留只含空格的 span
-    result = result.replace(/<span[^>]*><\/span>/g, '')
-
-    // 规范化：将块级换行元素转换为 <br>
-    // 重要：先处理结束标签转换为换行，再移除开始标签
-    result = result
-      .replace(/<\/(?:div|p)>/gi, '<br>')  // 结束标签转换为换行
-      .replace(/<(?:div|p)[^>]*>/gi, '')   // 移除开始标签
-
-    // 清理连续换行之间的多余空白字符，但保留用户输入的换行数量
-    result = result.replace(/(<br\s*\/?>)[ \t]+(?=<br\s*\/?>)/gi, '$1')
-
-    // 清理开头换行（保留用户在开头的换行意图），只清理结尾多余换行保留一个
-    result = result.replace(/(<br\s*\/?>\s*)+$/i, '<br>')
-
-    // 确保非空内容有换行标记
-    if (result && !result.includes('<br>')) {
-      result = result + '<br>'
-    }
-
-    return result || '<br>'
-  }, [])
 
   // 保存标题 - 纯文本处理，移除所有换行
   const saveTitle = useCallback(() => {
@@ -1327,12 +1337,31 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
   // 检查当前节点是否正在被拖拽到节点池
   const isBeingDraggedToPool = draggingNodeFromCanvas?.nodeId === node.id && isOverNodePool
 
+  // 内容为空时显示占位符，但不要把占位符写进 node.content
+  const isContentEmpty = useMemo(() => isVisuallyEmpty(node.content), [node.content])
+  const displayContent = isContentEmpty ? '双击添加内容' : (node.content || '')
+  const contentPreviewStyle = {
+    minHeight: '40px',
+    wordBreak: 'break-word' as const,
+    lineHeight: '1.6',
+    whiteSpace: 'pre-wrap' as const,
+    fontSize: `${node.fontSize}px`,
+    textAlign: node.contentAlign || node.textAlign,
+  }
+
   return (
     <>
       <style>{`
         .node-dragging,
         .node-dragging * {
           cursor: move !important;
+        }
+        .node-content-placeholder {
+          color: #9ca3af;
+          font-style: italic;
+        }
+        .dark .node-content-placeholder {
+          color: #6b7280;
         }
       `}</style>
       {/* Wrapper for node and resize handles */}
@@ -1759,18 +1788,19 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
                     onBlur={(e) => handleBlur('content', e)}
                     onMouseDown={(e) => e.stopPropagation()}
                   />
+                ) : isContentEmpty ? (
+                  <div
+                    style={contentPreviewStyle}
+                    className="node-content-placeholder"
+                    onDoubleClick={(e) => handleDoubleClick(e, 'content')}
+                  >
+                    双击添加内容
+                  </div>
                 ) : (
                   <div
-                    style={{
-                      minHeight: '40px',
-                      wordBreak: 'break-word',
-                      lineHeight: '1.6',
-                      whiteSpace: 'pre-wrap',
-                      fontSize: `${node.fontSize}px`,
-                      textAlign: node.contentAlign || node.textAlign,
-                    }}
+                    style={contentPreviewStyle}
                     onDoubleClick={(e) => handleDoubleClick(e, 'content')}
-                    dangerouslySetInnerHTML={{ __html: highlightState?.keywords ? safeHighlightHtml(cleanHtmlContent(node.content || '双击添加内容'), highlightState.keywords) : cleanHtmlContent(node.content || '双击添加内容') }}
+                    dangerouslySetInnerHTML={{ __html: highlightState?.keywords ? safeHighlightHtml(cleanHtmlContent(displayContent), highlightState.keywords) : cleanHtmlContent(displayContent) }}
                   />
                 )}
               </div>

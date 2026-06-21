@@ -109,12 +109,27 @@ function syncDiffToYDoc(before: MapsSnapshot | null, after: MapsSnapshot): void 
   yjsBinding.applyDiff(before, after)
 }
 
+/**
+ * Holds in-flight async side-effect promises for history commands.
+ * Kept outside of Zustand state to avoid storing non-serializable Promises.
+ */
+const commandEffectPromises = new Map<number, Promise<void>>()
+
+let nextCommandId = 0
+let isHistoryNavigating = false
+
 interface Command {
+  /** Unique command ID; assigned by executeCommand if omitted. */
+  id?: number
   type: string
   timestamp: number
   userId?: number
   execute: () => Partial<CanvasState>
   undo: () => Partial<CanvasState>
+  /** Optional async side effect that runs after the synchronous execute(). */
+  afterExecute?: () => Promise<void>
+  /** Optional async side effect that runs after the synchronous undo(). */
+  afterUndo?: () => Promise<void>
 }
 
 function getCurrentUserId(): number | null {
@@ -175,8 +190,8 @@ interface CanvasState {
   duplicateNode: (id: string) => void
 
   // Node Pool actions
-  moveNodeToPool: (nodeId: string, nodeData: Node, onExecute?: () => Promise<void>, onUndo?: () => Promise<void>) => void
-  moveNodeFromPool: (node: Node, onExecute?: () => Promise<void>, onUndo?: () => Promise<void>) => void
+  moveNodeToPool: (nodeId: string, nodeData: Node, afterExecute?: () => Promise<void>, afterUndo?: () => Promise<void>) => number | undefined
+  moveNodeFromPool: (node: Node, afterExecute?: () => Promise<void>, afterUndo?: () => Promise<void>) => number | undefined
 
   // Group actions
   addGroup: (group: NodeGroup) => void
@@ -221,13 +236,15 @@ interface CanvasState {
   setDirty: (dirty: boolean) => void
 
   // Undo/Redo actions
-  executeCommand: (command: Command, skipHistory?: boolean, markDirty?: boolean) => void
-  executeCommandWithoutHistory: (command: Command) => void
-  undo: () => void
-  redo: () => void
+  executeCommand: (command: Command, skipHistory?: boolean, markDirty?: boolean) => number
+  executeCommandWithoutHistory: (command: Command) => number
+  undo: () => Promise<void>
+  redo: () => Promise<void>
   canUndo: () => boolean
   canRedo: () => boolean
   clearHistory: () => void
+  /** Wait for the async side effect of a specific history command to complete. */
+  waitForCommandEffect: (commandId: number) => Promise<void>
 
   // Bulk actions
   setCanvasData: (data: {
@@ -900,11 +917,10 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     set({ isDirty: dirty })
   },
 
-  // Node Pool actions
-  moveNodeToPool: (nodeId: string, nodeData: Node, onExecute?: () => Promise<void>, onUndo?: () => Promise<void>) => {
+moveNodeToPool: (nodeId: string, nodeData: Node, afterExecute?: () => Promise<void>, afterUndo?: () => Promise<void>) => {
     const state = get()
     const node = state.nodes.get(nodeId)
-    if (!node) return
+    if (!node) return undefined
 
     // 收集与该节点相关的连接
     const removedConnections: Connection[] = []
@@ -914,7 +930,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       }
     }
 
-    get().executeCommand({
+    return get().executeCommand({
       type: 'moveNodeToPool',
       timestamp: Date.now(),
       execute: () => {
@@ -924,12 +940,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         const connections = new Map(state.connections)
         for (const conn of removedConnections) {
           connections.delete(conn.id)
-        }
-        // 异步添加卡片到节点池
-        if (onExecute) {
-          onExecute().catch(() => {
-            // Logged by caller
-          })
         }
         return { nodes, connections, selectedIds: [], isDirty: true }
       },
@@ -941,52 +951,38 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         for (const conn of removedConnections) {
           connections.set(conn.id, conn)
         }
-        // 异步从节点池移除卡片（撤销时）
-        if (onUndo) {
-          onUndo().catch(() => {
-            // Silently handle undo callback errors
-          })
-        }
         return { nodes, connections, isDirty: true }
       },
+      afterExecute,
+      afterUndo,
     })
   },
 
-  moveNodeFromPool: (node: Node, onExecute?: () => Promise<void>, onUndo?: () => Promise<void>) => {
-    get().executeCommand({
+  moveNodeFromPool: (node: Node, afterExecute?: () => Promise<void>, afterUndo?: () => Promise<void>) => {
+    return get().executeCommand({
       type: 'moveNodeFromPool',
       timestamp: Date.now(),
       execute: () => {
         const state = get()
         const nodes = new Map(state.nodes)
         nodes.set(node.id, node)
-        // 异步从节点池移除卡片
-        if (onExecute) {
-          onExecute().catch(() => {
-            // Logged by caller
-          })
-        }
         return { nodes, selectedIds: [node.id], isDirty: true }
       },
       undo: () => {
         const state = get()
         const nodes = new Map(state.nodes)
         nodes.delete(node.id)
-        // 异步添加卡片到节点池（撤销时）
-        if (onUndo) {
-          onUndo().catch(() => {
-            // Silently handle undo callback errors
-          })
-        }
         return { nodes, selectedIds: [], isDirty: true }
       },
+      afterExecute,
+      afterUndo,
     })
   },
 
   // Undo/Redo actions
   executeCommand: (command, skipHistory = false, markDirty = true) => {
     const currentUserId = getCurrentUserId()
-    const commandWithUser = { ...command, userId: currentUserId ?? undefined }
+    const commandWithUser = { ...command, id: command.id ?? ++nextCommandId, userId: currentUserId ?? undefined }
     // When the Yjs binding is applying remote changes, force skipHistory so
     // remote operations never enter the local undo stack.
     const effectiveSkipHistory = skipHistory || (yjsBinding?.isApplyingRemoteChanges ?? false)
@@ -997,7 +993,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       const commandResult = commandWithUser.execute()
       set(markDirty ? { ...commandResult, isDirty: true } : commandResult)
       syncDiffToYDoc(beforeSnapshot, get())
-      return
+      return commandWithUser.id
     }
 
     set((state) => {
@@ -1027,73 +1023,150 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       }
     })
     syncDiffToYDoc(beforeSnapshot, get())
+
+    if (commandWithUser.afterExecute) {
+      const promise = commandWithUser
+        .afterExecute()
+        .catch((error) => {
+          logger.error('[executeCommand] afterExecute failed', { commandType: commandWithUser.type, error })
+        })
+        .finally(() => {
+          commandEffectPromises.delete(commandWithUser.id)
+        })
+      commandEffectPromises.set(commandWithUser.id, promise)
+    }
+
+    return commandWithUser.id
   },
 
   executeCommandWithoutHistory: (command) => {
+    const currentUserId = getCurrentUserId()
+    const commandWithUser = { ...command, id: command.id ?? ++nextCommandId, userId: currentUserId ?? undefined }
     const beforeSnapshot = captureSnapshot(get())
-    const commandResult = command.execute()
+    const commandResult = commandWithUser.execute()
     set({ ...commandResult, isDirty: true })
     syncDiffToYDoc(beforeSnapshot, get())
+    return commandWithUser.id
   },
 
-  undo: () => {
-    const state = get()
-    const currentUserId = getCurrentUserId()
+  undo: async () => {
+    if (isHistoryNavigating) return
+    isHistoryNavigating = true
+    try {
+      const state = get()
+      const currentUserId = getCurrentUserId()
 
-    let targetIndex = state.history.currentIndex
-    while (targetIndex >= 0) {
-      const cmd = state.history.commands[targetIndex]
-      if (cmd.userId === currentUserId || cmd.userId === undefined) {
-        break
+      let targetIndex = state.history.currentIndex
+      while (targetIndex >= 0) {
+        const cmd = state.history.commands[targetIndex]
+        if (cmd.userId === currentUserId || cmd.userId === undefined) {
+          break
+        }
+        targetIndex--
       }
-      targetIndex--
+
+      if (targetIndex < 0) return
+
+      const command = state.history.commands[targetIndex]
+
+      // Wait for any in-flight execute side effect before undoing so the undo
+      // callback can observe the fully committed state (e.g. real card ID).
+      const pendingPromise = commandEffectPromises.get(command.id)
+      if (pendingPromise) {
+        try {
+          await pendingPromise
+        } catch {
+          // Error already logged by executeCommand; continue with undo.
+        }
+      }
+
+      const beforeSnapshot = captureSnapshot(get())
+      const commandResult = command.undo()
+
+      set((state) => ({
+        ...commandResult,
+        history: {
+          ...state.history,
+          currentIndex: targetIndex - 1,
+        },
+        isDirty: true,
+      }))
+      syncDiffToYDoc(beforeSnapshot, get())
+
+      if (command.afterUndo) {
+        const promise = command
+          .afterUndo()
+          .catch((error) => {
+            logger.error('[undo] afterUndo failed', { commandType: command.type, error })
+          })
+          .finally(() => {
+            commandEffectPromises.delete(command.id)
+          })
+        commandEffectPromises.set(command.id, promise)
+      }
+    } finally {
+      isHistoryNavigating = false
     }
-
-    if (targetIndex < 0) return
-
-    const beforeSnapshot = captureSnapshot(get())
-    const command = state.history.commands[targetIndex]
-    const commandResult = command.undo()
-
-    set((state) => ({
-      ...commandResult,
-      history: {
-        ...state.history,
-        currentIndex: targetIndex - 1,
-      },
-      isDirty: true,
-    }))
-    syncDiffToYDoc(beforeSnapshot, get())
   },
 
-  redo: () => {
-    const state = get()
-    const currentUserId = getCurrentUserId()
+  redo: async () => {
+    if (isHistoryNavigating) return
+    isHistoryNavigating = true
+    try {
+      const state = get()
+      const currentUserId = getCurrentUserId()
 
-    let targetIndex = state.history.currentIndex + 1
-    while (targetIndex < state.history.commands.length) {
-      const cmd = state.history.commands[targetIndex]
-      if (cmd.userId === currentUserId || cmd.userId === undefined) {
-        break
+      let targetIndex = state.history.currentIndex + 1
+      while (targetIndex < state.history.commands.length) {
+        const cmd = state.history.commands[targetIndex]
+        if (cmd.userId === currentUserId || cmd.userId === undefined) {
+          break
+        }
+        targetIndex++
       }
-      targetIndex++
+
+      if (targetIndex >= state.history.commands.length) return
+
+      const command = state.history.commands[targetIndex]
+
+      // Wait for any in-flight undo side effect before redoing so the redo
+      // callback can observe the fully committed state.
+      const pendingPromise = commandEffectPromises.get(command.id)
+      if (pendingPromise) {
+        try {
+          await pendingPromise
+        } catch {
+          // Error already logged by undo; continue with redo.
+        }
+      }
+
+      const beforeSnapshot = captureSnapshot(get())
+      const commandResult = command.execute()
+
+      set((state) => ({
+        ...commandResult,
+        history: {
+          ...state.history,
+          currentIndex: targetIndex,
+        },
+        isDirty: true,
+      }))
+      syncDiffToYDoc(beforeSnapshot, get())
+
+      if (command.afterExecute) {
+        const promise = command
+          .afterExecute()
+          .catch((error) => {
+            logger.error('[redo] afterExecute failed', { commandType: command.type, error })
+          })
+          .finally(() => {
+            commandEffectPromises.delete(command.id)
+          })
+        commandEffectPromises.set(command.id, promise)
+      }
+    } finally {
+      isHistoryNavigating = false
     }
-
-    if (targetIndex >= state.history.commands.length) return
-
-    const beforeSnapshot = captureSnapshot(get())
-    const command = state.history.commands[targetIndex]
-    const commandResult = command.execute()
-
-    set((state) => ({
-      ...commandResult,
-      history: {
-        ...state.history,
-        currentIndex: targetIndex,
-      },
-      isDirty: true,
-    }))
-    syncDiffToYDoc(beforeSnapshot, get())
   },
 
   canUndo: () => {
@@ -1137,6 +1210,17 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         },
       }
     }),
+
+  waitForCommandEffect: async (commandId: number) => {
+    const promise = commandEffectPromises.get(commandId)
+    if (promise) {
+      try {
+        await promise
+      } catch {
+        // Error already logged by the effect originator.
+      }
+    }
+  },
 
   // Bulk actions
   setCanvasData: (data) => {

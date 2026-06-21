@@ -17,6 +17,7 @@ import type {
   TemporaryCard,
 } from '../types/node-pool'
 import * as api from '@/services/api'
+import { createNodeFromCard, parseCardNodeData } from '../utils/createNodeFromCard'
 
 /**
  * Node pool store with operation queue system
@@ -52,7 +53,30 @@ function resolveRealCardId(id: number): number | null {
   return null
 }
 
-export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
+export const useNodePoolStore = create<NodePoolStore>((set, get) => {
+  /**
+   * Serialize async operations that mutate a specific card.
+   * Prevents duplicate API calls when the user rapidly clicks use/delete/update.
+   */
+  const withCardLock = async (cardId: number, operation: () => Promise<void>) => {
+    if (get().processingCardIds.has(cardId)) {
+      return
+    }
+    set((state) => ({
+      processingCardIds: new Set([...state.processingCardIds, cardId]),
+    }))
+    try {
+      await operation()
+    } finally {
+      set((state) => {
+        const next = new Set(state.processingCardIds)
+        next.delete(cardId)
+        return { processingCardIds: next }
+      })
+    }
+  }
+
+  return {
   // Initial state
   cardsMap: new Map(),
   foldersMap: new Map(),
@@ -64,6 +88,7 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
   operationQueue: new Map<string, Operation>(),
   temporaryCards: new Map<number, TemporaryCard>(),
   processingOperations: new Set<string>(),
+  processingCardIds: new Set<number>(),
   pendingUpdates: new Map<number, Partial<NodeCard>>(),
 
   // ========== Card Actions ==========
@@ -92,6 +117,7 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
       return
     }
 
+    return withCardLock(cardId, async () => {
     const operationId = generateOperationId()
 
     const operation: Operation = {
@@ -110,19 +136,11 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
         return
       }
 
-      let nodeData
-      try {
-        nodeData = JSON.parse(effectiveCard.content)
-      } catch {
-        throw new Error('Failed to parse card content')
-      }
-
-      const newNode = {
-        ...nodeData,
-        id: `${nodeData.id}-pool-${Date.now()}`,
-        x: nodeData.x + 50,
-        y: nodeData.y + 50,
-      }
+      const nodeData = parseCardNodeData(effectiveCard)
+      const newNode = createNodeFromCard(effectiveCard, {
+        x: (nodeData.x ?? 0) + 50,
+        y: (nodeData.y ?? 0) + 50,
+      })
 
       addNodeToCanvas(newNode)
 
@@ -207,6 +225,7 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
       set({ error: errorMessage })
       throw error
     }
+    })
   },
 
   // Set cards from API or initial load
@@ -509,6 +528,7 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
       return get().updateCard(tempCard.realCardId, data)
     }
 
+    return withCardLock(id, async () => {
     if (isPendingCard) {
       set((state) => {
         const newCardsMap = new Map(state.cardsMap)
@@ -565,6 +585,7 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
       set({ error: errorMessage })
       throw error
     }
+    })
   },
 
   removeCard: async (id: number) => {
@@ -581,6 +602,7 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
     const effectiveRealId = resolvedRealId
     const realCard = effectiveRealId ? state.cardsMap.get(effectiveRealId) : null
 
+    return withCardLock(id, async () => {
     const operationId = generateOperationId()
 
     const operation: Operation = {
@@ -738,6 +760,7 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
       set({ error: errorMessage })
       throw error
     }
+    })
   },
 
   reorderCards: async (updates: Array<{ id: number; sortOrder: number }>) => {
@@ -1051,7 +1074,8 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => ({
       }
     })
   },
-}))
+  }
+})
 
 // ========== Selectors ==========
 

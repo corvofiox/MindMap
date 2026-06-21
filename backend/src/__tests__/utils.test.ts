@@ -435,7 +435,7 @@ describe('Logger Utilities', () => {
 describe('Utility Functions', () => {
   describe('ID Generation', () => {
     it('should generate unique IDs', () => {
-      const generateId = () => Math.floor(Math.random() * 1000000)
+      const generateId = () => Math.floor(Math.random() * Number.MAX_SAFE_INTEGER)
 
       const ids = new Set()
       for (let i = 0; i < 100; i++) {

@@ -50,7 +50,7 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
   const { currentProject } = useProjectsStore()
   const { user } = useAuthStore()
   const { selectedIds, addNode } = useCanvasStore()
-  const { addToast, setDragGhost } = useUIStore()
+  const { addToast } = useUIStore()
 
   // Node pool store - 使用selector确保响应式更新
   const cardsMap = useNodePoolStore(state => state.cardsMap)
@@ -80,41 +80,79 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
 
   // Handle add selected nodes to pool
   const handleAddToPool = useCallback(async () => {
-    if (selectedIds.length === 0) {
+    // Snapshot the current selection so changes during async work do not affect this batch.
+    const snapshotSelectedIds = selectedIds
+    if (snapshotSelectedIds.length === 0) {
       addToast({ type: 'warning', title: '未选择节点', message: '请选择至少一个节点添加到节点池' })
       return
     }
 
     if (!currentProject) return
 
-    const nodes = useCanvasStore.getState().nodes
-    const { removeNode } = useCanvasStore.getState()
-    let successCount = 0
-    let failCount = 0
+    const { moveNodeToPool, waitForCommandEffect } = useCanvasStore.getState()
+    const { addCard } = useNodePoolStore.getState()
+    const createdCardIds = new Map<string, number>()
+    const commandIds: number[] = []
+    let skippedCount = 0
 
     // 批量处理所有选中的节点
-    for (const nodeId of selectedIds) {
-      const node = nodes.get(nodeId)
-      if (!node) continue
+    for (const nodeId of snapshotSelectedIds) {
+      const node = useCanvasStore.getState().nodes.get(nodeId)
+      if (!node) {
+        skippedCount++
+        continue
+      }
 
-      try {
-        await addCard({
-          name: node.title || node.content || '未命名',
-          content: JSON.stringify(node),
-          type: node.type || 'text',
-          color: node.color,
-          tags: null,
-          sortOrder: 0,
-          thumbnail: node.type === 'image' ? node.imageUrl : undefined,
-        })
+      const commandId = moveNodeToPool(
+        nodeId,
+        node,
+        async () => {
+          const card = await addCard({
+            name: node.title || node.content || '未命名',
+            content: JSON.stringify(node),
+            type: node.type || 'text',
+            color: node.color,
+            tags: null,
+            sortOrder: 0,
+            thumbnail: node.type === 'image' ? node.imageUrl : undefined,
+          })
+          createdCardIds.set(nodeId, card.id)
+        },
+        async () => {
+          const cardId = createdCardIds.get(nodeId)
+          const { removeCard } = useNodePoolStore.getState()
+          if (cardId) {
+            await removeCard(cardId)
+            return
+          }
 
-        // 从画布中移除原始节点
-        removeNode(nodeId)
-        successCount++
-      } catch {
-        failCount++
+          // Fallback: 通过内容匹配查找卡片
+          const { cardsMap } = useNodePoolStore.getState()
+          for (const [cid, card] of cardsMap) {
+            try {
+              const cardNodeData = JSON.parse(card.content)
+              if (cardNodeData.id === node.id) {
+                await removeCard(cid)
+                break
+              }
+            } catch {
+              // 解析失败，跳过
+            }
+          }
+        }
+      )
+
+      if (commandId !== undefined) {
+        commandIds.push(commandId)
       }
     }
+
+    // 等待所有异步副作用完成，再按实际创建成功的卡片数统计
+    await Promise.all(commandIds.map((id) => waitForCommandEffect(id)))
+
+    const successCount = createdCardIds.size
+    const attemptedCount = snapshotSelectedIds.length - skippedCount
+    const failCount = attemptedCount - successCount
 
     // 显示批量操作结果
     if (successCount > 0 && failCount === 0) {
@@ -129,7 +167,7 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
         title: '部分添加成功',
         message: `成功添加 ${successCount} 个节点，${failCount} 个节点添加失败`
       })
-    } else {
+    } else if (attemptedCount > 0) {
       addToast({
         type: 'error',
         title: '添加失败',
@@ -600,7 +638,6 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
             position={cardContextMenu.position}
             onClose={() => {
               setCardContextMenu(null)
-              setDragGhost(null, null)
             }}
             onRename={() => handleRenameCard(cardContextMenu.card)}
             onMoveToFolder={(folderId) => handleMoveCardToFolder(cardContextMenu.card, folderId)}
