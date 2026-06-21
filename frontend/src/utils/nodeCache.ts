@@ -59,6 +59,19 @@ function logOnce(canvasId: number, message: string, data: Record<string, unknown
   logger.info(message, data)
 }
 
+function isValidCacheData(data: unknown): data is CanvasCacheData {
+  if (typeof data !== 'object' || data === null) return false
+  const d = data as Partial<CanvasCacheData>
+  return (
+    Array.isArray(d.nodes) &&
+    Array.isArray(d.groups) &&
+    Array.isArray(d.domains) &&
+    Array.isArray(d.connections) &&
+    typeof d.timestamp === 'number' &&
+    typeof d.version === 'string'
+  )
+}
+
 /**
  * Save canvas data to localStorage cache.
  * If the serialized data exceeds MAX_CACHE_SIZE_BYTES, skip caching silently.
@@ -118,7 +131,11 @@ export function loadFromCache(canvasId: number): CanvasCacheData | null {
     const cached = localStorage.getItem(key)
     if (!cached) return null
 
-    const data = JSON.parse(cached) as CanvasCacheData
+    const data = JSON.parse(cached)
+    if (!isValidCacheData(data)) {
+      clearCache(canvasId)
+      return null
+    }
 
     // Check if cache is expired
     const age = Date.now() - data.timestamp
@@ -155,12 +172,17 @@ export function clearCache(canvasId: number): void {
  * Check if cache exists for a canvas and is valid
  */
 export function hasCache(canvasId: number): boolean {
-  const key = getCacheKey(canvasId)
-  const cached = localStorage.getItem(key)
-  if (!cached) return false
-
   try {
-    const data = JSON.parse(cached) as CanvasCacheData
+    const key = getCacheKey(canvasId)
+    const cached = localStorage.getItem(key)
+    if (!cached) return false
+
+    const data = JSON.parse(cached)
+    if (!isValidCacheData(data)) {
+      clearCache(canvasId)
+      return false
+    }
+
     const age = Date.now() - data.timestamp
 
     // Check if cache is expired
@@ -190,8 +212,19 @@ export function getCacheAge(canvasId: number): number | null {
     const cached = localStorage.getItem(key)
     if (!cached) return null
 
-    const data = JSON.parse(cached) as CanvasCacheData
-    return Date.now() - data.timestamp
+    const data = JSON.parse(cached)
+    if (!isValidCacheData(data)) {
+      clearCache(canvasId)
+      return null
+    }
+
+    const age = Date.now() - data.timestamp
+    if (age > CACHE_EXPIRY_MS || data.version !== CACHE_VERSION) {
+      clearCache(canvasId)
+      return null
+    }
+
+    return age
   } catch (error) {
     return null
   }
@@ -209,6 +242,6 @@ export function clearAllCaches(): void {
       localStorage.removeItem(key)
     })
   } catch (error) {
-    logger.warn('Failed to clear all canvas caches from localStorage', error)
+    logger.warn('Failed to clear all canvas caches from localStorage', { error })
   }
 }
