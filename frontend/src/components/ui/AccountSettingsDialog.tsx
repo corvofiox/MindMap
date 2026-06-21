@@ -153,7 +153,11 @@ export function AccountSettingsDialog() {
       })
 
       await logout()
-      localStorage.removeItem('mindmap_token')
+      try {
+        localStorage.removeItem('mindmap_token')
+      } catch {
+        // Storage may be unavailable; logout already cleared in-memory state.
+      }
       navigate('/login')
     } catch (error) {
       addToast({

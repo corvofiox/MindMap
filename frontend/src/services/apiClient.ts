@@ -64,16 +64,24 @@ export class ApiClient {
 
   // 从localStorage加载token
   private loadToken(): void {
-    this.token = localStorage.getItem('mindmap_token')
+    try {
+      this.token = localStorage.getItem('mindmap_token')
+    } catch {
+      this.token = null
+    }
   }
 
   // 设置token
   setToken(token: string | null): void {
     this.token = token
-    if (token) {
-      localStorage.setItem('mindmap_token', token)
-    } else {
-      localStorage.removeItem('mindmap_token')
+    try {
+      if (token) {
+        localStorage.setItem('mindmap_token', token)
+      } else {
+        localStorage.removeItem('mindmap_token')
+      }
+    } catch {
+      // Storage may be unavailable or quota exceeded; keep token in memory.
     }
   }
 

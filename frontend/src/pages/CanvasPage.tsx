@@ -53,14 +53,22 @@ function resolveClientVersion(updatedAt: string | undefined): number | undefined
 
 // Helper functions to save/load canvas view state from localStorage
 const saveCanvasView = (canvasId: number, zoom: number, panX: number, panY: number) => {
-  const views = JSON.parse(localStorage.getItem(CANVAS_VIEW_STORAGE_KEY) || '{}')
-  views[canvasId] = { zoom, panX, panY, timestamp: Date.now() }
-  localStorage.setItem(CANVAS_VIEW_STORAGE_KEY, JSON.stringify(views))
+  try {
+    const views = JSON.parse(localStorage.getItem(CANVAS_VIEW_STORAGE_KEY) || '{}')
+    views[canvasId] = { zoom, panX, panY, timestamp: Date.now() }
+    localStorage.setItem(CANVAS_VIEW_STORAGE_KEY, JSON.stringify(views))
+  } catch {
+    // Storage may be unavailable or quota exceeded; ignore gracefully.
+  }
 }
 
 const loadCanvasView = (canvasId: number) => {
-  const views = JSON.parse(localStorage.getItem(CANVAS_VIEW_STORAGE_KEY) || '{}')
-  return views[canvasId] || null
+  try {
+    const views = JSON.parse(localStorage.getItem(CANVAS_VIEW_STORAGE_KEY) || '{}')
+    return views[canvasId] || null
+  } catch {
+    return null
+  }
 }
 
 // Thumbnail generation constants
@@ -898,7 +906,8 @@ export function CanvasPage() {
     zoomStep,
   } = useUIStore()
 
-  const id = canvasId ? parseInt(canvasId) : null
+  const rawId = canvasId ? parseInt(canvasId) : null
+  const id = rawId !== null && !isNaN(rawId) ? rawId : null
 
   const { sendCursor } = useCollaboration({
     canvasId: id || 0,
@@ -1468,6 +1477,7 @@ export function CanvasPage() {
     if (!canvasId || !isDirty) return
 
     const id = parseInt(canvasId)
+    if (isNaN(id)) return
 
     if (cacheTimeoutRef.current) {
       clearTimeout(cacheTimeoutRef.current)
@@ -1489,6 +1499,7 @@ export function CanvasPage() {
     if (!canvasId) return
 
     const id = parseInt(canvasId)
+    if (isNaN(id)) return
 
     const saveToDatabase = async () => {
       const currentState = useCanvasStore.getState()

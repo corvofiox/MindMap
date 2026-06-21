@@ -1,3 +1,5 @@
+import { logger } from './logger'
+
 class DebugLogger {
   private logsDir: string
   private logs: string[] = []
@@ -60,13 +62,13 @@ class DebugLogger {
     const logsToSend = this.logEntries.length > 0 ? this.logEntries : this.getLogsFromStorage()
     
     if (logsToSend.length === 0) {
-      console.warn('No logs to save')
+      logger.warn('No logs to save')
       return
     }
 
     try {
-      console.log('Attempting to save logs to server...', { category, logCount: logsToSend.length })
-      
+      logger.info('Attempting to save logs to server...', { category, logCount: logsToSend.length })
+
       const response = await fetch('/api/logs', {
         method: 'POST',
         headers: {
@@ -83,10 +85,10 @@ class DebugLogger {
       }
 
       const result = await response.json()
-      console.log('Logs saved successfully:', result)
+      logger.info('Logs saved successfully:', result)
       return result
     } catch (error) {
-      console.error('Failed to save logs to server:', error)
+      logger.error('Failed to save logs to server:', error)
       this.log('error', 'log-save', 'Failed to save logs to server', { error: String(error) })
       throw error
     }

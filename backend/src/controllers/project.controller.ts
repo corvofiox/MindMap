@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import { db } from '../database/connection.js'
-import { projects, projectMembers } from '../database/schema.js'
+import { projects, projectMembers, users } from '../database/schema.js'
 import { eq, and, type InferSelectModel } from 'drizzle-orm'
 import { authenticate, type AuthRequest } from '../middleware/auth.middleware.js'
 import { asyncHandler } from '../middleware/error.middleware.js'
@@ -253,19 +253,74 @@ projectRouter.post(
       })
     }
 
-    const { userId, role } = req.body
+    const { userId: rawUserId, role } = req.body
+    const memberUserId = typeof rawUserId === 'number' ? rawUserId : parseInt(rawUserId, 10)
+
+    if (isNaN(memberUserId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid user ID format',
+      })
+    }
+
+    const normalizedRole = role || 'viewer'
+    if (!['editor', 'viewer'].includes(normalizedRole)) {
+      return res.status(400).json({
+        success: false,
+        error: '无效的角色',
+      })
+    }
 
     // Check ownership
     const project = await db.query.projects.findFirst({
       where: eq(projects.id, projectId),
     })
 
+    if (!project) {
+      return res.status(404).json({
+        success: false,
+        error: '项目未找到',
+      })
+    }
+
     const projectOwnerId = getProperty<number>(project, 'owner_id', 'ownerId') || project.ownerId
 
-    if (!project || projectOwnerId !== req.user!.id) {
+    if (projectOwnerId !== req.user!.id) {
       return res.status(403).json({
         success: false,
         error: '访问被拒绝',
+      })
+    }
+
+    if (memberUserId === req.user!.id) {
+      return res.status(400).json({
+        success: false,
+        error: '不能添加自己为成员',
+      })
+    }
+
+    const targetUser = await db.query.users.findFirst({
+      where: eq(users.id, memberUserId),
+    })
+
+    if (!targetUser) {
+      return res.status(404).json({
+        success: false,
+        error: '用户未找到',
+      })
+    }
+
+    const existingMember = await db.query.projectMembers.findFirst({
+      where: and(
+        eq(projectMembers.projectId, projectId),
+        eq(projectMembers.userId, memberUserId)
+      ),
+    })
+
+    if (existingMember && existingMember.id !== undefined) {
+      return res.status(409).json({
+        success: false,
+        error: '该用户已是项目成员',
       })
     }
 
@@ -273,8 +328,8 @@ projectRouter.post(
       .insert(projectMembers)
       .values({
         projectId,
-        userId,
-        role: role || 'viewer',
+        userId: memberUserId,
+        role: normalizedRole,
       })
       .returning()
 

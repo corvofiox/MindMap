@@ -6,6 +6,32 @@ import { loadUIStore } from '@/utils/moduleLoader'
 import { clearAllStorage } from '@/utils/clearStorage'
 import { logger } from '@/utils/logger'
 
+const TOKEN_KEY = 'mindmap_token'
+
+const safeStorage = {
+  getItem: (key: string): string | null => {
+    try {
+      return localStorage.getItem(key)
+    } catch {
+      return null
+    }
+  },
+  setItem: (key: string, value: string): void => {
+    try {
+      localStorage.setItem(key, value)
+    } catch {
+      // Storage may be unavailable or quota exceeded; ignore.
+    }
+  },
+  removeItem: (key: string): void => {
+    try {
+      localStorage.removeItem(key)
+    } catch {
+      // Storage may be unavailable; ignore.
+    }
+  },
+}
+
 interface AuthState {
   user: User | null
   token: string | null
@@ -44,7 +70,7 @@ export const useAuthStore = create<AuthState>()(
         isHydrated: false,
 
         validateToken: async () => {
-          const token = get().token || localStorage.getItem('mindmap_token')
+          const token = get().token || safeStorage.getItem(TOKEN_KEY)
           if (!token) {
             set({ user: null, token: null, isAuthenticated: false })
             api.apiClient.setToken(null)
@@ -61,11 +87,11 @@ export const useAuthStore = create<AuthState>()(
               logger.error('Failed to fetch CSRF token', csrfError)
             }
 
-            localStorage.setItem('mindmap_token', token)
+            safeStorage.setItem(TOKEN_KEY, token)
             set({ token, isAuthenticated: true })
             return true
           } catch {
-            localStorage.removeItem('mindmap_token')
+            safeStorage.removeItem(TOKEN_KEY)
             set({ user: null, token: null, isAuthenticated: false })
             api.apiClient.setToken(null)
             return false
@@ -75,7 +101,7 @@ export const useAuthStore = create<AuthState>()(
         login: async (credentials) => {
           set({ isLoading: true, error: null })
           try {
-            const oldToken = localStorage.getItem('mindmap_token')
+            const oldToken = safeStorage.getItem(TOKEN_KEY)
             const response = await api.login(credentials)
 
             if (oldToken && oldToken !== response.token) {
@@ -84,7 +110,7 @@ export const useAuthStore = create<AuthState>()(
 
             // 更新 apiClient 实例的 token
             api.apiClient.setToken(response.token)
-            localStorage.setItem('mindmap_token', response.token)
+            safeStorage.setItem(TOKEN_KEY, response.token)
 
             // 获取 CSRF token
             try {
@@ -128,14 +154,14 @@ export const useAuthStore = create<AuthState>()(
         register: async (data) => {
           set({ isLoading: true, error: null })
           try {
-            const oldToken = localStorage.getItem('mindmap_token')
+            const oldToken = safeStorage.getItem(TOKEN_KEY)
             const response = await api.register(data)
 
             if (oldToken && oldToken !== response.token) {
               clearAllStorage()
             }
 
-            localStorage.setItem('mindmap_token', response.token)
+            safeStorage.setItem(TOKEN_KEY, response.token)
             // 更新 apiClient 实例的 token
             api.apiClient.setToken(response.token)
 
@@ -164,7 +190,7 @@ export const useAuthStore = create<AuthState>()(
           } catch (error) {
             // Silently fail - no need to show error for logout
           } finally {
-            localStorage.removeItem('mindmap_token')
+            safeStorage.removeItem(TOKEN_KEY)
             // 更新 apiClient 实例的 token
             api.apiClient.setToken(null)
 
@@ -188,7 +214,7 @@ export const useAuthStore = create<AuthState>()(
 
           try {
             const response = await api.refreshToken()
-            localStorage.setItem('mindmap_token', response.token)
+            safeStorage.setItem(TOKEN_KEY, response.token)
             // 更新 apiClient 实例的 token
             api.apiClient.setToken(response.token)
             set({
@@ -203,7 +229,7 @@ export const useAuthStore = create<AuthState>()(
             }).catch(err => {
               logger.error('Failed to load UI store during token refresh', err)
             })
-            localStorage.removeItem('mindmap_token')
+            safeStorage.removeItem(TOKEN_KEY)
             // 更新 apiClient 实例的 token
             api.apiClient.setToken(null)
             set({
