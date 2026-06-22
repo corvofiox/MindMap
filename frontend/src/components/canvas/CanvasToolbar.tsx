@@ -28,7 +28,13 @@ import { useUIStore } from '@/store/useUIStore'
 import type { Tool } from '@/types'
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { generateId } from '@/utils/canvas'
-import { exportCanvas, importCanvas, downloadJsonFile, readJsonFile } from '@/utils/canvasExport'
+import {
+  exportCanvas,
+  importCanvas,
+  downloadJsonFile,
+  readJsonFile,
+  type ImportResult,
+} from '@/utils/canvasExport'
 
 interface CanvasToolbarProps {
   onSave?: () => Promise<void>
@@ -211,34 +217,47 @@ export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToo
       const file = event.target.files?.[0]
       if (!file) return
 
+      if (isCollabConnected) {
+        addToast({
+          type: 'warning',
+          title: '导入不可用',
+          message: '协作模式下请先断开连接再导入',
+          duration: 3000,
+        })
+        event.target.value = ''
+        return
+      }
+
       try {
         const jsonString = await readJsonFile(file)
-        const data = importCanvas(jsonString)
+        const result: ImportResult = importCanvas(jsonString)
 
-        if (data) {
-          setCanvasData(data)
-          setDirty(true)
+        if (!result.success) {
+          addToast({
+            type: 'error',
+            title: '导入失败',
+            message: result.error ?? '文件格式不正确或已损坏',
+            duration: 5000,
+          })
+          event.target.value = ''
+          return
+        }
 
-          // 强制立即保存到服务器，确保导入的数据被持久化。
-          // 协作模式下自动保存会跳过 REST API，而导入数据不会通过 WebSocket 同步，
-          // 若不在此时保存，切换画布后再切回会导致导入数据丢失。
-          if (onSave) {
-            try {
-              await onSave()
-            } catch {
-              // onSave（handleManualSave）已内部处理所有错误，此处仅作防御
-            }
-            // handleManualSave 成功时 setDirty(false)，失败时不修改 isDirty。
-            // 通过检查 isDirty 区分是否保存成功（避免 onSave 内部吞掉错误后仍显示成功 toast）。
-            if (!useCanvasStore.getState().isDirty) {
-              addToast({
-                type: 'success',
-                title: '导入成功',
-                message: `成功导入 ${data.nodes.length} 个节点, ${data.connections.length} 条连线`,
-                duration: 3000,
-              })
-            }
-          } else {
+        const { data, viewState } = result
+        setCanvasData(data, viewState)
+        setDirty(true)
+
+        // 强制立即保存到服务器，确保导入的数据被持久化。
+        // 协作模式下导入按钮已被禁用，不会走到这里。
+        if (onSave) {
+          try {
+            await onSave()
+          } catch {
+            // onSave（handleManualSave）已内部处理所有错误，此处仅作防御
+          }
+          // handleManualSave 成功时 setDirty(false)，失败时不修改 isDirty。
+          // 通过检查 isDirty 区分是否保存成功（避免 onSave 内部吞掉错误后仍显示成功 toast）。
+          if (!useCanvasStore.getState().isDirty) {
             addToast({
               type: 'success',
               title: '导入成功',
@@ -248,17 +267,17 @@ export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToo
           }
         } else {
           addToast({
-            type: 'error',
-            title: '导入失败',
-            message: '文件格式不正确或已损坏',
-            duration: 5000,
+            type: 'success',
+            title: '导入成功',
+            message: `成功导入 ${data.nodes.length} 个节点, ${data.connections.length} 条连线`,
+            duration: 3000,
           })
         }
       } catch (error) {
         addToast({
           type: 'error',
           title: '导入失败',
-          message: '读取文件时发生错误',
+          message: error instanceof Error ? error.message : '读取文件时发生错误',
           duration: 5000,
         })
       }
@@ -266,7 +285,7 @@ export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToo
       // 清空 input 值，允许重复选择同一文件
       event.target.value = ''
     },
-    [setCanvasData, setDirty, addToast, onSave]
+    [setCanvasData, setDirty, addToast, onSave, isCollabConnected]
   )
 
   const handleCreateGroup = () => {
@@ -649,8 +668,14 @@ export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToo
             {showImportExportMenu && !isViewer && (
               <div className="absolute right-0 top-full mt-1 w-32 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1 z-50">
                 <button
-                  onClick={handleImportClick}
-                  className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
+                  onClick={isCollabConnected ? undefined : handleImportClick}
+                  disabled={isCollabConnected}
+                  className="w-full px-4 py-2 text-left text-sm flex items-center gap-2 disabled:text-gray-400 dark:disabled:text-gray-600 disabled:cursor-not-allowed text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:hover:bg-transparent"
+                  title={
+                    isCollabConnected
+                      ? '协作模式下请先断开连接再导入'
+                      : '导入 JSON 文件替换当前画布'
+                  }
                 >
                   <Download className="w-4 h-4" />
                   导入

@@ -250,12 +250,15 @@ interface CanvasState {
   waitForCommandEffect: (commandId: number) => Promise<void>
 
   // Bulk actions
-  setCanvasData: (data: {
-    nodes?: Node[]
-    groups?: NodeGroup[]
-    domains?: Domain[]
-    connections?: Connection[]
-  }) => void
+  setCanvasData: (
+    data: {
+      nodes?: Node[]
+      groups?: NodeGroup[]
+      domains?: Domain[]
+      connections?: Connection[]
+    },
+    viewState?: { zoom: number; panX: number; panY: number },
+  ) => void
   clearCanvas: () => void
 }
 
@@ -1226,7 +1229,7 @@ moveNodeToPool: (nodeId: string, nodeData: Node, afterExecute?: () => Promise<vo
   },
 
   // Bulk actions
-  setCanvasData: (data) => {
+  setCanvasData: (data, viewState) => {
     const before = captureSnapshot(get())
     set((state) => {
       const currentUserId = getCurrentUserId()
@@ -1244,6 +1247,11 @@ moveNodeToPool: (nodeId: string, nodeData: Node, afterExecute?: () => Promise<vo
             toPort: c.toPort || 'left'
           }]))
           : state.connections,
+        // Bulk load replaces the entire canvas content; clear transient UI
+        // states that may point to entities that no longer exist.
+        selectedIds: [],
+        hoveredId: null,
+        editingId: null,
         history: {
           ...state.history,
           commands: ownCommands,
@@ -1253,6 +1261,9 @@ moveNodeToPool: (nodeId: string, nodeData: Node, afterExecute?: () => Promise<vo
         // entity map was replaced (e.g. after API/cache load) rather than
         // incrementally mutated by the user.
         bulkLoadVersion: state.bulkLoadVersion + 1,
+        ...(viewState
+          ? { zoom: viewState.zoom, panX: viewState.panX, panY: viewState.panY }
+          : {}),
       }
     })
     syncDiffToYDoc(before, get())

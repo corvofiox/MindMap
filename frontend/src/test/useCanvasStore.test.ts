@@ -205,6 +205,28 @@ describe('useCanvasStore', () => {
       expect(state.nodes.has('n2')).toBe(true)
     })
 
+    it('should apply viewState and clear transient UI states on bulk load', () => {
+      useCanvasStore.getState().addNode(createTestNode('n1'))
+      useCanvasStore.getState().setSelectedIds(['n1'])
+      useCanvasStore.getState().setHoveredId('n1')
+      useCanvasStore.getState().setEditingId('n1')
+
+      useCanvasStore.getState().setCanvasData(
+        { nodes: [createTestNode('n2')], groups: [], domains: [], connections: [] },
+        { zoom: 1.5, panX: 100, panY: 200 },
+      )
+
+      const state = useCanvasStore.getState()
+      expect(state.nodes.size).toBe(1)
+      expect(state.nodes.has('n2')).toBe(true)
+      expect(state.selectedIds).toEqual([])
+      expect(state.hoveredId).toBeNull()
+      expect(state.editingId).toBeNull()
+      expect(state.zoom).toBe(1.5)
+      expect(state.panX).toBe(100)
+      expect(state.panY).toBe(200)
+    })
+
     it('should clear canvas', () => {
       useCanvasStore.getState().addNode(createTestNode('n1'))
       useCanvasStore.getState().setSelectedIds(['n1'])
