@@ -25,8 +25,8 @@ export const groups = sqliteTable('groups', {
 // Group Members
 export const groupMembers = sqliteTable('group_members', {
   id: integer('id').primaryKey({ autoIncrement: true }),
-  groupId: integer('group_id').notNull().references(() => groups.id),
-  userId: integer('user_id').notNull().references(() => users.id),
+  groupId: integer('group_id').notNull().references(() => groups.id, { onDelete: 'cascade' }),
+  userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   role: text('role').notNull().default('member'), // owner, admin, member
   joinedAt: integer('joined_at').default(sql`strftime('%s', 'now')`),
 })
@@ -48,8 +48,8 @@ export const projects = sqliteTable('projects', {
 // Project Members
 export const projectMembers = sqliteTable('project_members', {
   id: integer('id').primaryKey({ autoIncrement: true }),
-  projectId: integer('project_id').notNull().references(() => projects.id),
-  userId: integer('user_id').notNull().references(() => users.id),
+  projectId: integer('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   role: text('role').notNull().default('viewer'), // owner, editor, viewer
   joinedAt: integer('joined_at').default(sql`strftime('%s', 'now')`),
 })
@@ -57,21 +57,20 @@ export const projectMembers = sqliteTable('project_members', {
 // Project Invitations
 export const projectInvitations = sqliteTable('project_invitations', {
   id: integer('id').primaryKey({ autoIncrement: true }),
-  projectId: integer('project_id').notNull().references(() => projects.id),
-  inviterId: integer('inviter_id').notNull().references(() => users.id),
-  inviteeId: integer('invitee_id').notNull().references(() => users.id),
+  projectId: integer('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  inviterId: integer('inviter_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  inviteeId: integer('invitee_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   role: text('role').notNull().default('viewer'), // editor, viewer
   status: text('status').notNull().default('pending'), // pending, accepted, rejected
   createdAt: integer('created_at').default(sql`strftime('%s', 'now')`),
   respondedAt: integer('responded_at'),
 })
-
 // Folders
 export const folders = sqliteTable('folders', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   name: text('name').notNull(),
   projectId: integer('project_id').notNull().references(() => projects.id),
-  parentId: integer('parent_id').references(() => folders.id),
+  parentId: integer('parent_id').references(() => folders.id, { onDelete: 'cascade' }),
   sortOrder: integer('sort_order').notNull().default(0),
   createdAt: integer('created_at').default(sql`strftime('%s', 'now')`),
 })
@@ -94,9 +93,9 @@ export const canvases = sqliteTable('canvases', {
 // Canvas Recycle Bin
 export const canvasRecycleBin = sqliteTable('canvas_recycle_bin', {
   id: integer('id').primaryKey({ autoIncrement: true }),
-  canvasId: integer('canvas_id').notNull().references(() => canvases.id),
-  projectId: integer('project_id').notNull().references(() => projects.id),
-  deletedBy: integer('deleted_by').notNull().references(() => users.id),
+  canvasId: integer('canvas_id').notNull().references(() => canvases.id, { onDelete: 'cascade' }),
+  projectId: integer('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  deletedBy: integer('deleted_by').notNull().references(() => users.id, { onDelete: 'cascade' }),
   deletedAt: integer('deleted_at').default(sql`strftime('%s', 'now')`),
   expiresAt: integer('expires_at').notNull(),
 })
@@ -104,15 +103,15 @@ export const canvasRecycleBin = sqliteTable('canvas_recycle_bin', {
 // Node Pool (Node Cards) - User-specific, independent of projects
 export const nodeCards = sqliteTable('node_cards', {
   id: integer('id').primaryKey({ autoIncrement: true }),
-  userId: integer('user_id').notNull().references(() => users.id),
+  userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   name: text('name').notNull(),
   content: text('content').notNull(), // JSON string
   type: text('type').notNull().default('text'),
   color: text('color').notNull().default('#ffffff'),
   tags: text('tags'), // Comma-separated
   useCount: integer('use_count').notNull().default(0),
-  createdBy: integer('created_by').notNull().references(() => users.id),
-  folderId: integer('folder_id').references(() => nodePoolFolders.id),
+  createdBy: integer('created_by').references(() => users.id, { onDelete: 'set null' }),
+  folderId: integer('folder_id').references(() => nodePoolFolders.id, { onDelete: 'set null' }),
   description: text('description'),
   thumbnail: text('thumbnail'),
   sortOrder: integer('sort_order').notNull().default(0),
@@ -122,9 +121,9 @@ export const nodeCards = sqliteTable('node_cards', {
 // Node Pool Folders - User-specific, independent of projects
 export const nodePoolFolders = sqliteTable('node_pool_folders', {
   id: integer('id').primaryKey({ autoIncrement: true }),
-  userId: integer('user_id').notNull().references(() => users.id),
+  userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   name: text('name').notNull(),
-  parentId: integer('parent_id').references(() => nodePoolFolders.id),
+  parentId: integer('parent_id').references(() => nodePoolFolders.id, { onDelete: 'cascade' }),
   sortOrder: integer('sort_order').notNull().default(0),
   collapsed: integer('collapsed', { mode: 'boolean' }).notNull().default(false),
   createdAt: integer('created_at').default(sql`strftime('%s', 'now')`),
@@ -133,7 +132,7 @@ export const nodePoolFolders = sqliteTable('node_pool_folders', {
 // Settings
 export const settings = sqliteTable('settings', {
   id: integer('id').primaryKey({ autoIncrement: true }),
-  userId: integer('user_id').notNull().references(() => users.id),
+  userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   key: text('key').notNull(),
   value: text('value').notNull(),
   category: text('category').notNull().default('general'),
@@ -146,16 +145,16 @@ export const files = sqliteTable('files', {
   path: text('path').notNull(),
   size: integer('size').notNull(),
   mimeType: text('mime_type').notNull(),
-  uploaderId: integer('uploader_id').notNull().references(() => users.id),
-  projectId: integer('project_id').references(() => projects.id),
+  uploaderId: integer('uploader_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  projectId: integer('project_id').references(() => projects.id, { onDelete: 'cascade' }),
   createdAt: integer('created_at').default(sql`strftime('%s', 'now')`),
 })
 
 // AI Chat Conversations - 画布级别的AI对话历史
 export const aiConversations = sqliteTable('ai_conversations', {
   id: integer('id').primaryKey({ autoIncrement: true }),
-  canvasId: integer('canvas_id').notNull().references(() => canvases.id),
-  userId: integer('user_id').notNull().references(() => users.id),
+  canvasId: integer('canvas_id').notNull().references(() => canvases.id, { onDelete: 'cascade' }),
+  userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   messages: text('messages').notNull(), // JSON string of messages array
   contextDividerIndex: integer('context_divider_index').notNull().default(-1),
   updatedAt: integer('updated_at').default(sql`strftime('%s', 'now')`),

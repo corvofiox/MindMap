@@ -1,10 +1,12 @@
 import { Router } from 'express'
 import { db } from '../database/connection.js'
-import { projects, projectMembers, users } from '../database/schema.js'
-import { eq, and, type InferSelectModel } from 'drizzle-orm'
+import { projects, users, canvases, folders, projectMembers } from '../database/schema.js'
+import { eq, and, inArray, isNull, type InferSelectModel } from 'drizzle-orm'
 import { authenticate, type AuthRequest } from '../middleware/auth.middleware.js'
 import { asyncHandler } from '../middleware/error.middleware.js'
 import { transformResponse, transformResponseArray, getProperty } from '../utils/transformResponse.js'
+import { removeCanvasState } from '../websocket/canvas-state.js'
+import { closeRoom } from '../websocket/index.js'
 
 export const projectRouter = Router()
 
@@ -232,6 +234,35 @@ projectRouter.delete('/:id', authenticate, asyncHandler(async (req: AuthRequest,
     })
   }
 
+  // Close rooms for all canvases in the project before deleting them.
+  const projectCanvases = await db.query.canvases.findMany({
+    where: eq(canvases.projectId, projectId),
+  })
+  for (const canvas of projectCanvases) {
+    closeRoom(canvas.id, 'project-deleted')
+  }
+
+  // Schema-level CASCADE handles ai_conversations, canvas_recycle_bin,
+  // project_members, project_invitations, and files when the project is deleted.
+  // Delete canvases first so removeCanvasState runs and the in-memory Yjs docs
+  // are cleaned up.
+  const canvasIdsToDelete = projectCanvases.map((canvas) => canvas.id)
+  if (canvasIdsToDelete.length > 0) {
+    await db.delete(canvases).where(inArray(canvases.id, canvasIdsToDelete))
+    for (const canvasId of canvasIdsToDelete) {
+      removeCanvasState(canvasId)
+    }
+  }
+
+  // Delete root folders; subfolders cascade via parent_id CASCADE.
+  const rootFolders = await db.query.folders.findMany({
+    where: and(eq(folders.projectId, projectId), isNull(folders.parentId)),
+  })
+  for (const folder of rootFolders) {
+    await db.delete(folders).where(eq(folders.id, folder.id))
+  }
+
+  // Deleting the project cascades to members, invitations, and files.
   await db.delete(projects).where(eq(projects.id, projectId))
 
   res.json({

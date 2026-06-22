@@ -1,13 +1,15 @@
 import { Router } from 'express'
 import bcrypt from 'bcrypt'
 import { db } from '../database/connection.js'
-import { users, projects, projectMembers, groupMembers, nodeCards, files, canvases, folders, canvasRecycleBin, nodePoolFolders, settings } from '../database/schema.js'
-import { eq, and, or, like } from 'drizzle-orm'
+import { users, projects, groups, nodeCards, canvases, folders, nodePoolFolders, settings } from '../database/schema.js'
+import { eq, and, or, like, inArray, isNull } from 'drizzle-orm'
 import { authenticate, type AuthRequest } from '../middleware/auth.middleware.js'
 import { asyncHandler } from '../middleware/error.middleware.js'
 import { logError } from '../utils/logger.js'
 import { SHARED_NODE_DEFAULTS, NODE_DEFAULTS_VALIDATION } from 'mindmap-shared'
 import { transformResponse, transformResponseArray, getUserId } from '../utils/transformResponse.js'
+import { removeCanvasState } from '../websocket/canvas-state.js'
+import { closeRoom } from '../websocket/index.js'
 
 export const userRouter = Router()
 
@@ -172,104 +174,55 @@ userRouter.delete('/account', authenticate, asyncHandler(async (req: AuthRequest
 
   const userId = req.user!.id
 
-  // Delete all user's project memberships (where user is not owner)
-  await db
-    .delete(projectMembers)
-    .where(
-      and(
-        eq(projectMembers.userId, userId),
-        eq(projectMembers.role, 'viewer')
-      )
-    )
-  await db
-    .delete(projectMembers)
-    .where(
-      and(
-        eq(projectMembers.userId, userId),
-        eq(projectMembers.role, 'editor')
-      )
-    )
-
-  // Delete all group memberships (where user is not owner)
-  await db
-    .delete(groupMembers)
-    .where(eq(groupMembers.userId, userId))
-
-  // Delete user's owned projects and their dependencies
-  const ownedProjects = await db
-    .select()
-    .from(projects)
-    .where(eq(projects.ownerId, userId))
-
-  for (const project of ownedProjects) {
-    // Delete project members
-    await db
-      .delete(projectMembers)
-      .where(eq(projectMembers.projectId, project.id))
-
-    // Delete canvases
-    const projectCanvases = await db
-      .select()
-      .from(canvases)
-      .where(eq(canvases.projectId, project.id))
-
-    for (const canvas of projectCanvases) {
-      // Delete canvas from recycle bin
-      await db
-        .delete(canvasRecycleBin)
-        .where(eq(canvasRecycleBin.canvasId, canvas.id))
+  // Handle groups owned by the user (groups.owner_id has no cascade). Detach
+  // associated projects first, then delete the groups.
+  const ownedGroups = await db.select().from(groups).where(eq(groups.ownerId, userId))
+  const ownedGroupIds = ownedGroups.map((group) => group.id)
+  if (ownedGroupIds.length > 0) {
+    for (const groupId of ownedGroupIds) {
+      await db.update(projects).set({ groupId: null }).where(eq(projects.groupId, groupId))
     }
-
-    // Delete all canvases for this project
-    await db
-      .delete(canvases)
-      .where(eq(canvases.projectId, project.id))
-
-    // Delete folders
-    await db
-      .delete(folders)
-      .where(eq(folders.projectId, project.id))
-
-    // Delete node pool folders (now user-specific)
-    await db
-      .delete(nodePoolFolders)
-      .where(eq(nodePoolFolders.userId, userId))
-
-    // Delete node cards (now user-specific)
-    await db
-      .delete(nodeCards)
-      .where(eq(nodeCards.userId, userId))
-
-    // Delete files
-    await db
-      .delete(files)
-      .where(eq(files.projectId, project.id))
-
-    // Delete project
-    await db
-      .delete(projects)
-      .where(eq(projects.id, project.id))
+    await db.delete(groups).where(eq(groups.ownerId, userId))
   }
 
-  // Delete user's uploaded files
-  await db
-    .delete(files)
-    .where(eq(files.uploaderId, userId))
+  // Delete owned projects. Schema-level CASCADE handles members, invitations,
+  // files, ai_conversations, and canvas_recycle_bin; we still need to close
+  // WebSocket rooms and remove in-memory Yjs state for canvases.
+  const ownedProjects = await db.select().from(projects).where(eq(projects.ownerId, userId))
 
-  // Delete user's node cards created in other projects
-  await db
-    .delete(nodeCards)
-    .where(eq(nodeCards.createdBy, userId))
+  for (const project of ownedProjects) {
+    const projectCanvases = await db.select().from(canvases).where(eq(canvases.projectId, project.id))
+    for (const canvas of projectCanvases) {
+      closeRoom(canvas.id, 'project-deleted')
+    }
 
-  // Delete recycle bin entries where user deleted the canvas
-  await db
-    .delete(canvasRecycleBin)
-    .where(eq(canvasRecycleBin.deletedBy, userId))
+    const canvasIds = projectCanvases.map((canvas) => canvas.id)
+    if (canvasIds.length > 0) {
+      await db.delete(canvases).where(inArray(canvases.id, canvasIds))
+      for (const canvasId of canvasIds) {
+        removeCanvasState(canvasId)
+      }
+    }
 
-  // Finally delete the user
-  await db
-    .delete(users)
-    .where(eq(users.id, userId))
+    const rootFolders = await db
+      .select()
+      .from(folders)
+      .where(and(eq(folders.projectId, project.id), isNull(folders.parentId)))
+    for (const folder of rootFolders) {
+      await db.delete(folders).where(eq(folders.id, folder.id))
+    }
+
+    await db.delete(projects).where(eq(projects.id, project.id))
+  }
+
+  // Schema-level CASCADE now handles the rest:
+  // - settings, group_members, project_members, project_invitations
+  // - node_cards (user_id CASCADE; created_by SET NULL)
+  // - node_pool_folders
+  // - files
+  // - canvas_recycle_bin (deleted_by CASCADE)
+  // - ai_conversations (user_id CASCADE)
+  await db.delete(users).where(eq(users.id, userId))
 
   res.json({
     success: true,
@@ -790,14 +743,9 @@ userRouter.delete('/node-pool-folders/:id', authenticate, asyncHandler(async (re
     })
   }
 
-  await db.transaction(async (tx) => {
-    await tx
-      .update(nodeCards)
-      .set({ folderId: null })
-      .where(eq(nodeCards.folderId, folderId))
-
-    await tx.delete(nodePoolFolders).where(eq(nodePoolFolders.id, folderId))
-  })
+  // Schema-level CASCADE on parent_id deletes subfolders automatically;
+  // folder_id ON DELETE SET NULL moves affected cards to the root.
+  await db.delete(nodePoolFolders).where(eq(nodePoolFolders.id, folderId))
 
   res.json({
     success: true,

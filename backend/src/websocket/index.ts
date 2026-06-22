@@ -339,6 +339,26 @@ export function kickUserFromRoom(canvasId: number, userId: number, reason: strin
 }
 
 /**
+ * 关闭整个画布房间：向所有连接的客户端发送 `kicked` 通知后断开连接。
+ * 用于画布或所属项目被删除时，避免已连接客户端继续往已删画布发更新。
+ */
+export function closeRoom(canvasId: number, reason: string = 'canvas-deleted'): void {
+  const room = canvasRooms.get(canvasId)
+  if (!room) return
+
+  for (const client of Array.from(room.clients)) {
+    try {
+      if (client.readyState === 1) {
+        client.send(JSON.stringify({ type: 'kicked', reason }))
+      }
+    } catch {
+      // send 失败不阻塞，继续走 close
+    }
+    handleClientDisconnect(client, room, true)
+  }
+}
+
+/**
  * P3: 更新某画布内指定用户的在线角色（owner 调整成员角色后调用）。
  * 同步更新 ws.userRole（handleOperation 的权限判定依据）与 room.activeUsers，
  * 并广播 user-role-changed 让其他客户端刷新用户列表 UI。

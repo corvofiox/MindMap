@@ -6,8 +6,8 @@ import { authenticate, type AuthRequest } from '../middleware/auth.middleware.js
 import { asyncHandler } from '../middleware/error.middleware.js'
 import { transformResponse, transformResponseArray, getProperty } from '../utils/transformResponse.js'
 import { log } from '../utils/logger.js'
-import { getCanvasActiveUsers } from '../websocket/index.js'
-import { loadCanvasStateFromDb, mergeJsonSnapshotIntoCanvas } from '../websocket/canvas-state.js'
+import { getCanvasActiveUsers, closeRoom } from '../websocket/index.js'
+import { loadCanvasStateFromDb, mergeJsonSnapshotIntoCanvas, removeCanvasState } from '../websocket/canvas-state.js'
 
 export const canvasRouter = Router()
 
@@ -15,7 +15,7 @@ const postSaveMutexes = new Map<number, Promise<void>>()
 const MUTEX_TIMEOUT = 30000
 
 async function withPostSaveMutex<T>(canvasId: number, fn: () => Promise<T>): Promise<T> {
-  const prev = (postSaveMutexes.get(canvasId) ?? Promise.resolve()).catch(() => {})
+  const prev = (postSaveMutexes.get(canvasId) ?? Promise.resolve()).catch(() => { })
 
   // Execute fn() inside the chain so the mutex always waits for fn() to fully complete
   let done = false
@@ -29,7 +29,7 @@ async function withPostSaveMutex<T>(canvasId: number, fn: () => Promise<T>): Pro
 
   // The mutex guard resolves only after fn() finishes (or errors), preventing
   // the next queued operation from starting before the current one is done
-  const cleanupGuard = next.then(() => {}, () => {})
+  const cleanupGuard = next.then(() => { }, () => { })
   postSaveMutexes.set(canvasId, cleanupGuard)
 
   // Auto-cleanup stale mutex entry after resolution: if no new POST has been
@@ -50,7 +50,7 @@ async function withPostSaveMutex<T>(canvasId: number, fn: () => Promise<T>): Pro
     // If timed out, wait for fn() to actually finish before propagating the error.
     // This ensures mutex integrity — the next operation won't start until fn() completes.
     if (!done) {
-      await next.catch(() => {})
+      await next.catch(() => { })
     }
     throw error
   }
@@ -442,8 +442,14 @@ canvasRouter.delete('/:id', authenticate, asyncHandler(async (req: AuthRequest, 
       })
     }
 
+    // Close the WebSocket room first so connected clients can't send further
+    // updates to a canvas that is about to be deleted.
+    closeRoom(canvasId, 'canvas-deleted')
+
+    // Schema-level CASCADE handles ai_conversations and canvas_recycle_bin.
     await db.delete(canvases).where(eq(canvases.id, canvasId))
     postSaveMutexes.delete(canvasId)
+    removeCanvasState(canvasId)
 
     if (canvasProjectId) {
       await db
@@ -755,16 +761,29 @@ canvasRouter.delete(
       folderIds: folderIdsToDelete,
     })
 
-    // Delete all canvases in all folders to be deleted
+    // Close rooms and delete all canvases in the folder subtree. Schema-level
+    // CASCADE handles ai_conversations and canvas_recycle_bin; folders.parent_id
+    // CASCADE handles subfolders when the root folder is deleted.
     if (folderIdsToDelete.length > 0) {
-      await db.delete(canvases).where(inArray(canvases.folderId, folderIdsToDelete))
+      const canvasesToDelete = await db.query.canvases.findMany({
+        where: inArray(canvases.folderId, folderIdsToDelete),
+      })
+      const canvasIdsToDelete = canvasesToDelete.map((canvas) => canvas.id)
+
+      if (canvasIdsToDelete.length > 0) {
+        for (const id of canvasIdsToDelete) {
+          closeRoom(id, 'folder-deleted')
+        }
+        await db.delete(canvases).where(inArray(canvases.id, canvasIdsToDelete))
+        for (const id of canvasIdsToDelete) {
+          postSaveMutexes.delete(id)
+          removeCanvasState(id)
+        }
+      }
     }
 
-    // Delete all folders (including subfolders)
-    // Delete in reverse order (children first) to respect foreign key constraints
-    for (let i = folderIdsToDelete.length - 1; i >= 0; i--) {
-      await db.delete(folders).where(eq(folders.id, folderIdsToDelete[i]))
-    }
+    // Deleting the root folder cascades to all subfolders via parent_id CASCADE.
+    await db.delete(folders).where(eq(folders.id, folderId))
 
     if (folderProjectId) {
       await db

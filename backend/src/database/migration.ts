@@ -26,6 +26,31 @@ function getColumns(sqlite: Database.Database, tableName: string): string[] {
   return rows.map((row) => row.name)
 }
 
+interface ForeignKeyInfo {
+  id: number
+  seq: number
+  table: string
+  from: string
+  to: string
+  on_update: string
+  on_delete: string
+  match: string
+}
+
+function getForeignKeys(sqlite: Database.Database, tableName: string): ForeignKeyInfo[] {
+  return sqlite.pragma(`foreign_key_list(${tableName})`) as ForeignKeyInfo[]
+}
+
+function hasForeignKeyAction(
+  sqlite: Database.Database,
+  tableName: string,
+  column: string,
+  action: string
+): boolean {
+  const fks = getForeignKeys(sqlite, tableName)
+  return fks.some((fk) => fk.from === column && fk.on_delete.toUpperCase() === action.toUpperCase())
+}
+
 // Function to run migrations on an existing sqlite instance
 export async function runMigrations(sqlite: Database.Database) {
   try {
@@ -62,8 +87,8 @@ export async function runMigrations(sqlite: Database.Database) {
       sqlite.exec(`
         CREATE TABLE group_members (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
-          group_id INTEGER NOT NULL REFERENCES groups(id),
-          user_id INTEGER NOT NULL REFERENCES users(id),
+          group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
           role TEXT NOT NULL DEFAULT 'member',
           joined_at INTEGER DEFAULT (strftime('%s', 'now'))
         )
@@ -89,8 +114,8 @@ export async function runMigrations(sqlite: Database.Database) {
       sqlite.exec(`
         CREATE TABLE project_members (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
-          project_id INTEGER NOT NULL REFERENCES projects(id),
-          user_id INTEGER NOT NULL REFERENCES users(id),
+          project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
           role TEXT NOT NULL DEFAULT 'viewer',
           joined_at INTEGER DEFAULT (strftime('%s', 'now'))
         )
@@ -102,7 +127,7 @@ export async function runMigrations(sqlite: Database.Database) {
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           name TEXT NOT NULL,
           project_id INTEGER NOT NULL REFERENCES projects(id),
-          parent_id INTEGER REFERENCES folders(id),
+          parent_id INTEGER REFERENCES folders(id) ON DELETE CASCADE,
           sort_order INTEGER NOT NULL DEFAULT 0,
           created_at INTEGER DEFAULT (strftime('%s', 'now'))
         )
@@ -129,9 +154,9 @@ export async function runMigrations(sqlite: Database.Database) {
       sqlite.exec(`
         CREATE TABLE canvas_recycle_bin (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
-          canvas_id INTEGER NOT NULL REFERENCES canvases(id),
-          project_id INTEGER NOT NULL REFERENCES projects(id),
-          deleted_by INTEGER NOT NULL REFERENCES users(id),
+          canvas_id INTEGER NOT NULL REFERENCES canvases(id) ON DELETE CASCADE,
+          project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          deleted_by INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
           deleted_at INTEGER DEFAULT (strftime('%s', 'now')),
           expires_at INTEGER NOT NULL
         )
@@ -141,15 +166,15 @@ export async function runMigrations(sqlite: Database.Database) {
       sqlite.exec(`
         CREATE TABLE node_cards (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
-          user_id INTEGER NOT NULL REFERENCES users(id),
+          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
           name TEXT NOT NULL,
           content TEXT NOT NULL,
           type TEXT NOT NULL DEFAULT 'text',
           color TEXT NOT NULL DEFAULT '#ffffff',
           tags TEXT,
           use_count INTEGER NOT NULL DEFAULT 0,
-          created_by INTEGER NOT NULL REFERENCES users(id),
-          folder_id INTEGER,
+          created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          folder_id INTEGER REFERENCES node_pool_folders(id) ON DELETE SET NULL,
           description TEXT,
           thumbnail TEXT,
           sort_order INTEGER NOT NULL DEFAULT 0,
@@ -161,9 +186,9 @@ export async function runMigrations(sqlite: Database.Database) {
       sqlite.exec(`
         CREATE TABLE node_pool_folders (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
-          user_id INTEGER NOT NULL REFERENCES users(id),
+          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
           name TEXT NOT NULL,
-          parent_id INTEGER REFERENCES node_pool_folders(id),
+          parent_id INTEGER REFERENCES node_pool_folders(id) ON DELETE CASCADE,
           sort_order INTEGER NOT NULL DEFAULT 0,
           collapsed INTEGER NOT NULL DEFAULT 0,
           created_at INTEGER DEFAULT (strftime('%s', 'now'))
@@ -174,7 +199,7 @@ export async function runMigrations(sqlite: Database.Database) {
       sqlite.exec(`
         CREATE TABLE settings (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
-          user_id INTEGER NOT NULL REFERENCES users(id),
+          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
           key TEXT NOT NULL,
           value TEXT NOT NULL,
           category TEXT NOT NULL DEFAULT 'general'
@@ -189,8 +214,8 @@ export async function runMigrations(sqlite: Database.Database) {
           path TEXT NOT NULL,
           size INTEGER NOT NULL,
           mime_type TEXT NOT NULL,
-          uploader_id INTEGER NOT NULL REFERENCES users(id),
-          project_id INTEGER REFERENCES projects(id),
+          uploader_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
           created_at INTEGER DEFAULT (strftime('%s', 'now'))
         )
       `)
@@ -235,9 +260,9 @@ export async function runMigrations(sqlite: Database.Database) {
       sqlite.exec(`
         CREATE TABLE project_invitations (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
-          project_id INTEGER NOT NULL REFERENCES projects(id),
-          inviter_id INTEGER NOT NULL REFERENCES users(id),
-          invitee_id INTEGER NOT NULL REFERENCES users(id),
+          project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          inviter_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          invitee_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
           role TEXT NOT NULL DEFAULT 'viewer',
           status TEXT NOT NULL DEFAULT 'pending',
           created_at INTEGER DEFAULT (strftime('%s', 'now')),
@@ -253,8 +278,8 @@ export async function runMigrations(sqlite: Database.Database) {
       sqlite.exec(`
         CREATE TABLE ai_conversations (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
-          canvas_id INTEGER NOT NULL REFERENCES canvases(id),
-          user_id INTEGER NOT NULL REFERENCES users(id),
+          canvas_id INTEGER NOT NULL REFERENCES canvases(id) ON DELETE CASCADE,
+          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
           messages TEXT NOT NULL,
           context_divider_index INTEGER NOT NULL DEFAULT -1,
           updated_at INTEGER DEFAULT (strftime('%s', 'now'))
@@ -378,6 +403,200 @@ export async function runMigrations(sqlite: Database.Database) {
       log('Adding yjs_update column to canvases table')
       sqlite.exec('ALTER TABLE canvases ADD COLUMN yjs_update TEXT')
       log('yjs_update column added successfully')
+    }
+
+    // Migrate foreign key constraints to include ON DELETE CASCADE / SET NULL.
+    // Databases created before this migration use NO ACTION, which caused
+    // FOREIGN KEY constraint failures when deleting canvases/projects/users.
+    if (
+      tableExists(sqlite, 'ai_conversations') &&
+      !hasForeignKeyAction(sqlite, 'ai_conversations', 'canvas_id', 'CASCADE')
+    ) {
+      log('Migrating foreign key constraints to support cascade deletes')
+      const fkBackup = sqlite.pragma('foreign_keys') as 0 | 1
+      sqlite.pragma('foreign_keys = OFF')
+
+      try {
+        sqlite.exec('BEGIN TRANSACTION')
+
+        // group_members: group_id/user_id ON DELETE CASCADE
+        sqlite.exec(`
+          CREATE TABLE group_members_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            role TEXT NOT NULL DEFAULT 'member',
+            joined_at INTEGER DEFAULT (strftime('%s', 'now'))
+          )
+        `)
+        sqlite.exec(`INSERT INTO group_members_new SELECT * FROM group_members`)
+        sqlite.exec(`DROP TABLE group_members`)
+        sqlite.exec(`ALTER TABLE group_members_new RENAME TO group_members`)
+
+        // project_members: project_id/user_id ON DELETE CASCADE
+        sqlite.exec(`
+          CREATE TABLE project_members_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            role TEXT NOT NULL DEFAULT 'viewer',
+            joined_at INTEGER DEFAULT (strftime('%s', 'now'))
+          )
+        `)
+        sqlite.exec(`INSERT INTO project_members_new SELECT * FROM project_members`)
+        sqlite.exec(`DROP TABLE project_members`)
+        sqlite.exec(`ALTER TABLE project_members_new RENAME TO project_members`)
+
+        // project_invitations: all FKs ON DELETE CASCADE
+        sqlite.exec(`
+          CREATE TABLE project_invitations_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            inviter_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            invitee_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            role TEXT NOT NULL DEFAULT 'viewer',
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at INTEGER DEFAULT (strftime('%s', 'now')),
+            responded_at INTEGER
+          )
+        `)
+        sqlite.exec(`INSERT INTO project_invitations_new SELECT * FROM project_invitations`)
+        sqlite.exec(`DROP TABLE project_invitations`)
+        sqlite.exec(`ALTER TABLE project_invitations_new RENAME TO project_invitations`)
+
+        // folders: parent_id -> folders(id) ON DELETE CASCADE
+        sqlite.exec(`
+          CREATE TABLE folders_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            project_id INTEGER NOT NULL REFERENCES projects(id),
+            parent_id INTEGER REFERENCES folders_new(id) ON DELETE CASCADE,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER DEFAULT (strftime('%s', 'now'))
+          )
+        `)
+        sqlite.exec(`INSERT INTO folders_new SELECT * FROM folders`)
+        sqlite.exec(`DROP TABLE folders`)
+        sqlite.exec(`ALTER TABLE folders_new RENAME TO folders`)
+
+        // canvas_recycle_bin: all FKs ON DELETE CASCADE
+        sqlite.exec(`
+          CREATE TABLE canvas_recycle_bin_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            canvas_id INTEGER NOT NULL REFERENCES canvases(id) ON DELETE CASCADE,
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            deleted_by INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            deleted_at INTEGER DEFAULT (strftime('%s', 'now')),
+            expires_at INTEGER NOT NULL
+          )
+        `)
+        sqlite.exec(`INSERT INTO canvas_recycle_bin_new SELECT * FROM canvas_recycle_bin`)
+        sqlite.exec(`DROP TABLE canvas_recycle_bin`)
+        sqlite.exec(`ALTER TABLE canvas_recycle_bin_new RENAME TO canvas_recycle_bin`)
+
+        // node_pool_folders: user_id/parent_id ON DELETE CASCADE
+        sqlite.exec(`
+          CREATE TABLE node_pool_folders_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            parent_id INTEGER REFERENCES node_pool_folders_new(id) ON DELETE CASCADE,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            collapsed INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER DEFAULT (strftime('%s', 'now'))
+          )
+        `)
+        sqlite.exec(`INSERT INTO node_pool_folders_new SELECT * FROM node_pool_folders`)
+        sqlite.exec(`DROP TABLE node_pool_folders`)
+        sqlite.exec(`ALTER TABLE node_pool_folders_new RENAME TO node_pool_folders`)
+
+        // node_cards: user_id CASCADE, created_by/folder_id SET NULL
+        sqlite.exec(`
+          CREATE TABLE node_cards_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            content TEXT NOT NULL,
+            type TEXT NOT NULL DEFAULT 'text',
+            color TEXT NOT NULL DEFAULT '#ffffff',
+            tags TEXT,
+            use_count INTEGER NOT NULL DEFAULT 0,
+            created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            folder_id INTEGER REFERENCES node_pool_folders(id) ON DELETE SET NULL,
+            description TEXT,
+            thumbnail TEXT,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER DEFAULT (strftime('%s', 'now'))
+          )
+        `)
+        sqlite.exec(`INSERT INTO node_cards_new SELECT * FROM node_cards`)
+        sqlite.exec(`DROP TABLE node_cards`)
+        sqlite.exec(`ALTER TABLE node_cards_new RENAME TO node_cards`)
+
+        // settings: user_id ON DELETE CASCADE
+        sqlite.exec(`
+          CREATE TABLE settings_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            key TEXT NOT NULL,
+            value TEXT NOT NULL,
+            category TEXT NOT NULL DEFAULT 'general'
+          )
+        `)
+        sqlite.exec(`INSERT INTO settings_new SELECT * FROM settings`)
+        sqlite.exec(`DROP TABLE settings`)
+        sqlite.exec(`ALTER TABLE settings_new RENAME TO settings`)
+
+        // files: uploader_id/project_id ON DELETE CASCADE
+        sqlite.exec(`
+          CREATE TABLE files_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            filename TEXT NOT NULL,
+            path TEXT NOT NULL,
+            size INTEGER NOT NULL,
+            mime_type TEXT NOT NULL,
+            uploader_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
+            created_at INTEGER DEFAULT (strftime('%s', 'now'))
+          )
+        `)
+        sqlite.exec(`INSERT INTO files_new SELECT * FROM files`)
+        sqlite.exec(`DROP TABLE files`)
+        sqlite.exec(`ALTER TABLE files_new RENAME TO files`)
+
+        // ai_conversations: canvas_id/user_id ON DELETE CASCADE
+        sqlite.exec(`DROP INDEX IF EXISTS ai_conversations_canvas_user_idx`)
+        sqlite.exec(`
+          CREATE TABLE ai_conversations_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            canvas_id INTEGER NOT NULL REFERENCES canvases(id) ON DELETE CASCADE,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            messages TEXT NOT NULL,
+            context_divider_index INTEGER NOT NULL DEFAULT -1,
+            updated_at INTEGER DEFAULT (strftime('%s', 'now'))
+          )
+        `)
+        sqlite.exec(`INSERT INTO ai_conversations_new SELECT * FROM ai_conversations`)
+        sqlite.exec(`DROP TABLE ai_conversations`)
+        sqlite.exec(`ALTER TABLE ai_conversations_new RENAME TO ai_conversations`)
+        sqlite.exec(`
+          CREATE UNIQUE INDEX ai_conversations_canvas_user_idx ON ai_conversations (canvas_id, user_id)
+        `)
+
+        sqlite.exec('COMMIT')
+        log('Foreign key cascade migration completed')
+      } catch (error) {
+        try {
+          sqlite.exec('ROLLBACK')
+        } catch {
+          // rollback may fail if no transaction is active; ignore
+        }
+        throw error
+      } finally {
+        if (fkBackup) {
+          sqlite.pragma('foreign_keys = ON')
+        }
+      }
     }
 
     log('Migrations completed successfully')
