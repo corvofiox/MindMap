@@ -29,6 +29,14 @@ type YjsBindingHandle = {
   endInteraction: (nodeId: string) => void
   /** Re-register observers on current Y.Map instances (after STEP2 sync). */
   reconnectObservers: () => void
+  /** Replace the entire Y.Doc content with imported entities in a single
+   *  LOCAL_ORIGIN transaction. */
+  importIntoDoc: (data: {
+    nodes: Node[]
+    groups: NodeGroup[]
+    domains: Domain[]
+    connections: Connection[]
+  }) => boolean
   /** Copy all entities from the Zustand store into the Y.Doc (initial sync). */
   syncLocalStateToYDoc: () => void
   /** Copy entities present in the Y.Doc but missing from the store back into
@@ -259,6 +267,15 @@ interface CanvasState {
     },
     viewState?: { zoom: number; panX: number; panY: number },
   ) => void
+  importCanvasData: (
+    data: {
+      nodes: Node[]
+      groups: NodeGroup[]
+      domains: Domain[]
+      connections: Connection[]
+    },
+    viewState?: { zoom: number; panX: number; panY: number },
+  ) => boolean
   clearCanvas: () => void
 }
 
@@ -1267,6 +1284,25 @@ moveNodeToPool: (nodeId: string, nodeData: Node, afterExecute?: () => Promise<vo
       }
     })
     syncDiffToYDoc(before, get())
+  },
+
+  importCanvasData: (data, viewState) => {
+    const binding = getYjsBinding()
+    if (binding) {
+      // In collaboration mode we replace the shared Y.Doc atomically and then
+      // update the local store. suppressSync prevents setCanvasData from
+      // re-diffing the same change back into the Y.Doc (the doc is already the
+      // authoritative source of truth for this import).
+      const written = binding.importIntoDoc(data)
+      if (!written) return false
+      binding.suppressSync(() => {
+        get().setCanvasData(data, viewState)
+      })
+      return true
+    }
+    // Single-user mode: just replace local state and let the caller save.
+    get().setCanvasData(data, viewState)
+    return true
   },
 
   clearCanvas: () => {

@@ -649,4 +649,75 @@ describe('yjsBinding', () => {
       binding.destroy()
     })
   })
+
+  describe('import into doc', () => {
+    it('replaces all doc entities and skips the local observer', () => {
+      const doc = new Y.Doc()
+      const collections = ensureRoot(doc)
+      doc.transact(() => {
+        collections.nodes.set('old', entityToYMap({ id: 'old', x: 0, y: 0, title: 'Old' }))
+      })
+
+      const store = createMockStore()
+      const binding = bindYjsToStore(createMockProvider(doc, true), store as any)
+
+      const imported = binding.importIntoDoc({
+        nodes: [{ id: 'new', x: 1, y: 2, title: 'New' } as any],
+        groups: [{ id: 'g1', name: 'G', x: 0, y: 0, width: 100, height: 100, borderColor: '#000', backgroundColor: '#fff', borderWidth: 1, borderRadius: 0, nodeIds: [], collapsed: false }],
+        domains: [{ id: 'd1', name: 'D', x: 0, y: 0, width: 100, height: 100, backgroundColor: '#fff', titleVisible: true }],
+        connections: [{ id: 'c1', fromNodeId: 'new', toNodeId: 'new', fromPort: 'right', toPort: 'left', type: 'curve', style: 'solid', color: '#000', width: 1, arrowType: 'end', direction: 'directed' } as any],
+      })
+
+      expect(imported).toBe(true)
+      expect(collections.nodes.has('new')).toBe(true)
+      expect(collections.nodes.has('old')).toBe(false)
+      expect(collections.groups.has('g1')).toBe(true)
+      expect(collections.domains.has('d1')).toBe(true)
+      expect(collections.connections.has('c1')).toBe(true)
+      // LOCAL_ORIGIN must not trigger the local observer.
+      expect(store.addNode).not.toHaveBeenCalled()
+      expect(store.removeNode).not.toHaveBeenCalled()
+      binding.destroy()
+    })
+
+    it('propagates the imported state to a remote doc', () => {
+      const localDoc = new Y.Doc()
+      ensureRoot(localDoc)
+      const remoteDoc = new Y.Doc()
+
+      const store = createMockStore()
+      const binding = bindYjsToStore(createMockProvider(localDoc, true), store as any)
+
+      binding.importIntoDoc({
+        nodes: [{ id: 'r1', x: 5, y: 6, title: 'Remote' } as any],
+        groups: [],
+        domains: [],
+        connections: [],
+      })
+
+      // Simulate the provider sending the missing updates to the server/peer.
+      const update = Y.encodeStateAsUpdate(localDoc, Y.encodeStateVector(remoteDoc))
+      Y.applyUpdate(remoteDoc, update)
+
+      const remoteCollections = ensureRoot(remoteDoc)
+      expect(remoteCollections.nodes.has('r1')).toBe(true)
+      binding.destroy()
+    })
+
+    it('returns false when the doc root is not yet available', () => {
+      const doc = new Y.Doc()
+      const store = createMockStore()
+      const binding = bindYjsToStore(createMockProvider(doc, false), store as any)
+
+      const imported = binding.importIntoDoc({
+        nodes: [{ id: 'n1', x: 0, y: 0, title: 'X' } as any],
+        groups: [],
+        domains: [],
+        connections: [],
+      })
+
+      expect(imported).toBe(false)
+      binding.destroy()
+    })
+  })
 })

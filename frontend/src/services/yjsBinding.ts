@@ -45,12 +45,15 @@ export interface CanvasStoreBinding {
   removeGroup: (id: string) => void
   removeDomain: (id: string) => void
   removeConnection: (id: string) => void
-  setCanvasData: (data: {
-    nodes?: Node[]
-    groups?: NodeGroup[]
-    domains?: Domain[]
-    connections?: Connection[]
-  }) => void
+  setCanvasData: (
+    data: {
+      nodes?: Node[]
+      groups?: NodeGroup[]
+      domains?: Domain[]
+      connections?: Connection[]
+    },
+    viewState?: { zoom: number; panX: number; panY: number },
+  ) => void
 }
 
 export interface YjsCanvasBinding {
@@ -68,6 +71,15 @@ export interface YjsCanvasBinding {
   getYGroups: () => Y.Map<Y.Map<unknown>> | undefined
   getYDomains: () => Y.Map<Y.Map<unknown>> | undefined
   getYConnections: () => Y.Map<Y.Map<unknown>> | undefined
+  /** Replace the entire Y.Doc content with imported entities in a single
+   *  LOCAL_ORIGIN transaction. Local observers skip it; remote peers receive
+   *  the full replacement update. Returns true if the doc root existed. */
+  importIntoDoc: (data: {
+    nodes: Node[]
+    groups: NodeGroup[]
+    domains: Domain[]
+    connections: Connection[]
+  }) => boolean
   /** Copy all entities from the Zustand store into the Y.Doc (initial sync). */
   syncLocalStateToYDoc: () => void
   /** Copy entities present in the Y.Doc but missing from the store back into
@@ -511,7 +523,7 @@ export function bindYjsToStore(
       if (currentUpdateLen <= emptyUpdateLen) {
         logger.warn(
           '[yjs-binding] server doc is empty (no history) but local store has entities; ' +
-            'preserving local state and mirroring it back to the doc',
+          'preserving local state and mirroring it back to the doc',
           { localEntityCount },
         )
         syncLocalStateToYDoc()
@@ -599,6 +611,46 @@ export function bindYjsToStore(
     return false
   }
 
+  /** Replace all entities in the Y.Doc with the imported data in one atomic
+   *  LOCAL_ORIGIN transaction. The local observer skips LOCAL_ORIGIN, so the
+   *  store is not updated by the observer; callers must update the local store
+   *  separately (usually via setCanvasData). Remote peers receive the update
+   *  and their observers apply it, replacing their local canvas content. */
+  function importIntoDoc(data: {
+    nodes: Node[]
+    groups: NodeGroup[]
+    domains: Domain[]
+    connections: Connection[]
+  }): boolean {
+    const collections = getExistingRoot(doc)
+    if (!collections) return false
+
+    doc.transact(() => {
+      collections.nodes.clear()
+      collections.groups.clear()
+      collections.domains.clear()
+      collections.connections.clear()
+
+      for (const node of data.nodes) {
+        collections.nodes.set(node.id, entityToYMap(node as unknown as Record<string, unknown>))
+      }
+      for (const group of data.groups) {
+        collections.groups.set(group.id, entityToYMap(group as unknown as Record<string, unknown>))
+      }
+      for (const domain of data.domains) {
+        collections.domains.set(domain.id, entityToYMap(domain as unknown as Record<string, unknown>))
+      }
+      for (const connection of data.connections) {
+        collections.connections.set(
+          connection.id,
+          entityToYMap(connection as unknown as Record<string, unknown>),
+        )
+      }
+    }, LOCAL_ORIGIN)
+
+    return true
+  }
+
   return {
     applyDiff,
     get isApplyingRemoteChanges() {
@@ -611,6 +663,7 @@ export function bindYjsToStore(
     getYGroups,
     getYDomains,
     getYConnections,
+    importIntoDoc,
     syncLocalStateToYDoc,
     syncYDocToLocalState,
     reconnectObservers,

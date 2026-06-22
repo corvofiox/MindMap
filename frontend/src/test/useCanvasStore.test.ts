@@ -239,6 +239,26 @@ describe('useCanvasStore', () => {
       expect(state.selectedIds).toEqual([])
       expect(state.isDirty).toBe(false)
     })
+
+    it('should import canvas data in single-user mode', () => {
+      const nodes = [createTestNode('n1')]
+      const groups: NodeGroup[] = []
+      const domains: Domain[] = []
+      const connections: Connection[] = []
+
+      const result = useCanvasStore.getState().importCanvasData(
+        { nodes, groups, domains, connections },
+        { zoom: 1.2, panX: 50, panY: 60 },
+      )
+
+      expect(result).toBe(true)
+      const state = useCanvasStore.getState()
+      expect(state.nodes.size).toBe(1)
+      expect(state.nodes.has('n1')).toBe(true)
+      expect(state.zoom).toBe(1.2)
+      expect(state.panX).toBe(50)
+      expect(state.panY).toBe(60)
+    })
   })
 
   describe('Dirty state', () => {

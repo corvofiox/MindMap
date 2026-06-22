@@ -25,6 +25,7 @@ import {
 } from 'lucide-react'
 import { useCanvasStore } from '@/store/useCanvasStore'
 import { useUIStore } from '@/store/useUIStore'
+import { Dialog, DialogAction } from '@/components/ui/Dialog'
 import type { Tool } from '@/types'
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { generateId } from '@/utils/canvas'
@@ -91,13 +92,18 @@ export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToo
     zoom,
     panX,
     panY,
-    setCanvasData,
+    importCanvasData,
     setDirty,
   } = useCanvasStore()
 
   const [isSaving, setIsSaving] = useState(false)
   const [saveSuccess, setSaveSuccess] = useState(false)
   const [showImportExportMenu, setShowImportExportMenu] = useState(false)
+  const [showCollabImportConfirm, setShowCollabImportConfirm] = useState(false)
+  const [pendingImport, setPendingImport] = useState<{
+    data: ImportResult['data']
+    viewState: ImportResult['viewState']
+  } | null>(null)
   const importExportRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -211,22 +217,58 @@ export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToo
     setShowImportExportMenu(false)
   }, [])
 
+  const showImportSuccess = useCallback(
+    (data: ImportResult['data']) => {
+      addToast({
+        type: 'success',
+        title: '导入成功',
+        message: `成功导入 ${data.nodes.length} 个节点, ${data.connections.length} 条连线`,
+        duration: 3000,
+      })
+    },
+    [addToast]
+  )
+
+  const performImport = useCallback(
+    async (data: ImportResult['data'], viewState: ImportResult['viewState']) => {
+      const written = importCanvasData(data, viewState)
+      if (!written) {
+        addToast({
+          type: 'error',
+          title: '导入失败',
+          message: '协作文档尚未就绪，无法导入',
+          duration: 5000,
+        })
+        return
+      }
+      setDirty(true)
+
+      if (!isCollabConnected && onSave) {
+        // Single-user mode: persist immediately via REST API.
+        try {
+          await onSave()
+        } catch {
+          // onSave（handleManualSave）已内部处理所有错误，此处仅作防御
+        }
+        // handleManualSave 成功时 setDirty(false)，失败时不修改 isDirty。
+        // 通过检查 isDirty 区分是否保存成功（避免 onSave 内部吞掉错误后仍显示成功 toast）。
+        if (!useCanvasStore.getState().isDirty) {
+          showImportSuccess(data)
+        }
+      } else {
+        // Collaboration mode: Yjs already broadcasts and the server persists
+        // the update automatically, so we just notify the user.
+        showImportSuccess(data)
+      }
+    },
+    [importCanvasData, setDirty, addToast, onSave, isCollabConnected, showImportSuccess]
+  )
+
   // 处理文件选择
   const handleFileSelect = useCallback(
     async (event: React.ChangeEvent<HTMLInputElement>) => {
       const file = event.target.files?.[0]
       if (!file) return
-
-      if (isCollabConnected) {
-        addToast({
-          type: 'warning',
-          title: '导入不可用',
-          message: '协作模式下请先断开连接再导入',
-          duration: 3000,
-        })
-        event.target.value = ''
-        return
-      }
 
       try {
         const jsonString = await readJsonFile(file)
@@ -243,35 +285,13 @@ export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToo
           return
         }
 
-        const { data, viewState } = result
-        setCanvasData(data, viewState)
-        setDirty(true)
-
-        // 强制立即保存到服务器，确保导入的数据被持久化。
-        // 协作模式下导入按钮已被禁用，不会走到这里。
-        if (onSave) {
-          try {
-            await onSave()
-          } catch {
-            // onSave（handleManualSave）已内部处理所有错误，此处仅作防御
-          }
-          // handleManualSave 成功时 setDirty(false)，失败时不修改 isDirty。
-          // 通过检查 isDirty 区分是否保存成功（避免 onSave 内部吞掉错误后仍显示成功 toast）。
-          if (!useCanvasStore.getState().isDirty) {
-            addToast({
-              type: 'success',
-              title: '导入成功',
-              message: `成功导入 ${data.nodes.length} 个节点, ${data.connections.length} 条连线`,
-              duration: 3000,
-            })
-          }
+        if (isCollabConnected) {
+          // Defer the actual import until the user confirms, because replacing
+          // the shared Y.Doc affects all connected peers.
+          setPendingImport({ data: result.data, viewState: result.viewState })
+          setShowCollabImportConfirm(true)
         } else {
-          addToast({
-            type: 'success',
-            title: '导入成功',
-            message: `成功导入 ${data.nodes.length} 个节点, ${data.connections.length} 条连线`,
-            duration: 3000,
-          })
+          await performImport(result.data, result.viewState)
         }
       } catch (error) {
         addToast({
@@ -285,8 +305,20 @@ export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToo
       // 清空 input 值，允许重复选择同一文件
       event.target.value = ''
     },
-    [setCanvasData, setDirty, addToast, onSave, isCollabConnected]
+    [addToast, performImport, isCollabConnected]
   )
+
+  const handleConfirmCollabImport = useCallback(async () => {
+    if (!pendingImport) return
+    setShowCollabImportConfirm(false)
+    await performImport(pendingImport.data, pendingImport.viewState)
+    setPendingImport(null)
+  }, [pendingImport, performImport])
+
+  const handleCancelCollabImport = useCallback(() => {
+    setShowCollabImportConfirm(false)
+    setPendingImport(null)
+  }, [])
 
   const handleCreateGroup = () => {
     if (hasSelectedNodes) {
@@ -668,12 +700,11 @@ export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToo
             {showImportExportMenu && !isViewer && (
               <div className="absolute right-0 top-full mt-1 w-32 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1 z-50">
                 <button
-                  onClick={isCollabConnected ? undefined : handleImportClick}
-                  disabled={isCollabConnected}
-                  className="w-full px-4 py-2 text-left text-sm flex items-center gap-2 disabled:text-gray-400 dark:disabled:text-gray-600 disabled:cursor-not-allowed text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:hover:bg-transparent"
+                  onClick={handleImportClick}
+                  className="w-full px-4 py-2 text-left text-sm flex items-center gap-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
                   title={
                     isCollabConnected
-                      ? '协作模式下请先断开连接再导入'
+                      ? '协作模式下导入会替换所有在线用户的画布，请谨慎操作'
                       : '导入 JSON 文件替换当前画布'
                   }
                 >
@@ -702,7 +733,30 @@ export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToo
         </div>
       </div>
 
-      {/* Secondary Toolbar - Connection Options */}
+      {/* Collaboration import confirmation */}
+      <Dialog
+        open={showCollabImportConfirm}
+        onClose={handleCancelCollabImport}
+        title="确认导入"
+        footer={
+          <>
+            <DialogAction onClick={handleCancelCollabImport} variant="secondary">
+              取消
+            </DialogAction>
+            <DialogAction onClick={handleConfirmCollabImport} variant="danger">
+              确认导入
+            </DialogAction>
+          </>
+        }
+      >
+        <p className="text-gray-700 dark:text-gray-300">
+          当前处于协作模式，导入会替换所有在线用户看到的画布内容。
+        </p>
+        <p className="text-gray-700 dark:text-gray-300 mt-2">
+          若其他用户正在编辑，其未保存的改动将丢失。是否继续？
+        </p>
+      </Dialog>
+
       {showSecondaryToolbar && (
         <div className="inline-grid h-auto min-h-12 border-t border-gray-200 dark:border-gray-700 grid grid-cols-1 xl:grid-cols-3 xl:grid-auto-rows xl:grid-flow-col gap-y-1 xl:gap-x-4 px-4 py-2 bg-gray-50 dark:bg-gray-900/50 shadow-md z-10">
           {currentTool === 'connection' ? (
