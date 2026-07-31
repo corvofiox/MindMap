@@ -42,6 +42,7 @@ import {
   getCanvasJsonSnapshot,
   applyUpdateToCanvas,
   isCanvasStatePersisted,
+  snapshotMissingDocEntities,
 } from '../websocket/canvas-state.js'
 import { encodeDocToBase64, jsonSnapshotToDoc } from '../websocket/yjs-schema.js'
 import { db } from '../database/connection.js'
@@ -128,6 +129,105 @@ describe('Yjs canvas-state', () => {
       })
       const snapshot = getCanvasJsonSnapshot(CANVAS_ID)
       expect(snapshot.nodes.some((n) => (n as any).id === 'u1')).toBe(true)
+    })
+  })
+
+  describe('snapshotMissingDocEntities (R1 entity-set staleness)', () => {
+    it('快照缺失 doc 中的实体 → true（过期快照，必须 upsertOnly）', async () => {
+      await loadCanvasStateFromDb(CANVAS_ID)
+      // 模拟 B 在客户端离线期间的编辑（doc 已有实体）
+      await mergeJsonSnapshotIntoCanvas(CANVAS_ID, {
+        nodes: [{ id: 'peer-node', x: 1, y: 2 } as any],
+      })
+
+      // 客户端快照完全不知道 peer-node
+      expect(snapshotMissingDocEntities(CANVAS_ID, {
+        nodes: [{ id: 'own-node', x: 3, y: 4 } as any],
+      })).toBe(true)
+
+      // 客户端快照包含全部 doc 实体（即使额外多了自己的实体）→ false
+      expect(snapshotMissingDocEntities(CANVAS_ID, {
+        nodes: [{ id: 'peer-node', x: 1, y: 2 } as any, { id: 'own-node', x: 3, y: 4 } as any],
+      })).toBe(false)
+    })
+
+    it('客户端声明删除的实体不视为缺失 → 全量合并可执行合法离线删除', async () => {
+      await loadCanvasStateFromDb(CANVAS_ID)
+      await mergeJsonSnapshotIntoCanvas(CANVAS_ID, {
+        nodes: [{ id: 'b-node', x: 1, y: 2 } as any],
+      })
+
+      // 客户端删除了 b-node（本地删除声明），快照中也没有它 → 判定 false，
+      // 全量合并会正确执行该删除（幽灵复活回归的回归测试）。
+      expect(snapshotMissingDocEntities(CANVAS_ID, {
+        nodes: [{ id: 'own-node', x: 3, y: 4 } as any],
+      }, {
+        nodes: ['b-node'],
+      })).toBe(false)
+
+      // 未声明删除 → 仍视为缺失（保护未知实体）
+      expect(snapshotMissingDocEntities(CANVAS_ID, {
+        nodes: [{ id: 'own-node', x: 3, y: 4 } as any],
+      }, {
+        nodes: [],
+      })).toBe(true)
+    })
+
+    it('删除声明按集合隔离（不同集合的同名 ID 互不影响）', async () => {
+      await loadCanvasStateFromDb(CANVAS_ID)
+      await mergeJsonSnapshotIntoCanvas(CANVAS_ID, {
+        nodes: [{ id: 'x', x: 1, y: 2 } as any],
+        connections: [{ id: 'x', fromNodeId: 'a', toNodeId: 'b' } as any],
+      })
+
+      // 只声明删除了 nodes 集合中的 'x'：connections 集合的 'x' 仍视为缺失
+      expect(snapshotMissingDocEntities(CANVAS_ID, {
+        nodes: [],
+        connections: [],
+      }, {
+        nodes: ['x'],
+      })).toBe(true)
+
+      // 两个集合都声明删除 → false
+      expect(snapshotMissingDocEntities(CANVAS_ID, {
+        nodes: [],
+        connections: [],
+      }, {
+        nodes: ['x'],
+        connections: ['x'],
+      })).toBe(false)
+    })
+
+    it('空 doc + 非空快照 → false（允许全量合并写入）', async () => {
+      await loadCanvasStateFromDb(CANVAS_ID)
+      expect(snapshotMissingDocEntities(CANVAS_ID, {
+        nodes: [{ id: 'n1', x: 0, y: 0 } as any],
+      })).toBe(false)
+    })
+
+    it('未提供的集合不参与比较（与 syncCollection 的 undefined 守卫一致）', async () => {
+      await loadCanvasStateFromDb(CANVAS_ID)
+      await mergeJsonSnapshotIntoCanvas(CANVAS_ID, {
+        nodes: [{ id: 'n1', x: 0, y: 0 } as any],
+        connections: [{ id: 'c1', fromNodeId: 'n1', toNodeId: 'n2' } as any],
+      })
+
+      // 只提供 nodes（缺 connections）：connections 不会被全量合并删除，不算缺失
+      expect(snapshotMissingDocEntities(CANVAS_ID, {
+        nodes: [{ id: 'n1', x: 0, y: 0 } as any],
+      })).toBe(false)
+
+      // 提供了 connections 数组但缺 doc 中的 c1 → true
+      expect(snapshotMissingDocEntities(CANVAS_ID, {
+        nodes: [{ id: 'n1', x: 0, y: 0 } as any],
+        connections: [],
+      })).toBe(true)
+    })
+
+    it('doc 未加载时返回 false（无法判断，交由其他守卫接管）', () => {
+      expect(snapshotMissingDocEntities(CANVAS_ID, {
+        nodes: [{ id: 'n1', x: 0, y: 0 } as any],
+      })).toBe(false)
     })
   })
 

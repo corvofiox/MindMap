@@ -85,6 +85,12 @@ export interface CanvasRoom {
   userConnectionCounts: Map<number, number>
   /** Shared Yjs awareness state for this canvas room. */
   awareness: awarenessProtocol.Awareness
+  /**
+   * True once this room has ever hosted more than one distinct user.
+   * Kept on the room so a stale REST snapshot arriving after the last user
+   * leaves can still be treated as a potential overwrite of peer edits.
+   */
+  everCollaborative?: boolean
 }
 
 /**
@@ -119,6 +125,59 @@ type RoomWithBroadcast = CanvasRoom & {
 }
 
 const canvasRooms = new Map<number, CanvasRoom>()
+
+/**
+ * R1 加固：REST 全量快照 vs WS 并发编辑的 TOCTOU 窗口。
+ *
+ * POST /data 的 upsertOnly 判定（getCanvasActiveUsers）与 mergeJsonSnapshotIntoCanvas
+ * 之间存在异步窗口：判定时房间还有活跃用户（走 upsertOnly），merge 前房间恰好拆除
+ * （如最后一个客户端断开），判定结果就过期了——此时一个来自断线客户端的过期全量快照
+ * 会被当作"无协作"而允许删除对端编辑。
+ *
+ * 记录每个房间拆除的时刻；若该画布曾经有过多人协作（everCollaborative），拆除后的一
+ * 段宽限期内仍按 upsertOnly 处理 POST /data，兜住"最后离开者携带过期快照"的窗口。
+ * 纯单用户画布不受影响（快照删除是真实操作，兜底保存必须正常全量合并）。
+ */
+const POST_COLLAB_UPSERT_GRACE_MS = 15_000
+/** 拆除记录保留时间：宽限期之外这些记录已无用途，定期清理防止内存无界增长。 */
+const TEARDOWN_RECORD_TTL_MS = POST_COLLAB_UPSERT_GRACE_MS * 2
+/** 画布 id 集合：该画布的某个房间曾经同时存在过多个不同用户。只增不减（保守）。 */
+const collaborativeCanvasIds = new Set<number>()
+/** canvasId → 最近一次房间拆除时刻（epoch ms）。 */
+const roomTeardownTimes = new Map<number, number>()
+
+/**
+ * 定期清理 roomTeardownTimes / collaborativeCanvasIds：
+ * 两者只在"拆除后宽限期"内有意义（shouldUpsertOnlyForSnapshot 仅在
+ * teardown 时间新鲜时读取），超过 TTL 的条目直接丢弃，使内存占用有界。
+ */
+export function pruneRoomTeardownRecords(now: number = Date.now()): void {
+  for (const [canvasId, teardownAt] of roomTeardownTimes) {
+    if (now - teardownAt > TEARDOWN_RECORD_TTL_MS) {
+      roomTeardownTimes.delete(canvasId)
+    }
+  }
+  for (const canvasId of collaborativeCanvasIds) {
+    const teardownAt = roomTeardownTimes.get(canvasId)
+    if (teardownAt === undefined || now - teardownAt > TEARDOWN_RECORD_TTL_MS) {
+      collaborativeCanvasIds.delete(canvasId)
+    }
+  }
+}
+
+export function shouldUpsertOnlyForSnapshot(canvasId: number): boolean {
+  if (getCanvasActiveUsers(canvasId).length > 0) return true
+  if (!collaborativeCanvasIds.has(canvasId)) return false
+  const teardownAt = roomTeardownTimes.get(canvasId)
+  if (teardownAt === undefined) return false
+  return Date.now() - teardownAt < POST_COLLAB_UPSERT_GRACE_MS
+}
+
+/** 测试专用：注入房间拆除记录，用于验证宽限期判定（下划线前缀仅供测试使用）。 */
+export function _recordRoomTeardownForTesting(canvasId: number, everCollaborative: boolean): void {
+  if (everCollaborative) collaborativeCanvasIds.add(canvasId)
+  roomTeardownTimes.set(canvasId, Date.now())
+}
 
 /**
  * Register a single doc 'update' → broadcast handler on the room, ONCE.
@@ -189,6 +248,9 @@ export function setupWebSocket(wss: WebSocketServer) {
   const heartbeatIntervalId = setInterval(() => {
     const now = Date.now()
 
+    // 定期清理过期的房间拆除记录，防止 roomTeardownTimes / collaborativeCanvasIds 无界增长。
+    pruneRoomTeardownRecords(now)
+
     for (const [ip, rateData] of wsConnectionRates.entries()) {
       if (now > rateData.resetTime) {
         wsConnectionRates.delete(ip)
@@ -244,6 +306,11 @@ function teardownEmptyRoom(canvasId: number, room: CanvasRoom): void {
   flushPendingPersist(canvasId)
   detachRoomBroadcastHandler(room)
   canvasRooms.delete(canvasId)
+  // R1: 记录拆除时刻与协作历史，供 shouldUpsertOnlyForSnapshot 的宽限期判定使用。
+  if (room.everCollaborative) {
+    collaborativeCanvasIds.add(canvasId)
+  }
+  roomTeardownTimes.set(canvasId, Date.now())
   // Awareness may be absent in unit tests that inject a minimal room.
   try {
     room.awareness?.destroy()
@@ -614,6 +681,12 @@ async function handleConnection(ws: WebSocketWithUserData, req: any) {
 
   const currentCount = room.userConnectionCounts.get(userId) || 0
   room.userConnectionCounts.set(userId, currentCount + 1)
+
+  // R1: 一旦房间同时存在多个不同用户，标记该房间为"多人协作过"。
+  // 用不同用户数（而非连接数）判断：同一用户的多标签页不算协作。
+  if (room.userConnectionCounts.size > 1) {
+    room.everCollaborative = true
+  }
 
   // Load the authoritative Yjs doc from DB.
   await loadCanvasStateFromDb(canvasId)

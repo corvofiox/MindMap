@@ -59,6 +59,7 @@ export function useCollaboration({
       token,
       tokenGetter: () => apiClient.getToken(),
       role,
+      userId: user?.id ?? null,
     })
     activeProviders.set(canvasId, provider)
 

@@ -11,7 +11,8 @@
  * removed entirely — Yjs handles all of that natively.
  */
 
-import { isCollabConnected } from '@/hooks/useCollaboration'
+import { isCollabConnected, getActiveYjsProvider } from '@/hooks/useCollaboration'
+import { hasCollaborationEvidenceForCanvas } from '@/services/yjsProvider'
 import { logger } from '@/utils/logger'
 
 // Re-export BatchOperations shape so call sites that type against it still work.
@@ -54,6 +55,19 @@ class CollaborationService {
 
   isConnected(): boolean {
     return isCollabConnected()
+  }
+
+  /**
+   * R1: 本会话是否曾与其他协作者共处/共编辑（跨 provider 生命周期）。
+   * 有证据时页面卸载/切换画布不应发送 REST 全量快照——快照可能过期，
+   * 全量合并会覆盖对端编辑（服务端 POST /data 只串行化 POST，不串行 WS）。
+   */
+  hasCollaborationEvidence(canvasId?: number): boolean {
+    if (canvasId !== undefined) {
+      return hasCollaborationEvidenceForCanvas(canvasId)
+    }
+    const provider = getActiveYjsProvider()
+    return provider ? provider.hasCollaborationEvidence() : false
   }
 
   /** Yjs has no global version; return 0 so REST callers send a benign value. */

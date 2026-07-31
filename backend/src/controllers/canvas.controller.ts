@@ -6,8 +6,8 @@ import { authenticate, type AuthRequest } from '../middleware/auth.middleware.js
 import { asyncHandler } from '../middleware/error.middleware.js'
 import { transformResponse, transformResponseArray, getProperty } from '../utils/transformResponse.js'
 import { log } from '../utils/logger.js'
-import { getCanvasActiveUsers, closeRoom } from '../websocket/index.js'
-import { loadCanvasStateFromDb, mergeJsonSnapshotIntoCanvas, removeCanvasState } from '../websocket/canvas-state.js'
+import { getCanvasActiveUsers, closeRoom, shouldUpsertOnlyForSnapshot } from '../websocket/index.js'
+import { loadCanvasStateFromDb, mergeJsonSnapshotIntoCanvas, removeCanvasState, snapshotMissingDocEntities } from '../websocket/canvas-state.js'
 
 export const canvasRouter = Router()
 
@@ -175,6 +175,10 @@ canvasRouter.post('/:projectId', authenticate, asyncHandler(async (req: AuthRequ
       name,
       projectId,
       folderId: folderId || null,
+      // R3: 显式毫秒时间戳，避免走 schema 默认值 strftime('%s','now')（秒级）。
+      // 秒级行会让升级前的两个并发缩略图 PUT 都通过 lte 检查（等值允许），
+      // 且旧 bundle 的秒级 clientVersion 对新毫秒行会永久 409。
+      updatedAt: Date.now(),
     })
     .returning()
 
@@ -261,14 +265,17 @@ canvasRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, res
           log('PUT canvas - Thumbnail branch also has yjsData; merging first', { canvasId })
           try {
             const jsonStr = Buffer.from(yjsData, 'base64').toString('utf-8')
-            const snapshot = JSON.parse(jsonStr)
-            const activeUsers = getCanvasActiveUsers(canvasId)
-            await mergeJsonSnapshotIntoCanvas(canvasId, {
-              nodes: Array.isArray(snapshot.nodes) ? snapshot.nodes : [],
-              groups: Array.isArray(snapshot.groups) ? snapshot.groups : [],
-              domains: Array.isArray(snapshot.domains) ? snapshot.domains : [],
-              connections: Array.isArray(snapshot.connections) ? snapshot.connections : [],
-            }, activeUsers.length > 0)
+            const parsed = JSON.parse(jsonStr)
+            const snapshot: { nodes?: unknown[]; groups?: unknown[]; domains?: unknown[]; connections?: unknown[] } = {}
+            if (Array.isArray(parsed.nodes)) snapshot.nodes = parsed.nodes
+            if (Array.isArray(parsed.groups)) snapshot.groups = parsed.groups
+            if (Array.isArray(parsed.domains)) snapshot.domains = parsed.domains
+            if (Array.isArray(parsed.connections)) snapshot.connections = parsed.connections
+            await loadCanvasStateFromDb(canvasId)
+            // R1: 快照缺失 doc 实体 → upsertOnly（与 POST /data 一致）。
+            const upsertOnly = snapshotMissingDocEntities(canvasId, snapshot)
+              || shouldUpsertOnlyForSnapshot(canvasId)
+            await mergeJsonSnapshotIntoCanvas(canvasId, snapshot, upsertOnly)
           } catch (err) {
             log('PUT canvas - Failed to merge yjsData into Yjs doc in thumbnail branch', {
               canvasId,
@@ -282,7 +289,9 @@ canvasRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, res
         }
 
         const updateData: Record<string, unknown> = {
-          updatedAt: Math.floor(Date.now() / 1000),
+          // R3: 毫秒级时间戳作为乐观锁版本。秒级粒度下同一秒内的两个并发
+          // 缩略图 PUT 都会通过 lte 检查（等值允许），锁形同虚设。
+          updatedAt: Date.now(),
           thumbnail,
         }
 
@@ -323,7 +332,9 @@ canvasRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, res
     log('PUT canvas - About to update', { canvasId, updateData: { name, yjsData: typeof yjsData, previewText, thumbnail, folderId, sortOrder } })
 
     const updateData: Record<string, unknown> = {
-      updatedAt: Math.floor(Date.now() / 1000),
+      // R3: 与缩略图版本检查分支保持同一精度（毫秒），否则该分支写入的秒级
+      // 时间戳会把乐观锁版本"倒退回秒"，两个并发缩略图 PUT 又都能通过检查。
+      updatedAt: Date.now(),
     }
 
     if (name !== undefined) {
@@ -333,18 +344,22 @@ canvasRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, res
       log('PUT canvas - yjsData provided; merging into Yjs doc instead of legacy column', { canvasId })
       try {
         // Wrap in withPostSaveMutex to prevent TOCTOU race (C1/C2):
-        // getCanvasActiveUsers decision and mergeJsonSnapshotIntoCanvas must be
-        // atomic with respect to concurrent POST /data and WS save operations.
+        // snapshotMissingDocEntities/shouldUpsertOnlyForSnapshot decision and
+        // mergeJsonSnapshotIntoCanvas must be atomic with respect to concurrent
+        // POST /data and WS save operations.
         await withPostSaveMutex(canvasId, async () => {
           const jsonStr = Buffer.from(yjsData, 'base64').toString('utf-8')
-          const snapshot = JSON.parse(jsonStr)
-          const activeUsers = getCanvasActiveUsers(canvasId)
-          await mergeJsonSnapshotIntoCanvas(canvasId, {
-            nodes: Array.isArray(snapshot.nodes) ? snapshot.nodes : [],
-            groups: Array.isArray(snapshot.groups) ? snapshot.groups : [],
-            domains: Array.isArray(snapshot.domains) ? snapshot.domains : [],
-            connections: Array.isArray(snapshot.connections) ? snapshot.connections : [],
-          }, activeUsers.length > 0)
+          const parsed = JSON.parse(jsonStr)
+          const snapshot: { nodes?: unknown[]; groups?: unknown[]; domains?: unknown[]; connections?: unknown[] } = {}
+          if (Array.isArray(parsed.nodes)) snapshot.nodes = parsed.nodes
+          if (Array.isArray(parsed.groups)) snapshot.groups = parsed.groups
+          if (Array.isArray(parsed.domains)) snapshot.domains = parsed.domains
+          if (Array.isArray(parsed.connections)) snapshot.connections = parsed.connections
+          await loadCanvasStateFromDb(canvasId)
+          // R1: 快照缺失 doc 实体 → upsertOnly（与 POST /data 一致）。
+          const upsertOnly = snapshotMissingDocEntities(canvasId, snapshot)
+            || shouldUpsertOnlyForSnapshot(canvasId)
+          await mergeJsonSnapshotIntoCanvas(canvasId, snapshot, upsertOnly)
         })
       } catch (err) {
         log('PUT canvas - Failed to merge yjsData into Yjs doc, returning error', {
@@ -502,16 +517,31 @@ canvasRouter.post('/:id/data', authenticate, asyncHandler(async (req: AuthReques
   }
 
   await withPostSaveMutex(canvasId, async () => {
-    const { nodes, groups, domains, connections, yjsData } = req.body
+    const { nodes, groups, domains, connections, yjsData, deletedIds } = req.body
 
-    // Check if there's an active collaboration session (WS room with clients).
-    // If so, use upsertOnly mode to prevent stale REST snapshots from
-    // deleting peer edits that the disconnected client didn't see.
-    const activeUsers = getCanvasActiveUsers(canvasId)
-    const hasActiveCollab = activeUsers.length > 0
-    if (hasActiveCollab) {
-      log('POST canvas data - upsertOnly mode (active collaboration)', { canvasId, activeUsers: activeUsers.length })
+    // R1 幽灵复活修复：客户端本地删除声明（{ nodes?: string[], ... }）。
+    // 快照缺失但客户端声明删除的实体视为"知情且主动删除"，允许全量合并执行
+    // 删除（否则单用户离线删除会被 upsertOnly 吞掉而"复活"）。
+    // 防御：单集合声明超过上限时忽略该集合（保守方向——不豁免 → upsertOnly），
+    // 防止异常/恶意客户端用超大声明集绕过实体保护。
+    const MAX_DELETED_IDS_PER_COLLECTION = 10_000
+    const sanitizeDeletedIds = (arr: unknown[] | undefined): string[] | undefined => {
+      if (!Array.isArray(arr)) return undefined
+      const ids = arr.filter((x): x is string => typeof x === 'string')
+      return ids.length > 0 && ids.length <= MAX_DELETED_IDS_PER_COLLECTION ? ids : undefined
     }
+    const clientDeletedIds: { nodes?: string[]; groups?: string[]; domains?: string[]; connections?: string[] } | undefined =
+      deletedIds && typeof deletedIds === 'object'
+        ? {
+            nodes: sanitizeDeletedIds(deletedIds.nodes),
+            groups: sanitizeDeletedIds(deletedIds.groups),
+            domains: sanitizeDeletedIds(deletedIds.domains),
+            connections: sanitizeDeletedIds(deletedIds.connections),
+          }
+        : undefined
+
+    // 先解析出统一的快照对象（兼容 yjsData 旧格式），再决定合并策略。
+    let snapshot: { nodes?: unknown[]; groups?: unknown[]; domains?: unknown[]; connections?: unknown[] } | null = null
 
     // Handle yjsData (base64-encoded JSON snapshot) for backward compatibility
     // with old clients that send the snapshot as a single base64 field instead
@@ -519,13 +549,12 @@ canvasRouter.post('/:id/data', authenticate, asyncHandler(async (req: AuthReques
     if (yjsData !== undefined && typeof yjsData === 'string') {
       try {
         const jsonStr = Buffer.from(yjsData, 'base64').toString('utf-8')
-        const snapshot = JSON.parse(jsonStr)
-        const yjsSnapshot: { nodes?: unknown[]; groups?: unknown[]; domains?: unknown[]; connections?: unknown[] } = {}
-        if (Array.isArray(snapshot.nodes)) yjsSnapshot.nodes = snapshot.nodes
-        if (Array.isArray(snapshot.groups)) yjsSnapshot.groups = snapshot.groups
-        if (Array.isArray(snapshot.domains)) yjsSnapshot.domains = snapshot.domains
-        if (Array.isArray(snapshot.connections)) yjsSnapshot.connections = snapshot.connections
-        await mergeJsonSnapshotIntoCanvas(canvasId, yjsSnapshot, hasActiveCollab)
+        const parsed = JSON.parse(jsonStr)
+        snapshot = {}
+        if (Array.isArray(parsed.nodes)) snapshot.nodes = parsed.nodes
+        if (Array.isArray(parsed.groups)) snapshot.groups = parsed.groups
+        if (Array.isArray(parsed.domains)) snapshot.domains = parsed.domains
+        if (Array.isArray(parsed.connections)) snapshot.connections = parsed.connections
       } catch (err) {
         log('POST canvas data - Failed to decode yjsData', {
           canvasId,
@@ -537,22 +566,39 @@ canvasRouter.post('/:id/data', authenticate, asyncHandler(async (req: AuthReques
         })
       }
     } else {
-      // Yjs: 单用户保存直接把客户端 JSON 快照合并进 doc。CRDT 自动处理字段级合并，
-      // 不再需要版本号乐观锁——并发保存会被 Y.Doc 的 update 事件正确归并。
-      // 注意：只合并请求体中实际存在的集合，避免把未提供的集合误删为空。
+      // 只合并请求体中实际存在的集合，避免把未提供的集合误删为空。
       const hasContent = nodes !== undefined || groups !== undefined
         || domains !== undefined || connections !== undefined
       if (hasContent) {
-        const snapshot: { nodes?: unknown[]; groups?: unknown[]; domains?: unknown[]; connections?: unknown[] } = {}
+        snapshot = {}
         if (Array.isArray(nodes)) snapshot.nodes = nodes
         if (Array.isArray(groups)) snapshot.groups = groups
         if (Array.isArray(domains)) snapshot.domains = domains
         if (Array.isArray(connections)) snapshot.connections = connections
-        await mergeJsonSnapshotIntoCanvas(canvasId, snapshot, hasActiveCollab)
-      } else {
-        // 无内容变更也要确保 doc 已加载（供后续读取一致）
-        await loadCanvasStateFromDb(canvasId)
       }
+    }
+
+    if (snapshot) {
+      // R1: upsertOnly 判定（逐层保守）：
+      // 1. 快照缺失 doc 中的实体（实体 ID 集合比对，排除客户端声明删除的
+      //    实体）→ 全量合并会删除它们，可能是客户端不知道的他人编辑 →
+      //    upsertOnly。精确覆盖"先后协作"、长窗口、服务端重启等一切时序，
+      //    不依赖房间共处历史；
+      // 2. 房间内有活跃用户 → 防止过期快照删除对端编辑（现状）；
+      // 3. 房间刚拆除（15s 宽限期）且该画布曾多人协作 → 兜住"判定与 merge
+      //    之间房间恰好拆除"的 TOCTOU 窗口。
+      // 注意：withPostSaveMutex 只串行化其他 POST，不串行 WS 操作的应用；
+      // 因此该判定必须保守（宁可 upsertOnly，也不允许过期快照删除对端编辑）。
+      await loadCanvasStateFromDb(canvasId)
+      const upsertOnly = snapshotMissingDocEntities(canvasId, snapshot, clientDeletedIds)
+        || shouldUpsertOnlyForSnapshot(canvasId)
+      if (upsertOnly) {
+        log('POST canvas data - upsertOnly mode (snapshot missing doc entities or active/recent collaboration)', { canvasId })
+      }
+      await mergeJsonSnapshotIntoCanvas(canvasId, snapshot, upsertOnly)
+    } else {
+      // 无内容变更也要确保 doc 已加载（供后续读取一致）
+      await loadCanvasStateFromDb(canvasId)
     }
 
     log('POST canvas data - Saved (Yjs merge)', { canvasId })

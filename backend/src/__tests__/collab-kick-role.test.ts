@@ -60,6 +60,9 @@ import {
   kickUserFromRoom,
   updateUserRole,
   _setRoomForTesting,
+  _recordRoomTeardownForTesting,
+  shouldUpsertOnlyForSnapshot,
+  pruneRoomTeardownRecords,
   type CanvasRoom,
 } from '../websocket/index.js'
 import { flushPendingPersist } from '../websocket/canvas-state.js'
@@ -247,5 +250,104 @@ describe('P3: kickUserFromRoom / updateUserRole', () => {
       updateUserRole(1, 5, 'editor')
       expect(target.userRole).toBe('editor')
     })
+  })
+})
+
+// R1: POST /data 的 upsertOnly 判定——房间拆除宽限期防过期快照覆盖对端编辑
+describe('R1: shouldUpsertOnlyForSnapshot', () => {
+  beforeEach(() => {
+    _setRoomForTesting(1, null)
+    vi.useRealTimers()
+  })
+
+  it('房间有活跃用户时返回 true', () => {
+    const client = makeMockClient(5)
+    const room = makeRoom(1, [client])
+    _setRoomForTesting(1, room)
+
+    expect(shouldUpsertOnlyForSnapshot(1)).toBe(true)
+  })
+
+  it('无房间、无拆除记录时返回 false（单用户冷启动可全量合并）', () => {
+    expect(shouldUpsertOnlyForSnapshot(1)).toBe(false)
+  })
+
+  it('纯单用户房间拆除后仍返回 false（快照删除是真实操作，必须允许全量）', () => {
+    _recordRoomTeardownForTesting(1, false)
+
+    expect(shouldUpsertOnlyForSnapshot(1)).toBe(false)
+  })
+
+  it('曾协作的房间拆除后宽限期内返回 true', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'))
+    _recordRoomTeardownForTesting(1, true)
+
+    expect(shouldUpsertOnlyForSnapshot(1)).toBe(true)
+
+    // 宽限期过后恢复允许全量合并
+    vi.setSystemTime(new Date('2026-01-01T00:00:20Z'))
+    expect(shouldUpsertOnlyForSnapshot(1)).toBe(false)
+
+    vi.useRealTimers()
+  })
+
+  it('房间有活跃用户时优先于拆除记录（不依赖宽限期）', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'))
+    _recordRoomTeardownForTesting(1, true)
+    // 超过宽限期后房间仍有活跃用户
+    vi.setSystemTime(new Date('2026-01-01T00:00:20Z'))
+    const client = makeMockClient(5)
+    const room = makeRoom(1, [client])
+    _setRoomForTesting(1, room)
+
+    expect(shouldUpsertOnlyForSnapshot(1)).toBe(true)
+  })
+})
+
+// #3: roomTeardownTimes / collaborativeCanvasIds 定期修剪，保证内存有界
+describe('R1: pruneRoomTeardownRecords', () => {
+  beforeEach(() => {
+    _setRoomForTesting(1, null)
+    vi.useRealTimers()
+  })
+
+  it('TTL 内的记录保留，超期的被清理', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'))
+    _recordRoomTeardownForTesting(1, true)
+
+    // +10s：宽限期(15s)与 TTL(30s)内 → 保留且生效
+    vi.setSystemTime(new Date('2026-01-01T00:00:10Z'))
+    pruneRoomTeardownRecords()
+    expect(shouldUpsertOnlyForSnapshot(1)).toBe(true)
+
+    // +20s：宽限期已过（记录仍在 TTL 内，但已无用途）→ 判定恢复 false
+    vi.setSystemTime(new Date('2026-01-01T00:00:20Z'))
+    pruneRoomTeardownRecords()
+    expect(shouldUpsertOnlyForSnapshot(1)).toBe(false)
+
+    // +35s：超过 TTL → 记录被清理（无残留）
+    vi.setSystemTime(new Date('2026-01-01T00:00:35Z'))
+    pruneRoomTeardownRecords()
+
+    vi.useRealTimers()
+  })
+
+  it('修剪后新拆除记录可重新生效', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'))
+    _recordRoomTeardownForTesting(1, true)
+
+    vi.setSystemTime(new Date('2026-01-01T00:00:35Z'))
+    pruneRoomTeardownRecords()
+    expect(shouldUpsertOnlyForSnapshot(1)).toBe(false)
+
+    // 新的拆除记录
+    _recordRoomTeardownForTesting(1, true)
+    expect(shouldUpsertOnlyForSnapshot(1)).toBe(true)
+
+    vi.useRealTimers()
   })
 })

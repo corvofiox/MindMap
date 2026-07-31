@@ -55,12 +55,102 @@ interface MindMapProviderOptions {
   sessionId?: string
   /** Role of the local user; viewer blocks local doc mutations. */
   role: 'owner' | 'editor' | 'viewer'
+  /** Local user id; used to detect whether room events involve other users. */
+  userId?: number | null
 }
 
 const APP_HEARTBEAT_INTERVAL_MS = 25000
 const MAX_RECONNECT_ATTEMPTS = 10
 const MAX_RECONNECT_DELAY_MS = 30000
 const RECONNECT_BASE_DELAY_MS = 2000
+
+/**
+ * R1 加固：跨 provider 生命周期的"协作证据"记录（canvasId → 是否曾见过其他协作者）。
+ *
+ * 前端在页面卸载/切换画布时用该证据决定是否发送 REST 全量快照：本会话见过其他
+ * 用户或收到过远端编辑广播，说明 REST 快照可能过期（会覆盖他人编辑），必须跳过。
+ * 证据需要跨 provider 存活，因为 React 卸载时 useCollaboration 的 cleanup 先于
+ * CanvasPage 的 beforeunload/pagehide 兜底逻辑运行（provider 已被销毁）。
+ *
+ * 语义为"本次打开画布会话"级：新 provider 构造时清除旧证据（再次打开该画布视为
+ * 新会话，单用户编辑应恢复 REST 快照兜底）。
+ */
+const collaborationEvidence = new Map<number, boolean>()
+
+export function recordCollaborationEvidence(canvasId: number): void {
+  collaborationEvidence.set(canvasId, true)
+}
+
+export function hasCollaborationEvidenceForCanvas(canvasId: number): boolean {
+  return collaborationEvidence.get(canvasId) ?? false
+}
+
+/**
+ * 清除指定画布的协作证据（"新会话"语义）。
+ *
+ * 由 CanvasPage 在进入画布的数据加载 effect 中调用：canvasId 变化或组件重新
+ * 挂载 = 新的画布会话，上一会话的协作证据不再适用（恢复单用户 REST 快照兜底）。
+ *
+ * 注意：不要在 MindMapYjsProvider 构造时清除——同画布的 provider 重建
+ * （如项目角色异步加载完成后 useCollaboration 的 effect 重跑）不是新会话，
+ * 误清会让"断开后关闭标签页"场景失去客户端证据防线。
+ */
+export function clearCollaborationEvidence(canvasId: number): void {
+  collaborationEvidence.delete(canvasId)
+}
+
+/**
+ * 本地删除声明（canvasId → 各集合被本地用户删除的实体 ID）。
+ *
+ * 用途（R1 幽灵复活修复）：服务端 snapshotMissingDocEntities 无法区分
+ * "客户端主动删除了实体 B"（合法，快照是更新版）与"B 是他人离线期间新增的"
+ * （快照过期）——两者都表现为"doc 有 B、快照无 B"。若一律 upsertOnly，
+ * 单用户离线删除会永久丢失（重载时 DB 优先于本地缓存，删除被"复活"）。
+ *
+ * 客户端在本地删除实体时记录其 ID，REST 快照一并发送；服务端比对时把声明
+ * 删除的实体视为"客户端知情且主动删除"→ 允许全量合并执行删除。未声明的
+ * 缺失实体仍视为过期快照 → upsertOnly 保护他人编辑。
+ *
+ * 记录点：yjsBinding.applyDiff 的 remove 分支（仅本地 mutation 触发，已排除
+ * 远端应用与 bulk 加载）。新会话（CanvasPage 数据加载 effect）时清除。
+ */
+export type DeletionCollection = 'nodes' | 'groups' | 'domains' | 'connections'
+
+const localDeletions = new Map<number, { nodes: Set<string>; groups: Set<string>; domains: Set<string>; connections: Set<string> }>()
+
+function deletionSets(canvasId: number): { nodes: Set<string>; groups: Set<string>; domains: Set<string>; connections: Set<string> } {
+  let entry = localDeletions.get(canvasId)
+  if (!entry) {
+    entry = { nodes: new Set(), groups: new Set(), domains: new Set(), connections: new Set() }
+    localDeletions.set(canvasId, entry)
+  }
+  return entry
+}
+
+export function recordLocalDeletion(canvasId: number, collection: DeletionCollection, id: string): void {
+  deletionSets(canvasId)[collection].add(id)
+}
+
+/** 序列化为 REST 快照附带的 deletedIds 载荷（数组形式）。 */
+export function getLocalDeletions(canvasId: number): {
+  nodes?: string[]
+  groups?: string[]
+  domains?: string[]
+  connections?: string[]
+} {
+  const entry = localDeletions.get(canvasId)
+  if (!entry) return {}
+  const out: { nodes?: string[]; groups?: string[]; domains?: string[]; connections?: string[] } = {}
+  if (entry.nodes.size > 0) out.nodes = Array.from(entry.nodes)
+  if (entry.groups.size > 0) out.groups = Array.from(entry.groups)
+  if (entry.domains.size > 0) out.domains = Array.from(entry.domains)
+  if (entry.connections.size > 0) out.connections = Array.from(entry.connections)
+  return out
+}
+
+export function clearLocalDeletions(canvasId: number): void {
+  localDeletions.delete(canvasId)
+}
 
 /**
  * Derive the WebSocket URL root from the current page location.
@@ -97,6 +187,17 @@ export class MindMapYjsProvider {
   private static readonly MAX_PENDING_UPDATE_BYTES = 1_000_000 // ~1MB
 
   /**
+   * R1: 本 provider 会话内是否收到过其他客户端的编辑广播（UPDATE 消息）。
+   * 服务端只对非发送者 origin 的 doc update 广播 UPDATE，因此收到 UPDATE 即
+   * 证明有其他客户端在编辑（STEP2 是服务端快照，不算）。
+   */
+  private receivedRemoteEdits = false
+  /**
+   * R1: 本 provider 会话内是否在房间事件中见过其他用户。
+   */
+  private sawPeerUser = false
+
+  /**
    * Saves awareness state (cursor/selection/editingId) per canvasId during
    * disconnect, so it can be restored on reconnect. Prevents the 'invisible
    * cursor' gap where remote users don't see the reconnecting user's cursor
@@ -118,6 +219,10 @@ export class MindMapYjsProvider {
   constructor(canvasId: number, options: MindMapProviderOptions) {
     this.canvasId = canvasId
     this.options = options
+    // 注意：这里不清除协作证据。同画布的 provider 重建（如角色异步加载完成
+    // 触发的 effect 重跑）不是新会话，清除会让"断开后关闭标签页"场景失去
+    // 客户端证据防线。新会话语义由 clearCollaborationEvidence 承担
+    // （CanvasPage 数据加载 effect 中调用）。
     this.sessionId =
       options.sessionId ||
       (typeof crypto !== 'undefined' && crypto.randomUUID
@@ -212,6 +317,22 @@ export class MindMapYjsProvider {
   /** Current user role; can change at runtime via setRole(). */
   getRole(): 'owner' | 'editor' | 'viewer' {
     return this.options.role
+  }
+
+  private markSawPeer(): void {
+    if (this.sawPeerUser) return
+    this.sawPeerUser = true
+    recordCollaborationEvidence(this.canvasId)
+  }
+
+  /**
+   * R1: 本会话是否存在"与其他协作者共处/共编辑"的证据。
+   * 综合实时标志与模块级记录（跨 provider 销毁存活）。
+   * 用于决定页面卸载/切换画布时是否发送 REST 全量快照：
+   * 有证据说明快照可能过期，发送会覆盖他人编辑，必须跳过。
+   */
+  hasCollaborationEvidence(): boolean {
+    return this.receivedRemoteEdits || this.sawPeerUser || hasCollaborationEvidenceForCanvas(this.canvasId)
   }
 
   // ---- Event subscription API ----
@@ -311,12 +432,22 @@ export class MindMapYjsProvider {
       case 'room-state':
         if (Array.isArray(message.users)) {
           this.activeUsers = message.users as CanvasActiveUser[]
+          // R1: room-state 是服务端按 userId 去重的在线用户列表（不含自己），
+          // 非空即存在其他用户。
+          if (this.activeUsers.some((u) => u.userId !== this.options.userId)) {
+            this.markSawPeer()
+          }
           this.userChangeListeners.forEach((fn) => fn(this.activeUsers))
         }
         break
       case 'user-join':
         if (message.user) {
           const user = message.user as CanvasActiveUser
+          // user-join 广播会给房间内所有连接，包括同一用户的其他标签页，
+          // 因此需要排除本地用户自己。
+          if (user.userId !== this.options.userId) {
+            this.markSawPeer()
+          }
           if (!this.activeUsers.some((u) => u.userId === user.userId)) {
             this.activeUsers = [...this.activeUsers, user]
             this.userChangeListeners.forEach((fn) => fn(this.activeUsers))
@@ -392,6 +523,12 @@ export class MindMapYjsProvider {
       } catch (err) {
         logger.warn('[yjs-provider] malformed sync message header', err)
         return
+      }
+      // R1: 收到 UPDATE 广播 = 有其他客户端在编辑（服务端只对非发送者 origin
+      // 的 doc update 广播 UPDATE）。这是"本画布存在其他协作者"的最直接证据。
+      if (subType === syncProtocol.messageYjsUpdate) {
+        this.receivedRemoteEdits = true
+        recordCollaborationEvidence(this.canvasId)
       }
       const isStep2 = subType === syncProtocol.messageYjsSyncStep2
       const encoder = encoding.createEncoder()
@@ -547,21 +684,29 @@ export class MindMapYjsProvider {
     this.sendRaw(encoding.toUint8Array(encoder))
   }
 
-  /** Replay all buffered pending updates that accumulated while disconnected.
-   *  Called after the STEP1/STEP2 sync handshake completes on reconnect.
-   *  The Yjs doc already merged the server state via readSyncMessage, so
-   *  broadcasting these updates merges the local offline edits on top.
+  /**
+   * Replay all buffered pending updates that accumulated while disconnected.
+   * Called after the STEP1/STEP2 sync handshake completes on reconnect, and
+   * by the pagehide/beforeunload path (R1) to push offline edits out on the
+   * live socket before the tab goes away.
+   * The Yjs doc already merged the server state via readSyncMessage, so
+   * broadcasting these updates merges the local offline edits on top.
    *
-   *  Viewers must not flush offline mutations: if the local role was downgraded
-   *  to viewer while disconnected, replaying queued editor updates would violate
-   *  the read-only contract and be rejected by the server anyway.
+   * Viewers must not flush offline mutations: if the local role was downgraded
+   * to viewer while disconnected, replaying queued editor updates would violate
+   * the read-only contract and be rejected by the server anyway.
    *
-   *  All pending updates are merged into a single UPDATE message before sending.
-   *  This avoids flooding the server SYNC rate limiter with many small messages
-   *  after a long offline period. Y.mergeUpdates is lossless: the merged update
-   *  is semantically equivalent to applying each queued update in order. */
-  private flushPendingUpdates() {
+   * All pending updates are merged into a single UPDATE message before sending.
+   * This avoids flooding the server SYNC rate limiter with many small messages
+   * after a long offline period. Y.mergeUpdates is lossless: the merged update
+   * is semantically equivalent to applying each queued update in order.
+   *
+   * Safe to call when nothing is pending (no-op). When disconnected it is
+   * also a no-op — the buffered updates are kept for the reconnect replay.
+   */
+  flushPendingUpdates(): void {
     if (this.pendingUpdates.length === 0) return
+    if (!this.isConnected()) return
     if (this.options.role === 'viewer') {
       this.pendingUpdates = []
       return

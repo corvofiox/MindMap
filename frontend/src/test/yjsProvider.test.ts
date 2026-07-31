@@ -11,7 +11,13 @@ import * as Y from 'yjs'
 import * as encoding from 'lib0/encoding'
 import * as decoding from 'lib0/decoding'
 import * as syncProtocol from 'y-protocols/sync'
-import { MindMapYjsProvider } from '../services/yjsProvider'
+import {
+  MindMapYjsProvider,
+  clearCollaborationEvidence,
+  clearLocalDeletions,
+  getLocalDeletions,
+  recordLocalDeletion,
+} from '../services/yjsProvider'
 import { ensureRoot } from '../services/yjs-schema'
 
 class MockWebSocket {
@@ -79,6 +85,12 @@ class MockWebSocket {
     }
   }
 
+  receiveText(text: string) {
+    if (this.onmessage) {
+      this.onmessage(new MessageEvent('message', { data: text }))
+    }
+  }
+
   simulateClose() {
     this.readyState = MockWebSocket.CLOSED
     if (this.onclose) {
@@ -104,11 +116,12 @@ function tick(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0))
 }
 
-function createProvider(canvasId = 1): MindMapYjsProvider {
+function createProvider(canvasId = 1, userId?: number | null): MindMapYjsProvider {
   return new MindMapYjsProvider(canvasId, {
     urlRoot: 'ws://localhost:3001/ws',
     token: 'test-token',
     role: 'editor',
+    userId: userId ?? null,
   })
 }
 
@@ -266,5 +279,163 @@ describe('MindMapYjsProvider', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('R1: collaboration evidence tracking', () => {
+  let OriginalWebSocket: typeof WebSocket
+
+  beforeEach(() => {
+    OriginalWebSocket = global.WebSocket
+    global.WebSocket = MockWebSocket as unknown as typeof WebSocket
+    MockWebSocket.reset()
+    // Evidence is session-scoped now (cleared explicitly, not on provider
+    // construction), so tests must reset it to avoid cross-test pollution.
+    clearCollaborationEvidence(1)
+    clearCollaborationEvidence(7)
+  })
+
+  afterEach(() => {
+    global.WebSocket = OriginalWebSocket
+    MockWebSocket.reset()
+  })
+
+  it('marks evidence when a peer UPDATE broadcast arrives', async () => {
+    const provider = createProvider()
+    provider.connect()
+    await tick()
+
+    const remoteDoc = new Y.Doc()
+    ensureRoot(remoteDoc)
+    MockWebSocket.last().receiveBinary(buildUpdateMessage(remoteDoc))
+
+    expect(provider.hasCollaborationEvidence()).toBe(true)
+    provider.disconnect()
+  })
+
+  it('does not mark evidence on a plain STEP2 server snapshot', async () => {
+    const provider = createProvider()
+    provider.connect()
+    await tick()
+
+    const remoteDoc = new Y.Doc()
+    ensureRoot(remoteDoc)
+    MockWebSocket.last().receiveBinary(buildStep2Message(remoteDoc))
+
+    expect(provider.hasCollaborationEvidence()).toBe(false)
+    provider.disconnect()
+  })
+
+  it('marks evidence when room-state lists another user', async () => {
+    const provider = createProvider(1, 1)
+    provider.connect()
+    await tick()
+
+    MockWebSocket.last().receiveText(JSON.stringify({
+      type: 'room-state',
+      users: [{ userId: 2, email: 'peer@test.com', nickname: null, avatar: null, role: 'editor', joinedAt: 0 }],
+    }))
+
+    expect(provider.hasCollaborationEvidence()).toBe(true)
+    provider.disconnect()
+  })
+
+  it('ignores user-join events from the local user (multi-tab)', async () => {
+    const provider = createProvider(1, 1)
+    provider.connect()
+    await tick()
+
+    MockWebSocket.last().receiveText(JSON.stringify({
+      type: 'user-join',
+      user: { userId: 1, email: 'me@test.com', nickname: null, avatar: null, role: 'editor', joinedAt: 0 },
+    }))
+
+    expect(provider.hasCollaborationEvidence()).toBe(false)
+    provider.disconnect()
+  })
+
+  it('evidence survives provider destruction and is only reset by clearCollaborationEvidence', async () => {
+    const provider = createProvider(7)
+    provider.connect()
+    await tick()
+
+    const remoteDoc = new Y.Doc()
+    ensureRoot(remoteDoc)
+    MockWebSocket.last().receiveBinary(buildUpdateMessage(remoteDoc))
+    expect(provider.hasCollaborationEvidence()).toBe(true)
+
+    // Provider destroyed (e.g. canvas switch): module-level record persists.
+    provider.disconnect()
+
+    // Rebuilding the provider for the same canvas (e.g. project role loads
+    // asynchronously and the useCollaboration effect re-runs) must NOT clear
+    // the evidence — it is still the same editing session.
+    const provider2 = createProvider(7)
+    expect(provider2.hasCollaborationEvidence()).toBe(true)
+    provider2.disconnect()
+
+    // Entering the canvas as a NEW session explicitly clears the evidence.
+    clearCollaborationEvidence(7)
+    const provider3 = createProvider(7)
+    expect(provider3.hasCollaborationEvidence()).toBe(false)
+    provider3.disconnect()
+  })
+
+  it('flushPendingUpdates is a no-op while disconnected (keeps buffer for replay)', async () => {
+    const provider = createProvider()
+    provider.connect()
+    await tick()
+
+    // Simulate disconnect before any edit: buffer a local update while "offline".
+    const ws = MockWebSocket.last()
+    ws.simulateClose()
+
+    const localDoc = new Y.Doc()
+    ensureRoot(localDoc)
+    localDoc.getMap('nodes').set('n1', new Y.Map())
+    // Doc mutation is forwarded via the update listener into pendingUpdates.
+    const captured = provider as unknown as { pendingUpdates: Uint8Array[] }
+    const before = captured.pendingUpdates.length
+
+    provider.flushPendingUpdates()
+
+    // Not connected: must NOT drop the buffered update.
+    expect(captured.pendingUpdates.length).toBe(before)
+    provider.disconnect()
+  })
+})
+
+describe('R1: local deletion declarations', () => {
+  beforeEach(() => {
+    clearLocalDeletions(1)
+    clearLocalDeletions(7)
+  })
+
+  it('records, serializes and clears per-canvas deletion declarations', () => {
+    recordLocalDeletion(7, 'nodes', 'n1')
+    recordLocalDeletion(7, 'nodes', 'n2')
+    recordLocalDeletion(7, 'connections', 'c1')
+
+    const out = getLocalDeletions(7)
+    expect(out.nodes).toEqual(['n1', 'n2'])
+    expect(out.connections).toEqual(['c1'])
+    // 空集合不出现在载荷中
+    expect(out.groups).toBeUndefined()
+    expect(out.domains).toBeUndefined()
+
+    // 不同画布互不影响
+    expect(getLocalDeletions(1)).toEqual({})
+
+    clearLocalDeletions(7)
+    expect(getLocalDeletions(7)).toEqual({})
+  })
+
+  it('is independent of collaboration evidence lifecycle', () => {
+    recordLocalDeletion(1, 'groups', 'g1')
+    clearCollaborationEvidence(1)
+    // 证据清除不影响删除声明
+    expect(getLocalDeletions(1)).toEqual({ groups: ['g1'] })
+    clearLocalDeletions(1)
+    expect(getLocalDeletions(1)).toEqual({})
   })
 })

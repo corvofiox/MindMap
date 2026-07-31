@@ -230,7 +230,7 @@ export async function loadCanvasStateFromDb(canvasId: number): Promise<YjsCanvas
           const converted = encodeDocToBase64(doc)
           await db
             .update(canvases)
-            .set({ yjsUpdate: converted, updatedAt: Math.floor(Date.now() / 1000) })
+            .set({ yjsUpdate: converted, updatedAt: Date.now() })
             .where(eq(canvases.id, canvasId))
         } catch (err) {
           logError('Failed to convert legacy yjs_data to Yjs doc', {
@@ -323,7 +323,9 @@ export async function persistCanvasState(canvasId: number): Promise<boolean> {
             .update(canvases)
             .set({
               yjsUpdate: base64,
-              updatedAt: Math.floor(Date.now() / 1000),
+              // 毫秒级：与缩略图乐观锁（clientVersion）精度一致，避免把版本
+              // 倒退回秒级导致并发 PUT 全部通过 lte 检查。
+              updatedAt: Date.now(),
             })
             .where(eq(canvases.id, canvasId))
 
@@ -491,6 +493,81 @@ export async function mergeJsonSnapshotIntoCanvas(
     })
     return false
   }
+}
+
+/**
+ * R1 加固：判定 REST 快照是否缺失 doc 中的实体（过期快照的直接判据）。
+ *
+ * 全量合并的唯一危险动作是删除"doc 中存在但快照中没有"的实体——那可能是
+ * 其他协作者在客户端离线期间的编辑。因此直接比较各集合的实体 ID：
+ * - 快照（某集合提供了数组时）缺失 doc 中存在的实体 → 全量合并会删除它们
+ *   → 必须 upsertOnly（保守：可能是过期快照）；
+ * - 快照覆盖 doc 全部实体 → 全量合并不会删除任何 doc 实体 → 安全。
+ *
+ * 已知限制（无法消除的语义歧义）：
+ * "doc 有 B、快照无 B"有两种相反解释——① 客户端主动删除了 B（合法，快照是
+ * 更新版）；② B 是他人离线期间新增的（快照过期）。为消除歧义，客户端在本地
+ * 删除实体时记录声明（deletedIds），随快照附带：声明删除的实体视为"知情且
+ * 主动删除"→ 不参与缺失判定 → 全量合并会正确执行删除；未声明的缺失实体仍
+ * 视为过期快照 → upsertOnly 保护他人编辑。旧客户端不附带 deletedIds → 维持
+ * 保守行为（宁可不删除，不让过期快照误删他人编辑）。
+ *
+ * 字段级覆盖（R2）是 REST 快照（全量 LWW）与 Yjs CRDT 合并语义的固有差异：
+ * 实体存在但字段值过期的快照仍会覆盖 doc 中的新字段值。本判定只保护实体级
+ * 增删，不保护字段级更新；活跃房间/宽限期由 shouldUpsertOnlyForSnapshot 兜住，
+ * 其余窗口（>15s、非重叠会话）下字段覆盖可能发生——已知限制，未根治。
+ *
+ * 与 mergeJsonSnapshotIntoCanvas 语义对齐：请求中未提供的集合（undefined）
+ * 不会触发删除，不参与比较。
+ */
+export function snapshotMissingDocEntities(
+  canvasId: number,
+  snapshot: {
+    nodes?: unknown[]
+    groups?: unknown[]
+    domains?: unknown[]
+    connections?: unknown[]
+  },
+  deletedIds?: {
+    nodes?: string[]
+    groups?: string[]
+    domains?: string[]
+    connections?: string[]
+  },
+): boolean {
+  const state = canvasStates.get(canvasId)
+  if (!state) return false
+  const collections = ensureRoot(state.doc)
+
+  const snapshotIds = (items: unknown[] | undefined): Set<string> => {
+    const ids = new Set<string>()
+    if (!Array.isArray(items)) return ids
+    for (const item of items) {
+      if (!item || typeof item !== 'object') continue
+      const id = (item as Record<string, unknown>).id
+      if (typeof id === 'string') ids.add(id)
+    }
+    return ids
+  }
+
+  const pairs: Array<[Y.Map<Y.Map<unknown>>, unknown[] | undefined, Set<string> | undefined]> = [
+    [collections.nodes, snapshot.nodes, deletedIds ? new Set(deletedIds.nodes ?? []) : undefined],
+    [collections.groups, snapshot.groups, deletedIds ? new Set(deletedIds.groups ?? []) : undefined],
+    [collections.domains, snapshot.domains, deletedIds ? new Set(deletedIds.domains ?? []) : undefined],
+    [collections.connections, snapshot.connections, deletedIds ? new Set(deletedIds.connections ?? []) : undefined],
+  ]
+
+  return pairs.some(([target, items, clientDeleted]) => {
+    // 未提供的集合不会触发删除（与 syncCollection 的 Array.isArray 守卫一致）。
+    if (!Array.isArray(items)) return false
+    const ids = snapshotIds(items)
+    for (const existingId of Array.from(target.keys())) {
+      // 客户端声明主动删除的实体不算缺失：全量合并会正确执行该删除。
+      if (clientDeleted?.has(existingId)) continue
+      if (!ids.has(existingId)) return true
+    }
+    return false
+  })
 }
 
 /**

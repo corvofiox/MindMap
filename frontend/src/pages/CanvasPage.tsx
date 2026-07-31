@@ -6,7 +6,7 @@ import { useUIStore } from '@/store/useUIStore'
 import { useAuthStore } from '@/store/useAuthStore'
 import { useNodePoolStore } from '@/features/node-pool/stores/useNodePoolStore'
 import { createNodeFromCard, parseCardNodeData } from '@/features/node-pool/utils/createNodeFromCard'
-import { useCollaboration } from '@/hooks/useCollaboration'
+import { useCollaboration, getActiveYjsProvider } from '@/hooks/useCollaboration'
 import { CanvasToolbar } from '@/components/canvas/CanvasToolbar'
 import { CanvasGrid } from '@/components/canvas/CanvasGrid'
 import { CanvasMinimap } from '@/components/canvas/CanvasMinimap'
@@ -28,6 +28,7 @@ import { execFormatCommand } from '@/utils/richTextCommands'
 import { loadCanvasNodesData, apiClient } from '@/services/api'
 import { ApiError } from '@/services/apiClient'
 import { collabService } from '@/services/collaboration'
+import { clearCollaborationEvidence, clearLocalDeletions, getLocalDeletions } from '@/services/yjsProvider'
 import type { Node, Connection } from '@/types'
 import html2canvas from 'html2canvas-pro'
 
@@ -44,13 +45,14 @@ const CANVAS_VIEW_STORAGE_KEY = 'mindmap_canvas_views'
  * returns `2026`, which is truthy — so the `|| new Date(...).getTime() / 1000`
  * fallback was dead code and a wrong version (2026) was sent to the server.
  *
- * The real source of truth is the UNIX timestamp (seconds). Parse the ISO
- * string via Date; fall back to undefined (no lock) if it is missing/invalid.
+ * R3: 服务端乐观锁时间戳已升级为毫秒级（秒级粒度下同一秒内两个并发 PUT 都会
+ * 通过 lte 检查）。这里返回毫秒时间戳与服务端保持一致。旧数据（秒级）也兼容：
+ * 秒值 < 毫秒值恒成立，首次带锁 PUT 会通过。
  */
 function resolveClientVersion(updatedAt: string | undefined): number | undefined {
   if (!updatedAt) return undefined
   const t = new Date(updatedAt).getTime()
-  return Number.isFinite(t) ? Math.floor(t / 1000) : undefined
+  return Number.isFinite(t) ? t : undefined
 }
 
 // Helper functions to save/load canvas view state from localStorage
@@ -646,6 +648,15 @@ function getCsrfToken(): string {
 // WS 操作的应用，全量快照会与并发 WS 操作交叉覆盖他人编辑；协作数据由
 // 服务端 handleClientDisconnect 的 persistCanvasState 持久化。
 //
+// R1 加固（最后离开者的过期快照问题）：
+// - 发送前先尽力把 WS 离线期间积累的本地编辑 flush 出去（页面卸载前 WS
+//   send 是同步的，大概率能发出）；
+// - 本会话见过其他协作者（收到过远端编辑广播或 room 事件中出现他人）时，
+//   即使当前已断开也不发 REST 快照——快照可能过期，全量合并会静默覆盖或
+//   删除对端编辑，比"少存一次本地兜底"严重得多。已知取舍：此时未同步的
+//   本地编辑只能靠 localStorage 缓存（重载时 DB 优先，可能丢失）；
+// - 纯单用户会话保持原有 REST 兜底（离线编辑的唯一保存途径）。
+//
 // beforeunload 与 pagehide 两个处理器共用此逻辑。
 const KEEPALIVE_MAX_BODY_BYTES = 48 * 1024
 
@@ -654,8 +665,23 @@ function sendKeepaliveSnapshot(
   data: ReturnType<typeof collectCanvasData>,
 ): void {
   const token = localStorage.getItem('mindmap_token')
-  if (!token || collabService.isConnected()) return
-  const body = JSON.stringify(data)
+  if (!token) return
+  // 尽力把离线期间积累的本地编辑通过 WS 同步出去（若 socket 仍 open）。
+  try {
+    getActiveYjsProvider(id)?.flushPendingUpdates()
+  } catch {
+    // best-effort
+  }
+  if (collabService.isConnected()) return
+  if (collabService.hasCollaborationEvidence(id)) return
+  // R1 幽灵复活修复：附带本地删除声明，服务端据此区分"客户端主动删除"
+  // 与"未知实体"，允许单用户离线删除通过全量合并生效。
+  const deletedIds = getLocalDeletions(id)
+  const hasDeletions = (deletedIds.nodes?.length ?? 0) > 0 ||
+    (deletedIds.groups?.length ?? 0) > 0 ||
+    (deletedIds.domains?.length ?? 0) > 0 ||
+    (deletedIds.connections?.length ?? 0) > 0
+  const body = JSON.stringify(hasDeletions ? { ...data, deletedIds } : data)
   if (new Blob([body]).size >= KEEPALIVE_MAX_BODY_BYTES) return
   fetch(`/api/canvases/${id}/data`, {
     method: 'POST',
@@ -1082,6 +1108,15 @@ export function CanvasPage() {
     const id = parseInt(canvasId)
     if (isNaN(id)) return
 
+    // R1: 进入画布 = 新会话，清除上一会话的协作证据与本地删除声明
+    // （恢复单用户 REST 快照兜底）。放在数据加载 effect（而非 provider 构造）
+    // 中：同画布的 provider 重建（角色异步加载完成触发的 effect 重跑）不是
+    // 新会话，不能误清；而本 effect 仅在 canvasId 变化或组件重新挂载时运行，
+    // 与"新会话"语义精确对应。注意顺序：卸载侧的保存逻辑（旧 cleanup）先于
+    // 本清除运行，读取到的仍是上一会话的证据与删除声明。
+    clearCollaborationEvidence(id)
+    clearLocalDeletions(id)
+
     // Reset camera initialization flag when canvas changes
     setHasInitializedCamera(false)
 
@@ -1293,12 +1328,28 @@ export function CanvasPage() {
           // 协作模式数据由服务端 handleClientDisconnect 的 persistCanvasState
           // 持久化，无需客户端再发全量快照。与 saveToDatabase/handleManualSave
           // 保持一致。
-          if (!collabService.isConnected()) {
+          // R1: 曾与其他协作者共处时同样跳过（快照可能过期，覆盖对端编辑）；
+          // 发送前尽力 flush 一次 WS 离线缓冲，把本地编辑传出去。
+          try {
+            getActiveYjsProvider(id)?.flushPendingUpdates()
+          } catch {
+            // best-effort
+          }
+          if (!collabService.isConnected() && !collabService.hasCollaborationEvidence(id)) {
             // 使用 apiClient.post 替代 fetch(keepalive: true)：
             // 1. 切换画布时页面未卸载，无需 keepalive 保证请求完成
             // 2. apiClient 自动处理 CSRF 获取/刷新/重试
             // 3. 无 64KB 负载上限（keepalive fetch 的浏览器限制）
-            apiClient.post(`/api/canvases/${id}/data`, canvasData).catch(() => { })
+            // R1 幽灵复活修复：附带本地删除声明，允许离线删除生效。
+            const deletedIds = getLocalDeletions(id)
+            const hasDeletions = (deletedIds.nodes?.length ?? 0) > 0 ||
+              (deletedIds.groups?.length ?? 0) > 0 ||
+              (deletedIds.domains?.length ?? 0) > 0 ||
+              (deletedIds.connections?.length ?? 0) > 0
+            apiClient.post(
+              `/api/canvases/${id}/data`,
+              hasDeletions ? { ...canvasData, deletedIds } : canvasData,
+            ).catch(() => { })
           }
         }
       }
@@ -1551,15 +1602,40 @@ export function CanvasPage() {
       // In collaboration mode, changes are saved in real-time via WebSocket, skip REST API auto-save.
       // Still generate a thumbnail for local edits, then clear the dirty flag so
       // we don't keep re-triggering thumbnail PUTs on every timer tick.
+      // R4: 与单用户分支一致，用引用比较决定是否清 dirty——collectCanvasData
+      // 期间若有新的本地编辑（新对象引用），不能误清标志，否则 500ms 防抖的
+      // localStorage 缓存兜底会漏掉最后几笔编辑。
       if (collabService.isConnected()) {
         const state = useCanvasStore.getState()
         if (state.canvasId === id) {
+          const snapshotNodes = state.nodes
+          const snapshotGroups = state.groups
+          const snapshotDomains = state.domains
+          const snapshotConnections = state.connections
           const { nodes, domains } = collectCanvasData(state)
           if (hasCanvasContent(nodes, domains)) {
             triggerThumbnailGeneration(id)
           }
+          const latest = useCanvasStore.getState()
+          if (latest.nodes === snapshotNodes &&
+            latest.groups === snapshotGroups &&
+            latest.domains === snapshotDomains &&
+            latest.connections === snapshotConnections) {
+            setDirty(false)
+          }
         }
-        setDirty(false)
+        dbSaveTimeoutRef.current = setTimeout(saveToDatabase, AUTO_SAVE_INTERVAL)
+        return
+      }
+
+      // R1 统一防线（与 keepalive/卸载路径一致）：本会话曾与其他协作者共处
+      // （有协作证据）时，断线状态下也不发送 REST 全量快照——upsertOnly 只防
+      // 实体删除、不防字段级覆盖，过期快照会把离线前看到的旧字段值覆盖他人
+      // 编辑。不清 dirty：重连后上方协作分支会正常清除；重连前 tick 仅做本地
+      // 检查，不发网络请求。
+      // 注意：本地编辑的兜底仅为"页面保持打开时的 WS 重连重放 + localStorage
+      // 缓存"；若未重连就关闭页面，这些编辑可能丢失（重载时 DB 优先于缓存）。
+      if (collabService.hasCollaborationEvidence(id)) {
         dbSaveTimeoutRef.current = setTimeout(saveToDatabase, AUTO_SAVE_INTERVAL)
         return
       }
@@ -1578,7 +1654,17 @@ export function CanvasPage() {
         const snapshotDomains = state.domains
         const snapshotConnections = state.connections
 
-        await apiClient.post<{ message: string; version: number }>(`/api/canvases/${id}/data`, canvasData)
+        // R1 幽灵复活修复：附带本地删除声明，允许单用户离线删除通过全量合并生效
+        // （与 keepalive/切画布路径一致；不带声明时服务端会保守 upsertOnly）。
+        const deletedIds = getLocalDeletions(id)
+        const hasDeletions = (deletedIds.nodes?.length ?? 0) > 0 ||
+          (deletedIds.groups?.length ?? 0) > 0 ||
+          (deletedIds.domains?.length ?? 0) > 0 ||
+          (deletedIds.connections?.length ?? 0) > 0
+        await apiClient.post<{ message: string; version: number }>(
+          `/api/canvases/${id}/data`,
+          hasDeletions ? { ...canvasData, deletedIds } : canvasData,
+        )
 
         lastSaveTimeRef.current = Date.now()
         const currentState = useCanvasStore.getState()
@@ -1645,11 +1731,33 @@ export function CanvasPage() {
       return
     }
 
+    // R1 统一防线（与自动保存/keepalive 一致）：有协作证据时跳过 REST 全量快照，
+    // 防止过期快照字段级覆盖他人编辑。兜底仅为"页面保持打开时的 WS 重连重放 +
+    // localStorage 缓存"；若未重连就关闭页面，编辑可能丢失（重载时 DB 优先于缓存）。
+    if (collabService.hasCollaborationEvidence(id)) {
+      addToast({
+        type: 'info',
+        title: '已保存到本地',
+        message: '连接已断开，更改已暂存在本地，重连后自动同步',
+        duration: 3000,
+      })
+      return
+    }
+
     const state = useCanvasStore.getState()
     const canvasData = collectCanvasData(state)
 
     try {
-      await apiClient.post<{ message: string; version: number }>(`/api/canvases/${id}/data`, canvasData)
+      // R1 幽灵复活修复：附带本地删除声明，允许单用户离线删除生效。
+      const deletedIds = getLocalDeletions(id)
+      const hasDeletions = (deletedIds.nodes?.length ?? 0) > 0 ||
+        (deletedIds.groups?.length ?? 0) > 0 ||
+        (deletedIds.domains?.length ?? 0) > 0 ||
+        (deletedIds.connections?.length ?? 0) > 0
+      await apiClient.post<{ message: string; version: number }>(
+        `/api/canvases/${id}/data`,
+        hasDeletions ? { ...canvasData, deletedIds } : canvasData,
+      )
 
       lastSaveTimeRef.current = Date.now()
       setDirty(false)

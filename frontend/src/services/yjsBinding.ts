@@ -16,7 +16,7 @@
 import * as Y from 'yjs'
 import type { Node, NodeGroup, Domain, Connection } from '@/types'
 import { ensureRoot, getExistingRoot, entityToYMap, ymapToObject } from './yjs-schema'
-import type { MindMapYjsProvider } from './yjsProvider'
+import { type MindMapYjsProvider, recordLocalDeletion } from './yjsProvider'
 import { useCanvasStore } from '@/store/useCanvasStore'
 import { logger } from '@/utils/logger'
 
@@ -413,6 +413,22 @@ export function bindYjsToStore(
     // after the handshake.
     const existingRoot = getExistingRoot(doc)
     if (!existingRoot && !provider.getIsSynced()) return
+    // R1: 记录本地删除声明（供 REST 快照附带，服务端据此区分"客户端主动删除"
+    // 与"未知实体"，避免离线删除被 upsertOnly 吞掉而"复活"）。
+    // 本函数仅由 store 的 syncDiffToYDoc 调用（已排除远端应用与 bulk 加载），
+    // 因此这里记录的删除全部来自本地用户。
+    for (const id of before.nodes.keys()) {
+      if (!after.nodes.has(id)) recordLocalDeletion(provider.canvasId, 'nodes', id)
+    }
+    for (const id of before.groups.keys()) {
+      if (!after.groups.has(id)) recordLocalDeletion(provider.canvasId, 'groups', id)
+    }
+    for (const id of before.domains.keys()) {
+      if (!after.domains.has(id)) recordLocalDeletion(provider.canvasId, 'domains', id)
+    }
+    for (const id of before.connections.keys()) {
+      if (!after.connections.has(id)) recordLocalDeletion(provider.canvasId, 'connections', id)
+    }
     const collections = existingRoot ?? ensureRoot(doc)
     doc.transact(() => {
       diffAndApply(before.nodes, after.nodes, collections.nodes)
