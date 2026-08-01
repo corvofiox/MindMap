@@ -243,6 +243,17 @@ async function setupEnvironmentFiles() {
       logSuccess(`Generated and set CSRF_SECRET for Backend`);
     }
 
+    // AI 密钥加密专用密钥（独立于 JWT_SECRET，避免 JWT 轮换导致已存储的 AI 密钥全部失效）
+    // 注意：不作为必需项，旧部署缺失时后端自动回退到 JWT_SECRET 派生
+    if (process.env.AI_KEY_SECRET) {
+      logStep('INFO', 'Using AI_KEY_SECRET from environment variable');
+      updateEnvFile(backendTargetPath, 'AI_KEY_SECRET', process.env.AI_KEY_SECRET);
+    } else if (shouldGenerateSecrets) {
+      const aiKeySecret = generateJWTSecret();
+      updateEnvFile(backendTargetPath, 'AI_KEY_SECRET', aiKeySecret);
+      logSuccess(`Generated and set AI_KEY_SECRET for Backend`);
+    }
+
   } else {
     logWarning(`Backend .env.example not found: ${backendExamplePath}`);
   }

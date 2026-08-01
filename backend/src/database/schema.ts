@@ -150,6 +150,16 @@ export const files = sqliteTable('files', {
   createdAt: integer('created_at').default(sql`strftime('%s', 'now')`),
 })
 
+// AI Provider Keys - 服务端加密存储的 AI 服务密钥（AES-256-GCM）
+export const aiProviderKeys = sqliteTable('ai_provider_keys', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  providerId: text('provider_id').notNull(),
+  apiKeyEncrypted: text('api_key_encrypted').notNull(), // AES-256-GCM 加密后的 API 密钥
+  baseUrl: text('base_url'), // 自定义 base URL（可选）
+  updatedAt: integer('updated_at').default(sql`strftime('%s', 'now')`),
+})
+
 // AI Chat Conversations - 画布级别的AI对话历史
 export const aiConversations = sqliteTable('ai_conversations', {
   id: integer('id').primaryKey({ autoIncrement: true }),
@@ -181,3 +191,5 @@ export type File = typeof files.$inferSelect
 export type NewFile = typeof files.$inferInsert
 export type AIConversation = typeof aiConversations.$inferSelect
 export type NewAIConversation = typeof aiConversations.$inferInsert
+export type AIProviderKey = typeof aiProviderKeys.$inferSelect
+export type NewAIProviderKey = typeof aiProviderKeys.$inferInsert

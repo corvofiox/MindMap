@@ -272,6 +272,27 @@ export async function runMigrations(sqlite: Database.Database) {
       log('project_invitations table created successfully')
     }
 
+    // Create ai_provider_keys table if it doesn't exist
+    // 服务端加密存储 AI 服务密钥，避免密钥进入浏览器/前端存储
+    if (!tableExists(sqlite, 'ai_provider_keys')) {
+      log('Creating ai_provider_keys table')
+      sqlite.exec(`
+        CREATE TABLE ai_provider_keys (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          provider_id TEXT NOT NULL,
+          api_key_encrypted TEXT NOT NULL,
+          base_url TEXT,
+          updated_at INTEGER DEFAULT (strftime('%s', 'now'))
+        )
+      `)
+      // Create unique index for user_id and provider_id
+      sqlite.exec(`
+        CREATE UNIQUE INDEX ai_provider_keys_user_provider_idx ON ai_provider_keys (user_id, provider_id)
+      `)
+      log('ai_provider_keys table created successfully')
+    }
+
     // Create ai_conversations table if it doesn't exist
     if (!tableExists(sqlite, 'ai_conversations')) {
       log('Creating ai_conversations table')

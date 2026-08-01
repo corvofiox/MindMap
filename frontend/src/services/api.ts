@@ -314,6 +314,33 @@ export async function deleteAIConversation(canvasId: number): Promise<void> {
   await apiClient.delete<void>(`/api/ai/conversation/${canvasId}`)
 }
 
+// AI Provider Key API（密钥加密存储在服务端）
+export interface AIProviderStatus {
+  providerId: string
+  configured: boolean
+  baseUrl?: string
+}
+
+export async function getAIProviders(): Promise<AIProviderStatus[]> {
+  return await apiClient.get<AIProviderStatus[]>('/api/ai/providers')
+}
+
+export async function saveAIProviderKey(
+  providerId: string,
+  apiKey: string,
+  baseUrl?: string
+): Promise<{ providerId: string; configured: boolean }> {
+  return await apiClient.post<{ providerId: string; configured: boolean }>('/api/ai/providers', {
+    providerId,
+    apiKey,
+    baseUrl: baseUrl || undefined,
+  })
+}
+
+export async function deleteAIProviderKey(providerId: string): Promise<void> {
+  await apiClient.delete<void>(`/api/ai/providers/${providerId}`)
+}
+
 // User Settings API
 export async function getNodeDefaults(): Promise<NodeDefaults> {
   return await apiClient.get<NodeDefaults>('/api/users/settings/node-defaults')

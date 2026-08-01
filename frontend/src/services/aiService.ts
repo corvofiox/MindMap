@@ -1,7 +1,9 @@
 // AI 服务 API 接口层
 // 支持 DeepSeek、智谱 GLM、Moonshot Kimi、Gemini、Ollama 等主流推理服务
+// 所有请求通过后端代理（/api/ai/*），API 密钥加密存储在服务端，不进入浏览器
 
 import { executeToolCall, getToolsForAI, getToolsForGemini } from './aiTools'
+import { apiClient } from './apiClient.js'
 
 export interface AIProvider {
   id: string
@@ -11,7 +13,6 @@ export interface AIProvider {
   apiKeyRequired: boolean
   modelsEndpoint: string
   chatEndpoint: string
-  headers: (apiKey: string) => Record<string, string>
   parseModels: (response: unknown) => AIModel[]
   parseChatResponse: (response: unknown) => { content: string; reasoningContent?: string; toolCalls?: Array<{ name: string; arguments: Record<string, unknown> }> }
 }
@@ -25,7 +26,8 @@ export interface AIModel {
 
 export interface AIConfig {
   provider: string
-  apiKey: string
+  /** 已废弃：API 密钥由服务端加密存储，前端不再需要 */
+  apiKey?: string
   baseUrl: string
   model: string
   temperature: number
@@ -56,11 +58,6 @@ export const AI_PROVIDERS: AIProvider[] = [
     apiKeyRequired: true,
     modelsEndpoint: '/models',
     chatEndpoint: '/chat/completions',
-    headers: (apiKey) => ({
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-    }),
     parseModels: (response: unknown) => {
       const data = response as { data: Array<{ id: string; owned_by?: string }> }
       return data.data
@@ -117,10 +114,6 @@ export const AI_PROVIDERS: AIProvider[] = [
     apiKeyRequired: true,
     modelsEndpoint: '/models',
     chatEndpoint: '/chat/completions',
-    headers: (apiKey) => ({
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    }),
     parseModels: (response: unknown) => {
       const data = response as { data: Array<{ id: string }> }
       return data.data
@@ -180,10 +173,6 @@ export const AI_PROVIDERS: AIProvider[] = [
     apiKeyRequired: true,
     modelsEndpoint: '/models',
     chatEndpoint: '/chat/completions',
-    headers: (apiKey) => ({
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    }),
     parseModels: (response: unknown) => {
       const data = response as { data: Array<{ id: string }> }
       return data.data
@@ -242,10 +231,6 @@ export const AI_PROVIDERS: AIProvider[] = [
     apiKeyRequired: true,
     modelsEndpoint: '/models',
     chatEndpoint: '/models/{model}:generateContent',
-    headers: (apiKey) => ({
-      'Content-Type': 'application/json',
-      'x-goog-api-key': apiKey,
-    }),
     parseModels: (response: unknown) => {
       const data = response as { models: Array<{ name: string; displayName?: string; description?: string }> }
       return data.models
@@ -298,9 +283,6 @@ export const AI_PROVIDERS: AIProvider[] = [
     apiKeyRequired: false,
     modelsEndpoint: '/api/tags',
     chatEndpoint: '/api/chat',
-    headers: () => ({
-      'Content-Type': 'application/json',
-    }),
     parseModels: (response: unknown) => {
       const data = response as { models: Array<{ name: string; size: number }> }
       return data.models.map((m) => ({
@@ -325,10 +307,6 @@ export const AI_PROVIDERS: AIProvider[] = [
     apiKeyRequired: true,
     modelsEndpoint: '/models',
     chatEndpoint: '/chat/completions',
-    headers: (apiKey) => ({
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    }),
     parseModels: (response: unknown) => {
       const data = response as { data: Array<{ id: string }> }
       return data.data.map((m) => ({
@@ -368,27 +346,48 @@ export const AI_PROVIDERS: AIProvider[] = [
   },
 ]
 
-// 获取模型列表
+// 获取模型列表（通过服务端代理，密钥不进入浏览器）
 export async function fetchModels(
   provider: AIProvider,
-  apiKey: string,
+  _apiKey: string,
   customBaseUrl?: string
 ): Promise<AIModel[]> {
-  const baseUrl = customBaseUrl || provider.baseUrl
-  const url = `${baseUrl}${provider.modelsEndpoint}`
+  await apiClient.ensureCsrfToken()
+  const headers = apiClient.getAuthHeaders()
 
-  const response = await fetch(url, {
-    method: 'GET',
-    headers: provider.headers(apiKey),
-  })
-
-  if (!response.ok) {
-    const error = await response.text()
-    throw new Error(`获取模型列表失败: ${error}`)
+  let response: Response
+  try {
+    response = await fetch('/api/ai/models', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        providerId: provider.id,
+        urlPath: provider.modelsEndpoint,
+        baseUrl: customBaseUrl || undefined,
+      }),
+    })
+  } catch {
+    throw new Error('网络连接失败，无法获取模型列表')
   }
 
-  const data = await response.json()
-  return provider.parseModels(data)
+  if (!response.ok) {
+    let message = `获取模型列表失败 (${response.status})`
+    try {
+      const data = (await response.json()) as { error?: string }
+      if (data?.error) {
+        message = data.error
+      }
+    } catch {
+      // ignore parse errors
+    }
+    throw new Error(message)
+  }
+
+  const data = (await response.json()) as { success: boolean; data?: unknown; error?: string }
+  if (!data.success) {
+    throw new Error(data.error || '获取模型列表失败')
+  }
+  return provider.parseModels(data.data)
 }
 
 // 全局 AbortController 用于中断请求
@@ -402,15 +401,21 @@ export function abortCurrentRequest() {
   }
 }
 
+// 工具调用最大轮数，防止模型无限请求工具导致死循环
+export const MAX_TOOL_ROUNDS = 5
+
 // 发送聊天消息（支持工具调用和中断）
 export async function sendChatMessageWithTools(
   providerId: string,
   config: AIConfig,
   messages: Array<Record<string, unknown>>,
-  enableTools: boolean = true
+  enableTools: boolean = true,
+  depth: number = 0
 ): Promise<{ content: string; reasoningContent?: string; toolResults?: Array<{ tool: string; result: unknown }> }> {
-  // 创建新的 AbortController
-  abortCurrentRequest() // 先中断之前的请求
+  // 创建新的 AbortController（递归调用时不中断外层请求）
+  if (depth === 0) {
+    abortCurrentRequest() // 先中断之前的请求
+  }
   currentAbortController = new AbortController()
   const signal = currentAbortController.signal
   const controller = currentAbortController
@@ -420,8 +425,7 @@ export async function sendChatMessageWithTools(
     throw new Error('未知的 AI 提供商')
   }
 
-  const baseUrl = config.baseUrl || provider.baseUrl
-  let url: string
+  let urlPath: string
   let body: Record<string, unknown>
 
   // 根据供应商决定是否使用 strict 模式
@@ -432,7 +436,7 @@ export async function sendChatMessageWithTools(
   // 根据不同提供商构建请求体和 URL
   if (providerId === 'gemini') {
     // Gemini 特殊处理
-    url = `${baseUrl}/models/${config.model}:generateContent`
+    urlPath = `/models/${config.model}:generateContent`
     // 分离 system message 和对话消息
     const systemMessage = messages.find((m) => m.role === 'system')
     const chatMessages = messages.filter((m) => m.role !== 'system')
@@ -454,7 +458,7 @@ export async function sendChatMessageWithTools(
       }
     }
   } else if (providerId === 'ollama') {
-    url = `${baseUrl}${provider.chatEndpoint}`
+    urlPath = provider.chatEndpoint
     body = {
       model: config.model,
       messages: messages,
@@ -466,12 +470,12 @@ export async function sendChatMessageWithTools(
     }
   } else {
     // OpenAI 兼容格式（支持工具调用）
-    let effectiveBaseUrl = baseUrl
     // DeepSeek strict 模式需要使用 Beta 端点
+    let effectiveUrlPath = provider.chatEndpoint
     if (providerId === 'deepseek' && useStrict) {
-      effectiveBaseUrl = baseUrl.replace(/\/beta$/, '').replace(/\/$/, '') + '/beta'
+      effectiveUrlPath = '/beta' + provider.chatEndpoint
     }
-    url = `${effectiveBaseUrl}${provider.chatEndpoint}`
+    urlPath = effectiveUrlPath
     body = {
       model: config.model,
       messages: messages,
@@ -585,16 +589,38 @@ export async function sendChatMessageWithTools(
   }
 
   try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: provider.headers(config.apiKey),
-      body: JSON.stringify(body),
-      signal,
-    })
+    await apiClient.ensureCsrfToken()
+    let response: Response
+    try {
+      response = await fetch('/api/ai/chat', {
+        method: 'POST',
+        headers: apiClient.getAuthHeaders(),
+        body: JSON.stringify({
+          providerId,
+          urlPath,
+          baseUrl: config.baseUrl || undefined,
+          body,
+        }),
+        signal,
+      })
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error('请求已中断')
+      }
+      throw new Error('网络连接失败')
+    }
 
     if (!response.ok) {
-      const error = await response.text()
-      throw new Error(`请求失败: ${error}`)
+      let message = `请求失败 (${response.status})`
+      try {
+        const data = (await response.json()) as { error?: string }
+        if (data?.error) {
+          message = data.error
+        }
+      } catch {
+        // ignore parse errors
+      }
+      throw new Error(message)
     }
 
     const data = await response.json()
@@ -604,6 +630,10 @@ export async function sendChatMessageWithTools(
     // 执行工具调用
     const toolResults: Array<{ tool: string; result: unknown }> = []
     if (toolCalls && toolCalls.length > 0) {
+      // 工具调用轮次限制，防止死循环
+      if (depth >= MAX_TOOL_ROUNDS) {
+        throw new Error(`工具调用超过 ${MAX_TOOL_ROUNDS} 轮上限，已停止`)
+      }
       for (const toolCall of toolCalls) {
         const result = await executeToolCall(toolCall.name, toolCall.arguments)
         toolResults.push({ tool: toolCall.name, result })
@@ -644,12 +674,13 @@ export async function sendChatMessageWithTools(
           content: JSON.stringify(toolResults[idx]?.result),
         }))
 
-        // 递归调用获取最终响应
+        // 递归调用获取最终响应（带轮次上限）
         const finalResponse = await sendChatMessageWithTools(
           providerId,
           config,
           [...messages, assistantMessage, ...toolResultMessages],
-          true
+          true,
+          depth + 1
         )
 
         // 合并思维链内容
@@ -690,10 +721,13 @@ export async function sendStreamChatMessage(
   config: AIConfig,
   messages: Array<Record<string, unknown>>,
   callbacks: StreamCallbacks,
-  enableTools: boolean = true
+  enableTools: boolean = true,
+  depth: number = 0
 ): Promise<void> {
-  // 创建新的 AbortController
-  abortCurrentRequest()
+  // 创建新的 AbortController（递归调用时不中断外层请求）
+  if (depth === 0) {
+    abortCurrentRequest()
+  }
   currentAbortController = new AbortController()
   const signal = currentAbortController.signal
   const controller = currentAbortController
@@ -703,20 +737,18 @@ export async function sendStreamChatMessage(
     throw new Error('未知的 AI 提供商')
   }
 
-  const baseUrl = config.baseUrl || provider.baseUrl
   // 根据供应商决定是否使用 strict 模式
   // DeepSeek 支持 strict 模式，GLM 等不支持（可能影响指令遵循能力）
   const useStrict = providerId === 'deepseek'
   const tools = enableTools ? getToolsForAI(useStrict) : []
   const geminiTools = enableTools ? getToolsForGemini() : []
 
-  let url: string
+  let urlPath: string
   let body: Record<string, unknown>
-  let headers: Record<string, string>
 
   // Gemini 特殊处理
   if (providerId === 'gemini') {
-    url = `${baseUrl}/models/${config.model}:streamGenerateContent?alt=sse`
+    urlPath = `/models/${config.model}:streamGenerateContent?alt=sse`
     const systemMessage = messages.find((m) => m.role === 'system')
     const chatMessages = messages.filter((m) => m.role !== 'system')
 
@@ -776,16 +808,14 @@ export async function sendStreamChatMessage(
         functionDeclarations: [tool]
       }))
     }
-
-    headers = provider.headers(config.apiKey)
   } else {
     // OpenAI 兼容格式
-    let effectiveBaseUrl = baseUrl
     // DeepSeek strict 模式需要使用 Beta 端点
+    let effectiveUrlPath = provider.chatEndpoint
     if (providerId === 'deepseek' && useStrict) {
-      effectiveBaseUrl = baseUrl.replace(/\/beta$/, '').replace(/\/$/, '') + '/beta'
+      effectiveUrlPath = '/beta' + provider.chatEndpoint
     }
-    url = `${effectiveBaseUrl}${provider.chatEndpoint}`
+    urlPath = effectiveUrlPath
     body = {
       model: config.model,
       messages: messages,
@@ -912,24 +942,62 @@ export async function sendStreamChatMessage(
       body.tools = tools
       body.tool_choice = 'auto'
     }
+  }
 
-    headers = {
-      ...provider.headers(config.apiKey),
-      'Accept': 'text/event-stream',
+  // 空闲超时（120 秒无数据则视为连接挂死）
+  const STREAM_IDLE_TIMEOUT_MS = 120000
+  let timedOut = false
+  let idleTimer: ReturnType<typeof setTimeout> | null = null
+  const armIdleTimer = () => {
+    if (idleTimer) clearTimeout(idleTimer)
+    idleTimer = setTimeout(() => {
+      timedOut = true
+      controller.abort()
+    }, STREAM_IDLE_TIMEOUT_MS)
+  }
+  const clearIdleTimer = () => {
+    if (idleTimer) {
+      clearTimeout(idleTimer)
+      idleTimer = null
     }
   }
 
   try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: headers,
-      body: JSON.stringify(body),
-      signal,
-    })
+    await apiClient.ensureCsrfToken()
+    let response: Response
+    try {
+      response = await fetch('/api/ai/chat', {
+        method: 'POST',
+        headers: {
+          ...apiClient.getAuthHeaders(),
+          'Accept': 'text/event-stream',
+        },
+        body: JSON.stringify({
+          providerId,
+          urlPath,
+          baseUrl: config.baseUrl || undefined,
+          body,
+        }),
+        signal,
+      })
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error(timedOut ? '请求超时' : '请求已中断')
+      }
+      throw new Error('网络连接失败')
+    }
 
     if (!response.ok) {
-      const error = await response.text()
-      throw new Error(`请求失败: ${error}`)
+      let message = `请求失败 (${response.status})`
+      try {
+        const data = (await response.json()) as { error?: string }
+        if (data?.error) {
+          message = data.error
+        }
+      } catch {
+        // ignore parse errors
+      }
+      throw new Error(message)
     }
 
     const reader = response.body?.getReader()
@@ -949,12 +1017,15 @@ export async function sendStreamChatMessage(
       thoughtSignature?: string
     }> = []
 
+    armIdleTimer()
     while (!isDone) {
       const { done, value } = await reader.read()
       if (done) {
         isDone = true
         break
       }
+
+      armIdleTimer()
 
       buffer += decoder.decode(value, { stream: true })
       const lines = buffer.split('\n')
@@ -970,6 +1041,16 @@ export async function sendStreamChatMessage(
 
           try {
             const parsed = JSON.parse(data)
+
+            // 上游错误（如 Ollama 返回 {"error": ...}）：结束流并上报，避免被静默吞掉
+            if (parsed && typeof parsed === 'object' && parsed.error) {
+              const errorText = typeof parsed.error === 'string'
+                ? parsed.error
+                : JSON.stringify(parsed.error)
+              callbacks.onError?.(new Error(`AI 服务错误：${errorText}`))
+              isDone = true
+              break
+            }
 
             // Gemini 格式处理
             if (providerId === 'gemini') {
@@ -1063,8 +1144,16 @@ export async function sendStreamChatMessage(
       }
     }
 
+    // 流式读取结束，清除空闲计时器
+    clearIdleTimer()
+
     // 如果有工具调用，执行工具并将结果返回给 AI
     if (toolCalls.length > 0) {
+      // 工具调用轮次限制，防止死循环
+      if (depth >= MAX_TOOL_ROUNDS) {
+        callbacks.onError?.(new Error(`工具调用超过 ${MAX_TOOL_ROUNDS} 轮上限，已停止`))
+        return
+      }
       // 压缩稀疏数组（流式 tool_calls 的 index 可能不连续）
       const calls = toolCalls.filter(() => true)
       // 用户已中断则跳过工具执行
@@ -1130,7 +1219,8 @@ export async function sendStreamChatMessage(
           config,
           geminiMessages,
           callbacks,
-          true
+          true,
+          depth + 1
         )
         return
       }
@@ -1180,7 +1270,8 @@ export async function sendStreamChatMessage(
         config,
         [...messages, assistantMessage, ...toolResultMessages],
         callbacks,
-        true  // 保持工具调用启用，支持多轮思考+工具调用
+        true,  // 保持工具调用启用，支持多轮思考+工具调用
+        depth + 1
       )
       return
     }
@@ -1188,25 +1279,26 @@ export async function sendStreamChatMessage(
     callbacks.onComplete?.()
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
-      callbacks.onError?.(new Error('请求已中断'))
+      callbacks.onError?.(new Error(timedOut ? '请求超时' : '请求已中断'))
     } else {
       callbacks.onError?.(error instanceof Error ? error : new Error(String(error)))
     }
   } finally {
+    clearIdleTimer()
     if (currentAbortController === controller) {
       currentAbortController = null
     }
   }
 }
 
-// 验证 API 密钥
+// 验证 API 密钥（通过服务端代理）
 export async function validateApiKey(
   provider: AIProvider,
-  apiKey: string,
+  _apiKey: string,
   customBaseUrl?: string
 ): Promise<boolean> {
   try {
-    await fetchModels(provider, apiKey, customBaseUrl)
+    await fetchModels(provider, _apiKey, customBaseUrl)
     return true
   } catch {
     return false

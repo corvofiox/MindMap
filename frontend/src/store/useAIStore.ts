@@ -2,9 +2,8 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { AIModel } from '@/services/aiService'
 
-// 每个提供商的独立配置
+// 每个提供商的独立配置（API 密钥不再存储在前端，由服务端加密保存）
 export interface ProviderConfig {
-  apiKey: string
   baseUrl: string
   model: string
   temperature: number
@@ -52,7 +51,6 @@ interface AIState {
 }
 
 const defaultProviderConfig: ProviderConfig = {
-  apiKey: '',
   baseUrl: '',
   model: '',
   temperature: 0.7,
@@ -120,7 +118,8 @@ export const useAIStore = create<AIState>()(
         }),
     }),
     {
-      name: 'ai-config-storage-v2',
+      // v3: API 密钥改为服务端加密存储，不再持久化到 localStorage
+      name: 'ai-config-storage-v3',
       partialize: (state) => ({
         currentProvider: state.currentProvider,
         providerConfigs: state.providerConfigs,

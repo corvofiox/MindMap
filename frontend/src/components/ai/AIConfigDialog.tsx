@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react'
-import { X, Check, RefreshCw, AlertCircle, Settings, Brain, Braces } from 'lucide-react'
+import { useState, useEffect, useCallback } from 'react'
+import { X, Check, RefreshCw, AlertCircle, Settings, Brain, Braces, Trash2 } from 'lucide-react'
 import { AI_PROVIDERS, fetchModels, validateApiKey } from '@/services/aiService'
 import { useAIStore, type ProviderConfig } from '@/store/useAIStore'
+import { getAIProviders, saveAIProviderKey, deleteAIProviderKey, type AIProviderStatus } from '@/services/api'
 
 interface AIConfigDialogProps {
   open: boolean
@@ -11,11 +12,9 @@ interface AIConfigDialogProps {
 export function AIConfigDialog({ open, onClose }: AIConfigDialogProps) {
   const {
     currentProvider,
-    providerConfigs,
     availableModels,
     isLoadingModels,
     error,
-    isConnected,
     setCurrentProvider,
     setProviderConfig,
     getProviderConfig,
@@ -29,19 +28,39 @@ export function AIConfigDialog({ open, onClose }: AIConfigDialogProps) {
   // 本地状态，用于当前编辑的提供商配置
   const [localProvider, setLocalProvider] = useState(currentProvider)
   const [localConfig, setLocalConfig] = useState<ProviderConfig>(getProviderConfig(currentProvider))
+  const [apiKeyInput, setApiKeyInput] = useState('') // 用户新输入的密钥（不持久化到前端存储）
   const [isTesting, setIsTesting] = useState(false)
   const [testResult, setTestResult] = useState<boolean | null>(null)
+  // 服务端密钥配置状态
+  const [providerStatuses, setProviderStatuses] = useState<Record<string, AIProviderStatus>>({})
 
   const provider = AI_PROVIDERS.find((p) => p.id === localProvider)
 
-  // 当对话框打开时同步本地配置
+  // 加载服务端密钥配置状态
+  const loadProviderStatuses = useCallback(async () => {
+    try {
+      const statuses = await getAIProviders()
+      setProviderStatuses(
+        statuses.reduce<Record<string, AIProviderStatus>>((acc, s) => {
+          acc[s.providerId] = s
+          return acc
+        }, {})
+      )
+    } catch {
+      setProviderStatuses({})
+    }
+  }, [])
+
+  // 当对话框打开时同步本地配置 + 加载服务端密钥状态
   useEffect(() => {
     if (open) {
       setLocalProvider(currentProvider)
       setLocalConfig(getProviderConfig(currentProvider))
+      setApiKeyInput('')
       setTestResult(null)
+      loadProviderStatuses()
     }
-  }, [open, currentProvider, getProviderConfig])
+  }, [open, currentProvider, getProviderConfig, loadProviderStatuses])
 
   // 当切换提供商时，加载该提供商的配置
   const handleProviderChange = (newProvider: string) => {
@@ -52,16 +71,34 @@ export function AIConfigDialog({ open, onClose }: AIConfigDialogProps) {
     // 加载新提供商的配置
     const newConfig = getProviderConfig(newProvider)
     setLocalConfig(newConfig)
+    setApiKeyInput('')
     setTestResult(null)
     setAvailableModels([])
+  }
+
+  // 如果用户输入了新密钥，先保存到服务端
+  const ensureKeySaved = async (): Promise<boolean> => {
+    if (apiKeyInput.trim() === '') {
+      return true
+    }
+    try {
+      await saveAIProviderKey(localProvider, apiKeyInput.trim(), localConfig.baseUrl || undefined)
+      setApiKeyInput('')
+      await loadProviderStatuses()
+      return true
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '保存 API 密钥失败')
+      return false
+    }
   }
 
   // 获取模型列表
   const handleFetchModels = async () => {
     if (!provider) return
 
-    // 检查是否需要 API Key
-    if (provider.apiKeyRequired && !localConfig.apiKey) {
+    // 检查是否需要 API Key（服务端已配置或本次输入）
+    const isConfigured = providerStatuses[localProvider]?.configured
+    if (provider.apiKeyRequired && !isConfigured && !apiKeyInput.trim()) {
       setError('请输入 API 密钥')
       return
     }
@@ -70,9 +107,12 @@ export function AIConfigDialog({ open, onClose }: AIConfigDialogProps) {
     setError(null)
 
     try {
+      const saved = await ensureKeySaved()
+      if (!saved) return
+
       const models = await fetchModels(
         provider,
-        localConfig.apiKey,
+        '',
         localConfig.baseUrl || undefined
       )
       setAvailableModels(models)
@@ -91,7 +131,8 @@ export function AIConfigDialog({ open, onClose }: AIConfigDialogProps) {
   const handleTestConnection = async () => {
     if (!provider) return
 
-    if (provider.apiKeyRequired && !localConfig.apiKey) {
+    const isConfigured = providerStatuses[localProvider]?.configured
+    if (provider.apiKeyRequired && !isConfigured && !apiKeyInput.trim()) {
       setError('请输入 API 密钥')
       return
     }
@@ -101,9 +142,12 @@ export function AIConfigDialog({ open, onClose }: AIConfigDialogProps) {
     setError(null)
 
     try {
+      const saved = await ensureKeySaved()
+      if (!saved) return
+
       const isValid = await validateApiKey(
         provider,
-        localConfig.apiKey,
+        '',
         localConfig.baseUrl || undefined
       )
       setTestResult(isValid)
@@ -119,8 +163,26 @@ export function AIConfigDialog({ open, onClose }: AIConfigDialogProps) {
     }
   }
 
+  // 删除服务端密钥
+  const handleDeleteKey = async () => {
+    if (!confirm('确定要删除该提供商的 API 密钥吗？')) return
+    try {
+      await deleteAIProviderKey(localProvider)
+      setApiKeyInput('')
+      setTestResult(null)
+      await loadProviderStatuses()
+      setIsConnected(false)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '删除密钥失败')
+    }
+  }
+
   // 保存配置
   const handleSave = async () => {
+    // 保存密钥到服务端（如有输入）
+    const saved = await ensureKeySaved()
+    if (!saved) return
+
     // 保存当前提供商的配置
     setProviderConfig(localProvider, localConfig)
     // 设置当前选中的提供商
@@ -134,23 +196,22 @@ export function AIConfigDialog({ open, onClose }: AIConfigDialogProps) {
     onClose()
   }
 
-  // 自动测试并获取模型列表（当配置完整时）
+  // 自动测试并获取模型列表（当服务端已配置且测试尚未进行时）
   useEffect(() => {
     const autoConnect = async () => {
       if (!provider) return
       if (!open) return // 只在对话框打开时执行
 
-      // 检查配置是否完整
-      const hasApiKey = !provider.apiKeyRequired || localConfig.apiKey
+      const isConfigured = providerStatuses[localProvider]?.configured
       const hasBaseUrl = localConfig.baseUrl || provider.baseUrl
 
-      if (hasApiKey && hasBaseUrl && !testResult) {
+      if (isConfigured && hasBaseUrl && !testResult) {
         // 自动测试连接
         setIsTesting(true)
         try {
           const isValid = await validateApiKey(
             provider,
-            localConfig.apiKey,
+            '',
             localConfig.baseUrl || undefined
           )
           setTestResult(isValid)
@@ -158,7 +219,7 @@ export function AIConfigDialog({ open, onClose }: AIConfigDialogProps) {
             // 连接成功，自动获取模型列表
             const models = await fetchModels(
               provider,
-              localConfig.apiKey,
+              '',
               localConfig.baseUrl || undefined
             )
             setAvailableModels(models)
@@ -177,9 +238,11 @@ export function AIConfigDialog({ open, onClose }: AIConfigDialogProps) {
 
     autoConnect()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, localProvider])
+  }, [open, localProvider, providerStatuses])
 
   if (!open) return null
+
+  const isProviderConfigured = providerStatuses[localProvider]?.configured === true
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
@@ -223,18 +286,33 @@ export function AIConfigDialog({ open, onClose }: AIConfigDialogProps) {
           {/* API 密钥 */}
           {provider?.apiKeyRequired && (
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                API 密钥
-              </label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                  API 密钥
+                </label>
+                {isProviderConfigured && (
+                  <button
+                    onClick={handleDeleteKey}
+                    className="text-xs text-red-500 hover:text-red-600 flex items-center gap-1"
+                    title="删除服务端保存的密钥"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                    删除密钥
+                  </button>
+                )}
+              </div>
               <input
                 type="password"
-                value={localConfig.apiKey}
-                onChange={(e) =>
-                  setLocalConfig((prev) => ({ ...prev, apiKey: e.target.value }))
-                }
-                placeholder="sk-..."
+                value={apiKeyInput}
+                onChange={(e) => setApiKeyInput(e.target.value)}
+                placeholder={isProviderConfigured ? '已配置（留空使用现有密钥）' : 'sk-...'}
                 className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white focus:ring-2 focus:ring-purple-500 focus:outline-none"
               />
+              {isProviderConfigured && apiKeyInput.trim() === '' && (
+                <p className="text-xs text-green-600 dark:text-green-400 mt-1">
+                  ✓ 密钥已安全存储在服务器（AES-256 加密）
+                </p>
+              )}
             </div>
           )}
 
@@ -259,7 +337,7 @@ export function AIConfigDialog({ open, onClose }: AIConfigDialogProps) {
           {/* 测试连接按钮 */}
           <button
             onClick={handleTestConnection}
-            disabled={isTesting || (provider?.apiKeyRequired && !localConfig.apiKey)}
+            disabled={isTesting || (provider?.apiKeyRequired && !isProviderConfigured && !apiKeyInput.trim())}
             className={`w-full py-2 px-4 rounded-lg text-sm font-medium flex items-center justify-center gap-2 ${
               testResult === true
                 ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'

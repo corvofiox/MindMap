@@ -157,6 +157,11 @@ export class ApiClient {
     return headers
   }
 
+  // 公开方法：构建认证+CSRF 请求头（供 SSE 流式等需要原生 fetch 的场景使用）
+  getAuthHeaders(contentType: string = 'application/json'): HeadersInit {
+    return this.buildHeaders(contentType)
+  }
+
   // 从cookie中获取CSRF token
   private getCsrfToken(): string | null {
     const cookies = document.cookie.split(';')

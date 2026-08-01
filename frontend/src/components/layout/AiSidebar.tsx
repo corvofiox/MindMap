@@ -12,29 +12,14 @@ import { sendStreamChatMessage, abortCurrentRequest, type StreamCallbacks, AI_PR
 import { getAIConversation, saveAIConversation, deleteAIConversation } from '@/services/api'
 import { Z_INDEX, DEFAULT_SYSTEM_PROMPT } from '@/constants'
 import { useCanvasStore } from '@/store/useCanvasStore'
-
-interface Message {
-  id: string
-  role: 'user' | 'assistant' | 'divider'
-  content: string
-  timestamp: number
-  reasoningContent?: string  // 思维链内容
-  hasToolCalls?: boolean     // 是否包含工具调用（DeepSeek 思考模式下需回传 reasoning_content）
-  /** 工具调用产生的中间消息（assistant+tool），需在后续多轮对话中回传给 API */
-  toolExchangeMessages?: Array<Record<string, unknown>>
-  isInterrupted?: boolean    // 是否被中断
-  attachments?: Attachment[] // 附件（图片/文件）
-}
-
-interface Attachment {
-  id: string
-  type: 'image' | 'file'
-  name: string
-  mimeType: string
-  size: number
-  data?: string  // base64 数据（用于图片）
-  url?: string   // 图片预览 URL
-}
+import {
+  buildMessageHistory,
+  buildUserMessage,
+  sanitizeMessagesForSave,
+  trimMessageHistory,
+  type Message,
+  type Attachment,
+} from '@/utils/aiChat'
 
 interface AiSidebarProps {
   open: boolean
@@ -42,9 +27,9 @@ interface AiSidebarProps {
 
 export function AiSidebar({ open }: AiSidebarProps) {
   const { setAiSidebarOpen } = useUIStore()
-  const { currentProvider, providerConfigs, isConnected } = useAIStore()
+  const { currentProvider, isConnected, getProviderConfig } = useAIStore()
   const { user } = useAuthStore()
-  const config = providerConfigs[currentProvider]
+  const config = getProviderConfig(currentProvider)
   const [messages, setMessages] = useState<Message[]>([
     {
       id: 'welcome',
@@ -92,38 +77,29 @@ export function AiSidebar({ open }: AiSidebarProps) {
     }
   }, [open])
 
-  // 自动验证并恢复已保存的连接状态（侧边栏每次打开时执行）
+  // 自动验证服务端密钥配置状态（侧边栏每次打开时执行）
   useEffect(() => {
     const autoValidateConnection = async () => {
-      const { currentProvider: cp, providerConfigs: pcs, isConnected: ic } = useAIStore.getState()
+      const { currentProvider: cp, getProviderConfig: getCfg } = useAIStore.getState()
       const provider = AI_PROVIDERS.find((p) => p.id === cp)
       if (!provider) return
 
-      const cfg = pcs[cp]
-      const hasApiKey = !provider.apiKeyRequired || cfg?.apiKey
-      const hasBaseUrl = cfg?.baseUrl || provider.baseUrl
+      const cfg = getCfg(cp)
+      const hasBaseUrl = cfg.baseUrl || provider.baseUrl
 
-      if (!hasApiKey || !hasBaseUrl) {
-        if (ic) {
-          useAIStore.getState().setIsConnected(false)
-        }
-        return
-      }
-
-      if (ic) {
+      // 始终尝试验证（密钥存储在服务端），避免连接状态卡死无法自愈
+      if (hasBaseUrl) {
         try {
-          const isValid = await validateApiKey(
-            provider,
-            cfg.apiKey,
-            cfg.baseUrl || undefined
-          )
-          if (!isValid) {
-            useAIStore.getState().setIsConnected(false)
+          const isValid = await validateApiKey(provider, '', cfg.baseUrl || undefined)
+          if (isValid) {
+            useAIStore.getState().setIsConnected(true)
+            return
           }
         } catch {
-          useAIStore.getState().setIsConnected(false)
+          // 验证失败，继续走未连接逻辑
         }
       }
+      useAIStore.getState().setIsConnected(false)
     }
 
     autoValidateConnection()
@@ -194,9 +170,16 @@ export function AiSidebar({ open }: AiSidebarProps) {
     loadConversation()
   }, [canvasId, isConnected])
 
-  // 保存对话历史到服务器（防抖）
+  // 保存对话历史到服务器
+  // 修复：流式输出期间 messages 高频变化，不能再把"卸载 flush"挂在与 messages 同依赖的 effect cleanup 上，
+  // 否则每个流式 chunk 都会触发一次全量保存（限流 + DB 写放大）。
+  // 方案：dirty 标记 + 防抖保存；仅在组件卸载/画布切换时显式 flush。
   const messagesRef = useRef(messages)
   const contextDividerIndexRef = useRef(contextDividerIndex)
+  const canvasIdRef = useRef(canvasId)
+  const dirtyRef = useRef(false)
+  // 画布切换中断标记：中断时只标记 interrupted，不写错误文案
+  const abortOnSwitchRef = useRef(false)
 
   // 更新 ref 值
   useEffect(() => {
@@ -207,58 +190,212 @@ export function AiSidebar({ open }: AiSidebarProps) {
     contextDividerIndexRef.current = contextDividerIndex
   }, [contextDividerIndex])
 
-  // 使用 ref 进行保存，避免循环依赖
-  const pendingSaveRef = useRef(false)
+  useEffect(() => {
+    canvasIdRef.current = canvasId
+  }, [canvasId])
+
+  // 判断是否有值得保存的内容（跳过只有欢迎消息/空占位的状态）
+  const hasSaveableContent = (msgs: Message[]): boolean => {
+    if (msgs.length <= 1 && msgs[0]?.id === 'welcome') return false
+    // 丢弃中断且无内容的空占位（画布切换/中断产生的半成品）
+    return !msgs.some(
+      (m) => m.role === 'assistant' && m.isInterrupted && !m.content.trim()
+    )
+  }
+
+  const persistConversation = async () => {
+    const currentCanvasId = canvasIdRef.current
+    if (!currentCanvasId) return
+    const currentMessages = sanitizeMessagesForSave(messagesRef.current)
+    if (!hasSaveableContent(currentMessages)) return
+    try {
+      await saveAIConversation(currentCanvasId, {
+        messages: currentMessages,
+        contextDividerIndex: contextDividerIndexRef.current,
+      })
+    } catch {
+      // 保存失败，标记为脏以便下次重试
+      dirtyRef.current = true
+    }
+  }
+
+  // 防抖保存：messages 变更后 1.5s 无新变更才保存
   useEffect(() => {
     if (!canvasId) return
-
-    pendingSaveRef.current = true
+    dirtyRef.current = true
     const timeoutId = setTimeout(async () => {
-      pendingSaveRef.current = false
-      const currentMessages = messagesRef.current
-      // 剥离 base64 图片数据以减小存储体积
-      const strippedMessages = currentMessages.map((m) =>
-        m.attachments?.some((a) => a.type === 'image' && a.data)
-          ? { ...m, attachments: m.attachments.map((a) => (a.type === 'image' ? { ...a, data: undefined } : a)) }
-          : m
-      )
-      // 只保存非空的对话（超过欢迎消息）
-      if (currentMessages.length <= 1 && currentMessages[0]?.id === 'welcome') {
-        return
-      }
+      dirtyRef.current = false
+      await persistConversation()
+    }, 1500)
 
-      try {
-        await saveAIConversation(canvasId, {
-          messages: strippedMessages,
-          contextDividerIndex: contextDividerIndexRef.current,
-        })
-      } catch {
-        // Failed to save conversation, will retry on next change
-      }
-    }, 1000) // 1秒防抖
+    return () => clearTimeout(timeoutId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canvasId, messages, contextDividerIndex])
 
+  // 画布切换/组件卸载时：中断进行中的请求 + flush 待保存内容
+  useEffect(() => {
+    if (!canvasId) return
     return () => {
-      clearTimeout(timeoutId)
-      // 组件卸载时 flush 待保存内容
-      if (pendingSaveRef.current) {
-        const currentMessages = messagesRef.current
-        if (!(currentMessages.length <= 1 && currentMessages[0]?.id === 'welcome')) {
-          const strippedMessages = currentMessages.map((m) =>
-            m.attachments?.some((a) => a.type === 'image' && a.data)
-              ? { ...m, attachments: m.attachments.map((a) => (a.type === 'image' ? { ...a, data: undefined } : a)) }
-              : m
-          )
-          saveAIConversation(canvasId, {
-            messages: strippedMessages,
-            contextDividerIndex: contextDividerIndexRef.current,
-          }).catch(() => {})
-        }
+      abortOnSwitchRef.current = true
+      abortCurrentRequest()
+      if (dirtyRef.current) {
+        dirtyRef.current = false
+        persistConversation()
       }
     }
-  }, [canvasId, messages, contextDividerIndex])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canvasId])
+
+  // 创建流式输出回调（handleSend / handleRegenerate 共用）
+  const createStreamCallbacks = (assistantMessageId: string, showEmptyHint: boolean): StreamCallbacks => ({
+    onReasoningChunk: (chunk) => {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantMessageId
+            ? { ...m, reasoningContent: (m.reasoningContent || '') + chunk }
+            : m
+        )
+      )
+    },
+    onContentChunk: (chunk) => {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantMessageId
+            ? { ...m, content: m.content + chunk }
+            : m
+        )
+      )
+    },
+    onToolCall: () => {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantMessageId
+            ? { ...m, hasToolCalls: true }
+            : m
+        )
+      )
+    },
+    onToolExchange: (exchangeMessages) => {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantMessageId
+            ? { ...m, toolExchangeMessages: [...(m.toolExchangeMessages || []), ...exchangeMessages] }
+            : m
+        )
+      )
+    },
+    onComplete: () => {
+      setIsLoading(false)
+      // 如果内容为空，显示提示信息
+      if (showEmptyHint) {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantMessageId && m.content === '' && !m.isInterrupted
+              ? { ...m, content: '（AI 未返回内容）' }
+              : m
+          )
+        )
+      }
+    },
+    onError: (error) => {
+      setIsLoading(false)
+      if (abortOnSwitchRef.current) {
+        // 画布切换导致的中断：只标记中断，不写错误文案
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantMessageId
+              ? { ...m, isInterrupted: true }
+              : m
+          )
+        )
+        return
+      }
+      if (error.message === '请求已中断' || error.message === '请求超时') {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantMessageId
+              ? {
+                  ...m,
+                  content: m.content + (error.message === '请求超时' ? '\n\n⏳ 请求超时' : '\n\n⏹️ 回答已中断'),
+                  isInterrupted: true,
+                }
+              : m
+          )
+        )
+      } else {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantMessageId
+              ? { ...m, content: `❌ 请求失败：${error.message}\n\n请检查：\n1. AI 服务配置是否正确\n2. API 密钥是否有效\n3. 网络连接是否正常` }
+              : m
+          )
+        )
+      }
+    },
+  })
+
+  // 发送 AI 请求（handleSend / handleRegenerate 共用）
+  const runAssistantTurn = async (
+    messageHistory: Array<Record<string, unknown>>,
+    currentUserMessage: Record<string, unknown>
+  ) => {
+    const assistantMessageId = crypto.randomUUID()
+    const assistantMessage: Message = {
+      id: assistantMessageId,
+      role: 'assistant',
+      content: '',
+      timestamp: Date.now(),
+      reasoningContent: '',
+    }
+    setMessages((prev) => [...prev, assistantMessage])
+
+    // 配置未就绪：错误写入占位符，提示用户配置
+    if (!isConnected || !config.model) {
+      setIsLoading(false)
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantMessageId
+            ? { ...m, content: '❌ 请求失败：请先配置 AI 服务\n\n请点击右上角设置按钮，配置 AI 服务提供商并测试连接' }
+            : m
+        )
+      )
+      return
+    }
+
+    // 上下文裁剪：预算约为 maxTokens 的 2 倍（给输出留空间），防止长对话超限
+    const budget = Math.max(4000, Math.min(32000, (config.maxTokens || 4096) * 2))
+    const trimmedHistory = trimMessageHistory(messageHistory, budget)
+
+    const systemMessage = {
+      role: 'system',
+      content: DEFAULT_SYSTEM_PROMPT,
+    }
+
+    try {
+      await sendStreamChatMessage(
+        currentProvider,
+        { ...config, provider: currentProvider },
+        [systemMessage, ...trimmedHistory, currentUserMessage],
+        createStreamCallbacks(assistantMessageId, true)
+      )
+    } catch (error) {
+      // 流式请求本身抛出的错误（如未知提供商）写入占位符
+      setIsLoading(false)
+      const errorMessage = error instanceof Error ? error.message : '未知错误'
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantMessageId
+            ? { ...m, content: `❌ 请求失败：${errorMessage}\n\n请检查：\n1. AI 服务配置是否正确\n2. API 密钥是否有效\n3. 网络连接是否正常` }
+            : m
+        )
+      )
+    }
+  }
 
   const handleSend = async () => {
     if ((!input.trim() && attachedFiles.length === 0) || isLoading) return
+
+    abortOnSwitchRef.current = false
 
     // 构建消息内容（仅用户输入，文件内容在后台传递给AI）
     const content = input.trim()
@@ -276,233 +413,18 @@ export function AiSidebar({ open }: AiSidebarProps) {
     setAttachedFiles([])
     setIsLoading(true)
 
-    let assistantMessageId = ''
+    // 构建消息历史（只包含分隔线以下的消息）
+    // DeepSeek 思考模式要求：
+    // - 工具调用产生的中间 assistant+tool 消息必须完整回传（见 buildMessageHistory）
+    const startIndex = contextDividerIndex >= 0 ? contextDividerIndex : 0
+    const messageHistory = buildMessageHistory(messages, startIndex)
+    const currentUserMessage = buildUserMessage(content, attachedFiles)
 
-    // 调用真实 AI API
-    try {
-      if (!isConnected || !config.model) {
-        throw new Error('请先配置 AI 服务')
-      }
-
-      // 构建消息历史（只包含分隔线以下的消息）
-      // DeepSeek 思考模式要求：
-      // - 无工具调用轮次：reasoning_content 无需参与上下文拼接
-      // - 有工具调用轮次：reasoning_content 必须参与上下文拼接
-      // - 工具调用产生的中间 assistant+tool 消息必须完整回传
-      const startIndex = contextDividerIndex >= 0 ? contextDividerIndex : 0
-      const messageHistory = messages
-        .slice(startIndex)
-        .filter((m) => m.id !== 'welcome' && m.role !== 'divider')
-        .flatMap((m) => {
-          // Assistant 消息有工具交换：先输出中间消息，再输出最终 assistant
-          if (m.role === 'assistant' && m.toolExchangeMessages && m.toolExchangeMessages.length > 0) {
-            return [...m.toolExchangeMessages, { role: 'assistant', content: m.content }]
-          }
-
-          // 如果有图片附件，使用多模态格式
-          if (m.attachments && m.attachments.some(a => a.type === 'image' && a.data)) {
-            const imageAttachments = m.attachments.filter(a => a.type === 'image' && a.data)
-            const textContent = m.content || ''
-
-            // 构建 content 数组（文本 + 图片）
-            const contentParts: Array<{ type: string; text?: string; image_url?: { url: string } }> = []
-
-            if (textContent) {
-              contentParts.push({ type: 'text', text: textContent })
-            }
-
-            // 添加图片（使用 base64 格式）
-            for (const img of imageAttachments) {
-              if (img.data && img.mimeType) {
-                contentParts.push({
-                  type: 'image_url',
-                  image_url: {
-                    url: `data:${img.mimeType};base64,${img.data}`
-                  }
-                })
-              }
-            }
-
-            return {
-              role: m.role,
-              content: contentParts,
-            }
-          }
-
-          // assistant 消息：有工具调用时必须回传 reasoning_content
-          if (m.role === 'assistant' && m.hasToolCalls && m.reasoningContent) {
-            return {
-              role: m.role,
-              content: m.content,
-              reasoning_content: m.reasoningContent,
-            }
-          }
-
-          // 普通文本消息 - 只返回 content，不返回 reasoning_content
-          return {
-            role: m.role,
-            content: m.content,
-          }
-        })
-
-      // 添加系统提示（包含工具调用说明和思维链）
-      const systemMessage = {
-        role: 'system',
-        content: DEFAULT_SYSTEM_PROMPT,
-      }
-
-      // 创建助手消息占位符
-      assistantMessageId = crypto.randomUUID()
-      const assistantMessage: Message = {
-        id: assistantMessageId,
-        role: 'assistant',
-        content: '',
-        timestamp: Date.now(),
-        reasoningContent: '',
-      }
-      setMessages((prev) => [...prev, assistantMessage])
-
-      // 流式输出回调
-      const callbacks: StreamCallbacks = {
-        onReasoningChunk: (chunk) => {
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantMessageId
-                ? { ...m, reasoningContent: (m.reasoningContent || '') + chunk }
-                : m
-            )
-          )
-        },
-        onContentChunk: (chunk) => {
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantMessageId
-                ? { ...m, content: m.content + chunk }
-                : m
-            )
-          )
-        },
-        onToolCall: () => {
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantMessageId
-                ? { ...m, hasToolCalls: true }
-                : m
-            )
-          )
-        },
-        onToolExchange: (messages) => {
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantMessageId
-                ? { ...m, toolExchangeMessages: [...(m.toolExchangeMessages || []), ...messages] }
-                : m
-            )
-          )
-        },
-        onComplete: () => {
-          setIsLoading(false)
-          // 如果内容为空，显示提示信息
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantMessageId && m.content === '' && !m.isInterrupted
-                ? { ...m, content: '（AI 未返回内容）' }
-                : m
-            )
-          )
-        },
-        onError: (error) => {
-          setIsLoading(false)
-          if (error.message === '请求已中断') {
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === assistantMessageId
-                  ? { ...m, content: m.content + '\n\n⏹️ 回答已中断', isInterrupted: true }
-                  : m
-              )
-            )
-          } else {
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === assistantMessageId
-                  ? { ...m, content: `❌ 请求失败：${error.message}\n\n请检查：\n1. AI 服务配置是否正确\n2. API 密钥是否有效\n3. 网络连接是否正常` }
-                  : m
-              )
-            )
-          }
-        },
-      }
-
-      // 构建当前用户消息（支持多模态）
-      const currentUserMessage: Record<string, unknown> = { role: 'user' }
-      const imageAttachments = attachedFiles.filter(f => f.type === 'image' && f.data)
-      const textFiles = attachedFiles.filter(f => f.type === 'file' && f.data)
-
-      // 构建 content 数组（文本 + 图片 + 文本文件内容）
-      const contentParts: Array<{ type: string; text?: string; image_url?: { url: string } }> = []
-
-      // 添加用户输入文本
-      if (content) {
-        contentParts.push({ type: 'text', text: content })
-      }
-
-      // 添加文本文件内容（在后台传递给 AI，不显示在气泡中）
-      for (const file of textFiles) {
-        if (file.data) {
-          contentParts.push({
-            type: 'text',
-            text: `\n\n--- ${file.name} ---\n${file.data}`
-          })
-        }
-      }
-
-      // 添加图片
-      for (const img of imageAttachments) {
-        if (img.data && img.mimeType) {
-          contentParts.push({
-            type: 'image_url',
-            image_url: {
-              url: `data:${img.mimeType};base64,${img.data}`
-            }
-          })
-        }
-      }
-
-      // 如果有多个部分，使用数组格式；否则使用简单字符串
-      if (contentParts.length === 1 && contentParts[0].type === 'text') {
-        currentUserMessage.content = contentParts[0].text
-      } else if (contentParts.length > 0) {
-        currentUserMessage.content = contentParts
-      } else {
-        currentUserMessage.content = ''
-      }
-
-      // 发送流式请求
-      await sendStreamChatMessage(
-        currentProvider,
-        { ...config, provider: currentProvider },
-        [
-          systemMessage,
-          ...messageHistory,
-          currentUserMessage,
-        ],
-        callbacks
-      )
-    } catch (error) {
-      setIsLoading(false)
-      const errorMessage = error instanceof Error ? error.message : '未知错误'
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantMessageId
-            ? { ...m, content: `❌ 请求失败：${errorMessage}\n\n请检查：\n1. AI 服务配置是否正确\n2. API 密钥是否有效\n3. 网络连接是否正常` }
-            : m
-        )
-      )
-    }
+    await runAssistantTurn(messageHistory, currentUserMessage)
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault()
       handleSend()
     }
@@ -531,193 +453,21 @@ export function AiSidebar({ open }: AiSidebarProps) {
 
     const userMessage = messages[userMessageIndex]
 
+    abortOnSwitchRef.current = false
+
     // 删除当前 AI 回复及之后的所有消息
     setMessages((prev) => prev.slice(0, messageIndex))
     setIsLoading(true)
 
-    let assistantMessageId = ''
+    // 构建消息历史（不包括被删除的消息，且只包含分隔线以下的消息）
+    const startIndex = contextDividerIndex >= 0 ? contextDividerIndex : 0
+    const messageHistory = buildMessageHistory(
+      messages.slice(0, userMessageIndex),
+      startIndex
+    )
+    const currentUserMessage = buildUserMessage(userMessage.content, userMessage.attachments)
 
-    try {
-      if (!isConnected || !config.model) {
-        throw new Error('请先配置 AI 服务')
-      }
-
-      // 构建消息历史（不包括被删除的消息，且只包含分隔线以下的消息）
-      const startIndex = contextDividerIndex >= 0 ? contextDividerIndex : 0
-      const messageHistory = messages
-        .slice(Math.max(startIndex, 0), userMessageIndex)
-        .filter((m) => m.id !== 'welcome' && m.role !== 'divider')
-        .flatMap((m) => {
-          // Assistant 消息有工具交换：先输出中间消息，再输出最终 assistant
-          if (m.role === 'assistant' && m.toolExchangeMessages && m.toolExchangeMessages.length > 0) {
-            return [...m.toolExchangeMessages, { role: 'assistant', content: m.content }]
-          }
-
-          // assistant 消息：有工具调用时必须回传 reasoning_content
-          if (m.role === 'assistant' && m.hasToolCalls && m.reasoningContent) {
-            return {
-              role: m.role,
-              content: m.content,
-              reasoning_content: m.reasoningContent,
-            }
-          }
-          return {
-            role: m.role,
-            content: m.content,
-          }
-        })
-
-      // 添加系统提示
-      const systemMessage = {
-        role: 'system',
-        content: DEFAULT_SYSTEM_PROMPT,
-      }
-
-      // 创建助手消息占位符
-      assistantMessageId = crypto.randomUUID()
-      const assistantMessage: Message = {
-        id: assistantMessageId,
-        role: 'assistant',
-        content: '',
-        timestamp: Date.now(),
-        reasoningContent: '',
-      }
-      setMessages((prev) => [...prev, assistantMessage])
-
-      // 流式输出回调
-      const callbacks: StreamCallbacks = {
-        onReasoningChunk: (chunk) => {
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantMessageId
-                ? { ...m, reasoningContent: (m.reasoningContent || '') + chunk }
-                : m
-            )
-          )
-        },
-        onContentChunk: (chunk) => {
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantMessageId
-                ? { ...m, content: m.content + chunk }
-                : m
-            )
-          )
-        },
-        onToolCall: () => {
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantMessageId
-                ? { ...m, hasToolCalls: true }
-                : m
-            )
-          )
-        },
-        onToolExchange: (messages) => {
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantMessageId
-                ? { ...m, toolExchangeMessages: [...(m.toolExchangeMessages || []), ...messages] }
-                : m
-            )
-          )
-        },
-        onComplete: () => {
-          setIsLoading(false)
-        },
-        onError: (error) => {
-          setIsLoading(false)
-          if (error.message === '请求已中断') {
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === assistantMessageId
-                  ? { ...m, content: m.content + '\n\n⏹️ 回答已中断' }
-                  : m
-              )
-            )
-          } else {
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === assistantMessageId
-                  ? { ...m, content: `❌ 请求失败：${error.message}\n\n请检查：\n1. AI 服务配置是否正确\n2. API 密钥是否有效\n3. 网络连接是否正常` }
-                  : m
-              )
-            )
-          }
-        },
-      }
-
-      // 构建当前用户消息（包含附件中的文本文件内容）
-      const currentUserMessage: Record<string, unknown> = { role: 'user' }
-
-      // 检查是否有附件
-      if (userMessage.attachments && userMessage.attachments.length > 0) {
-        const contentParts: Array<{ type: string; text?: string; image_url?: { url: string } }> = []
-
-        // 添加用户输入文本
-        if (userMessage.content) {
-          contentParts.push({ type: 'text', text: userMessage.content })
-        }
-
-        // 添加文本文件内容
-        const textFiles = userMessage.attachments.filter(f => f.type === 'file' && f.data)
-        for (const file of textFiles) {
-          if (file.data) {
-            contentParts.push({
-              type: 'text',
-              text: `\n\n--- ${file.name} ---\n${file.data}`
-            })
-          }
-        }
-
-        // 添加图片
-        const imageAttachments = userMessage.attachments.filter(f => f.type === 'image' && f.data)
-        for (const img of imageAttachments) {
-          if (img.data && img.mimeType) {
-            contentParts.push({
-              type: 'image_url',
-              image_url: {
-                url: `data:${img.mimeType};base64,${img.data}`
-              }
-            })
-          }
-        }
-
-        // 如果有多个部分，使用数组格式；否则使用简单字符串
-        if (contentParts.length === 1 && contentParts[0].type === 'text') {
-          currentUserMessage.content = contentParts[0].text
-        } else if (contentParts.length > 0) {
-          currentUserMessage.content = contentParts
-        } else {
-          currentUserMessage.content = userMessage.content || ''
-        }
-      } else {
-        // 没有附件，使用简单字符串
-        currentUserMessage.content = userMessage.content || ''
-      }
-
-      // 发送流式请求
-      await sendStreamChatMessage(
-        currentProvider,
-        { ...config, provider: currentProvider },
-        [
-          systemMessage,
-          ...messageHistory,
-          currentUserMessage,
-        ],
-        callbacks
-      )
-    } catch (error) {
-      setIsLoading(false)
-      const errorMessage = error instanceof Error ? error.message : '未知错误'
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantMessageId
-            ? { ...m, content: `❌ 请求失败：${errorMessage}\n\n请检查：\n1. AI 服务配置是否正确\n2. API 密钥是否有效\n3. 网络连接是否正常` }
-            : m
-        )
-      )
-    }
+    await runAssistantTurn(messageHistory, currentUserMessage)
   }
 
   const handleClear = async () => {
@@ -1205,18 +955,34 @@ export function AiSidebar({ open }: AiSidebarProps) {
                   {/* 显示图片附件 */}
                   {message.attachments && message.attachments.some(a => a.type === 'image') && (
                     <div className="mt-2 flex flex-wrap gap-2">
-                      {message.attachments.filter(a => a.type === 'image').map((img) => (
-                        <div key={img.id} className="relative group/image">
-                          <img
-                            src={img.url}
-                            alt={img.name}
-                            className="max-w-[200px] max-h-[150px] rounded-lg border border-gray-200 dark:border-gray-600 object-cover"
-                          />
-                          <div className="absolute bottom-0 left-0 right-0 bg-black/50 text-white text-xs px-2 py-1 rounded-b-lg opacity-0 group-hover/image:opacity-100 transition-opacity truncate">
-                            {img.name}
+                      {message.attachments.filter(a => a.type === 'image').map((img) => {
+                        // blob URL 刷新后失效，且保存时已剥离 base64 data，此时显示占位而非裂图
+                        const imageSrc = img.data
+                          ? `data:${img.mimeType};base64,${img.data}`
+                          : img.url
+                        return (
+                          <div key={img.id} className="relative group/image">
+                            {imageSrc ? (
+                              <>
+                                <img
+                                  src={imageSrc}
+                                  alt={img.name}
+                                  className="max-w-[200px] max-h-[150px] rounded-lg border border-gray-200 dark:border-gray-600 object-cover"
+                                />
+                                <div className="absolute bottom-0 left-0 right-0 bg-black/50 text-white text-xs px-2 py-1 rounded-b-lg opacity-0 group-hover/image:opacity-100 transition-opacity truncate">
+                                  {img.name}
+                                </div>
+                              </>
+                            ) : (
+                              <div className="max-w-[200px] px-3 py-4 rounded-lg border border-dashed border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 text-xs text-gray-400 dark:text-gray-500 flex flex-col items-center gap-1">
+                                <ImageIcon className="w-4 h-4" />
+                                <span className="truncate max-w-full">{img.name}</span>
+                                <span>图片已过期（会话恢复后不再可用）</span>
+                              </div>
+                            )}
                           </div>
-                        </div>
-                      ))}
+                        )
+                      })}
                     </div>
                   )}
                   {/* 显示文件附件 */}
