@@ -129,6 +129,31 @@ const commandEffectPromises = new Map<number, Promise<void>>()
 let nextCommandId = 0
 let isHistoryNavigating = false
 
+/** C19: 等待命令副作用完成的最大时长，防止 afterExecute/afterUndo 永不
+ *  resolve（如底层 API 挂起）时 undo/redo 永久卡死。 */
+const COMMAND_EFFECT_TIMEOUT_MS = 8000
+
+async function waitForCommandEffectWithTimeout(commandId: number): Promise<void> {
+  const promise = commandEffectPromises.get(commandId)
+  if (!promise) return
+  let timer: ReturnType<typeof setTimeout> | null = null
+  const timeout = new Promise<void>((resolve) => {
+    timer = setTimeout(() => {
+      logger.warn(
+        `[undo/redo] waiting for command effect #${commandId} timed out after ${COMMAND_EFFECT_TIMEOUT_MS}ms; continuing`,
+      )
+      resolve()
+    }, COMMAND_EFFECT_TIMEOUT_MS)
+  })
+  try {
+    await Promise.race([promise, timeout])
+  } catch {
+    // Error already logged by the effect originator; continue.
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
 interface Command {
   /** Unique command ID; assigned by executeCommand if omitted. */
   id?: number
@@ -141,6 +166,11 @@ interface Command {
   afterExecute?: () => Promise<void>
   /** Optional async side effect that runs after the synchronous undo(). */
   afterUndo?: () => Promise<void>
+  /**
+   * R8: 纯本地顺序操作标记(如置顶/置底——仅重排 Map 顺序,不持久化、
+   * 不同步 Yjs)。undo/redo 分支识别后不置 dirty,避免触发冗余自动保存。
+   */
+  pureOrderChange?: boolean
 }
 
 function getCurrentUserId(): number | null {
@@ -1014,7 +1044,19 @@ moveNodeToPool: (nodeId: string, nodeData: Node, afterExecute?: () => Promise<vo
 
     if (effectiveSkipHistory) {
       const commandResult = commandWithUser.execute()
-      set(markDirty ? { ...commandResult, isDirty: true } : commandResult)
+      // C22: 空结果（如节点不存在时 execute 返回 {}）不应置 dirty
+      const hasChanges = Object.keys(commandResult).length > 0
+      set(markDirty && hasChanges ? { ...commandResult, isDirty: true } : commandResult)
+      syncDiffToYDoc(beforeSnapshot, get())
+      return commandWithUser.id
+    }
+
+    const commandResult = commandWithUser.execute()
+    // C22: 空结果（如节点不存在时 execute 返回 {}）不 push 命令、不置
+    // dirty、不执行 afterExecute——与 skipHistory 分支保持一致。
+    const hasChanges = Object.keys(commandResult).length > 0
+    if (!hasChanges) {
+      set({ ...commandResult })
       syncDiffToYDoc(beforeSnapshot, get())
       return commandWithUser.id
     }
@@ -1033,7 +1075,6 @@ moveNodeToPool: (nodeId: string, nodeData: Node, afterExecute?: () => Promise<vo
       }
 
       newCommands.push(commandWithUser)
-      const commandResult = commandWithUser.execute()
 
       return {
         ...commandResult,
@@ -1067,7 +1108,9 @@ moveNodeToPool: (nodeId: string, nodeData: Node, afterExecute?: () => Promise<vo
     const commandWithUser = { ...command, id: command.id ?? ++nextCommandId, userId: currentUserId ?? undefined }
     const beforeSnapshot = captureSnapshot(get())
     const commandResult = commandWithUser.execute()
-    set({ ...commandResult, isDirty: true })
+    // C22: 空结果不置 dirty（与 executeCommand skipHistory 分支保持一致）
+    const hasChanges = Object.keys(commandResult).length > 0
+    set(hasChanges ? { ...commandResult, isDirty: true } : commandResult)
     syncDiffToYDoc(beforeSnapshot, get())
     return commandWithUser.id
   },
@@ -1094,25 +1137,30 @@ moveNodeToPool: (nodeId: string, nodeData: Node, afterExecute?: () => Promise<vo
 
       // Wait for any in-flight execute side effect before undoing so the undo
       // callback can observe the fully committed state (e.g. real card ID).
-      const pendingPromise = commandEffectPromises.get(command.id)
-      if (pendingPromise) {
-        try {
-          await pendingPromise
-        } catch {
-          // Error already logged by executeCommand; continue with undo.
-        }
+      // C19: 带超时兜底，避免副作用永不完成时 undo 卡死。
+      // 注意：仅当存在 pending promise 时才 await——无副作用时保持同步
+      // 执行，否则 undo() 会多出一次微任务，破坏同步调用的测试语义。
+      const pendingEffect = commandEffectPromises.get(command.id)
+      if (pendingEffect) {
+        await waitForCommandEffectWithTimeout(command.id)
       }
 
       const beforeSnapshot = captureSnapshot(get())
       const commandResult = command.undo()
 
+      // R7-fix: 空结果(如节点已不存在)不置 dirty——与 C22 execute 路径一致,
+      // 避免置顶/置底等无内容变化的命令 undo 后触发冗余自动保存。
+      // R8-fix: pureOrderChange 命令(置顶/置底)的 undo 仅恢复本地顺序,
+      // 同样不置 dirty。
+      const hasChanges = Object.keys(commandResult).length > 0
+      const isPureOrder = command.pureOrderChange === true
       set((state) => ({
         ...commandResult,
         history: {
           ...state.history,
           currentIndex: targetIndex - 1,
         },
-        isDirty: true,
+        isDirty: hasChanges && !isPureOrder ? true : state.isDirty,
       }))
       syncDiffToYDoc(beforeSnapshot, get())
 
@@ -1154,25 +1202,26 @@ moveNodeToPool: (nodeId: string, nodeData: Node, afterExecute?: () => Promise<vo
 
       // Wait for any in-flight undo side effect before redoing so the redo
       // callback can observe the fully committed state.
-      const pendingPromise = commandEffectPromises.get(command.id)
-      if (pendingPromise) {
-        try {
-          await pendingPromise
-        } catch {
-          // Error already logged by undo; continue with redo.
-        }
+      // C19: 带超时兜底；仅当存在 pending promise 时才 await（保持同步语义）。
+      const pendingEffect = commandEffectPromises.get(command.id)
+      if (pendingEffect) {
+        await waitForCommandEffectWithTimeout(command.id)
       }
 
       const beforeSnapshot = captureSnapshot(get())
       const commandResult = command.execute()
 
+      // R7-fix: 空结果不置 dirty(与 undo 分支一致)
+      // R8-fix: pureOrderChange 命令的 redo 同样不置 dirty
+      const hasChanges = Object.keys(commandResult).length > 0
+      const isPureOrder = command.pureOrderChange === true
       set((state) => ({
         ...commandResult,
         history: {
           ...state.history,
           currentIndex: targetIndex,
         },
-        isDirty: true,
+        isDirty: hasChanges && !isPureOrder ? true : state.isDirty,
       }))
       syncDiffToYDoc(beforeSnapshot, get())
 
@@ -1219,40 +1268,22 @@ moveNodeToPool: (nodeId: string, nodeData: Node, afterExecute?: () => Promise<vo
   },
 
   clearHistory: () =>
-    set((state) => {
-      const currentUserId = getCurrentUserId()
-      const filteredCommands = state.history.commands.filter(
-        cmd => cmd.userId !== currentUserId && cmd.userId !== undefined
-      )
-
-      return {
-        history: {
-          ...state.history,
-          commands: filteredCommands,
-          currentIndex: filteredCommands.length - 1,
-        },
-      }
-    }),
+    set((state) => ({
+      history: {
+        ...state.history,
+        commands: [],
+        currentIndex: -1,
+      },
+    })),
 
   waitForCommandEffect: async (commandId: number) => {
-    const promise = commandEffectPromises.get(commandId)
-    if (promise) {
-      try {
-        await promise
-      } catch {
-        // Error already logged by the effect originator.
-      }
-    }
+    await waitForCommandEffectWithTimeout(commandId)
   },
 
   // Bulk actions
   setCanvasData: (data, viewState) => {
     const before = captureSnapshot(get())
     set((state) => {
-      const currentUserId = getCurrentUserId()
-      const ownCommands = state.history.commands.filter(
-        cmd => cmd.userId === currentUserId || cmd.userId === undefined
-      )
       return {
         nodes: data.nodes ? new Map(data.nodes.map((n) => [n.id, n])) : state.nodes,
         groups: data.groups ? new Map(data.groups.map((g) => [g.id, g])) : state.groups,
@@ -1269,10 +1300,12 @@ moveNodeToPool: (nodeId: string, nodeData: Node, afterExecute?: () => Promise<vo
         selectedIds: [],
         hoveredId: null,
         editingId: null,
+        // C1: 整包加载 = 新画布会话，清空 undo/redo 历史，防止 Ctrl+Z 执行
+        // 上一张画布的旧命令（误删节点 / redo 污染新画布 Y.Doc）。
         history: {
           ...state.history,
-          commands: ownCommands,
-          currentIndex: ownCommands.length - 1,
+          commands: [],
+          currentIndex: -1,
         },
         // Bump the bulk-load marker so subscribers can tell that the entire
         // entity map was replaced (e.g. after API/cache load) rather than

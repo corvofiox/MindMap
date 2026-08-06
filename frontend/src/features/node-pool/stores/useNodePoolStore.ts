@@ -117,6 +117,14 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => {
       return
     }
 
+    // 记录乐观删除前的卡片快照，API 失败时回滚（D4）
+    const originalCardSnapshot = effectiveCard
+    const originalRealIdSnapshot = resolvedRealId
+    // R3 #7：记录操作前 cardsMap 中是否存在该卡（及真实卡）。回滚时仅恢复操作前
+    // 真实存在的条目，避免把原本不在 cardsMap 中的卡（如纯临时卡）回滚成"幻影卡"。
+    const cardExistedInMapBefore = state.cardsMap.has(cardId)
+    const realIdExistedInMapBefore = resolvedRealId ? state.cardsMap.has(resolvedRealId) : false
+
     return withCardLock(cardId, async () => {
     const operationId = generateOperationId()
 
@@ -222,6 +230,64 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => {
       })
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : '使用节点失败'
+
+      // 回滚乐观移除：恢复卡片、清除临时卡删除标记、标记 operation 失败并清理 processing（D4）
+      set((prevState) => {
+        const newCardsMap = new Map(prevState.cardsMap)
+        const newOperationQueue = new Map(prevState.operationQueue)
+        const newProcessingOps = new Set(prevState.processingOperations)
+        const newTemporaryCards = new Map(prevState.temporaryCards)
+
+        // 仅当操作前该卡确实存在于 cardsMap 时才回滚插入，否则会生成幻影卡（R3 #7）
+        if (cardExistedInMapBefore && originalCardSnapshot && !newCardsMap.has(cardId)) {
+          newCardsMap.set(cardId, originalCardSnapshot)
+        }
+        if (
+          realIdExistedInMapBefore &&
+          originalRealIdSnapshot &&
+          originalRealIdSnapshot !== cardId &&
+          !newCardsMap.has(originalRealIdSnapshot) &&
+          originalCardSnapshot
+        ) {
+          newCardsMap.set(originalRealIdSnapshot, originalCardSnapshot)
+        }
+
+        const tempCard = newTemporaryCards.get(cardId)
+        if (tempCard?.card._markedForDeletion) {
+          const { _markedForDeletion, ...cardWithoutFlag } = tempCard.card as any
+          newTemporaryCards.set(cardId, {
+            ...tempCard,
+            card: cardWithoutFlag as NodeCard
+          })
+        }
+
+        const updatedOp = newOperationQueue.get(operationId)
+        if (updatedOp) {
+          newOperationQueue.set(operationId, {
+            ...updatedOp,
+            status: 'failed',
+            retryCount: (updatedOp.retryCount || 0) + 1
+          })
+        }
+
+        newProcessingOps.delete(operationId)
+
+        setTimeout(() => {
+          set((state) => {
+            const newOps = new Map(state.operationQueue)
+            newOps.delete(operationId)
+            return { operationQueue: newOps }
+          })
+        }, 10000)
+
+        return {
+          cardsMap: newCardsMap,
+          operationQueue: newOperationQueue,
+          processingOperations: newProcessingOps,
+          temporaryCards: newTemporaryCards
+        }
+      })
+
       set({ error: errorMessage })
       throw error
     }
@@ -783,12 +849,11 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => {
     })
 
     try {
-      // Sync with server
-      await Promise.all(
-        updates.map(({ id, sortOrder }) =>
-          api.updateNodeCard(id, { sortOrder })
-        )
-      )
+      // 逐个同步：任一失败时能确定哪些已成功，便于回滚服务端（D21）。
+      // Promise.all 会让部分成功+部分失败时前后端分叉。
+      for (const { id, sortOrder } of updates) {
+        await api.updateNodeCard(id, { sortOrder })
+      }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : '重新排序卡片失败'
       set({ error: errorMessage })
@@ -802,6 +867,16 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => {
           }
         })
         return { cardsMap: revertedCardsMap }
+      })
+
+      // 尽力回滚已成功同步到服务端的排序，避免前后端分叉（D21）
+      originalCards.forEach((card, id) => {
+        const attempted = updates.find(u => u.id === id)
+        if (attempted && attempted.sortOrder !== card.sortOrder) {
+          api.updateNodeCard(id, { sortOrder: card.sortOrder }).catch(() => {
+            // 回滚失败仅影响服务端顺序，下次 loadNodePool 会纠正
+          })
+        }
       })
     }
   },
@@ -900,6 +975,10 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => {
       newFoldersMap.delete(id)
       return { foldersMap: newFoldersMap }
     })
+
+    // 临时文件夹（id < 0）尚未在服务端创建：无需调用删除 API，也不回滚；
+    // addFolder 完成回调检测到临时文件夹已被移除时会丢弃真实文件夹（D22）。
+    if (id < 0) return
 
     try {
       await api.deleteNodePoolFolder(id)

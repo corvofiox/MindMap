@@ -320,27 +320,120 @@ export function NodeContextMenu({ nodeId, position, onClose }: NodeContextMenuPr
     onClose()
   }
 
+  // 置顶/置底：通过 executeCommand 走标准 store 路径（置 dirty、入撤销历史），
+  // 避免直接 setState 绕过 store 导致不持久化/不回滚（D5）。
+  // 【已知限制】仅本地生效（R3 #5/#6）：本操作只重排本地 store 中 nodes Map 的键
+  // 顺序。增量渲染器按对象添加顺序决定画布 z-order，不会因 Map 重排改变渲染层级；
+  // Yjs 按节点 ID 做字段级 diff 同步，不传递 Map 顺序，因此该顺序不会同步到协作者。
+  // 如需真正的 z-order 同步（画布层级 + 协作传播），需另做渲染层与 Yjs 层支持。
   const handleBringToFront = () => {
-    const { nodes: allNodes } = useCanvasStore.getState()
-    const newNodes = new Map(allNodes)
-    const currentNode = newNodes.get(nodeId)
-    if (currentNode) {
-      newNodes.delete(nodeId)
-      newNodes.set(nodeId, currentNode)
-      useCanvasStore.setState({ nodes: newNodes })
+    const store = useCanvasStore.getState()
+    const currentNode = store.nodes.get(nodeId)
+    if (!currentNode) {
+      onClose()
+      return
     }
+    const originalOrder = Array.from(store.nodes.keys())
+
+    // R4 #5：置顶/置底仅重排本地 nodes Map 顺序（已知限制：不持久化、不同步
+    // Yjs、不改变画布渲染层级），置 dirty 会触发无意义的自动保存。故 markDirty
+    // 传 false（仍入撤销历史，Ctrl+Z 可还原顺序），execute/undo 不再返回 isDirty。
+    store.executeCommand(
+      {
+        type: 'bringToFront',
+        timestamp: Date.now(),
+        execute: () => {
+          const nodes = new Map(useCanvasStore.getState().nodes)
+          const target = nodes.get(nodeId)
+          if (!target) return {}
+          nodes.delete(nodeId)
+          nodes.set(nodeId, target)
+          return { nodes }
+        },
+        undo: () => {
+          const nodes = new Map(useCanvasStore.getState().nodes)
+          const target = nodes.get(nodeId)
+          if (!target) return {}
+          const reordered = new Map<string, typeof target>()
+          for (const id of originalOrder) {
+            if (id === nodeId) {
+              reordered.set(nodeId, target)
+            } else {
+              const n = nodes.get(id)
+              if (n) reordered.set(id, n)
+            }
+          }
+          // D5-fix: 保留置顶后新增的节点（协作者远程添加/本地添加的节点不在
+          // originalOrder 快照里）。若不保留，undo 重建会丢弃它们，且 diff
+          // 会把删除广播进 Yjs doc，造成协作数据丢失。
+          for (const [id, n] of nodes.entries()) {
+            if (!reordered.has(id)) reordered.set(id, n)
+          }
+          return { nodes: reordered }
+        },
+        // R8-fix: 置顶/置底是纯本地顺序操作(不持久化、不同步 Yjs),
+        // undo 恢复顺序同样不产生内容变化——标记后 store 的 undo/redo
+        // 分支不置 dirty,避免触发冗余自动保存。
+        pureOrderChange: true,
+      },
+      false,
+      false
+    )
     onClose()
   }
 
+  // 置底与置顶同理：仅重排本地 nodes Map 顺序，仅本地生效，不同步 Yjs、
+  // 不改变画布渲染层级（R3 #5/#6，详见 handleBringToFront 注释）。
   const handleSendToBack = () => {
-    const { nodes: allNodes } = useCanvasStore.getState()
-    const newNodes = new Map(allNodes)
-    const currentNode = newNodes.get(nodeId)
-    if (currentNode) {
-      newNodes.delete(nodeId)
-      const orderedNodes = new Map([[nodeId, currentNode], ...Array.from(newNodes.entries())])
-      useCanvasStore.setState({ nodes: orderedNodes })
+    const store = useCanvasStore.getState()
+    const currentNode = store.nodes.get(nodeId)
+    if (!currentNode) {
+      onClose()
+      return
     }
+    const originalOrder = Array.from(store.nodes.keys())
+
+    // R4 #5：与置顶同理，markDirty=false（仅本地 Map 重排，无意义保存；仍可撤销）。
+    store.executeCommand(
+      {
+        type: 'sendToBack',
+        timestamp: Date.now(),
+        execute: () => {
+          const nodes = new Map(useCanvasStore.getState().nodes)
+          const target = nodes.get(nodeId)
+          if (!target) return {}
+          nodes.delete(nodeId)
+          const reordered = new Map<string, typeof target>([[nodeId, target]])
+          for (const [id, n] of nodes.entries()) {
+            reordered.set(id, n)
+          }
+          return { nodes: reordered }
+        },
+        undo: () => {
+          const nodes = new Map(useCanvasStore.getState().nodes)
+          const target = nodes.get(nodeId)
+          if (!target) return {}
+          const reordered = new Map<string, typeof target>()
+          for (const id of originalOrder) {
+            if (id === nodeId) {
+              reordered.set(nodeId, target)
+            } else {
+              const n = nodes.get(id)
+              if (n) reordered.set(id, n)
+            }
+          }
+          // D5-fix: 保留置底后新增的节点（同置顶 undo，防协作数据丢失）
+          for (const [id, n] of nodes.entries()) {
+            if (!reordered.has(id)) reordered.set(id, n)
+          }
+          return { nodes: reordered }
+        },
+        // R8-fix: 同置顶——纯本地顺序操作,undo 不置 dirty
+        pureOrderChange: true,
+      },
+      false,
+      false
+    )
     onClose()
   }
 

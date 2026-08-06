@@ -14,12 +14,17 @@ import { Z_INDEX } from '@/constants'
 import { useNodePoolStore } from '../stores/useNodePoolStore'
 import { useUIStore } from '@/store/useUIStore'
 
+// 转义正则特殊字符，防止搜索关键词含特殊字符时 new RegExp 抛 SyntaxError（D3）
+function escapeRegExp(input: string): string {
+  return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
 function SearchHighlighter({ text, query }: { text: string; query: string }) {
   if (!query.trim() || !text.toLowerCase().includes(query.toLowerCase())) {
     return <span>{containsHTML(text) ? <span dangerouslySetInnerHTML={{ __html: safeHTML(text) }} /> : text}</span>
   }
 
-  const parts = text.split(new RegExp(`(${query})`, 'gi'))
+  const parts = text.split(new RegExp(`(${escapeRegExp(query)})`, 'gi'))
   return (
     <span>
       {parts.map((part, index) => {

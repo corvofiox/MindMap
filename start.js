@@ -254,6 +254,18 @@ async function setupEnvironmentFiles() {
       logSuccess(`Generated and set AI_KEY_SECRET for Backend`);
     }
 
+    // R5 #1: TRUST_PROXY / CSRF_COOKIE_SECURE 从环境透传到生成的 .env——
+    // Docker/反代部署时通过环境变量注入即可生效（.env.example 中有注释说明）
+    if (process.env.TRUST_PROXY) {
+      logStep('INFO', 'Using TRUST_PROXY from environment variable');
+      updateEnvFile(backendTargetPath, 'TRUST_PROXY', process.env.TRUST_PROXY);
+    }
+
+    if (process.env.CSRF_COOKIE_SECURE) {
+      logStep('INFO', 'Using CSRF_COOKIE_SECURE from environment variable');
+      updateEnvFile(backendTargetPath, 'CSRF_COOKIE_SECURE', process.env.CSRF_COOKIE_SECURE);
+    }
+
   } else {
     logWarning(`Backend .env.example not found: ${backendExamplePath}`);
   }

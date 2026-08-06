@@ -42,6 +42,8 @@ export function Sidebar({ open }: SidebarProps) {
   const [newFolderName, setNewFolderName] = useState('')
 
   useEffect(() => {
+    // 侧边栏收起时不启动 5s 轮询（D8）
+    if (!open) return
     if (!currentProject?.id) return
 
     const interval = setInterval(() => {
@@ -49,7 +51,7 @@ export function Sidebar({ open }: SidebarProps) {
     }, 5000)
 
     return () => clearInterval(interval)
-  }, [currentProject?.id, refreshCanvasesSilent])
+  }, [open, currentProject?.id, refreshCanvasesSilent])
 
   // 计算项目统计数据
   const projectStats = useMemo(() => {

@@ -27,8 +27,18 @@ export function getUserId(obj: Record<string, any> | null | undefined): number |
 
 /**
  * 将下划线命名转换为驼峰命名
+ *
+ * B19: 递归深度受限。列表接口（如 GET /projects/:id/canvases）会对每条记录
+ * 调用本函数，若记录携带深层嵌套的大对象，无界递归既浪费 CPU 也可能爆栈。
+ * 超过 MAX_CAMEL_DEPTH 层的子树保持原样（不再改键名）——业务数据的键名
+ * 转换只发生在浅层（画布/节点/项目等实体通常不超过 3-4 层）。
  */
-function toCamelCase(obj: Record<string, any>): Record<string, any> {
+const MAX_CAMEL_DEPTH = 8
+
+function toCamelCase(obj: Record<string, any>, depth: number = 0): Record<string, any> {
+  if (depth >= MAX_CAMEL_DEPTH) {
+    return obj
+  }
   const result: Record<string, any> = {}
 
   for (const key in obj) {
@@ -38,10 +48,10 @@ function toCamelCase(obj: Record<string, any>): Record<string, any> {
 
       // 递归处理嵌套对象
       if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
-        result[camelKey] = toCamelCase(value)
+        result[camelKey] = toCamelCase(value, depth + 1)
       } else if (Array.isArray(value)) {
         result[camelKey] = value.map(item =>
-          typeof item === 'object' && item !== null ? toCamelCase(item) : item
+          typeof item === 'object' && item !== null ? toCamelCase(item, depth + 1) : item
         )
       } else {
         result[camelKey] = value

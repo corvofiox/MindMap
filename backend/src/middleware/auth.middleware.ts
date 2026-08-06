@@ -17,8 +17,9 @@ export interface AuthRequest extends Request {
 
 export async function authenticate(req: AuthRequest, res: Response, next: NextFunction) {
   try {
+    // B7: 仅接受 Authorization 头携带 JWT。query ?token= 会泄漏到访问日志/
+    // Referer，且 REST 场景无此必要（WebSocket 的 ?token= 走独立鉴权路径）。
     const token = req.headers.authorization?.replace('Bearer ', '')
-      || (req.query.token as string | undefined)
 
     if (!token) {
       return res.status(401).json({ success: false, error: '未提供令牌' })

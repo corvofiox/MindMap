@@ -79,7 +79,10 @@ export async function migrateCanvasesToYjs(): Promise<number> {
 
       await db
         .update(canvases)
-        .set({ yjsUpdate: base64, updatedAt: Math.floor(Date.now() / 1000) })
+        // B11: 用毫秒时间戳。与运行时持久化（persistCanvasState 写 Date.now()）
+        // 和前端缩略图乐观锁（clientVersion）精度保持一致，避免把毫秒级版本
+        // 倒退回秒级导致并发 PUT 的 lte 乐观锁检查全部通过。
+        .set({ yjsUpdate: base64, updatedAt: Date.now() })
         .where(eq(canvases.id, row.id))
 
       migrated += 1

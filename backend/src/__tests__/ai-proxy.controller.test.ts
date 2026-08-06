@@ -188,8 +188,59 @@ describe('AI Proxy Controller', () => {
       mockFindFirst.mockResolvedValue(null)
       const res = await request(app).post('/api/ai/providers').send({
         providerId: 'custom',
-        apiKey: 'sk-x',
+        apiKey: 'sk-new',
         baseUrl: 'https://example.com/v1',
+      })
+      expect(res.status).toBe(200)
+    })
+
+    // R4 #4: https 回环地址是合法的本地 https 端点（如本地 https LLM 网关），
+    // 与 http 回环同等信任，必须放行（含 IPv4-mapped IPv6 回环形式）。
+    it.each([
+      'https://localhost:8443', // 域名，解析到回环
+      'https://127.0.0.1:8443', // IPv4 回环
+      'https://[::1]:8443', // IPv6 回环
+      'https://[::ffff:127.0.0.1]:8443', // mapped 回环 点分
+      'https://[::ffff:7f00:1]:8443', // mapped 回环 十六进制
+    ])('should allow https loopback base url: %s', async (okUrl) => {
+      mockFindFirst.mockResolvedValue(null)
+      const res = await request(app).post('/api/ai/providers').send({
+        providerId: 'custom',
+        apiKey: 'sk-new',
+        baseUrl: okUrl,
+      })
+      expect(res.status).toBe(200)
+    })
+
+    // 回归测试（Verifier 2026-08-06 发现）：WHATWG URL 会把
+    // ::ffff:127.0.0.1 规范化为十六进制 ::ffff:7f00:1，旧的点分正则
+    // 匹配不到 → IPv4-mapped IPv6 绕过 SSRF。修复采用完整展开法，
+    // 所有 mapped 形式（点分/十六进制）都必须被拒绝。
+    // 注意：mapped 回环（::ffff:127.0.0.1 / ::ffff:7f00:1）自 R4 #4 起
+    // 按回环放行（见上方 allow 用例），此处仅保留非回环受限段。
+    it.each([
+      'https://[::ffff:a9fe:a9fe]/', // 169.254.169.254 云元数据
+      'https://[::ffff:a00:1]/', // 10.0.0.1 私网
+      'https://[::ffff:c0a8:1]/', // 192.168.0.1 私网
+      'https://[::ffff:ac10:1]/', // 172.16.0.1 私网
+      'https://[::ffff:6440:1]/', // 100.64.0.1 CGNAT
+      'https://[::ffff:c612:1]/', // 198.18.0.1 基准测试段
+      'https://[fe80::1]/', // IPv6 链路本地
+    ])('should reject IPv4-mapped/restricted IPv6 base url: %s', async (badUrl) => {
+      const res = await request(app).post('/api/ai/providers').send({
+        providerId: 'custom',
+        apiKey: 'sk-new',
+        baseUrl: badUrl,
+      })
+      expect(res.status).toBe(400)
+    })
+
+    it('should allow public IPv6 base url', async () => {
+      mockFindFirst.mockResolvedValue(null)
+      const res = await request(app).post('/api/ai/providers').send({
+        providerId: 'custom',
+        apiKey: 'sk-test',
+        baseUrl: 'https://[2606:4700::1111]/v1',
       })
       expect(res.status).toBe(200)
     })

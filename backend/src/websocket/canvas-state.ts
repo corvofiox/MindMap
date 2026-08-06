@@ -49,6 +49,11 @@ export interface YjsCanvasState {
   persistError: { message: string; attempts: number } | null
   /** Bound update listener used to detect dirty state and broadcast. */
   updateListener: (update: Uint8Array, origin: unknown) => void
+  /**
+   * 最近一次活动时间（load/merge/update 都会刷新），用于 A13 空闲回收：
+   * 长时间无活动且已完全持久化的状态会被移除，防止纯 REST 场景内存无限增长。
+   */
+  lastActivityAt: number
 }
 
 const canvasStates = new Map<number, YjsCanvasState>()
@@ -138,11 +143,13 @@ function createCanvasState(canvasId: number): YjsCanvasState {
     lastPersistedUpdateCount: 0,
     isPersisting: false,
     persistError: null,
+    lastActivityAt: Date.now(),
     updateListener: (_update, _origin) => {
       // Mark dirty: any update advances the high-water counter.
       const s = canvasStates.get(canvasId)
       if (!s) return
       s.lastSeenUpdateCount++
+      s.lastActivityAt = Date.now()
       schedulePersistCanvasState(canvasId)
     },
   }
@@ -150,6 +157,7 @@ function createCanvasState(canvasId: number): YjsCanvasState {
   // file stays free of room/socket concerns. The listener here only tracks dirtiness.
   doc.on('update', state.updateListener)
   canvasStates.set(canvasId, state)
+  ensureIdleReclaimTimer()
   return state
 }
 
@@ -177,6 +185,67 @@ export function removeCanvasState(canvasId: number): void {
   if (timeout) {
     clearTimeout(timeout)
     persistTimeouts.delete(canvasId)
+  }
+}
+
+// A13: 空闲回收——WS 房间拆除时会调用 removeCanvasState，但纯 REST 路径
+// （loadCanvasStateFromDb 由 POST /data、PUT yjsData 触发）没有 teardown，
+// canvasStates 会无限增长。定期清扫满足以下全部条件的状态：
+//   1. 已完全持久化（内存 doc 不领先于 DB）
+//   2. 无持久化错误（有错误时保留内存状态，避免丢弃未落盘数据）
+//   3. 空闲超过阈值（load/merge/update 都会刷新 lastActivityAt）
+//   4. 无活跃 WS 房间（有活跃用户时不回收，避免破坏房间广播监听）
+// 动态导入 websocket/index.js 查询房间状态（静态导入会形成循环依赖）；
+// 导入失败时保守跳过该画布（不回收）。
+const IDLE_STATE_RECLAIM_MS = 5 * 60 * 1000
+let idleReclaimTimer: ReturnType<typeof setInterval> | null = null
+
+async function reclaimIdleCanvasStates(): Promise<void> {
+  const now = Date.now()
+  for (const [canvasId, state] of Array.from(canvasStates.entries())) {
+    if (state.persistError) continue
+    if (state.isPersisting) continue
+    if (state.lastSeenUpdateCount > state.lastPersistedUpdateCount) continue
+    if (now - state.lastActivityAt < IDLE_STATE_RECLAIM_MS) continue
+
+    let roomActive = true
+    try {
+      const wsModule = await import('../websocket/index.js')
+      // #5: await import 是异步的，期间该画布可能收到新 update（变 dirty）、
+      // 开始持久化或已被替换——二次复检全部回收条件，任一不满足即放弃回收，
+      // 避免把刚产生新编辑（尚未落盘）的活跃 doc 从内存中清掉。
+      const fresh = canvasStates.get(canvasId)
+      if (!fresh || fresh !== state) continue
+      if (fresh.persistError || fresh.isPersisting) continue
+      if (fresh.lastSeenUpdateCount > fresh.lastPersistedUpdateCount) continue
+      if (Date.now() - fresh.lastActivityAt < IDLE_STATE_RECLAIM_MS) continue
+      roomActive = wsModule.getCanvasActiveUsers(canvasId).length > 0
+    } catch {
+      // 导入失败：保守不回收
+    }
+    if (roomActive) continue
+
+    log('Reclaiming idle canvas state', { canvasId, idleMs: now - state.lastActivityAt })
+    removeCanvasState(canvasId)
+  }
+
+  // 全部清空后停掉定时器，避免空转
+  if (canvasStates.size === 0 && idleReclaimTimer) {
+    clearInterval(idleReclaimTimer)
+    idleReclaimTimer = null
+  }
+}
+
+function ensureIdleReclaimTimer(): void {
+  if (idleReclaimTimer) return
+  idleReclaimTimer = setInterval(() => {
+    reclaimIdleCanvasStates().catch((err) => {
+      logError('Idle canvas state reclaim failed', err)
+    })
+  }, IDLE_STATE_RECLAIM_MS)
+  // 不阻止进程退出（测试/短生命周期进程场景）
+  if (typeof idleReclaimTimer.unref === 'function') {
+    idleReclaimTimer.unref()
   }
 }
 
@@ -259,9 +328,17 @@ export async function loadCanvasStateFromDb(canvasId: number): Promise<YjsCanvas
         canvasId,
         error: error instanceof Error ? error.message : String(error),
       })
-      // Do NOT mark as loaded on failure so the next call retries the load
-      // instead of returning a permanently empty doc that could overwrite
-      // the real data if the user starts editing.
+      // B14: DB 读失败必须向调用方抛错（WS 连接被拒绝、REST 请求返回 500），
+      // 而不是返回一个空 doc 让连接继续——空 doc 一旦被客户端编辑并 persist，
+      // 就会覆盖数据库中的真实数据。loadCanvasStateFromDb 的所有调用方
+      // （WS 握手、applyUpdateToCanvas、mergeJsonSnapshotIntoCanvas）都以
+      // 抛错为失败信号。失败时不标记 loaded，下次调用会重新尝试加载；
+      // 空 state 的 dirty 计数为 0，periodic flush 不会把它写入数据库。
+      throw new Error(
+        `Failed to load canvas state for canvas ${canvasId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      )
     } finally {
       loadingPromises.delete(canvasId)
     }
@@ -441,6 +518,16 @@ export async function mergeJsonSnapshotIntoCanvas(
     connections?: unknown[]
   },
   upsertOnly: boolean = false,  // NEW parameter
+  // R4 #11: 客户端声明删除的实体（删除声明）。upsertOnly 模式下这些删除
+  // 仍会执行——删除声明是"知情且主动删除"的明确信号，不应被保护逻辑吞掉
+  // （否则"快照全空 + 删除声明"等场景下客户端明确删除的实体复活）；
+  // 未声明的缺失实体继续受 upsertOnly 保护（可能是他人编辑）。
+  deletedIds?: {
+    nodes?: string[]
+    groups?: string[]
+    domains?: string[]
+    connections?: string[]
+  },
 ): Promise<boolean> {
   const state = await loadCanvasStateFromDb(canvasId)
   try {
@@ -448,6 +535,7 @@ export async function mergeJsonSnapshotIntoCanvas(
     const syncCollection = (
       target: Y.Map<Y.Map<unknown>>,
       items: unknown[] | undefined,
+      declaredDeletedIds: string[] | undefined,
     ) => {
       if (!Array.isArray(items)) return
       // Build the set of ids present in the incoming snapshot.
@@ -477,13 +565,21 @@ export async function mergeJsonSnapshotIntoCanvas(
             target.delete(existingId)
           }
         }
+      } else if (declaredDeletedIds && declaredDeletedIds.length > 0) {
+        // R4 #11: upsertOnly 模式下仅删除客户端显式声明删除的实体。
+        const declared = new Set(declaredDeletedIds)
+        for (const existingId of Array.from(target.keys())) {
+          if (!incomingIds.has(existingId) && declared.has(existingId)) {
+            target.delete(existingId)
+          }
+        }
       }
     }
     state.doc.transact(() => {
-      syncCollection(collections.nodes, snapshot.nodes)
-      syncCollection(collections.groups, snapshot.groups)
-      syncCollection(collections.domains, snapshot.domains)
-      syncCollection(collections.connections, snapshot.connections)
+      syncCollection(collections.nodes, snapshot.nodes, deletedIds?.nodes)
+      syncCollection(collections.groups, snapshot.groups, deletedIds?.groups)
+      syncCollection(collections.domains, snapshot.domains, deletedIds?.domains)
+      syncCollection(collections.connections, snapshot.connections, deletedIds?.connections)
     })
     return true
   } catch (err) {
@@ -556,6 +652,21 @@ export function snapshotMissingDocEntities(
     [collections.domains, snapshot.domains, deletedIds ? new Set(deletedIds.domains ?? []) : undefined],
     [collections.connections, snapshot.connections, deletedIds ? new Set(deletedIds.connections ?? []) : undefined],
   ]
+
+  const providedPairs = pairs.filter(([, items]) => Array.isArray(items))
+  if (providedPairs.length === 0) return false
+
+  // B1: 显式清空判定——客户端提供的所有集合均为空数组、且无任何删除声明时，
+  // 视为"清空画布"的明确意图，允许全量合并执行删除（否则空快照会被误判为
+  // 过期快照而 upsertOnly，清空永远不生效）。仅单用户场景生效：活跃房间/
+  // 协作宽限期由 shouldUpsertOnlyForSnapshot 兜底，仍会走 upsertOnly。
+  const allProvidedEmpty = providedPairs.every(([, items]) => (items as unknown[]).length === 0)
+  const deletionDeclared =
+    (deletedIds?.nodes && deletedIds.nodes.length > 0) ||
+    (deletedIds?.groups && deletedIds.groups.length > 0) ||
+    (deletedIds?.domains && deletedIds.domains.length > 0) ||
+    (deletedIds?.connections && deletedIds.connections.length > 0)
+  if (allProvidedEmpty && !deletionDeclared) return false
 
   return pairs.some(([target, items, clientDeleted]) => {
     // 未提供的集合不会触发删除（与 syncCollection 的 Array.isArray 守卫一致）。

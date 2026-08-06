@@ -2,11 +2,13 @@
 // Handles persistent storage of AI chat history per canvas
 
 import { Router } from 'express'
+import type { Response } from 'express'
 import { db } from '../database/connection.js'
-import { aiConversations } from '../database/schema.js'
+import { aiConversations, canvases, projects, projectMembers } from '../database/schema.js'
 import { eq, and } from 'drizzle-orm'
 import { authenticate, type AuthRequest } from '../middleware/auth.middleware.js'
 import { asyncHandler } from '../middleware/error.middleware.js'
+import { getProperty } from '../utils/transformResponse.js'
 
 // Message type matching frontend
 interface Message {
@@ -26,6 +28,58 @@ function safeJsonParse(messages: string): Message[] {
   }
 }
 
+// B5: 校验画布存在且当前用户对所属项目有访问权（owner 或成员），
+// 防止通过画布 ID 越权读写他人 AI 对话。
+async function checkCanvasAccess(
+  canvasId: number,
+  userId: number
+): Promise<{ allowed: boolean; exists: boolean }> {
+  const canvas = await db.query.canvases.findFirst({
+    where: eq(canvases.id, canvasId),
+  })
+  if (!canvas) {
+    return { allowed: false, exists: false }
+  }
+
+  const projectId = getProperty<number>(canvas, 'project_id', 'projectId') || canvas.projectId
+  if (!projectId) {
+    return { allowed: false, exists: true }
+  }
+
+  const project = await db.query.projects.findFirst({
+    where: eq(projects.id, projectId),
+  })
+  if (!project) {
+    return { allowed: false, exists: true }
+  }
+
+  const projectOwnerId = getProperty<number>(project, 'owner_id', 'ownerId') || project.ownerId
+  if (projectOwnerId === userId) {
+    return { allowed: true, exists: true }
+  }
+
+  const member = await db.query.projectMembers.findFirst({
+    where: and(
+      eq(projectMembers.projectId, projectId),
+      eq(projectMembers.userId, userId)
+    ),
+  })
+
+  return { allowed: !!member, exists: true }
+}
+
+async function assertCanvasAccess(canvasId: number, userId: number, res: Response): Promise<boolean> {
+  const access = await checkCanvasAccess(canvasId, userId)
+  if (!access.allowed) {
+    res.status(access.exists ? 403 : 404).json({
+      success: false,
+      error: access.exists ? '无权访问该画布' : '画布未找到',
+    })
+    return false
+  }
+  return true
+}
+
 // Create router
 const router = Router()
 
@@ -42,6 +96,9 @@ router.get(
     if (!userId || isNaN(canvasId)) {
       return res.status(400).json({ success: false, error: 'Invalid parameters' })
     }
+
+    // B5: 画布访问权校验
+    if (!(await assertCanvasAccess(canvasId, userId, res))) return
 
     const conversation = await db.query.aiConversations.findFirst({
       where: and(
@@ -86,6 +143,9 @@ router.post(
       return res.status(400).json({ success: false, error: 'Invalid messages format' })
     }
 
+    // B5: 画布访问权校验
+    if (!(await assertCanvasAccess(canvasId, userId, res))) return
+
     const existing = await db.query.aiConversations.findFirst({
       where: and(
         eq(aiConversations.canvasId, canvasId),
@@ -126,6 +186,9 @@ router.delete(
     if (!userId || isNaN(canvasId)) {
       return res.status(400).json({ success: false, error: 'Invalid parameters' })
     }
+
+    // B5: 画布访问权校验
+    if (!(await assertCanvasAccess(canvasId, userId, res))) return
 
     await db
       .delete(aiConversations)

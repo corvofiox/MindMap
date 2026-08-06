@@ -357,15 +357,23 @@ export async function fetchModels(
 
   let response: Response
   try {
-    response = await fetch('/api/ai/models', {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        providerId: provider.id,
-        urlPath: provider.modelsEndpoint,
-        baseUrl: customBaseUrl || undefined,
-      }),
-    })
+    // C10: 连接阶段超时兜底（20s），防止服务端无响应时 fetch 永久挂起
+    const controller = new AbortController()
+    const connectTimer = setTimeout(() => controller.abort(), 20000)
+    try {
+      response = await fetch('/api/ai/models', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          providerId: provider.id,
+          urlPath: provider.modelsEndpoint,
+          baseUrl: customBaseUrl || undefined,
+        }),
+        signal: controller.signal,
+      })
+    } finally {
+      clearTimeout(connectTimer)
+    }
   } catch {
     throw new Error('网络连接失败，无法获取模型列表')
   }
@@ -391,6 +399,9 @@ export async function fetchModels(
 }
 
 // 全局 AbortController 用于中断请求
+// C16: 模块级单例是有意设计——当前 UI 同时最多只有一个流式请求（AiSidebar），
+// 新请求发起时 abort 旧请求（depth>0 的递归工具轮次不中断外层）。
+// 若未来支持多面板并发请求，需要改为 Map<key, AbortController>。
 let currentAbortController: AbortController | null = null
 
 // 中断当前请求
@@ -403,306 +414,6 @@ export function abortCurrentRequest() {
 
 // 工具调用最大轮数，防止模型无限请求工具导致死循环
 export const MAX_TOOL_ROUNDS = 5
-
-// 发送聊天消息（支持工具调用和中断）
-export async function sendChatMessageWithTools(
-  providerId: string,
-  config: AIConfig,
-  messages: Array<Record<string, unknown>>,
-  enableTools: boolean = true,
-  depth: number = 0
-): Promise<{ content: string; reasoningContent?: string; toolResults?: Array<{ tool: string; result: unknown }> }> {
-  // 创建新的 AbortController（递归调用时不中断外层请求）
-  if (depth === 0) {
-    abortCurrentRequest() // 先中断之前的请求
-  }
-  currentAbortController = new AbortController()
-  const signal = currentAbortController.signal
-  const controller = currentAbortController
-
-  const provider = AI_PROVIDERS.find((p) => p.id === providerId)
-  if (!provider) {
-    throw new Error('未知的 AI 提供商')
-  }
-
-  let urlPath: string
-  let body: Record<string, unknown>
-
-  // 根据供应商决定是否使用 strict 模式
-  // DeepSeek 支持 strict 模式，GLM 等不支持（可能影响指令遵循能力）
-  const useStrict = providerId === 'deepseek'
-  const tools = enableTools ? getToolsForAI(useStrict) : []
-
-  // 根据不同提供商构建请求体和 URL
-  if (providerId === 'gemini') {
-    // Gemini 特殊处理
-    urlPath = `/models/${config.model}:generateContent`
-    // 分离 system message 和对话消息
-    const systemMessage = messages.find((m) => m.role === 'system')
-    const chatMessages = messages.filter((m) => m.role !== 'system')
-
-    body = {
-      contents: chatMessages.map((m) => ({
-        role: m.role === 'assistant' ? 'model' : 'user',
-        parts: [{ text: m.content }],
-      })),
-      generationConfig: {
-        temperature: config.temperature,
-        maxOutputTokens: config.maxTokens,
-      },
-    }
-
-    if (systemMessage) {
-      (body as Record<string, unknown>).systemInstruction = {
-        parts: [{ text: systemMessage.content }],
-      }
-    }
-  } else if (providerId === 'ollama') {
-    urlPath = provider.chatEndpoint
-    body = {
-      model: config.model,
-      messages: messages,
-      stream: false,
-      options: {
-        temperature: config.temperature,
-        num_predict: config.maxTokens,
-      },
-    }
-  } else {
-    // OpenAI 兼容格式（支持工具调用）
-    // DeepSeek strict 模式需要使用 Beta 端点
-    let effectiveUrlPath = provider.chatEndpoint
-    if (providerId === 'deepseek' && useStrict) {
-      effectiveUrlPath = '/beta' + provider.chatEndpoint
-    }
-    urlPath = effectiveUrlPath
-    body = {
-      model: config.model,
-      messages: messages,
-      temperature: config.temperature,
-      max_tokens: config.maxTokens,
-    }
-
-    // DeepSeek 特殊处理
-    if (providerId === 'deepseek') {
-      const supportsThinking = config.model.includes('deepseek')
-      const isThinkingEnabled = supportsThinking && config.enableThinking !== false
-
-      // 思考模式下不支持 temperature、top_p、presence_penalty、frequency_penalty
-      if (isThinkingEnabled) {
-        delete (body as Record<string, unknown>).temperature
-        delete (body as Record<string, unknown>).top_p
-        delete (body as Record<string, unknown>).presence_penalty
-        delete (body as Record<string, unknown>).frequency_penalty
-      }
-
-      // JSON Output 模式
-      if (config.responseFormat === 'json_object') {
-        (body as Record<string, unknown>).response_format = { type: 'json_object' }
-      }
-
-      // 思考模式控制（顶级参数，非 extra_body）
-      if (supportsThinking && config.enableThinking === false) {
-        (body as Record<string, unknown>).thinking = { type: 'disabled' }
-      } else if (supportsThinking) {
-        (body as Record<string, unknown>).thinking = { type: 'enabled' }
-      }
-
-      // 思考强度控制（顶级参数）
-      if (isThinkingEnabled && config.reasoningEffort) {
-        (body as Record<string, unknown>).reasoning_effort = config.reasoningEffort
-      }
-    }
-
-    // GLM 特殊处理
-    if (providerId === 'zhipu') {
-      // GLM 深度思考模式
-      // GLM-5、GLM-4.7 默认开启思考，不需要显式设置
-      // 只在需要禁用思考或设置特定参数时才设置
-      if (config.glmConfig?.thinking) {
-        (body as Record<string, unknown>).thinking = config.glmConfig.thinking
-      } else if (config.enableThinking === false) {
-        // 明确禁用思考模式
-        (body as Record<string, unknown>).thinking = { type: 'disabled' }
-      }
-      // 注意：不设置 thinking 时，GLM-5/4.7 默认开启思考
-
-      // GLM 保留式思考 (Preserved Thinking)
-      // 在工具调用之间保留 reasoning_content，保持推理连贯性
-      if (config.glmConfig?.clearThinking === false) {
-        const thinkingBody = (body as Record<string, unknown>).thinking as Record<string, unknown> || {}
-        thinkingBody.clear_thinking = false
-          ; (body as Record<string, unknown>).thinking = thinkingBody
-      }
-
-      // JSON Output 模式（结构化输出）
-      if (config.responseFormat === 'json_object') {
-        (body as Record<string, unknown>).response_format = { type: 'json_object' }
-      }
-    }
-
-    // Moonshot 特殊处理
-    if (providerId === 'moonshot') {
-      // Moonshot 兼容 OpenAI SDK，支持工具调用、JSON Output
-      // kimi-k2 系列支持深度思考，kimi-k1.5 也支持但不支持工具调用
-      const supportsToolUse = !config.model.includes('kimi-k1')
-
-      // 某些 Moonshot 模型（如 kimi-k2/k2.5 系列、kimi-k1.5 系列）只支持 temperature: 1
-      // 如果用户设置了其他值，需要强制设置为 1
-      if (config.model.includes('kimi-k2') || config.model.includes('kimi-k1')) {
-        (body as Record<string, unknown>).temperature = 1
-      }
-
-      // JSON Output 模式
-      if (config.responseFormat === 'json_object') {
-        (body as Record<string, unknown>).response_format = { type: 'json_object' }
-      }
-
-      // 注意：Moonshot 的 reasoning_content 是模型自动返回的，不需要额外参数开启
-      // 工具调用只在支持的模型上启用
-      if (!supportsToolUse && tools.length > 0) {
-        // k1.5 不支持工具调用，移除工具
-        delete (body as Record<string, unknown>).tools
-        delete (body as Record<string, unknown>).tool_choice
-      }
-
-      // Partial Mode：预填模型回复来引导输出
-      // 参考：https://platform.moonshot.cn/docs/api/partial
-      if (config.moonshotConfig?.partial) {
-        // 检查最后一条消息是否是 assistant 角色
-        const lastMessage = messages[messages.length - 1]
-        if (lastMessage && lastMessage.role === 'assistant') {
-          (lastMessage as Record<string, unknown>).partial = true
-          // 可选：添加 name 字段强化角色一致性
-          if (config.moonshotConfig.name) {
-            (lastMessage as Record<string, unknown>).name = config.moonshotConfig.name
-          }
-        }
-      }
-    }
-
-    // 添加工具定义
-    if (tools.length > 0) {
-      (body as Record<string, unknown>).tools = tools
-        ; (body as Record<string, unknown>).tool_choice = 'auto'
-    }
-  }
-
-  try {
-    await apiClient.ensureCsrfToken()
-    let response: Response
-    try {
-      response = await fetch('/api/ai/chat', {
-        method: 'POST',
-        headers: apiClient.getAuthHeaders(),
-        body: JSON.stringify({
-          providerId,
-          urlPath,
-          baseUrl: config.baseUrl || undefined,
-          body,
-        }),
-        signal,
-      })
-    } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') {
-        throw new Error('请求已中断')
-      }
-      throw new Error('网络连接失败')
-    }
-
-    if (!response.ok) {
-      let message = `请求失败 (${response.status})`
-      try {
-        const data = (await response.json()) as { error?: string }
-        if (data?.error) {
-          message = data.error
-        }
-      } catch {
-        // ignore parse errors
-      }
-      throw new Error(message)
-    }
-
-    const data = await response.json()
-    const rawMessage = (data as { choices: Array<{ message: Record<string, unknown> }> }).choices?.[0]?.message
-    const { content, reasoningContent, toolCalls } = provider.parseChatResponse(data)
-
-    // 执行工具调用
-    const toolResults: Array<{ tool: string; result: unknown }> = []
-    if (toolCalls && toolCalls.length > 0) {
-      // 工具调用轮次限制，防止死循环
-      if (depth >= MAX_TOOL_ROUNDS) {
-        throw new Error(`工具调用超过 ${MAX_TOOL_ROUNDS} 轮上限，已停止`)
-      }
-      for (const toolCall of toolCalls) {
-        const result = await executeToolCall(toolCall.name, toolCall.arguments)
-        toolResults.push({ tool: toolCall.name, result })
-      }
-
-      // 将工具结果返回给 AI 继续处理
-      // 使用标准 OpenAI tool_calls + role:tool 格式
-      if (toolResults.length > 0) {
-        const assistantMessage: Record<string, unknown> = {
-          role: 'assistant',
-          content: content || '',
-        }
-
-        // DeepSeek 思考模式要求：工具调用轮次必须回传 reasoning_content
-        if (reasoningContent) {
-          assistantMessage.reasoning_content = reasoningContent
-        }
-
-        // 从原始响应中提取 tool_calls（包含 id）
-        const rawToolCalls = (rawMessage?.tool_calls as Array<{
-          id: string
-          type: string
-          function: { name: string; arguments: string }
-        }>) || []
-
-        assistantMessage.tool_calls = rawToolCalls.length > 0
-          ? rawToolCalls
-          : toolCalls.map((tc, idx) => ({
-            id: `call_${idx}`,
-            type: 'function',
-            function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
-          }))
-
-        // 构建 role:tool 消息（每条工具调用对应一条 tool 消息）
-        const toolResultMessages = toolCalls.map((tc, idx) => ({
-          role: 'tool',
-          tool_call_id: rawToolCalls[idx]?.id || `call_${idx}`,
-          content: JSON.stringify(toolResults[idx]?.result),
-        }))
-
-        // 递归调用获取最终响应（带轮次上限）
-        const finalResponse = await sendChatMessageWithTools(
-          providerId,
-          config,
-          [...messages, assistantMessage, ...toolResultMessages],
-          true,
-          depth + 1
-        )
-
-        // 合并思维链内容
-        return {
-          ...finalResponse,
-          reasoningContent: reasoningContent || finalResponse.reasoningContent,
-        }
-      }
-    }
-
-    return { content, reasoningContent, toolResults: toolResults.length > 0 ? toolResults : undefined }
-  } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') {
-      throw new Error('请求已中断')
-    }
-    throw error
-  } finally {
-    if (currentAbortController === controller) {
-      currentAbortController = null
-    }
-  }
-}
 
 // 流式输出回调类型
 export interface StreamCallbacks {
@@ -946,7 +657,10 @@ export async function sendStreamChatMessage(
 
   // 空闲超时（120 秒无数据则视为连接挂死）
   const STREAM_IDLE_TIMEOUT_MS = 120000
+  // C10: 连接阶段超时（30 秒未收到响应头则视为连接挂起），与空闲超时互补
+  const CONNECT_TIMEOUT_MS = 30000
   let timedOut = false
+  let connectTimedOut = false
   let idleTimer: ReturnType<typeof setTimeout> | null = null
   const armIdleTimer = () => {
     if (idleTimer) clearTimeout(idleTimer)
@@ -965,6 +679,15 @@ export async function sendStreamChatMessage(
   try {
     await apiClient.ensureCsrfToken()
     let response: Response
+    // C10: fetch 挂起保护——连接阶段（响应头未返回）超时即 abort，
+    // 避免服务端不响应时请求永久悬挂
+    let responseReceived = false
+    const connectTimer = setTimeout(() => {
+      if (!responseReceived) {
+        connectTimedOut = true
+        controller.abort()
+      }
+    }, CONNECT_TIMEOUT_MS)
     try {
       response = await fetch('/api/ai/chat', {
         method: 'POST',
@@ -980,11 +703,14 @@ export async function sendStreamChatMessage(
         }),
         signal,
       })
+      responseReceived = true
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
-        throw new Error(timedOut ? '请求超时' : '请求已中断')
+        throw new Error(connectTimedOut ? '连接超时，请检查网络或服务端状态' : (timedOut ? '请求超时' : '请求已中断'))
       }
       throw new Error('网络连接失败')
+    } finally {
+      clearTimeout(connectTimer)
     }
 
     if (!response.ok) {
@@ -1032,8 +758,11 @@ export async function sendStreamChatMessage(
       buffer = lines.pop() || ''
 
       for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          const data = line.slice(6)
+        // C11: 兼容 \r\n 行尾与 'data:' 无空格变体（SSE 规范两者皆允许），
+        // 否则 [DONE]\r 无法匹配、'data:' 前缀行被整行丢弃
+        const trimmedLine = line.replace(/\r$/, '')
+        if (trimmedLine.startsWith('data:')) {
+          const data = trimmedLine.slice(5).trimStart()
           if (data === '[DONE]') {
             isDone = true
             break

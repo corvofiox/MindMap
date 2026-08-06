@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom'
 import { useProjectsStore } from '@/store/useProjectsStore'
 import { useUIStore } from '@/store/useUIStore'
 import { useAuthStore } from '@/store/useAuthStore'
-import { Project } from '@/types'
+import type { Project } from '@/types'
 import { Z_INDEX } from '@/constants'
 import { addRecentProject } from '@/utils/recentProjects'
 
@@ -59,6 +59,12 @@ export function ProjectsPage() {
   }, [loadProjects, restoreCurrentProject])
 
   const handleCreateProject = async () => {
+    // 未登录时拒绝创建，避免 ownerId 硬编码兜底（D20）
+    if (!user) {
+      addToast({ type: 'warning', title: '请先登录', message: '登录后才能创建项目' })
+      return
+    }
+
     if (!newProjectName.trim()) {
       addToast({ type: 'warning', title: '需要项目名称', message: '请输入项目名称' })
       return
@@ -68,7 +74,7 @@ export function ProjectsPage() {
       await createProject({
         name: newProjectName,
         description: newProjectDesc || null,
-        ownerId: user?.id || 1,
+        ownerId: user.id,
         groupId: null,
         thumbnail: null,
         isPublic: false,

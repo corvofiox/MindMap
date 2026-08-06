@@ -8,6 +8,12 @@ import { apiClient } from '@/services/api'
 
 const activeProviders = new Map<number, MindMapYjsProvider>()
 
+// R5 #4: interactionMaxMs 此前从未被任何调用方透传,bindYjsToStore 的
+// INTERACTION_MAX_MS 恒为默认值(死配置)。这里定义统一常量并通过 options
+// 显式传入,让绑定层的交互超时兜底时长可被集中调整(默认 10s;长拖拽场景
+// 或低性能设备可调大)。
+const COLLAB_INTERACTION_MAX_MS = 10000
+
 export function getActiveYjsProvider(canvasId?: number): MindMapYjsProvider | null {
   if (canvasId !== undefined) return activeProviders.get(canvasId) ?? null
   const first = activeProviders.values().next()
@@ -63,7 +69,9 @@ export function useCollaboration({
     })
     activeProviders.set(canvasId, provider)
 
-    const binding = bindYjsToStore(provider, useCanvasStore.getState())
+    const binding = bindYjsToStore(provider, useCanvasStore.getState(), {
+      interactionMaxMs: COLLAB_INTERACTION_MAX_MS,
+    })
     setYjsBinding(binding)
 
     // Restore saved awareness state (cursor/selection/editingId) from before

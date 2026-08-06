@@ -16,7 +16,7 @@
 import * as Y from 'yjs'
 import type { Node, NodeGroup, Domain, Connection } from '@/types'
 import { ensureRoot, getExistingRoot, entityToYMap, ymapToObject } from './yjs-schema'
-import { type MindMapYjsProvider, recordLocalDeletion } from './yjsProvider'
+import { type MindMapYjsProvider, type DeletionCollection, recordLocalDeletion, isLocalDeletion } from './yjsProvider'
 import { useCanvasStore } from '@/store/useCanvasStore'
 import { logger } from '@/utils/logger'
 
@@ -113,9 +113,21 @@ export interface YjsCanvasBinding {
  * `writeToYDoc` should be called by the store's command.execute/undo to make
  * local changes propagate to the doc.
  */
+export interface YjsBindingOptions {
+  /**
+   * R4 #8（C7）：交互超时兜底时长（毫秒）。默认 10000（10s）。
+   * R5 #4：由 useCollaboration 创建绑定时显式透传（COLLAB_INTERACTION_MAX_MS
+   * 常量），不再是无人消费的死配置。拖拽期间 FabricCanvas 的
+   * startObjectInteraction 每帧续期（clearTimeout + 重新计时），本超时仅在
+   * endInteraction 因组件卸载/异常路径未触发时兜底结束交互。
+   */
+  interactionMaxMs?: number
+}
+
 export function bindYjsToStore(
   provider: MindMapYjsProvider,
   store: CanvasStoreBinding,
+  options: YjsBindingOptions = {},
 ): YjsCanvasBinding {
   const doc = provider.doc
 
@@ -141,18 +153,59 @@ export function bindYjsToStore(
   // Yjs position fields are Last-Writer-Wins.
   const interactingNodes = new Map<string, string | undefined>()
   const deferredNodeUpdates = new Map<string, Partial<Node>>()
+  // C7: 交互超时兜底——若 endInteraction 因组件卸载/异常路径从未触发，
+  // 该节点会永久处于"交互中"，远端位置更新被无限期延迟。超时后自动结束交互。
+  // R4 #8：时长通过 bindYjsToStore options 配置（默认 10s）。
+  // R5 #4：useCollaboration 已透传 interactionMaxMs，此处读取的是真实配置。
+  const INTERACTION_MAX_MS = options.interactionMaxMs ?? 10000
+  const interactionTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
   function startInteraction(nodeId: string, field?: string): void {
     interactingNodes.set(nodeId, field)
+    const existing = interactionTimers.get(nodeId)
+    if (existing) clearTimeout(existing)
+    interactionTimers.set(
+      nodeId,
+      setTimeout(() => {
+        interactionTimers.delete(nodeId)
+        // 超时自动结束交互（与手动结束走同一 flush 路径）
+        endInteraction(nodeId)
+      }, INTERACTION_MAX_MS),
+    )
   }
+
   function endInteraction(nodeId: string): void {
+    const timer = interactionTimers.get(nodeId)
+    if (timer) {
+      clearTimeout(timer)
+      interactionTimers.delete(nodeId)
+    }
     interactingNodes.delete(nodeId)
     // Flush deferred position updates so the remote peer's position is
     // visible as soon as the local interaction ends.
     const deferred = deferredNodeUpdates.get(nodeId)
     if (deferred) {
       deferredNodeUpdates.delete(nodeId)
-      store.updateNodeWithoutHistory(nodeId, deferred, true)
+      // C4: 本地最后写入优先。deferred 是交互期间捕获的远端位置；flush 前
+      // 比对 doc 当前值——若本地用户松手前又拖动了节点，doc 中已是本地
+      // 更新的位置（LOCAL_ORIGIN 写入），此时逐字段跳过被本地改过的字段，
+      // 避免用较旧的远端位置覆盖本地拖拽结果；本地未动的字段仍应用远端值。
+      const currentYMap = getYNodes()?.get(nodeId)
+      if (currentYMap) {
+        const current = ymapToObject(currentYMap) as Partial<Node>
+        const toApply: Partial<Node> = {}
+        for (const key of ['x', 'y', 'width', 'height'] as const) {
+          if (current[key] === deferred[key]) {
+            toApply[key] = deferred[key]
+          }
+        }
+        if (Object.keys(toApply).length > 0) {
+          store.updateNodeWithoutHistory(nodeId, toApply, true)
+        }
+      } else {
+        // doc 尚无该节点（罕见），直接应用远端值
+        store.updateNodeWithoutHistory(nodeId, deferred, true)
+      }
     }
   }
 
@@ -320,6 +373,7 @@ export function bindYjsToStore(
    */
   const observeCollection = (
     ymap: Y.Map<Y.Map<unknown>> | undefined,
+    kind: DeletionCollection,
     applyAddOrUpdate: (id: string, entity: Y.Map<unknown>) => void,
     applyRemove: (id: string) => void,
   ): (() => void) => {
@@ -346,6 +400,17 @@ export function bindYjsToStore(
 
       isApplyingRemoteChanges = true
       try {
+        // R7-fix: 判断 store 中是否已有该实体。仅当"store 无此实体且已声明
+        // 本地删除"时才跳过增量应用(防离线删除实体在重连 STEP2 合并时复活)。
+        // 删除→撤销恢复的实体 store 中已存在,必须正常接收远端更新——
+        // 否则该实体被永久冻结(远端对其的字段更新被静默丢弃)。
+        const storeHasEntity = (id: string): boolean => {
+          const s = useCanvasStore.getState()
+          if (kind === 'nodes') return s.nodes.has(id)
+          if (kind === 'groups') return s.groups.has(id)
+          if (kind === 'domains') return s.domains.has(id)
+          return s.connections.has(id)
+        }
         for (const event of events) {
           if (event.target === ymap) {
             // Top-level key change: entity added / deleted / replaced.
@@ -353,6 +418,10 @@ export function bindYjsToStore(
               if (change.action === 'delete') {
                 applyRemove(key)
               } else {
+                // C18 + R7-fix: 离线删除后重连,STEP2 合并使 doc 中重新出现该
+                // 实体,且 store 中不存在(未撤销)→ 跳过,防瞬时"复活"。
+                // store 中已有该实体(如撤销恢复)→ 正常应用远端更新。
+                if (isLocalDeletion(provider.canvasId, kind, key) && !storeHasEntity(key)) continue
                 const child = ymap.get(key)
                 if (child) applyAddOrUpdate(key, child as Y.Map<unknown>)
               }
@@ -364,6 +433,8 @@ export function bindYjsToStore(
             // whole entity snapshot. This captures group.nodeIds / connection
             // .bendPoints in-place mutations that peers may perform.
             const id = event.path[0] as string
+            // C18 + R7-fix: 嵌套变更同样仅在"store 无此实体且已声明删除"时跳过
+            if (isLocalDeletion(provider.canvasId, kind, id) && !storeHasEntity(id)) continue
             const child = ymap.get(id)
             if (child) applyAddOrUpdate(id, child as Y.Map<unknown>)
           }
@@ -379,10 +450,10 @@ export function bindYjsToStore(
   // Register observers using dynamic getters. Before STEP2 the top-level maps
   // do not exist yet, so attach a no-op unsubscriber and wait for
   // reconnectObservers() after sync completes.
-  let unobserveNodes = observeCollection(getYNodes(), applyRemoteNode, (id) => store.removeNode(id))
-  let unobserveGroups = observeCollection(getYGroups(), applyRemoteGroup, (id) => store.removeGroup(id))
-  let unobserveDomains = observeCollection(getYDomains(), applyRemoteDomain, (id) => store.removeDomain(id))
-  let unobserveConnections = observeCollection(getYConnections(), applyRemoteConnection, (id) => store.removeConnection(id))
+  let unobserveNodes = observeCollection(getYNodes(), 'nodes', applyRemoteNode, (id) => store.removeNode(id))
+  let unobserveGroups = observeCollection(getYGroups(), 'groups', applyRemoteGroup, (id) => store.removeGroup(id))
+  let unobserveDomains = observeCollection(getYDomains(), 'domains', applyRemoteDomain, (id) => store.removeDomain(id))
+  let unobserveConnections = observeCollection(getYConnections(), 'connections', applyRemoteConnection, (id) => store.removeConnection(id))
 
   /** Re-register observers on the current Y.Map instances. Called after
    *  STEP2 sync to pick up the possibly-replaced Y.Map references. */
@@ -391,10 +462,10 @@ export function bindYjsToStore(
     unobserveGroups()
     unobserveDomains()
     unobserveConnections()
-    unobserveNodes = observeCollection(getYNodes(), applyRemoteNode, (id) => store.removeNode(id))
-    unobserveGroups = observeCollection(getYGroups(), applyRemoteGroup, (id) => store.removeGroup(id))
-    unobserveDomains = observeCollection(getYDomains(), applyRemoteDomain, (id) => store.removeDomain(id))
-    unobserveConnections = observeCollection(getYConnections(), applyRemoteConnection, (id) => store.removeConnection(id))
+    unobserveNodes = observeCollection(getYNodes(), 'nodes', applyRemoteNode, (id) => store.removeNode(id))
+    unobserveGroups = observeCollection(getYGroups(), 'groups', applyRemoteGroup, (id) => store.removeGroup(id))
+    unobserveDomains = observeCollection(getYDomains(), 'domains', applyRemoteDomain, (id) => store.removeDomain(id))
+    unobserveConnections = observeCollection(getYConnections(), 'connections', applyRemoteConnection, (id) => store.removeConnection(id))
   }
 
   /**
@@ -587,8 +658,11 @@ export function bindYjsToStore(
       // edited locally while the handshake was in flight, so those edits are not
       // overwritten by the server snapshot; they will propagate to the doc on
       // the next local mutation via applyDiff.
+      // C14: 重连后本地已声明删除的实体（localDeletions）不重新加入 store，
+      // 否则离线删除会在重连同步时"幽灵复活"。
       if (collections.nodes) {
         for (const [id, ymap] of collections.nodes) {
+          if (isLocalDeletion(provider.canvasId, 'nodes', id)) continue
           if (!liveState.nodes.has(id)) {
             store.addNode({ ...(ymapToObject(ymap) as unknown as Node), id })
           } else if (!shouldSkipExistingUpdate(id)) {
@@ -598,6 +672,7 @@ export function bindYjsToStore(
       }
       if (collections.groups) {
         for (const [id, ymap] of collections.groups) {
+          if (isLocalDeletion(provider.canvasId, 'groups', id)) continue
           if (!liveState.groups.has(id)) {
             store.addGroup({ ...(ymapToObject(ymap) as unknown as NodeGroup), id })
           } else if (!shouldSkipExistingUpdate(id)) {
@@ -607,6 +682,7 @@ export function bindYjsToStore(
       }
       if (collections.domains) {
         for (const [id, ymap] of collections.domains) {
+          if (isLocalDeletion(provider.canvasId, 'domains', id)) continue
           if (!liveState.domains.has(id)) {
             store.addDomain({ ...(ymapToObject(ymap) as unknown as Domain), id })
           } else if (!shouldSkipExistingUpdate(id)) {
@@ -616,6 +692,7 @@ export function bindYjsToStore(
       }
       if (collections.connections) {
         for (const [id, ymap] of collections.connections) {
+          if (isLocalDeletion(provider.canvasId, 'connections', id)) continue
           if (!liveState.connections.has(id)) {
             store.addConnection({ ...(ymapToObject(ymap) as unknown as Connection), id })
           } else if (!shouldSkipExistingUpdate(id)) {
@@ -688,6 +765,11 @@ export function bindYjsToStore(
       unobserveGroups()
       unobserveDomains()
       unobserveConnections()
+      // C7: 清理交互超时定时器，避免 destroy 后定时器触发 endInteraction
+      for (const timer of interactionTimers.values()) {
+        clearTimeout(timer)
+      }
+      interactionTimers.clear()
     },
     suppressSync,
     startInteraction,

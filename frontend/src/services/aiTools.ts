@@ -17,6 +17,12 @@ export interface ToolCall {
   arguments: Record<string, unknown>
 }
 
+/** 数值安全转换：非有限数（NaN/Infinity）返回 fallback，避免 NaN 写入节点属性。 */
+function toFiniteNumber(value: unknown, fallback: number): number {
+  const num = Number(value)
+  return Number.isFinite(num) ? num : fallback
+}
+
 // 读取画布所有节点
 function getAllNodes(): ToolCallResult {
   try {
@@ -148,12 +154,12 @@ function createNode(args: Record<string, unknown>): ToolCallResult {
       id: nodeId,
       title: String(args.title || '新节点'),
       content: String(args.content || ''),
-      x: Number(args.x ?? 0),
-      y: Number(args.y ?? 0),
-      width: Number(args.width ?? 200),
-      height: Number(args.height ?? 160),
+      x: toFiniteNumber(args.x, 0),
+      y: toFiniteNumber(args.y, 0),
+      width: toFiniteNumber(args.width, 200),
+      height: toFiniteNumber(args.height, 160),
       color: String(args.color ?? '#ffffff'),  // 默认白色背景
-      fontSize: Number(args.fontSize ?? 14),
+      fontSize: toFiniteNumber(args.fontSize, 14),
       textAlign: (args.textAlign as Node['textAlign']) || 'center',
       titleAlign: (args.titleAlign as Node['titleAlign']) || undefined,
       contentAlign: (args.contentAlign as Node['contentAlign']) || undefined,
@@ -162,7 +168,7 @@ function createNode(args: Record<string, unknown>): ToolCallResult {
       locked: Boolean(args.locked ?? false),
       type: nodeType,
       imageUrl: nodeType === 'image' ? String(args.imageUrl || '') : undefined,
-      aspectRatio: args.aspectRatio !== undefined ? Number(args.aspectRatio) : undefined,
+      aspectRatio: args.aspectRatio !== undefined ? toFiniteNumber(args.aspectRatio, 1) : undefined,
     }
     addNode(node)
     return { success: true, data: { nodeId, title: node.title, type: nodeType } }
@@ -174,21 +180,23 @@ function createNode(args: Record<string, unknown>): ToolCallResult {
 // 更新节点
 function updateNode(args: Record<string, unknown>): ToolCallResult {
   try {
-    const { updateNode } = useCanvasStore.getState()
+    const { updateNode, nodes } = useCanvasStore.getState()
     const nodeId = String(args.nodeId)
     if (!nodeId) {
       return { success: false, error: '缺少节点 ID' }
     }
+    // 读取当前节点作为数值兜底（toFiniteNumber fallback）
+    const existingNode = nodes.get(nodeId)
 
     const updates: Partial<Node> = {}
     if (args.title !== undefined) updates.title = String(args.title)
     if (args.content !== undefined) updates.content = String(args.content)
-    if (args.x !== undefined) updates.x = Number(args.x)
-    if (args.y !== undefined) updates.y = Number(args.y)
-    if (args.width !== undefined) updates.width = Number(args.width)
-    if (args.height !== undefined) updates.height = Number(args.height)
+    if (args.x !== undefined) updates.x = toFiniteNumber(args.x, existingNode?.x ?? 0)
+    if (args.y !== undefined) updates.y = toFiniteNumber(args.y, existingNode?.y ?? 0)
+    if (args.width !== undefined) updates.width = toFiniteNumber(args.width, existingNode?.width ?? 200)
+    if (args.height !== undefined) updates.height = toFiniteNumber(args.height, existingNode?.height ?? 160)
     if (args.color !== undefined) updates.color = String(args.color)
-    if (args.fontSize !== undefined) updates.fontSize = Number(args.fontSize)
+    if (args.fontSize !== undefined) updates.fontSize = toFiniteNumber(args.fontSize, existingNode?.fontSize ?? 14)
     if (args.textAlign !== undefined) updates.textAlign = args.textAlign as Node['textAlign']
     if (args.titleAlign !== undefined) updates.titleAlign = args.titleAlign as Node['titleAlign']
     if (args.contentAlign !== undefined) updates.contentAlign = args.contentAlign as Node['contentAlign']
@@ -197,7 +205,7 @@ function updateNode(args: Record<string, unknown>): ToolCallResult {
     if (args.locked !== undefined) updates.locked = Boolean(args.locked)
     if (args.type !== undefined) updates.type = args.type as Node['type']
     if (args.imageUrl !== undefined) updates.imageUrl = String(args.imageUrl)
-    if (args.aspectRatio !== undefined) updates.aspectRatio = Number(args.aspectRatio)
+    if (args.aspectRatio !== undefined) updates.aspectRatio = toFiniteNumber(args.aspectRatio, existingNode?.aspectRatio ?? 1)
 
     updateNode(nodeId, updates)
     return { success: true, data: { nodeId, updates } }
@@ -704,10 +712,21 @@ function generateMindMapFromJSON(args: Record<string, unknown>): ToolCallResult 
     const nodeIdMap = new Map<string, string>()  // 标题/自定义ID -> 实际ID
     const nodes: Node[] = []
     const connections: Connection[] = []
+    // C9: 冲突防护——AI 传入的 id 可能与画布已有实体或本批次实体重复，
+    // 重复会导致 addNode 等静默覆盖已有实体，必须为冲突 id 重新生成。
+    const usedNodeIds = new Set<string>()
+    const existingNodeIds = new Set(useCanvasStore.getState().nodes.keys())
+    const existingConnectionIds = new Set(useCanvasStore.getState().connections.keys())
+    const existingGroupIds = new Set(useCanvasStore.getState().groups.keys())
+    const existingDomainIds = new Set(useCanvasStore.getState().domains.keys())
 
     // 第一步：创建所有节点
     data.nodes.forEach((nodeData, index) => {
-      const nodeId = nodeData.id || generateId('node')
+      let nodeId = nodeData.id || generateId('node')
+      while (usedNodeIds.has(nodeId) || existingNodeIds.has(nodeId)) {
+        nodeId = generateId('node')
+      }
+      usedNodeIds.add(nodeId)
       const key = nodeData.id || nodeData.title
       nodeIdMap.set(key, nodeId)
 
@@ -769,6 +788,7 @@ function generateMindMapFromJSON(args: Record<string, unknown>): ToolCallResult 
 
     // 第二步：创建所有连线
     if (data.connections && Array.isArray(data.connections)) {
+      const usedConnectionIds = new Set<string>()
       data.connections.forEach((connData) => {
         // 解析源节点和目标节点ID
         const fromNodeId = nodeIdMap.get(connData.from) ||
@@ -807,8 +827,14 @@ function generateMindMapFromJSON(args: Record<string, unknown>): ToolCallResult 
         }
 
         const defaultConnStyle = data.defaultConnectionStyle || {}
+        // C9: 连线 id 冲突时重新生成
+        let connId = connData.id || generateId('conn')
+        while (usedConnectionIds.has(connId) || existingConnectionIds.has(connId)) {
+          connId = generateId('conn')
+        }
+        usedConnectionIds.add(connId)
         const connection: Connection = {
-          id: connData.id || generateId('conn'),
+          id: connId,
           fromNodeId,
           toNodeId,
           fromPort: fromPort!,
@@ -834,8 +860,14 @@ function generateMindMapFromJSON(args: Record<string, unknown>): ToolCallResult 
     // 第五步：处理组
     let groupsCreated = 0
     if (data.groups && Array.isArray(data.groups)) {
+      const usedGroupIds = new Set<string>()
       data.groups.forEach((groupData) => {
-        const groupId = groupData.id || generateId('group')
+        let groupId = groupData.id || generateId('group')
+        // C9: 组 id 冲突时重新生成
+        while (usedGroupIds.has(groupId) || existingGroupIds.has(groupId)) {
+          groupId = generateId('group')
+        }
+        usedGroupIds.add(groupId)
 
         // 解析节点ID
         const resolvedNodeIds = (groupData.nodeIds || [])
@@ -902,8 +934,14 @@ function generateMindMapFromJSON(args: Record<string, unknown>): ToolCallResult 
     // 第六步：处理域
     let domainsCreated = 0
     if (data.domains && Array.isArray(data.domains)) {
+      const usedDomainIds = new Set<string>()
       data.domains.forEach((domainData) => {
-        const domainId = domainData.id || generateId('domain')
+        let domainId = domainData.id || generateId('domain')
+        // C9: 域 id 冲突时重新生成
+        while (usedDomainIds.has(domainId) || existingDomainIds.has(domainId)) {
+          domainId = generateId('domain')
+        }
+        usedDomainIds.add(domainId)
 
         // 解析节点ID
         const resolvedNodeIds = (domainData.nodeIds || [])

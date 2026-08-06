@@ -150,7 +150,8 @@ export function estimateTokens(text: string): number {
 }
 
 // 上下文裁剪：超出预算时移除最早的消息，保证最后一条消息保留
-// 并避免以 assistant 消息开头（多数 API 要求首条消息为 user/system）
+// 并避免以 assistant/tool 消息开头（多数 API 要求首条消息为 user/system；
+// tool 消息前面必须有对应的 assistant tool_calls 消息，单独出现会 400）
 export function trimMessageHistory(
   history: Array<Record<string, unknown>>,
   maxTokens: number
@@ -168,11 +169,21 @@ export function trimMessageHistory(
     const removed = result.shift()
     if (removed) {
       total -= estimateTokens(JSON.stringify(removed))
+      // C6: 按 assistant+tool 组为单位裁剪——若移除的是带 tool_calls 的
+      // assistant 消息，其后续的 role:'tool' 消息立即成为孤儿（前面没有
+      // 对应的 assistant），必须一并移除，否则上游 API 会 400。
+      if (removed.role === 'assistant' && (removed as Record<string, unknown>).tool_calls) {
+        while (result.length > 1 && result[0]?.role === 'tool') {
+          const t = result.shift()!
+          total -= estimateTokens(JSON.stringify(t))
+        }
+      }
     }
   }
 
-  // 避免以 assistant 消息开头
-  while (result.length > 1 && result[0]?.role === 'assistant') {
+  // 兜底：首条不能是 assistant 或 tool（预算恰好停在 tool 消息上时，
+  // 它同样没有前置 assistant，属于孤儿，必须移除）
+  while (result.length > 1 && (result[0]?.role === 'assistant' || result[0]?.role === 'tool')) {
     result.shift()
   }
 

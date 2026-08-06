@@ -719,5 +719,42 @@ describe('yjsBinding', () => {
       expect(imported).toBe(false)
       binding.destroy()
     })
+
+    // R7 回归测试:删除→撤销恢复的实体,store 中已存在,必须正常接收远端更新。
+    // 旧实现(C18 一刀切 isLocalDeletion 检查)会永久跳过该实体的远端更新,
+    // 导致实体冻结在撤销时刻。修复后:仅"store 无此实体且已声明删除"才跳过。
+    it('applies remote updates to an entity restored by local undo after deletion', async () => {
+      const doc = new Y.Doc()
+      ensureRoot(doc)
+      const store = createMockStore()
+      // 提供 canvasId 以便 recordLocalDeletion/isLocalDeletion 使用
+      const provider = { ...createMockProvider(doc), canvasId: 9999 } as any
+      const binding = bindYjsToStore(provider, store as any)
+      // 动态导入 yjsProvider(与顶部 mock useCanvasStore 的加载时序一致)
+      const yjsProvider = await import('../services/yjsProvider')
+
+      const collections = ensureRoot(doc)
+
+      // 1. 本地删除 n1 并声明删除
+      store.nodes.set('n1', { id: 'n1', x: 1, y: 2, title: 'A' } as any)
+      // 模拟 applyDiff 的删除路径:记录 localDeletion
+      yjsProvider.recordLocalDeletion(9999, 'nodes', 'n1')
+
+      // 2. 撤销:store 恢复 n1(模拟撤销后 store 已有该实体)
+      store.nodes.set('n1', { id: 'n1', x: 1, y: 2, title: 'A' } as any)
+
+      // 3. 远端更新 n1(顶层 key set 事件)
+      doc.transact(() => {
+        collections.nodes.set('n1', entityToYMap({ id: 'n1', x: 100, y: 200, title: 'Remote' }))
+      })
+
+      // 4. 修复后:store 已有 n1(撤销恢复)→ 不应跳过,应应用远端更新
+      expect(store.nodes.get('n1')?.title).toBe('Remote')
+      expect(store.nodes.get('n1')?.x).toBe(100)
+
+      binding.destroy()
+      // 清理模块级 localDeletions,避免污染其他测试
+      yjsProvider.clearLocalDeletions(9999)
+    })
   })
 })

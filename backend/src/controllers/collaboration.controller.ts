@@ -33,6 +33,22 @@ collaborationRouter.get('/projects/:projectId/members', authenticate, asyncHandl
 
   const projectOwnerId = getProperty<number>(project, 'owner_id', 'ownerId') || project.ownerId
 
+  // A4 (越权): 成员列表含邮箱/邀请等敏感信息，仅项目 owner 或成员可查看
+  if (req.user!.id !== projectOwnerId) {
+    const requesterMember = await db.query.projectMembers.findFirst({
+      where: and(
+        eq(projectMembers.projectId, projectId),
+        eq(projectMembers.userId, req.user!.id)
+      ),
+    })
+    if (!requesterMember) {
+      return res.status(403).json({
+        success: false,
+        error: '访问被拒绝',
+      })
+    }
+  }
+
   const members = await db
     .select({
       id: projectMembers.id,
@@ -148,6 +164,16 @@ collaborationRouter.post('/projects/:projectId/invite', authenticate, asyncHandl
     })
   }
 
+  // B4: role 白名单——只允许 editor/viewer，禁止任意字符串（如 'owner'）
+  const VALID_INVITE_ROLES = ['editor', 'viewer']
+  if (role !== undefined && (typeof role !== 'string' || !VALID_INVITE_ROLES.includes(role))) {
+    return res.status(400).json({
+      success: false,
+      error: '无效的角色（仅支持 editor 或 viewer）',
+    })
+  }
+  const inviteRole = typeof role === 'string' ? role : 'viewer'
+
   const project = await db.query.projects.findFirst({
     where: eq(projects.id, projectId),
   })
@@ -219,7 +245,7 @@ collaborationRouter.post('/projects/:projectId/invite', authenticate, asyncHandl
       projectId,
       inviterId: req.user!.id,
       inviteeId: userId,
-      role: role || 'viewer',
+      role: inviteRole,
       status: 'pending',
     })
     .returning()

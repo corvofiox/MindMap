@@ -52,3 +52,15 @@ export function getValidatedEnv(): EnvVars {
     NODE_ENV: getEnv('NODE_ENV'),
   }
 }
+
+/**
+ * #7: TRUST_PROXY 判定唯一入口——HTTP 侧（express trust proxy）与 WS 侧
+ * （X-Forwarded-For 信任）必须使用同一套取值规则：仅 true/1/yes 视为开启，
+ * 其余（含未设置）一律不信任。统一实现避免两侧判定漂移：某侧认
+ * 'TRUE' 另一侧不认、或某侧多认一个 'on' 之类的值，都会造成
+ * 限速绕过（伪造 X-Forwarded-For）或功能不一致。
+ */
+export function isTrustProxyEnabled(): boolean {
+  const value = (process.env.TRUST_PROXY || '').toLowerCase()
+  return value === 'true' || value === '1' || value === 'yes'
+}

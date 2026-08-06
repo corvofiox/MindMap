@@ -10,15 +10,37 @@ import { authLimiter } from '../middleware/rateLimit.middleware.js'
 
 export const authRouter = Router()
 
+// B6: 邮箱格式校验（宽松但可过滤明显非法输入）
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+const MIN_PASSWORD_LENGTH = 6
+
 // Register
 authRouter.post('/register', authLimiter(), asyncHandler(async (req, res) => {
   const { email, password, nickname } = req.body
 
-  // Validate input
-  if (!email || !password) {
+  // B6: 类型校验——email/password 传对象等非字符串会直接 500
+  if (typeof email !== 'string' || typeof password !== 'string' || !email.trim() || !password) {
     return res.status(400).json({
       success: false,
       error: '邮箱和密码不能为空',
+    })
+  }
+
+  if (password.length < MIN_PASSWORD_LENGTH) {
+    return res.status(400).json({
+      success: false,
+      error: `密码长度不能少于${MIN_PASSWORD_LENGTH}个字符`,
+    })
+  }
+
+  // #6: 统一 trim 后校验/查重/存储——注册与登录使用同一规范化结果，
+  // 避免"注册存了带空格邮箱、登录查不到"或反之的账号分裂问题。
+  const normalizedEmail = email.trim()
+
+  if (!EMAIL_PATTERN.test(normalizedEmail)) {
+    return res.status(400).json({
+      success: false,
+      error: '邮箱格式不正确',
     })
   }
 
@@ -26,7 +48,7 @@ authRouter.post('/register', authLimiter(), asyncHandler(async (req, res) => {
   const existingUsers = await db
     .select()
     .from(users)
-    .where(eq(users.email, email))
+    .where(eq(users.email, normalizedEmail))
   const existingUser = existingUsers[0]
 
   if (existingUser) {
@@ -39,13 +61,16 @@ authRouter.post('/register', authLimiter(), asyncHandler(async (req, res) => {
   // Hash password
   const hashedPassword = await bcrypt.hash(password, 10)
 
+  // R4 #9: nickname trim 后存储——避免首尾空格入库（显示与各处校验不一致）。
+  const rawNickname = typeof nickname === 'string' ? nickname.trim() : ''
+
   // Create user
   const result = await db
     .insert(users)
     .values({
-      email,
+      email: normalizedEmail,
       password: hashedPassword,
-      nickname: nickname || null,
+      nickname: rawNickname ? rawNickname : null,
     })
     .returning()
 
@@ -88,11 +113,14 @@ authRouter.post('/login', authLimiter(), asyncHandler(async (req, res) => {
     })
   }
 
+  // #6: 查询前与注册同样 trim，保证"注册存 trim 后邮箱、登录按 trim 后查询"一致
+  const normalizedEmail = email.trim()
+
   // Find user
   const usersList = await db
     .select()
     .from(users)
-    .where(eq(users.email, email))
+    .where(eq(users.email, normalizedEmail))
   const user = usersList[0]
 
   if (!user || !user.password) {

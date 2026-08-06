@@ -70,7 +70,9 @@ export const useAuthStore = create<AuthState>()(
         isHydrated: false,
 
         validateToken: async () => {
-          const token = get().token || safeStorage.getItem(TOKEN_KEY)
+          // token 单一来源为 apiClient/localStorage('mindmap_token')，
+          // 这里按 内存 → apiClient → localStorage 的顺序兜底读取。
+          const token = get().token || api.apiClient.getToken() || safeStorage.getItem(TOKEN_KEY)
           if (!token) {
             set({ user: null, token: null, isAuthenticated: false })
             api.apiClient.setToken(null)
@@ -79,7 +81,8 @@ export const useAuthStore = create<AuthState>()(
 
           try {
             api.apiClient.setToken(token)
-            await api.getProfile()
+            // 更新 user 为服务端返回的最新资料（此前返回值被丢弃）
+            const profile = await api.getProfile()
 
             try {
               await api.apiClient.getCsrfTokenFromServer()
@@ -88,7 +91,7 @@ export const useAuthStore = create<AuthState>()(
             }
 
             safeStorage.setItem(TOKEN_KEY, token)
-            set({ token, isAuthenticated: true })
+            set({ user: profile, token, isAuthenticated: true })
             return true
           } catch {
             safeStorage.removeItem(TOKEN_KEY)
@@ -262,9 +265,18 @@ export const useAuthStore = create<AuthState>()(
       name: 'mindmap-auth',
       partialize: (state: AuthState) => ({
         user: state.user,
-        token: state.token,
         isAuthenticated: state.isAuthenticated,
       }),
+      // token 统一以 apiClient/localStorage('mindmap_token') 为唯一持久化来源，
+      // 不再信任 zustand 持久化副本，避免双存储不一致（如旧版本残留的过期 token）。
+      merge: (persisted, current) => {
+        const p = (persisted ?? {}) as Partial<AuthState>
+        return {
+          ...current,
+          ...p,
+          token: current.token,
+        }
+      },
       onRehydrateStorage: (state) => {
         // This function is called after rehydration
         // We need to mark the state as hydrated

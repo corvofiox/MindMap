@@ -42,6 +42,23 @@ export function NodeSearchDialog() {
   const headerRef = useRef<HTMLDivElement>(null)
   const resultsListRef = useRef<HTMLDivElement>(null)
 
+  // 关闭时统一清理查询/结果/高亮状态（D19：Escape、Ctrl+F 切换等所有关闭路径）
+  useEffect(() => {
+    if (nodeSearchOpen) return
+
+    setQuery('')
+    setSearchResults([])
+    setCurrentIndex(-1)
+
+    const clearEvent = new CustomEvent('nodeSearchHighlight', {
+      detail: {
+        nodeId: null,
+        keywords: [],
+      },
+    })
+    window.dispatchEvent(clearEvent)
+  }, [nodeSearchOpen])
+
   const searchNodes = useCallback((searchQuery: string): SearchResult[] => {
     if (!searchQuery.trim()) return []
 
@@ -245,17 +262,8 @@ export function NodeSearchDialog() {
   }, [jumpToNode])
 
   const handleClose = () => {
+    // 状态清理统一由 nodeSearchOpen 变化的 effect 完成（D19）
     setNodeSearchOpen(false)
-    setQuery('')
-    setSearchResults([])
-    setCurrentIndex(-1)
-    const clearEvent = new CustomEvent('nodeSearchHighlight', {
-      detail: {
-        nodeId: null,
-        keywords: [],
-      },
-    })
-    window.dispatchEvent(clearEvent)
   }
 
   const getNodeTitle = (node: Node): string => {

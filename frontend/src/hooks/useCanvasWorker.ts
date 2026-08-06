@@ -99,6 +99,16 @@ export function useCanvasWorker() {
           connection,
           nodes,
         })
+
+        // 超时保护：worker 无响应时清理 pending 并返回 null（D14）
+        const timeoutId = setTimeout(() => {
+          timeoutIdsRef.current.delete(timeoutId)
+          if (pendingRequestsRef.current.has(connection.id)) {
+            pendingRequestsRef.current.delete(connection.id)
+            resolve(null)
+          }
+        }, 5000)
+        timeoutIdsRef.current.add(timeoutId)
       })
     },
     []
@@ -210,13 +220,15 @@ export function useCanvasWorker() {
           }
         })
 
-        // 设置超时
-        setTimeout(() => {
+        // 设置超时（并登记到 timeoutIdsRef，随 hook 卸载统一清理，D14）
+        const timeoutId = setTimeout(() => {
+          timeoutIdsRef.current.delete(timeoutId)
           if (pendingRequestsRef.current.has(requestId)) {
             pendingRequestsRef.current.delete(requestId)
             resolve(new Map())
           }
         }, 10000)
+        timeoutIdsRef.current.add(timeoutId)
 
         workerRef.current.postMessage({
           type: 'calculateLayout',

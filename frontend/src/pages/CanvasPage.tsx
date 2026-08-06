@@ -21,7 +21,7 @@ import { ContextMenuWrapper } from '@/components/ContextMenuWrapper'
 import { RichTextToolbar } from '@/components/canvas/RichTextToolbar'
 import { ConnectionLine } from '@/components/canvas/ConnectionLine'
 import { CONNECTION_DEFAULTS, Z_INDEX } from '@/constants'
-import { generateId, colorToHex, hexToRgba, calculateCurveControlPoints, getCurveThroughPoints, getStepPath, pointsToPath, calculateSmartPortPosition, buildConnectionInfoMap, getPortOffsetVector, type PortDirection, type ConnectionInfo } from '@/utils/canvas'
+import { generateId, colorToHex, hexToRgba, calculateSmartPortPosition, buildConnectionInfoMap, getPortOffsetVector, type PortDirection, type ConnectionInfo } from '@/utils/canvas'
 import { saveToCache, loadFromCache } from '@/utils/nodeCache'
 import { logger } from '@/utils/logger'
 import { execFormatCommand } from '@/utils/richTextCommands'
@@ -30,7 +30,6 @@ import { ApiError } from '@/services/apiClient'
 import { collabService } from '@/services/collaboration'
 import { clearCollaborationEvidence, clearLocalDeletions, getLocalDeletions } from '@/services/yjsProvider'
 import type { Node, Connection } from '@/types'
-import html2canvas from 'html2canvas-pro'
 
 const AUTO_SAVE_INTERVAL = 5000
 const CACHE_SAVE_DELAY = 500
@@ -134,54 +133,6 @@ function getPortPosition(node: Node, port: 'top' | 'right' | 'bottom' | 'left') 
       return { x: node.x + node.width / 2, y: node.y + node.height }
     case 'left':
       return { x: node.x, y: node.y + node.height / 2 }
-  }
-}
-
-// Calculate distributed port position when multiple connections share the same port
-function getDistributedPortPosition(
-  node: Node,
-  port: 'top' | 'right' | 'bottom' | 'left',
-  index: number,
-  total: number
-): { x: number; y: number } {
-  const basePos = getPortPosition(node, port)
-  if (total <= 1) return basePos
-
-  // Calculate offset based on port direction
-  // For top/bottom ports, distribute horizontally
-  // For left/right ports, distribute vertically
-
-  // 动态计算可用空间：根据端口方向使用宽度或高度
-  const availableSpace = port === 'top' || port === 'bottom'
-    ? node.width * 0.9  // 水平方向使用 90% 宽度
-    : node.height * 0.9 // 垂直方向使用 90% 高度
-
-  // 计算最小间距（至少 8px，确保可点击）
-  const minSpacing = 8
-  // 计算最大间距（最多 20px，避免过于分散）
-  const maxSpacing = 20
-
-  // 根据连线数量动态计算间距
-  // 如果空间足够，使用理想间距；否则压缩间距以适应空间
-  const idealTotalSpread = (total - 1) * 16  // 理想情况下每条连线间隔 16px
-  const actualTotalSpread = Math.min(idealTotalSpread, availableSpace)
-
-  // 动态计算实际间距，确保不小于最小间距
-  const actualSpacing = Math.max(
-    minSpacing,
-    Math.min(maxSpacing, actualTotalSpread / (total - 1 || 1))
-  )
-
-  // 计算当前连线的偏移量
-  const offset = (index - (total - 1) / 2) * actualSpacing
-
-  switch (port) {
-    case 'top':
-    case 'bottom':
-      return { x: basePos.x + offset, y: basePos.y }
-    case 'left':
-    case 'right':
-      return { x: basePos.x, y: basePos.y + offset }
   }
 }
 
@@ -413,17 +364,6 @@ function getCubicBezierMidpoint(
   const x = mt3 * x1 + mt2t * cp1x + mt2 * cp2x + t3 * x2
   const y = mt3 * y1 + mt2t * cp1y + mt2 * cp2y + t3 * y2
 
-  return { x, y }
-}
-
-// Get midpoint of a quadratic bezier curve
-function getQuadraticBezierMidpoint(x1: number, y1: number, cx: number, cy: number, x2: number, y2: number): { x: number; y: number } {
-  const t = 0.5
-  const mt = 1 - t
-  const mt2 = mt * mt
-  const t2 = t * t
-  const x = mt2 * x1 + 2 * mt * t * cx + t2 * x2
-  const y = mt2 * y1 + 2 * mt * t * cy + t2 * y2
   return { x, y }
 }
 
@@ -697,25 +637,73 @@ function sendKeepaliveSnapshot(
 }
 
 // Helper function to check if canvas has content
-function hasCanvasContent(nodes: any[], domains: any[]): boolean {
-  return nodes.length > 0 || domains.length > 0
+function hasCanvasContent(nodes: any[], domains: any[], groups?: any[]): boolean {
+  return nodes.length > 0 || domains.length > 0 || (groups !== undefined && groups.length > 0)
 }
 
-// Helper function to calculate bounding box of canvas elements
-function calculateBoundingBox(elements: Array<{ x: number; y: number; width?: number; height?: number }>) {
-  let minX = Infinity
-  let minY = Infinity
-  let maxX = -Infinity
-  let maxY = -Infinity
+// E18: 剪贴板读写封装(带错误处理,避免组件内直接操作 sessionStorage)
+const CLIPBOARD_STORAGE_KEY = 'mindmap_clipboard_nodes'
 
-  elements.forEach((el) => {
-    minX = Math.min(minX, el.x)
-    minY = Math.min(minY, el.y)
-    maxX = Math.max(maxX, el.x + (el.width || 0))
-    maxY = Math.max(maxY, el.y + (el.height || 0))
-  })
+function saveClipboardNodes(nodes: Node[]): void {
+  try {
+    sessionStorage.setItem(CLIPBOARD_STORAGE_KEY, JSON.stringify(nodes))
+  } catch (error) {
+    logger.warn('Failed to save clipboard nodes', { error })
+  }
+}
 
-  return { minX, minY, maxX, maxY, contentWidth: maxX - minX, contentHeight: maxY - minY }
+function loadClipboardNodes(): Node[] | null {
+  try {
+    const raw = sessionStorage.getItem(CLIPBOARD_STORAGE_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? (parsed as Node[]) : null
+  } catch (error) {
+    logger.warn('Failed to load clipboard nodes', { error })
+    return null
+  }
+}
+
+// E16: 组缩放把手公共组件(原四个角各一份重复的 onMouseDown 逻辑)
+interface GroupResizeHandleProps {
+  handle: 'nw' | 'ne' | 'sw' | 'se'
+  className: string
+  style: React.CSSProperties
+  panX: number
+  panY: number
+  zoom: number
+  containerRef: React.RefObject<HTMLDivElement | null>
+  onResizeStart: (canvasX: number, canvasY: number) => void
+  onContextMenu?: (e: React.MouseEvent) => void
+}
+
+function GroupResizeHandle({
+  handle,
+  className,
+  style,
+  panX,
+  panY,
+  zoom,
+  containerRef,
+  onResizeStart,
+  onContextMenu,
+}: GroupResizeHandleProps) {
+  return (
+    <div
+      className={`absolute w-2 h-2 bg-blue-500 rounded-full ${className} hover:bg-blue-600`}
+      style={{ ...style, zIndex: Z_INDEX.GROUP }}
+      onMouseDown={(e) => {
+        e.stopPropagation()
+        const rect = containerRef.current?.getBoundingClientRect()
+        if (rect) {
+          const mouseX = e.clientX - rect.left
+          const mouseY = e.clientY - rect.top
+          onResizeStart((mouseX - panX) / zoom, (mouseY - panY) / zoom)
+        }
+      }}
+      onContextMenu={onContextMenu}
+    />
+  )
 }
 
 export function CanvasPage() {
@@ -725,8 +713,11 @@ export function CanvasPage() {
   const [isDragging, setIsDragging] = useState(false)
   const [isSpacePressed, setIsSpacePressed] = useState(false)
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 })
-  const [containerReady, setContainerReady] = useState(false)
   const lastSaveTimeRef = useRef<number>(0)
+  // E20: 保存失败指数退避(5s→10s→20s→40s→60s 封顶),成功时清零
+  const saveBackoffRef = useRef(0)
+  // E18: 剪贴板粘贴偏移(每次粘贴递增,避免叠加在同一位置;重新复制时清零)
+  const pasteOffsetRef = useRef(0)
 
   const dragStartRef = useRef({ x: 0, y: 0 })
   const groupContextMenuStartRef = useRef({ x: 0, y: 0 })
@@ -738,7 +729,6 @@ export function CanvasPage() {
   const pendingPanRef = useRef<{ x: number; y: number } | null>(null)
   const cacheTimeoutRef = useRef<ReturnType<typeof setTimeout>>()
   const dbSaveTimeoutRef = useRef<ReturnType<typeof setTimeout>>()
-  const mouseDownOnContentRef = useRef(false) // Track if mouse down was on content
   const [hasInitializedCamera, setHasInitializedCamera] = useState(false) // Track if camera has been initialized
   const [hasLoadedCanvasData, setHasLoadedCanvasData] = useState(false) // Track if canvas data has been loaded
   const justFinishedConnectionRef = useRef(false) // Track if just finished creating a connection
@@ -755,11 +745,6 @@ export function CanvasPage() {
   const [connectionStartNodeId, setConnectionStartNodeId] = useState<string | null>(null)
   const [connectionStartPort, setConnectionStartPort] = useState<'top' | 'right' | 'bottom' | 'left' | null>(null)
   const [connectionEndPosition, setConnectionEndPosition] = useState({ x: 0, y: 0 })
-
-  // Connection endpoint editing state
-  const [isEditingConnectionEndpoint] = useState(false)
-  const [editingConnectionId] = useState<string | null>(null)
-  const [editingEndpoint] = useState<'start' | 'end' | null>(null)
   const [editingEndpointPosition, setEditingEndpointPosition] = useState({ x: 0, y: 0 })
 
   // Connection endpoint dragging state
@@ -770,7 +755,6 @@ export function CanvasPage() {
   // Bend point dragging state
   const [isDraggingBendPoint, setIsDraggingBendPoint] = useState(false)
   const [draggingBendPointId, setDraggingBendPointId] = useState<string | null>(null)
-  const [dragBendPointStart, setDragBendPointStart] = useState({ x: 0, y: 0 })
 
   // Bend point context menu state
   const [bendPointContextMenu, setBendPointContextMenu] = useState<{ x: number; y: number; connectionId: string; bendPointId: string } | null>(null)
@@ -938,6 +922,25 @@ export function CanvasPage() {
   const rawId = canvasId ? parseInt(canvasId) : null
   const id = rawId !== null && !isNaN(rawId) ? rawId : null
 
+  // E3: 在 useCollaboration 的 provider cleanup 之前冲刷 WS 离线缓冲。
+  // useCollaboration 的 cleanup(disconnect)会销毁 Y.Doc 与 pendingUpdates 缓冲,
+  // 而加载 effect 的 cleanup 在其之后执行——此时 getActiveYjsProvider(id) 已返回
+  // null,flush 变成 no-op,断线期间积累的本地编辑会随 provider 一起丢失。
+  // 本 effect 声明在 useCollaboration 之前,cleanup 优先执行,连接仍可用时能
+  // 赶在断开前把缓冲发送出去(未连接时 flush 为 no-op,缓冲由断开前最后的
+  // localStorage 兜底覆盖)。
+  useEffect(() => {
+    return () => {
+      if (id === null || id <= 0) return
+      try {
+        getActiveYjsProvider(id)?.flushPendingUpdates()
+      } catch {
+        // best-effort
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canvasId])
+
   const { sendCursor } = useCollaboration({
     canvasId: id || 0,
     enabled: id !== null && id > 0,
@@ -957,12 +960,22 @@ export function CanvasPage() {
   const panYRef = useRef(panY)
   const zoomRef = useRef(zoom)
 
+  // E12: 键盘快捷键 effect 使用 ref 读取易变值,避免每次编辑/选择变化都重绑监听器
+  const currentToolRef = useRef(currentTool)
+  const nodesRef = useRef(nodes)
+  const groupsRef = useRef(groups)
+  const selectedIdsRef = useRef(selectedIds)
+
   // Update refs when values change
   useEffect(() => {
     panXRef.current = panX
     panYRef.current = panY
     zoomRef.current = zoom
-  }, [panX, panY, zoom])
+    currentToolRef.current = currentTool
+    nodesRef.current = nodes
+    groupsRef.current = groups
+    selectedIdsRef.current = selectedIds
+  }, [panX, panY, zoom, currentTool, nodes, groups, selectedIds])
 
   // Cancel any pending pan rAF on unmount
   useEffect(() => {
@@ -1055,6 +1068,38 @@ export function CanvasPage() {
   const canEdit = currentMemberRole === 'owner' || currentMemberRole === 'editor'
   const isViewer = currentMemberRole === 'viewer'
 
+  // E21: 协作连接状态状态化——渲染期不再直读 collabService.isConnected(),
+  // 连接/断开时通过 provider 的 onStatusChange 事件驱动重渲染。
+  const [isCollabConnected, setIsCollabConnected] = useState(false)
+
+  useEffect(() => {
+    let disposed = false
+    let unsub: (() => void) | null = null
+
+    const sync = () => {
+      if (disposed) return
+      const provider = getActiveYjsProvider(id ?? undefined)
+      setIsCollabConnected(provider?.isConnected() ?? false)
+      if (provider) {
+        unsub?.()
+        unsub = provider.onStatusChange((connected) => {
+          if (!disposed) setIsCollabConnected(connected)
+        })
+      }
+    }
+
+    sync()
+    // provider 可能因角色异步加载(useCollaboration 的 effect 依赖
+    // currentMemberRole)稍晚创建,延迟再同步一次以补上订阅。
+    const retryTimer = setTimeout(sync, 800)
+
+    return () => {
+      disposed = true
+      clearTimeout(retryTimer)
+      unsub?.()
+    }
+  }, [id, currentMemberRole])
+
   const stableLoadProjects = useCallback(loadProjects, [])
   const stableRestoreCurrentProject = useCallback(restoreCurrentProject, [])
 
@@ -1084,8 +1129,13 @@ export function CanvasPage() {
     // 临时ID（负数）被允许存在，因为它们会被真实ID替换
     // 注意：只有当 canvases 已加载（length > 0）时才检查，避免在初始加载时误判
     if (!canvasExists && !hasTemporaryCanvas && canvases.length > 0) {
-      // 清空画布状态
-      clearCanvas()
+      // 清空画布状态(抑制 Yjs 同步,避免清空操作写入 Y.Doc/广播给协作者)
+      const binding = getYjsBinding()
+      if (binding) {
+        binding.suppressSync(() => { clearCanvas() })
+      } else {
+        clearCanvas()
+      }
       setCanvasId(null)
       // 重定向到项目列表
       navigate('/projects', { replace: true })
@@ -1125,6 +1175,9 @@ export function CanvasPage() {
 
     // Reset last save time when canvas changes
     lastSaveTimeRef.current = 0
+    // E14: 重置缩略图冷却/待生成状态,避免新画布被上一画布的 2s 冷却窗口压制
+    lastRemoteThumbnailRef.current = 0
+    thumbnailPendingRef.current = false
 
     // Initialize thumbnail worker
     try {
@@ -1277,6 +1330,13 @@ export function CanvasPage() {
           return
         }
 
+        // E10: DB 加载失败不再静默降级——提示用户已回退到本地缓存
+        useUIStore.getState().addToast({
+          type: 'warning',
+          title: '加载提示',
+          message: '从服务器加载画布数据失败，已改用本地缓存',
+        })
+
         // DB load failed, fallback to cache
         const cachedData = loadFromCache(id)
         if (cachedData) {
@@ -1328,13 +1388,9 @@ export function CanvasPage() {
           // 协作模式数据由服务端 handleClientDisconnect 的 persistCanvasState
           // 持久化，无需客户端再发全量快照。与 saveToDatabase/handleManualSave
           // 保持一致。
-          // R1: 曾与其他协作者共处时同样跳过（快照可能过期，覆盖对端编辑）；
-          // 发送前尽力 flush 一次 WS 离线缓冲，把本地编辑传出去。
-          try {
-            getActiveYjsProvider(id)?.flushPendingUpdates()
-          } catch {
-            // best-effort
-          }
+          // R1: 曾与其他协作者共处时同样跳过(快照可能过期,覆盖对端编辑)。
+          // WS 离线缓冲的冲刷已由声明在 useCollaboration 之前的 effect 完成
+          // (E3: provider cleanup 先于本 cleanup 执行,此处 flush 已是 no-op)。
           if (!collabService.isConnected() && !collabService.hasCollaborationEvidence(id)) {
             // 使用 apiClient.post 替代 fetch(keepalive: true)：
             // 1. 切换画布时页面未卸载，无需 keepalive 保证请求完成
@@ -1357,9 +1413,27 @@ export function CanvasPage() {
       clearTimeout(cacheTimeoutRef.current)
       clearTimeout(dbSaveTimeoutRef.current)
 
-      // Terminate thumbnail worker
-      if (thumbnailWorkerRef.current) {
-        thumbnailWorkerRef.current.terminate()
+      // E4: 先触发最终缩略图(best-effort)再销毁 worker——原来先 terminate 再
+      // generateThumbnail 时 worker 已不存在,直接 return,卸载路径的缩略图
+      // 生成是死代码。完成后(或 2s 超时兜底)再 terminate,避免泄漏。
+      const worker = thumbnailWorkerRef.current
+      if (worker) {
+        if (id > 0) {
+          // generateThumbnail 内部同步读取 thumbnailWorkerRef.current,
+          // 必须先调用再置 null,否则同样变成 no-op。
+          const finalThumbnail = generateThumbnail(id).catch(() => { })
+          thumbnailWorkerRef.current = null
+          Promise.race([
+            finalThumbnail,
+            new Promise<void>((resolve) => setTimeout(resolve, 2000)),
+          ]).finally(() => {
+            worker.terminate()
+          })
+        } else {
+          thumbnailWorkerRef.current = null
+          worker.terminate()
+        }
+      } else {
         thumbnailWorkerRef.current = null
       }
     }
@@ -1436,10 +1510,6 @@ export function CanvasPage() {
   }, [canvasId, zoom, panX, panY, hasInitializedCamera])
 
   const generateThumbnail = useCallback(async (canvasId: number) => {
-    if (!thumbnailWorkerRef.current) {
-      return
-    }
-
     try {
       const currentStore = useCanvasStore.getState()
 
@@ -1452,6 +1522,8 @@ export function CanvasPage() {
       const groupsArray = Array.from(currentStore.groups.values())
       const domainsArray = Array.from(currentStore.domains.values())
 
+      // E6: 空画布直绘分支不依赖 worker——worker 初始化失败(或已被销毁)时
+      // 仍能生成缩略图,因此该分支必须放在 worker 存在性检查之前。
       if (nodesArray.length === 0 && groupsArray.length === 0 && domainsArray.length === 0) {
         const canvas = document.createElement('canvas')
         canvas.width = THUMBNAIL.WIDTH
@@ -1474,6 +1546,10 @@ export function CanvasPage() {
             clientVersion,
           }, true)
         }
+        return
+      }
+
+      if (!thumbnailWorkerRef.current) {
         return
       }
 
@@ -1528,13 +1604,32 @@ export function CanvasPage() {
   // Debounced thumbnail generation to avoid excessive updates
   const thumbnailTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastRemoteThumbnailRef = useRef<number>(0)
+  // E5: 冷却期内被丢弃的缩略图请求不永久丢失——标记待生成,冷却结束后补偿执行
+  const thumbnailCompensationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const thumbnailPendingRef = useRef(false)
 
   const triggerThumbnailGeneration = useCallback((canvasId: number) => {
     // During active collaboration, remote changes arrive every 100ms (drag
     // throttle) or faster. Enforce a minimum 2s interval between remote-triggered
     // thumbnails so they don't flash on every peer edit.
     const now = Date.now()
-    if (now - lastRemoteThumbnailRef.current < 2000) return
+    const elapsed = now - lastRemoteThumbnailRef.current
+    if (elapsed < 2000) {
+      // E5: 冷却期丢弃的请求不重排队会导致缩略图永久缺失(调用方随后清除
+      // dirty,后续 tick 不再触发)。补偿:冷却结束后补生成一次。
+      thumbnailPendingRef.current = true
+      if (!thumbnailCompensationTimeoutRef.current) {
+        thumbnailCompensationTimeoutRef.current = setTimeout(() => {
+          thumbnailCompensationTimeoutRef.current = null
+          if (thumbnailPendingRef.current) {
+            thumbnailPendingRef.current = false
+            lastRemoteThumbnailRef.current = Date.now()
+            generateThumbnail(canvasId).catch(() => { })
+          }
+        }, 2000 - elapsed)
+      }
+      return
+    }
     lastRemoteThumbnailRef.current = now
     if (thumbnailTimeoutRef.current) {
       clearTimeout(thumbnailTimeoutRef.current)
@@ -1551,6 +1646,12 @@ export function CanvasPage() {
       if (thumbnailTimeoutRef.current) {
         clearTimeout(thumbnailTimeoutRef.current)
       }
+      // E5: 同时清理冷却补偿定时器与待生成标记,避免跨画布触发过期生成
+      if (thumbnailCompensationTimeoutRef.current) {
+        clearTimeout(thumbnailCompensationTimeoutRef.current)
+        thumbnailCompensationTimeoutRef.current = null
+      }
+      thumbnailPendingRef.current = false
     }
   }, [canvasId])
 
@@ -1612,8 +1713,8 @@ export function CanvasPage() {
           const snapshotGroups = state.groups
           const snapshotDomains = state.domains
           const snapshotConnections = state.connections
-          const { nodes, domains } = collectCanvasData(state)
-          if (hasCanvasContent(nodes, domains)) {
+          const { nodes, domains, groups } = collectCanvasData(state)
+          if (hasCanvasContent(nodes, domains, groups)) {
             triggerThumbnailGeneration(id)
           }
           const latest = useCanvasStore.getState()
@@ -1667,6 +1768,8 @@ export function CanvasPage() {
         )
 
         lastSaveTimeRef.current = Date.now()
+        // E20: 保存成功,重置退避
+        saveBackoffRef.current = 0
         const currentState = useCanvasStore.getState()
         if (currentState.nodes === snapshotNodes &&
           currentState.groups === snapshotGroups &&
@@ -1676,21 +1779,27 @@ export function CanvasPage() {
         }
 
         // Generate thumbnail after successful auto-save
-        if (hasCanvasContent(canvasData.nodes, canvasData.domains)) {
+        if (hasCanvasContent(canvasData.nodes, canvasData.domains, canvasData.groups)) {
           await triggerThumbnailGeneration(id)
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         if (error instanceof ApiError && error.status === 409) {
-          addToast({ type: 'warning', title: '保存冲突', message: '已获取服务端最新版本，可再次保存' })
+          addToast({ type: 'warning', title: '保存冲突', message: '画布已被其他会话更新，请刷新页面获取最新内容后重试' })
         } else if (message.includes('网络连接失败')) {
           addToast({ type: 'error', title: '保存失败', message: '网络错误，请检查连接后重试' })
         } else {
           addToast({ type: 'error', title: '保存失败', message: '服务器错误，请稍后重试' })
         }
-      } finally {
-        dbSaveTimeoutRef.current = setTimeout(saveToDatabase, AUTO_SAVE_INTERVAL)
+        // E20: 失败后指数退避重试(5s→10s→20s→40s→60s 封顶),避免持续高频重试
+        const backoff = saveBackoffRef.current === 0
+          ? AUTO_SAVE_INTERVAL
+          : Math.min(saveBackoffRef.current * 2, 60000)
+        saveBackoffRef.current = backoff
+        dbSaveTimeoutRef.current = setTimeout(saveToDatabase, backoff)
+        return
       }
+      dbSaveTimeoutRef.current = setTimeout(saveToDatabase, AUTO_SAVE_INTERVAL)
     }
 
     dbSaveTimeoutRef.current = setTimeout(saveToDatabase, AUTO_SAVE_INTERVAL)
@@ -1703,11 +1812,13 @@ export function CanvasPage() {
   }, [canvasId, setDirty, triggerThumbnailGeneration, addToast])
 
   // Manual save function
-  const handleManualSave = useCallback(async () => {
-    if (!canvasId) return
+  // E1: 返回 boolean 表示是否保存成功——此前错误被内部 catch 吞掉,调用方
+  // (Ctrl+S 成功提示)无法区分成功与失败,失败时仍提示"保存成功"。
+  const handleManualSave = useCallback(async (): Promise<boolean> => {
+    if (!canvasId) return false
 
     const id = parseInt(canvasId)
-    if (isNaN(id)) return
+    if (isNaN(id)) return false
 
     // In collaboration mode, edits are synced in real time via WebSocket.
     // Sending a full-snapshot POST /data here races with concurrent WS ops:
@@ -1718,8 +1829,8 @@ export function CanvasPage() {
     // toolbar save button can't trigger the race. Still flush the thumbnail.
     if (collabService.isConnected()) {
       const state = useCanvasStore.getState()
-      const { nodes, domains } = collectCanvasData(state)
-      if (hasCanvasContent(nodes, domains)) {
+      const { nodes, domains, groups } = collectCanvasData(state)
+      if (hasCanvasContent(nodes, domains, groups)) {
         await generateThumbnail(id)
       }
       addToast({
@@ -1728,7 +1839,7 @@ export function CanvasPage() {
         message: '协作模式下编辑内容会实时同步到服务器',
         duration: 3000,
       })
-      return
+      return true
     }
 
     // R1 统一防线（与自动保存/keepalive 一致）：有协作证据时跳过 REST 全量快照，
@@ -1741,7 +1852,7 @@ export function CanvasPage() {
         message: '连接已断开，更改已暂存在本地，重连后自动同步',
         duration: 3000,
       })
-      return
+      return true
     }
 
     const state = useCanvasStore.getState()
@@ -1762,20 +1873,29 @@ export function CanvasPage() {
       lastSaveTimeRef.current = Date.now()
       setDirty(false)
 
-      if (hasCanvasContent(canvasData.nodes, canvasData.domains)) {
+      if (hasCanvasContent(canvasData.nodes, canvasData.domains, canvasData.groups)) {
         await generateThumbnail(id)
       }
+      return true
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       if (error instanceof ApiError && error.status === 409) {
-        addToast({ type: 'warning', title: '保存冲突', message: '已获取服务端最新版本，可再次保存' })
+        addToast({ type: 'warning', title: '保存冲突', message: '画布已被其他会话更新，请刷新页面获取最新内容后重试' })
       } else if (message.includes('网络连接失败')) {
         addToast({ type: 'error', title: '保存失败', message: '网络错误，请检查连接后重试' })
       } else {
         addToast({ type: 'error', title: '保存失败', message: '服务器错误，请稍后重试' })
       }
+      return false
     }
   }, [canvasId, setDirty, generateThumbnail, addToast])
+
+  // E1: 工具栏保存按钮适配——handleManualSave 现在返回 boolean(供 Ctrl+S
+  // 判断成功与否),工具栏 onSave 期望 Promise<void>,这里丢弃返回值;
+  // 失败提示已由 handleManualSave 内部完成。
+  const handleToolbarSave = useCallback(async () => {
+    await handleManualSave()
+  }, [handleManualSave])
 
   // Handle page refresh/close - save data immediately before unloading
   useEffect(() => {
@@ -1812,7 +1932,7 @@ export function CanvasPage() {
         }
 
         // Generate thumbnail when page is being unloaded
-        if (hasCanvasContent(canvasData.nodes, canvasData.domains)) {
+        if (hasCanvasContent(canvasData.nodes, canvasData.domains, canvasData.groups)) {
           triggerThumbnailGeneration(id)
         }
       }
@@ -1848,23 +1968,11 @@ export function CanvasPage() {
     window.addEventListener('pagehide', handlePageHide)
 
     return () => {
+      // E8: 移除重复的 removeEventListener;卸载缩略图生成已由加载 effect 的
+      // cleanup 在 worker 销毁前完成(E4),此处原调用是死代码(worker 已被
+      // terminate,generateThumbnail 直接 return)。
       window.removeEventListener('beforeunload', handleBeforeUnload)
       window.removeEventListener('pagehide', handlePageHide)
-
-      // Generate thumbnail on component unmount (when navigating away)
-      if (canvasId) {
-        const id = parseInt(canvasId)
-        if (!isNaN(id)) {
-          const state = useCanvasStore.getState()
-          const { nodes, domains } = collectCanvasData(state)
-
-          if (hasCanvasContent(nodes, domains)) {
-            triggerThumbnailGeneration(id)
-          }
-        }
-      }
-
-      window.removeEventListener('beforeunload', handleBeforeUnload)
     }
   }, [canvasId, triggerThumbnailGeneration])
 
@@ -1898,7 +2006,6 @@ export function CanvasPage() {
         // Only set ready when size is stable and non-zero
         if (!isReady && width > 0 && height > 0 && stableFrameCount >= STABLE_FRAMES) {
           isReady = true
-          setContainerReady(true)
           return true
         }
       }
@@ -2020,29 +2127,26 @@ export function CanvasPage() {
           })
           return
         }
-        handleManualSave().then(() => {
-          addToast({
-            type: 'success',
-            title: '保存成功',
-            message: '画布内容已保存到服务器',
-            duration: 3000,
-          })
-        }).catch((error) => {
-          addToast({
-            type: 'error',
-            title: '保存失败',
-            message: error instanceof Error ? error.message : '保存画布时发生错误',
-            duration: 5000,
-          })
-        })
+        // E1: handleManualSave 返回是否成功,失败时其内部已提示具体错误,
+        // 这里仅在真正成功时提示"保存成功",不再失败误报。
+        handleManualSave().then((ok) => {
+          if (ok) {
+            addToast({
+              type: 'success',
+              title: '保存成功',
+              message: '画布内容已保存到服务器',
+              duration: 3000,
+            })
+          }
+        }).catch(() => { })
         return
       }
 
       // Delete/Backspace
-      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedIds.length > 0) {
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedIdsRef.current.length > 0) {
         e.preventDefault()
         const { removeNode, removeConnection, removeGroup, removeDomain, nodes: currentNodes, connections: currentConnections, groups: currentGroups, domains: currentDomains } = useCanvasStore.getState()
-        selectedIds.forEach((id) => {
+        selectedIdsRef.current.forEach((id) => {
           if (currentNodes.has(id)) {
             removeNode(id)
           } else if (currentConnections.has(id)) {
@@ -2080,31 +2184,37 @@ export function CanvasPage() {
       if ((e.key === 'd' || e.key === 'D') && (e.ctrlKey || e.metaKey)) {
         e.preventDefault()
         const { duplicateNode } = useCanvasStore.getState()
-        if (selectedIds.length === 1) {
-          duplicateNode(selectedIds[0])
+        if (selectedIdsRef.current.length === 1) {
+          duplicateNode(selectedIdsRef.current[0])
         }
         return
       }
 
       // Copy: Ctrl+C
       if ((e.key === 'c' || e.key === 'C') && (e.ctrlKey || e.metaKey)) {
-        const nodesToCopy = selectedIds.map((id) => nodes.get(id)).filter(Boolean)
-        sessionStorage.setItem('clipboard_nodes', JSON.stringify(nodesToCopy))
+        const nodesToCopy = selectedIdsRef.current
+          .map((id) => nodesRef.current.get(id))
+          .filter((n): n is Node => Boolean(n))
+        // E18: 经封装函数写入剪贴板(带错误处理);重置粘贴偏移,避免叠加
+        saveClipboardNodes(nodesToCopy)
+        pasteOffsetRef.current = 0
         return
       }
 
       // Paste: Ctrl+V
       if ((e.key === 'v' || e.key === 'V') && (e.ctrlKey || e.metaKey)) {
-        const clipboard = sessionStorage.getItem('clipboard_nodes')
+        const clipboard = loadClipboardNodes()
         if (clipboard) {
           try {
-            const nodesToPaste = JSON.parse(clipboard) as Node[]
-            nodesToPaste.forEach((node) => {
+            // E18: 每次粘贴递增偏移(20px),避免多次粘贴全部叠加在同一个位置
+            pasteOffsetRef.current += 20
+            const offset = pasteOffsetRef.current
+            clipboard.forEach((node) => {
               const newNode = {
                 ...node,
                 id: generateId('node'),
-                x: node.x + 20,
-                y: node.y + 20,
+                x: node.x + offset,
+                y: node.y + offset,
               }
               addNode(newNode)
             })
@@ -2118,32 +2228,37 @@ export function CanvasPage() {
       // Select all: Ctrl+A
       if ((e.key === 'a' || e.key === 'A') && (e.ctrlKey || e.metaKey)) {
         e.preventDefault()
-        setSelectedIds(Array.from(nodes.keys()))
+        setSelectedIds(Array.from(nodesRef.current.keys()))
         return
       }
 
       // Shift key - toggle drag mode
       if (e.key === 'Shift' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        // E2: 长按 Shift 产生重复 keydown,仅首次切换拖拽模式
+        if (e.repeat) return
         toggleDragMode()
         return
       }
 
       // Tool shortcuts (single key, no modifiers)
       if (!e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey) {
+        // E2-fix: 长按单键工具快捷键同样产生重复 keydown（与 Shift 拖拽模式
+        // 守卫一致），仅首次按下切换工具，避免长按在 select 与其他工具间抖动。
+        if (e.repeat) return
         if (e.key === 'n' || e.key === 'N') {
-          setCurrentTool(currentTool === 'node' ? 'select' : 'node')
+          setCurrentTool(currentToolRef.current === 'node' ? 'select' : 'node')
           return
         } else if (e.key === 'i' || e.key === 'I') {
-          setCurrentTool(currentTool === 'image' ? 'select' : 'image')
+          setCurrentTool(currentToolRef.current === 'image' ? 'select' : 'image')
           return
         } else if (e.key === 'r' || e.key === 'R') {
-          setCurrentTool(currentTool === 'domain' ? 'select' : 'domain')
+          setCurrentTool(currentToolRef.current === 'domain' ? 'select' : 'domain')
           return
         } else if (e.key === 'l' || e.key === 'L') {
-          setCurrentTool(currentTool === 'connection' ? 'select' : 'connection')
+          setCurrentTool(currentToolRef.current === 'connection' ? 'select' : 'connection')
           return
         } else if (e.key === 'g' || e.key === 'G') {
-          setCurrentTool(currentTool === 'group' ? 'select' : 'group')
+          setCurrentTool(currentToolRef.current === 'group' ? 'select' : 'group')
           return
         } else if (e.key === 'h' || e.key === 'H') {
           toggleGrid()
@@ -2225,9 +2340,9 @@ export function CanvasPage() {
           }
           return
         } else if (e.key === 'Enter') {
-          if (selectedIds.length === 1) {
-            const nodeId = selectedIds[0]
-            if (nodes.has(nodeId)) {
+          if (selectedIdsRef.current.length === 1) {
+            const nodeId = selectedIdsRef.current[0]
+            if (nodesRef.current.has(nodeId)) {
               e.preventDefault()
               setEditingId(nodeId)
               return
@@ -2246,8 +2361,8 @@ export function CanvasPage() {
       // Ctrl+G create group
       if ((e.ctrlKey || e.metaKey) && (e.key === 'g' || e.key === 'G')) {
         e.preventDefault()
-        if (selectedIds.length > 0) {
-          const selectedNodes = selectedIds.map(id => nodes.get(id)).filter(Boolean)
+        if (selectedIdsRef.current.length > 0) {
+          const selectedNodes = selectedIdsRef.current.map(id => nodesRef.current.get(id)).filter(Boolean)
           if (selectedNodes.length > 0) {
             let minX = Infinity
             let minY = Infinity
@@ -2263,7 +2378,7 @@ export function CanvasPage() {
 
             const newGroup = {
               id: generateId('group'),
-              name: `组 ${groups.size + 1}`,
+              name: `组 ${groupsRef.current.size + 1}`,
               x: minX - 10,
               y: minY - 10,
               width: maxX - minX + 20,
@@ -2272,7 +2387,7 @@ export function CanvasPage() {
               backgroundColor: 'rgba(59, 130, 246, 0.1)',
               borderWidth: 2,
               borderRadius: 8,
-              nodeIds: selectedIds,
+              nodeIds: selectedIdsRef.current,
               collapsed: false,
             }
             addGroup(newGroup)
@@ -2285,12 +2400,15 @@ export function CanvasPage() {
       if ((e.ctrlKey || e.metaKey) && e.key === '0') {
         e.preventDefault()
         setZoom(1)
+        // E17: Ctrl+0 同时重置平移——回到"原点居中"的默认视图
+        const rect = containerRef.current?.getBoundingClientRect()
+        setPan((rect?.width ?? 0) / 2, (rect?.height ?? 0) / 2)
       } else if ((e.ctrlKey || e.metaKey) && (e.key === '=' || e.key === '+')) {
         e.preventDefault()
-        setZoom(Math.min(zoom + 0.1, 5))
+        setZoom(Math.min(zoomRef.current + 0.1, 5))
       } else if ((e.ctrlKey || e.metaKey) && e.key === '-') {
         e.preventDefault()
-        setZoom(Math.max(zoom - 0.1, 0.1))
+        setZoom(Math.max(zoomRef.current - 0.1, 0.1))
       }
 
       // Panel shortcuts
@@ -2314,7 +2432,9 @@ export function CanvasPage() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
     }
-  }, [zoom, currentTool, setCurrentTool, setZoom, setPan, toggleGrid, toggleQuickEditMode, toggleRelationshipHighlightMode, toggleDragMode, toggleMinimap, setEditingId, nodes, groups, selectedIds, addGroup, toggleSidebar, toggleNodePool, setSettingsOpen, setCommandPaletteOpen, handleManualSave, setIsCreatingConnection, setConnectionStartNodeId, setStartPortPreview, setSelectedIds, canUndo, canRedo, undo, redo, addNode, addToast])
+    // E12: deps 全部为稳定引用——易变值(zoom/currentTool/nodes/groups/selectedIds)
+    // 通过 ref 读取,避免每次编辑/选择变化都解绑并重绑全局 keydown 监听。
+  }, [setCurrentTool, setZoom, setPan, toggleGrid, toggleQuickEditMode, toggleRelationshipHighlightMode, toggleDragMode, toggleMinimap, setEditingId, addGroup, toggleSidebar, toggleNodePool, setSettingsOpen, setCommandPaletteOpen, handleManualSave, setIsCreatingConnection, setConnectionStartNodeId, setStartPortPreview, setSelectedIds, canUndo, canRedo, undo, redo, addNode, addToast])
 
   // Space key for canvas drag
   useEffect(() => {
@@ -2412,6 +2532,8 @@ export function CanvasPage() {
     }
   }, [])
 
+  // E13-fix: lastMouseUpAtRef 提升到 handleMouseDown 之前声明,供入口重置使用。
+  const lastMouseUpAtRef = useRef(0)
   // Handle mouse down for drag panning and connection creation
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     const rect = containerRef.current?.getBoundingClientRect()
@@ -2420,10 +2542,14 @@ export function CanvasPage() {
     const canvasX = (mouseX - panX) / zoom
     const canvasY = (mouseY - panY) / zoom
 
-    mouseDownOnContentRef.current = false
+    // E13-fix: 每次新的 mousedown 重置 mouseup 去重时间戳,保证每次按下都能
+    // 重新结算(双击/连点场景第二次 mouseup 不会被上一次的时间戳去重吞掉)。
+    // R5 #1: 去重窗口已从 100ms 缩至 20ms,此重置不再影响正常快速交互。
+    lastMouseUpAtRef.current = 0
     justFinishedConnectionRef.current = false
     justFinishedBoxSelectingRef.current = false
     justFinishedEndpointDraggingRef.current = false
+    justFinishedBendPointDraggingRef.current = false
 
     const target = e.target as HTMLElement
     const clickedOnNode = target.closest('.node-item')
@@ -2841,7 +2967,20 @@ export function CanvasPage() {
   }, [isDragging, isBoxSelecting, isCreatingDomain, isCreatingConnection, isDraggingConnectionEndpoint, isDraggingBendPoint, isResizingGroup, isCreatingGroup, panX, panY, zoom, setPan, nodes, connectionStartNodeId, draggingConnectionId, draggingEndpoint, draggingBendPointId, connections, isDraggingGroup, draggingGroupId, groups, groupDragStart, groupInitialPositions, initialGroupNodeIds, groupDragInitialGroupPos, resizeHandle, resizeStart, resizeInitialGroup, resizeInitialNodePositions, updateGroup, resizingGroupId, currentTool, selectedIds, customCursor, setCustomCursor, id, sendCursor])
 
   // Handle mouse up
-  const handleMouseUp = useCallback(async (e: React.MouseEvent) => {
+  // E13: 同时接受原生 MouseEvent——window 级兜底监听在容器外释放鼠标时
+  // 也能结束拖拽,替代原 onMouseLeave={handleMouseUp}(指针离开容器即过早
+  // 终结拖拽,且窗口外释放时状态可能卡死)。
+  // R5 #1(E13 回归修复): 去重窗口从 100ms 缩到 20ms。100ms 会吞掉合法快速
+  // 交互——mousedown 重置时间戳后,按下到抬起不足 100ms 的 mouseup 会被
+  // 去重丢弃,isBoxSelecting/isCreatingDomain/isDraggingGroup 等状态残留,
+  // 之后纯移动鼠标即驱动误操作。20ms 仅覆盖同一事件的重复派发(React 合成
+  // 事件 + 原生冒泡),不会吞正常交互;配合 window 兜底的 contains 判断
+  // (容器内释放只走 React onMouseUp),本去重实际只作为防御性兜底。
+  const handleMouseUp = useCallback(async (e: React.MouseEvent | MouseEvent) => {
+    const now = Date.now()
+    if (now - lastMouseUpAtRef.current < 20) return
+    lastMouseUpAtRef.current = now
+
     setIsDragging(false)
 
     if (panRafRef.current) {
@@ -3168,8 +3307,11 @@ export function CanvasPage() {
           addConnection(newConnection)
         }
       } else {
-        const target = e.target as HTMLElement
-        const clickedOnNode = target.closest('.node-item')
+        // E13-fix: window 级兜底监听下,鼠标移出窗口释放时原生 e.target
+        // 可能是 Document/null,不是 Element,直接 .closest() 会抛 TypeError
+        // 导致状态卡死;先 instanceof 判断,非 Element 按未点中节点处理。
+        const target = e.target instanceof Element ? e.target : null
+        const clickedOnNode = target?.closest('.node-item') ?? null
         const nodeId = clickedOnNode?.getAttribute('data-node-id')
 
         if (nodeId && nodeId !== connectionStartNodeId) {
@@ -3255,8 +3397,11 @@ export function CanvasPage() {
           newToPort = snappedPort.port
         }
       } else {
-        const target = e.target as HTMLElement
-        const clickedOnNode = target.closest('.node-item')
+        // E13-fix: window 级兜底监听下,鼠标移出窗口释放时原生 e.target
+        // 可能是 Document/null,不是 Element,直接 .closest() 会抛 TypeError
+        // 导致状态卡死;先 instanceof 判断,非 Element 按未点中节点处理。
+        const target = e.target instanceof Element ? e.target : null
+        const clickedOnNode = target?.closest('.node-item') ?? null
         const nodeId = clickedOnNode?.getAttribute('data-node-id')
 
         if (nodeId) {
@@ -3329,6 +3474,26 @@ export function CanvasPage() {
       }, 0)
     }
   }, [isDragging, isDraggingGroup, isCreatingGroup, groupStartPos, groupEndPos, groupDragStart, groupInitialPositions, initialGroupNodeIds, groupDragInitialGroupPos, draggingGroupId, groupDragOffset, nodes, groups, updateGroup, addGroup, isCreatingConnection, connectionStartNodeId, connectionStartPort, isDraggingConnectionEndpoint, draggingConnectionId, draggingEndpoint, connections, panX, panY, zoom, containerRef, updateConnection, findBestPort, snappedPort, addConnection, removeConnection, isBoxSelecting, boxSelectionStart, boxSelectionEnd, addToSelection, isCreatingDomain, domainBoxStart, domainBoxEnd, domains, addDomain, isDraggingBendPoint, draggingBendPointId, setSelectedIds, setSelectedType, connectionType])
+
+  // E13: window 级 mouseup 兜底——拖拽过程中指针移出容器甚至移出窗口时,
+  // 释放鼠标仍能触发 handleMouseUp 结束拖拽。
+  // R5 #1(E13 回归修复): 容器内释放时仅以 React onMouseUp 为准——同一
+  // mouseup 原生事件会继续冒泡到 window 再次触发本回调,若此处也执行
+  // handleMouseUp 就会重复结算(重复建域/重复连线/重复入 undo 历史)。
+  // 因此先判 contains:释放点在容器内则直接跳过(兜底只处理容器外释放,
+  // 此时 React onMouseUp 不会触发,本回调是唯一结算入口)。
+  useEffect(() => {
+    const onWindowMouseUp = (e: MouseEvent) => {
+      const target = e.target
+      // 释放点在容器内 → React onMouseUp 已处理,跳过兜底(避免同事件双触发)
+      if (target instanceof Node && containerRef.current?.contains(target)) return
+      handleMouseUp(e)
+    }
+    window.addEventListener('mouseup', onWindowMouseUp)
+    return () => {
+      window.removeEventListener('mouseup', onWindowMouseUp)
+    }
+  }, [handleMouseUp, containerRef])
 
   // Handle connection click
   const handleConnectionClick = useCallback((e: React.MouseEvent, connectionId: string) => {
@@ -3529,7 +3694,7 @@ export function CanvasPage() {
 
       setCurrentTool('select')
     }
-  }, [isEditingConnectionEndpoint, editingConnectionId, editingEndpoint, connections, updateConnection, nodes, panX, panY, zoom, containerRef, currentTool, isDragging, setSelectedIds, dragMode, addNode, setCurrentTool, findBestPort, stylePanelOpen, closeStylePanel, nodeDefaults])
+  }, [connections, updateConnection, nodes, panX, panY, zoom, containerRef, currentTool, isDragging, setSelectedIds, dragMode, addNode, setCurrentTool, findBestPort, stylePanelOpen, closeStylePanel, nodeDefaults])
 
   // Handle mouse wheel for zooming and panning
   const handleWheel = (e: React.WheelEvent) => {
@@ -3567,24 +3732,10 @@ export function CanvasPage() {
   }
 
   // Close context menu when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (e.button === 0) {
-        // Find the context menu element
-        const contextMenuElement = document.querySelector('.fixed.bg-white.dark\\:bg-gray-800.border.border-gray-200.dark\\:border-gray-700.rounded-lg.shadow-lg.py-1.z-50')
-        // Check if the click is outside the context menu
-        if (contextMenuElement && !contextMenuElement.contains(e.target as unknown as globalThis.Node)) {
-          setContextMenu(null)
-          setConnectionContextMenu(null)
-          setDomainContextMenu(null)
-          setNodeContextMenu(null)
-        }
-      }
-    }
-
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [])
+  // E11: 删除硬编码 CSS 选择器方案——原选择器(.z-50)与 ContextMenuWrapper
+  // 实际 class(zIndex 走 style)不匹配,永远匹配不到,是死代码。且所有菜单
+  // 组件(ContextMenuWrapper/NodeContextMenu/DomainContextMenu)均自带
+  // document mousedown 点击外部关闭,此处的全局监听完全冗余。
 
   // Listen for node drag events to update connections in real-time
   useEffect(() => {
@@ -3858,7 +4009,7 @@ export function CanvasPage() {
 
       {/* Canvas Toolbar */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
-        <CanvasToolbar onSave={handleManualSave} isViewer={isViewer} isCollabConnected={collabService.isConnected()} />
+        <CanvasToolbar onSave={handleToolbarSave} isViewer={isViewer} isCollabConnected={isCollabConnected} />
       </div>
 
       {/* Zoom Controls */}
@@ -3873,7 +4024,6 @@ export function CanvasPage() {
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseUp}
         onClick={handleCanvasClick}
         onContextMenu={(e) => {
           // 只阻止画布区域的右键菜单，允许节点池等侧边栏的右键菜单正常显示
@@ -3919,7 +4069,7 @@ export function CanvasPage() {
             transformOrigin: '0 0',
           }}
           onMouseDown={() => {
-            mouseDownOnContentRef.current = true
+            // 原"鼠标按在内容区"标记 ref 已移除——只写不读的死状态
           }}
           onClick={(e) => {
             // SVG content click handler
@@ -3997,8 +4147,14 @@ export function CanvasPage() {
           {Array.from(groups.values()).map((group) => {
             const isSelected = selectedIds.includes(group.id)
             // Calculate position with offset if dragging
-            const displayX = isDraggingGroup && draggingGroupId === group.id ? groupDragInitialGroupPos!.x + groupDragOffset.x : group.x
-            const displayY = isDraggingGroup && draggingGroupId === group.id ? groupDragInitialGroupPos!.y + groupDragOffset.y : group.y
+            // E22: 去掉非空断言——组拖拽初始位置为 null 时回退到 store 位置
+            const isDraggingThisGroup = isDraggingGroup && draggingGroupId === group.id
+            const displayX = isDraggingThisGroup && groupDragInitialGroupPos
+              ? groupDragInitialGroupPos.x + groupDragOffset.x
+              : group.x
+            const displayY = isDraggingThisGroup && groupDragInitialGroupPos
+              ? groupDragInitialGroupPos.y + groupDragOffset.y
+              : group.y
 
             return (
               <div
@@ -4023,6 +4179,10 @@ export function CanvasPage() {
                   }
 
                   e.stopPropagation()
+                  // E13-fix: 组拖拽 handle 的 stopPropagation 会绕过 handleMouseDown
+                  // 中的去重重置。此处同步重置，避免快速双击组时第二次 mouseup 被
+                  // handleMouseUp 去重吞掉 → isDraggingGroup 状态卡死 + 幻影 undo。
+                  lastMouseUpAtRef.current = 0
 
                   // Only allow left mouse button for dragging and selection
                   if (e.button !== 0) return
@@ -4160,146 +4320,49 @@ export function CanvasPage() {
                 </div>
 
                 {/* Resize handles */}
-                <div
-                  className="absolute w-2 h-2 bg-blue-500 rounded-full cursor-nwse-resize hover:bg-blue-600"
-                  style={{
-                    left: -4,
-                    top: -4,
-                    zIndex: Z_INDEX.GROUP,
-                  }}
-                  onMouseDown={(e) => {
-                    e.stopPropagation()
-                    const rect = containerRef.current?.getBoundingClientRect()
-                    if (rect) {
-                      const mouseX = e.clientX - rect.left
-                      const mouseY = e.clientY - rect.top
-                      const canvasX = (mouseX - panX) / zoom
-                      const canvasY = (mouseY - panY) / zoom
+                {/* E16: 四个角的把手共用 GroupResizeHandle 组件,消除重复 */}
+                {([
+                  { handle: 'nw' as const, className: 'cursor-nwse-resize', style: { left: -4, top: -4 } },
+                  { handle: 'ne' as const, className: 'cursor-nesw-resize', style: { right: -4, top: -4 } },
+                  { handle: 'sw' as const, className: 'cursor-nesw-resize', style: { left: -4, bottom: -4 } },
+                  { handle: 'se' as const, className: 'cursor-nwse-resize', style: { right: -4, bottom: -4 } },
+                ]).map(({ handle, className, style }) => (
+                  <GroupResizeHandle
+                    key={handle}
+                    handle={handle}
+                    className={className}
+                    style={style}
+                    panX={panX}
+                    panY={panY}
+                    zoom={zoom}
+                    containerRef={containerRef}
+                    onContextMenu={handle === 'nw' ? (e) => {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      setContextMenu({
+                        x: e.clientX,
+                        y: e.clientY,
+                        groupId: group.id,
+                      })
+                    } : undefined}
+                    onResizeStart={(canvasX, canvasY) => {
                       setIsResizingGroup(true)
                       setResizingGroupId(group.id)
-                      setResizeHandle('nw')
+                      setResizeHandle(handle)
                       setResizeStart({ x: canvasX, y: canvasY })
                       setResizeInitialGroup({ x: group.x, y: group.y, width: group.width, height: group.height })
 
                       const initialPositions = new Map<string, { x: number; y: number; width: number; height: number }>()
-                      group.nodeIds.forEach(nodeId => {
+                      group.nodeIds.forEach((nodeId) => {
                         const node = nodes.get(nodeId)
                         if (node) {
                           initialPositions.set(nodeId, { x: node.x, y: node.y, width: node.width, height: node.height })
                         }
                       })
                       setResizeInitialNodePositions(initialPositions)
-                    }
-                  }}
-                  onContextMenu={(e) => {
-                    e.preventDefault()
-                    e.stopPropagation()
-                    setContextMenu({
-                      x: e.clientX,
-                      y: e.clientY,
-                      groupId: group.id,
-                    })
-                  }}
-                />
-
-                <div
-                  className="absolute w-2 h-2 bg-blue-500 rounded-full cursor-nesw-resize hover:bg-blue-600"
-                  style={{
-                    right: -4,
-                    top: -4,
-                    zIndex: Z_INDEX.GROUP,
-                  }}
-                  onMouseDown={(e) => {
-                    e.stopPropagation()
-                    const rect = containerRef.current?.getBoundingClientRect()
-                    if (rect) {
-                      const mouseX = e.clientX - rect.left
-                      const mouseY = e.clientY - rect.top
-                      const canvasX = (mouseX - panX) / zoom
-                      const canvasY = (mouseY - panY) / zoom
-                      setIsResizingGroup(true)
-                      setResizingGroupId(group.id)
-                      setResizeHandle('ne')
-                      setResizeStart({ x: canvasX, y: canvasY })
-                      setResizeInitialGroup({ x: group.x, y: group.y, width: group.width, height: group.height })
-
-                      const initialPositions = new Map<string, { x: number; y: number; width: number; height: number }>()
-                      group.nodeIds.forEach(nodeId => {
-                        const node = nodes.get(nodeId)
-                        if (node) {
-                          initialPositions.set(nodeId, { x: node.x, y: node.y, width: node.width, height: node.height })
-                        }
-                      })
-                      setResizeInitialNodePositions(initialPositions)
-                    }
-                  }}
-                />
-
-                <div
-                  className="absolute w-2 h-2 bg-blue-500 rounded-full cursor-nesw-resize hover:bg-blue-600"
-                  style={{
-                    left: -4,
-                    bottom: -4,
-                    zIndex: Z_INDEX.GROUP,
-                  }}
-                  onMouseDown={(e) => {
-                    e.stopPropagation()
-                    const rect = containerRef.current?.getBoundingClientRect()
-                    if (rect) {
-                      const mouseX = e.clientX - rect.left
-                      const mouseY = e.clientY - rect.top
-                      const canvasX = (mouseX - panX) / zoom
-                      const canvasY = (mouseY - panY) / zoom
-                      setIsResizingGroup(true)
-                      setResizingGroupId(group.id)
-                      setResizeHandle('sw')
-                      setResizeStart({ x: canvasX, y: canvasY })
-                      setResizeInitialGroup({ x: group.x, y: group.y, width: group.width, height: group.height })
-
-                      const initialPositions = new Map<string, { x: number; y: number; width: number; height: number }>()
-                      group.nodeIds.forEach(nodeId => {
-                        const node = nodes.get(nodeId)
-                        if (node) {
-                          initialPositions.set(nodeId, { x: node.x, y: node.y, width: node.width, height: node.height })
-                        }
-                      })
-                      setResizeInitialNodePositions(initialPositions)
-                    }
-                  }}
-                />
-
-                <div
-                  className="absolute w-2 h-2 bg-blue-500 rounded-full cursor-nwse-resize hover:bg-blue-600"
-                  style={{
-                    right: -4,
-                    bottom: -4,
-                    zIndex: Z_INDEX.GROUP,
-                  }}
-                  onMouseDown={(e) => {
-                    e.stopPropagation()
-                    const rect = containerRef.current?.getBoundingClientRect()
-                    if (rect) {
-                      const mouseX = e.clientX - rect.left
-                      const mouseY = e.clientY - rect.top
-                      const canvasX = (mouseX - panX) / zoom
-                      const canvasY = (mouseY - panY) / zoom
-                      setIsResizingGroup(true)
-                      setResizingGroupId(group.id)
-                      setResizeHandle('se')
-                      setResizeStart({ x: canvasX, y: canvasY })
-                      setResizeInitialGroup({ x: group.x, y: group.y, width: group.width, height: group.height })
-
-                      const initialPositions = new Map<string, { x: number; y: number; width: number; height: number }>()
-                      group.nodeIds.forEach(nodeId => {
-                        const node = nodes.get(nodeId)
-                        if (node) {
-                          initialPositions.set(nodeId, { x: node.x, y: node.y, width: node.width, height: node.height })
-                        }
-                      })
-                      setResizeInitialNodePositions(initialPositions)
-                    }
-                  }}
-                />
+                    }}
+                  />
+                ))}
               </div>
             )
           })}
@@ -4883,7 +4946,6 @@ export function CanvasPage() {
                           setIsDraggingBendPoint(true)
                           setDraggingBendPointId(bendPoint.id)
                           setDraggingConnectionId(conn.id)
-                          setDragBendPointStart({ x: e.clientX, y: e.clientY })
                         }}
                         onContextMenu={(e) => {
                           e.preventDefault()
@@ -4964,7 +5026,13 @@ export function CanvasPage() {
                       zoom={zoom}
                       groupDragOffset={nodeGroupDragOffset}
                       onNodeContextMenuOpen={handleNodeContextMenu}
-                      onMouseDown={closeAllContextMenus}
+                      onMouseDown={() => {
+                        // E13-fix: NodeItem 的 mousedown 会 stopPropagation，绕过
+                        // handleMouseDown 中的 lastMouseUpAtRef 重置。此处同步重置，
+                        // 防快速双击节点时 mouseup 去重吞掉第二次结算（状态卡死+幻影 undo）。
+                        lastMouseUpAtRef.current = 0
+                        closeAllContextMenus()
+                      }}
                       isViewer={isViewer}
                       opacity={nodeOpacity}
                     />

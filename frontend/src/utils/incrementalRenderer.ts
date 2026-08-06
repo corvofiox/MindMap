@@ -26,6 +26,7 @@ export class IncrementalRenderer {
   }
   private options: IncrementalRendererOptions
   private pendingRender = false
+  private renderRafId: number | null = null
   private worker: Worker | null = null
   private workerRequestVersion = 0
 
@@ -37,6 +38,11 @@ export class IncrementalRenderer {
 
   destroy(): void {
     this.pendingRender = false
+    // 取消尚未执行的 rAF，避免在已 dispose 的 canvas 上渲染（D17）
+    if (this.renderRafId !== null) {
+      cancelAnimationFrame(this.renderRafId)
+      this.renderRafId = null
+    }
     this.workerRequestVersion = 0
     this.objectMap.nodes.clear()
     this.objectMap.connections.clear()
@@ -210,15 +216,27 @@ export class IncrementalRenderer {
     const existingObj = this.objectMap.nodes.get(node.id)
 
     if (existingObj) {
-      existingObj.set({
-        left: node.x,
-        top: node.y,
-        width: node.width,
-        height: node.height,
+      const updates: Record<string, unknown> = {
         fill: node.color || '#ffffff',
         selectable: !node.locked,
         evented: !node.locked,
-      })
+      }
+      // R3 #1：ActiveSelection/Group 子对象的 left/top/width/height 是相对组中心的
+      // 本地坐标，与 store 的画布坐标不在同一坐标系——直接写入会导致节点在组内
+      // 错位/飞出/尺寸重复放大。组交互结束（object:modified）时 FabricCanvas 已用
+      // 组变换矩阵把最终画布坐标提交 store，此处整体跳过几何即可；取消选择后
+      // fabric 反组会把子对象还原为绝对坐标，届时恢复同步。
+      if (!existingObj.group) {
+        updates.left = node.x
+        updates.top = node.y
+        updates.width = node.width
+        updates.height = node.height
+        // 归一化 scale：fabric 反组会把组缩放烘焙进子对象 scaleX/scaleY，
+        // 重置为 1 保证"渲染尺寸 = store 尺寸"（与单节点提交后的行为一致）
+        updates.scaleX = 1
+        updates.scaleY = 1
+      }
+      existingObj.set(updates)
     } else {
       const newObj = this.createNodeObject(node)
       if (newObj) {
@@ -263,11 +281,15 @@ export class IncrementalRenderer {
   // 检查节点是否需要更新
   private nodeNeedsUpdate(obj: fabric.Object, node: Node): boolean {
     const fillColor = typeof obj.fill === 'string' ? obj.fill : (obj.fill as any)?.color
-    return (
+    // 组内子对象的几何（left/top/width/height）是组本地坐标，不与 store 画布坐标比较（R3 #1）
+    const geometryChanged = !obj.group && (
       obj.left !== node.x ||
       obj.top !== node.y ||
       obj.width !== node.width ||
-      obj.height !== node.height ||
+      obj.height !== node.height
+    )
+    return (
+      geometryChanged ||
       fillColor !== node.color ||
       obj.selectable !== !node.locked
     )
@@ -471,7 +493,12 @@ export class IncrementalRenderer {
     timeout: number = 5000
   ): Promise<T | null> {
     return new Promise((resolve) => {
-      if (!this.worker) {
+      // R4 #7：用局部变量捕获 worker。destroy() 会把 this.worker 置 null，
+      // 若回调（message/setTimeout）仍通过 this.worker! 访问会在 destroy 后
+      // 抛 TypeError（null.removeEventListener）。局部引用在 destroy 后依然
+      // 有效（worker 已被 terminate，removeEventListener 无害）。
+      const worker = this.worker
+      if (!worker) {
         resolve(null)
         return
       }
@@ -479,19 +506,21 @@ export class IncrementalRenderer {
       const handleMessage = (event: MessageEvent) => {
         const response = event.data
         if (response.type === `${type}Result` || response.type === 'pathsResult') {
+          // 无论版本是否匹配都立即移除监听，避免过期响应导致监听器堆积（D16）；
+          // 只有版本匹配的响应才 resolve。
+          worker.removeEventListener('message', handleMessage)
           if (version === this.workerRequestVersion) {
-            this.worker!.removeEventListener('message', handleMessage)
             resolve(response.data as T)
           }
         }
       }
 
-      this.worker.addEventListener('message', handleMessage)
+      worker.addEventListener('message', handleMessage)
 
-      this.worker!.postMessage({ type, ...(data as Record<string, unknown>) })
+      worker.postMessage({ type, ...(data as Record<string, unknown>) })
 
       setTimeout(() => {
-        this.worker!.removeEventListener('message', handleMessage)
+        worker.removeEventListener('message', handleMessage)
         resolve(null)
       }, timeout)
     })
@@ -504,6 +533,29 @@ export class IncrementalRenderer {
     pathData: string
   ): void {
     const existingObj = this.objectMap.connections.get(connection.id)
+
+    // 增量更新：同一非直线类型直接复用对象、只更新路径数据与样式，避免重建（D15）
+    if (existingObj && connection.type !== 'straight') {
+      const fabric = this.getFabric()
+      const parsePath = fabric?.util?.parsePath
+      if (typeof parsePath === 'function' && (existingObj as fabric.Path).path) {
+        const pathObj = existingObj as any
+        // R3 #2：fabric 的 set({ path }) 只替换路径数组，不会重算 pathOffset/
+        // width/height/left/top，直接复用会导致路径渲染错位（原点/包围盒沿用旧值）。
+        // 改调 fabric.Path 的 _setPath（构造器同款逻辑：makePathSimpler +
+        // _setPositionDimensions 重算全部几何），并手动置 dirty 使缓存位图失效。
+        if (typeof pathObj._setPath === 'function') {
+          pathObj._setPath(parsePath(pathData))
+          pathObj.dirty = true
+          pathObj.setCoords()
+          this.updateConnectionProperties(existingObj, connection)
+          return
+        }
+        // 私有 API 不可用（如 fabric 版本升级）时回退到重建对象
+        this.canvas.remove(existingObj)
+        this.objectMap.connections.delete(connection.id)
+      }
+    }
 
     if (existingObj) {
       this.canvas.remove(existingObj)
@@ -753,9 +805,10 @@ export class IncrementalRenderer {
     if (this.pendingRender) return
 
     this.pendingRender = true
-    requestAnimationFrame(() => {
-      this.canvas.renderAll()
+    this.renderRafId = requestAnimationFrame(() => {
       this.pendingRender = false
+      this.renderRafId = null
+      this.canvas.renderAll()
     })
   }
 

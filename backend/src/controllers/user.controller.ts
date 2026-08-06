@@ -161,15 +161,19 @@ userRouter.delete('/account', authenticate, asyncHandler(async (req: AuthRequest
     })
   }
 
-  // Verify password
-  if (password) {
-    const isValid = await bcrypt.compare(password, user.password)
-    if (!isValid) {
-      return res.status(401).json({
-        success: false,
-        error: '密码不正确',
-      })
-    }
+  // A7: 强制密码校验——持 JWT 而无密码不得删号（防撞库/被盗 token 直接删号）
+  if (!password || typeof password !== 'string') {
+    return res.status(400).json({
+      success: false,
+      error: '请输入密码以确认删除账户',
+    })
+  }
+  const isValid = await bcrypt.compare(password, user.password)
+  if (!isValid) {
+    return res.status(401).json({
+      success: false,
+      error: '密码不正确',
+    })
   }
 
   const userId = req.user!.id

@@ -1,4 +1,5 @@
 import { logger } from './logger'
+import { apiClient } from '@/services/apiClient'
 
 class DebugLogger {
   private logsDir: string
@@ -69,10 +70,14 @@ class DebugLogger {
     try {
       logger.info('Attempting to save logs to server...', { category, logCount: logsToSend.length })
 
+      // 携带认证 + CSRF 头（D23：/api/logs 受 CSRF 保护，缺头会 403）
+      const authHeaders = apiClient.getAuthHeaders('application/json') as Record<string, string>
+
       const response = await fetch('/api/logs', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...authHeaders,
         },
         body: JSON.stringify({
           category,

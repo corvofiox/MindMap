@@ -21,6 +21,7 @@ import * as encoding from 'lib0/encoding'
 import * as decoding from 'lib0/decoding'
 import * as syncProtocol from 'y-protocols/sync'
 import * as awarenessProtocol from 'y-protocols/awareness'
+import { getExistingRoot } from './yjs-schema'
 import { logger } from '@/utils/logger'
 
 /**
@@ -129,6 +130,22 @@ function deletionSets(canvasId: number): { nodes: Set<string>; groups: Set<strin
 
 export function recordLocalDeletion(canvasId: number, collection: DeletionCollection, id: string): void {
   deletionSets(canvasId)[collection].add(id)
+}
+
+/** 查询某实体是否已被本地声明删除（供重连同步时排除幽灵复活）。 */
+export function isLocalDeletion(canvasId: number, collection: DeletionCollection, id: string): boolean {
+  if (typeof canvasId !== 'number') return false
+  const entry = localDeletions.get(canvasId)
+  if (!entry) return false
+  return entry[collection].has(id)
+}
+
+/** 移除单条删除声明（服务端已确认应用后调用，防止 localDeletions 只增不减）。 */
+export function removeLocalDeletion(canvasId: number, collection: DeletionCollection, id: string): void {
+  if (typeof canvasId !== 'number') return
+  const entry = localDeletions.get(canvasId)
+  if (!entry) return
+  entry[collection].delete(id)
 }
 
 /** 序列化为 REST 快照附带的 deletedIds 载荷（数组形式）。 */
@@ -553,7 +570,18 @@ export class MindMapYjsProvider {
       }
       if (!this.isSynced && isStep2) {
         this.isSynced = true
+        // R4 #4（C18）：对账前先确认删除 update 已送达。若本次同步前存在离线
+        // 缓冲（pendingUpdates 非空），flushPendingUpdates 刚把删除 update 发出，
+        // 服务端尚未应用。此时本地 doc 中实体已不存在（本地删除 op 在 CRDT 合并
+        // 中保留），立即 reconcile 会把声明误删 → 下次 REST 快照不再携带删除声明
+        // → 服务端全量合并时实体幽灵复活。仅当无待发送缓冲（删除 update 均已
+        // 送达）时才执行对账；离线场景的声明保留至下次干净重连再清理。
+        const hadPendingUpdates = this.pendingUpdates.length > 0
         this.flushPendingUpdates()
+        if (!hadPendingUpdates) {
+          // C18: 对账本地删除声明（服务端已应用的删除从 localDeletions 移除）
+          this.reconcileLocalDeletions()
+        }
         this.sendLocalAwareness()
         this.syncedListeners.forEach((fn) => fn())
       }
@@ -564,6 +592,35 @@ export class MindMapYjsProvider {
         awarenessProtocol.applyAwarenessUpdate(this.awareness, update, this)
       } catch (err) {
         logger.warn('[yjs-provider] failed to apply awareness update', err)
+      }
+    }
+  }
+
+  /**
+   * C18: STEP2 同步完成后对账 localDeletions。
+   *
+   * STEP2 是服务端权威状态：若某个被本地声明删除的实体在 STEP2 后仍存在于
+   * doc（服务端还持有它，说明删除更新尚未到达服务端），保留声明供后续
+   * REST 快照携带；若实体已不存在于 doc（服务端已应用该删除），则删除声明
+   * 已确认，从 localDeletions 移除，避免只增不减。
+   */
+  private reconcileLocalDeletions(): void {
+    const root = getExistingRoot(this.doc)
+    if (!root) return
+    const entry = localDeletions.get(this.canvasId)
+    if (!entry) return
+    const collections: Array<[DeletionCollection, Set<string>, unknown]> = [
+      ['nodes', entry.nodes, root.nodes],
+      ['groups', entry.groups, root.groups],
+      ['domains', entry.domains, root.domains],
+      ['connections', entry.connections, root.connections],
+    ]
+    for (const [collection, set, ymap] of collections) {
+      if (!ymap) continue
+      for (const id of Array.from(set)) {
+        if (!(ymap as Y.Map<unknown>).has(id)) {
+          removeLocalDeletion(this.canvasId, collection, id)
+        }
       }
     }
   }
@@ -641,15 +698,10 @@ export class MindMapYjsProvider {
         this.awarenessThrottleTimer = setTimeout(() => {
           this.awarenessThrottleTimer = null
           this.lastAwarenessSend = Date.now()
+          // C17: flushAwareness 编码的是调度时刻的最新 awareness 状态，
+          // 窗口期内到达的更新已包含在内，无需二次 flush（此前会冗余双发）。
+          this.awarenessPendingFlush = false
           this.flushAwareness()
-          // If another update arrived while we were throttled, the deferred
-          // flush may have sent stale state (e.g. null followed by non-null).
-          // Flush once more to ensure peers see the latest cursor/selection.
-          if (this.awarenessPendingFlush) {
-            this.awarenessPendingFlush = false
-            this.lastAwarenessSend = Date.now()
-            this.flushAwareness()
-          }
         }, MIN_MS - elapsed)
         return
       }
@@ -708,7 +760,14 @@ export class MindMapYjsProvider {
     if (this.pendingUpdates.length === 0) return
     if (!this.isConnected()) return
     if (this.options.role === 'viewer') {
-      this.pendingUpdates = []
+      // C5: 不静默丢弃离线缓冲。降级为 viewer 时保留 pendingUpdates（本地
+      // Y.Doc 仍包含这些编辑），待角色恢复 editor 后由下一次
+      // flushPendingUpdates（STEP2 重连或页面卸载兜底）重新发送；同时告警，
+      // 避免用户离线编辑在无提示的情况下丢失。
+      logger.warn(
+        `[yjs-provider] role downgraded to viewer with ${this.pendingUpdates.length} pending update(s); ` +
+        'offline edits are retained locally and will be flushed once edit permission is restored',
+      )
       return
     }
     const merged = Y.mergeUpdates(this.pendingUpdates)

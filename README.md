@@ -276,6 +276,25 @@ cp frontend/.env.example frontend/.env
 
 2. 根据需要修改 `.env` 文件中的配置
 
+##### 反向代理部署（TRUST_PROXY，重要）
+
+服务**直曝公网**时（默认），后端**不信任** `X-Forwarded-For` 请求头——该头
+完全由客户端控制，无条件信任会让攻击者伪造任意 IP 绕过全局限速，请保持
+默认（不设置或 `TRUST_PROXY=false`）。
+
+仅当部署在**反向代理**（Nginx / Caddy / Traefik 等）之后时，必须在
+`backend/.env` 中显式设置：
+
+```bash
+TRUST_PROXY=true
+```
+
+取值仅 `true` / `1` / `yes` 视为开启，其他任何值一律视为关闭。若忘记设置，
+限速会按反向代理的 IP 聚合——所有用户共享同一限额，容易误触发 429。
+
+HTTPS 部署还需显式设置 `CSRF_COOKIE_SECURE=true`，否则浏览器不会在 HTTPS
+下发送 Secure cookie，登录态与 CSRF 校验会失效。
+
 #### 数据库初始化
 
 ```bash

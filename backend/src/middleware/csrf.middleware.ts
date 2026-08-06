@@ -16,16 +16,24 @@ const { doubleCsrfProtection, generateCsrfToken } = doubleCsrf({
   getSecret,
   getSessionIdentifier: (req) => {
     const authReq = req as AuthRequest;
-    // 如果用户已认证，使用用户ID作为会话标识符
+    // R4 #6（注释修正）：CSRF 中间件挂在 authenticate 之前运行（见 index.ts
+    // 路由挂载顺序），校验时 authReq.user 永远不会被填充——session identifier
+    // 实际上始终使用 IP 地址（已认证与未认证请求一致），下方 user.id 分支是
+    // 防御性保留，实际不会走到。双重提交校验只要求"取 token 与校验 token 时
+    // 标识一致"，单用户/单浏览器场景下 IP 标识已满足该要求，登录与否不改变
+    // 标识，因此不会出现登录后 token 失效的问题。
     if (authReq.user?.id) {
       return authReq.user.id.toString();
     }
-    // 否则使用IP地址
     return req.ip || 'default';
   },
   cookieName: 'x-csrf-token',
   cookieOptions: {
-    secure: false,
+    // #1: secure 由显式环境变量 CSRF_COOKIE_SECURE=true 控制（默认不设，
+    // 兼容 HTTP 直曝部署）。不再由 NODE_ENV 直接决定——NODE_ENV=production
+    // 但服务仍以 HTTP 直曝时，Secure cookie 会被浏览器静默拒绝，CSRF token
+    // 反而不可用；HTTPS 部署需显式设置 CSRF_COOKIE_SECURE=true 开启。
+    secure: process.env.CSRF_COOKIE_SECURE === 'true',
     sameSite: 'strict',
     httpOnly: false,
     maxAge: 604800

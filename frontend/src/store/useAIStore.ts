@@ -123,7 +123,8 @@ export const useAIStore = create<AIState>()(
       partialize: (state) => ({
         currentProvider: state.currentProvider,
         providerConfigs: state.providerConfigs,
-        isConnected: state.isConnected,
+        // isConnected 是会话级运行状态（每次打开侧边栏都会重新验证），
+        // 持久化会导致重启后误显示"已连接"，因此不持久化。
       }),
     }
   )

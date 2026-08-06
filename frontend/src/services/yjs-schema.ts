@@ -56,24 +56,39 @@ export function getExistingRoot(doc: Y.Doc) {
   }
 }
 
-/** Convert a plain object entity into a Y.Map (scalar fields only). */
+/**
+ * 递归地把普通 JS 值转换为 Yjs 类型：
+ * - 对象 → Y.Map（字段递归转换）
+ * - 数组 → Y.Array（元素递归转换，嵌套对象/数组也会展开）
+ * - 标量 → 原样保留（undefined 表示删除语义，由调用方处理）
+ * 与读取侧 unwrapYValue 的递归展开一一对应。
+ */
+function toYValue(value: unknown): unknown {
+  if (value === null || typeof value !== 'object') return value
+  if (value instanceof Y.Map || value instanceof Y.Array) return value // 已是 Yjs 类型，原样保留
+  if (Array.isArray(value)) {
+    // 数组元素保持原始 JS 值（不递归转 Y.Map）。Y.Array 本身已是 CRDT 容器，
+    // 元素为普通对象即可正确合并；若元素也转 Y.Map，writeFields 的
+    // diffObjectArrayById（'id' in item）会对 Y.Map 实例失效，导致对象数组
+    // （如 bendPoints）每次写入都全量追加。
+    const arr = new Y.Array<unknown>()
+    arr.insert(0, value as unknown[])
+    return arr
+  }
+  const nested = new Y.Map<unknown>()
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (v !== undefined) nested.set(k, toYValue(v))
+  }
+  return nested
+}
+
+/** Convert a plain object entity into a Y.Map (recursive: nested objects and
+ *  arrays are fully expanded into Y.Map / Y.Array). */
 export function entityToYMap(data: Record<string, unknown>): Y.Map<unknown> {
   const ymap = new Y.Map<unknown>()
   for (const [key, value] of Object.entries(data)) {
     if (value === undefined) continue
-    if (Array.isArray(value)) {
-      const arr = new Y.Array<unknown>()
-      arr.insert(0, value as unknown[])
-      ymap.set(key, arr)
-    } else if (value !== null && typeof value === 'object') {
-      const nested = new Y.Map<unknown>()
-      for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-        nested.set(k, v as unknown)
-      }
-      ymap.set(key, nested)
-    } else {
-      ymap.set(key, value as unknown)
-    }
+    ymap.set(key, toYValue(value))
   }
   return ymap
 }

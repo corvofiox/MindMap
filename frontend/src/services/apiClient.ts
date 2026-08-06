@@ -91,6 +91,8 @@ export class ApiClient {
   }
 
   // 获取CSRF token（从服务器）
+  // 服务端响应为 { success: true, token } 信封格式，这里解包出 token，
+  // 避免调用方拿到整个 envelope（此前把原始响应体当 token 用）。
   async getCsrfTokenFromServer(): Promise<{ token: string }> {
     const response = await fetch(`${this.baseUrl}/api/csrf-token`, {
       method: 'GET',
@@ -101,8 +103,11 @@ export class ApiClient {
       throw new Error('Failed to get CSRF token')
     }
 
-    const data = await response.json()
-    return data
+    const data = (await response.json()) as { success?: boolean; token?: string }
+    if (!data || typeof data.token !== 'string' || data.token === '') {
+      throw new Error('Failed to get CSRF token')
+    }
+    return { token: data.token }
   }
 
   // 显示错误提示
@@ -216,7 +221,7 @@ export class ApiClient {
     return errorMessage
   }
 
-  // 重试请求（用于CSRF token过期）
+  // 重试请求（用于CSRF token过期，最多重试一次，防止 403 循环递归）
   private async retryWithNewCsrfToken<T>(
     endpoint: string,
     options: RequestInit
@@ -225,8 +230,8 @@ export class ApiClient {
       // 获取新的 CSRF token
       await this.getCsrfTokenFromServer()
 
-      // 重试原始请求
-      return this.request<T>(endpoint, options)
+      // 重试原始请求（标记为已重试，再次 403 不再递归）
+      return this.request<T>(endpoint, options, this.defaultTimeout, true)
     } catch (error) {
       throw new Error(this.handleError(error, '重试请求失败'))
     }
@@ -236,7 +241,8 @@ export class ApiClient {
   private async request<T>(
     endpoint: string,
     options: RequestInit = {},
-    timeout: number = this.defaultTimeout
+    timeout: number = this.defaultTimeout,
+    isCsrfRetry: boolean = false
   ): Promise<T> {
     try {
       // 确保CSRF token有效（针对非GET请求）
@@ -268,9 +274,11 @@ export class ApiClient {
           const errorData = await this.parseResponse<any>(response)
           if (errorData && errorData.error &&
             (errorData.error.includes('CSRF') || errorData.error.includes('csrf'))) {
-            // 清除旧的CSRF token并尝试获取新的
+            // 清除旧的CSRF token并尝试获取新的；已重试过则不再递归，直接抛出错误
             document.cookie = 'x-csrf-token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;'
-            return this.retryWithNewCsrfToken<T>(endpoint, options)
+            if (!isCsrfRetry) {
+              return this.retryWithNewCsrfToken<T>(endpoint, options)
+            }
           }
         }
 

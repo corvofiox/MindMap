@@ -9,6 +9,51 @@ import { execFormatCommand } from '@/utils/richTextCommands'
 import { setEditingFieldForCollab, getEditingState, setLocalEditingUpdate } from '@/hooks/useCollabEditing'
 import type { Node } from '@/types'
 
+// 节点通用样式全局只注入一次（D12：避免每个节点渲染一份 <style>）
+let nodeItemStylesInjected = false
+function ensureNodeItemStyles(): void {
+  if (nodeItemStylesInjected) return
+  nodeItemStylesInjected = true
+  if (typeof document === 'undefined') return
+  const style = document.createElement('style')
+  style.id = 'node-item-global-styles'
+  style.textContent = `
+    .node-dragging,
+    .node-dragging * {
+      cursor: move !important;
+    }
+    .node-content-placeholder {
+      color: #9ca3af;
+      font-style: italic;
+    }
+    .dark .node-content-placeholder {
+      color: #6b7280;
+    }
+  `
+  document.head.appendChild(style)
+}
+ensureNodeItemStyles()
+
+/**
+ * zustand 字段级订阅辅助（D7 性能优化）。
+ * 真实 store 下 hook(selector) 返回选中值；automock 测试中 hook 会忽略
+ * selector 直接返回整个 store 对象，这里检测到后手动应用 selector，
+ * 使两种环境下取值一致（字段级订阅避免全量订阅导致的重渲染）。
+ */
+function useStoreField<T>(
+  hook: (selector: (state: any) => T) => any,
+  selector: (state: any) => T
+): T {
+  const value = hook(selector)
+  if (value !== null && typeof value === 'object') {
+    const selected = selector(value)
+    if (selected !== undefined && selected !== value) {
+      return selected
+    }
+  }
+  return value
+}
+
 // Helper function to check if in default selection mode
 function isDefaultSelectionTool(tool: string): boolean {
   return tool === 'select'
@@ -192,19 +237,23 @@ interface HighlightState {
 }
 
 export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, groupDragOffset, onNodeContextMenuOpen, onMouseDown, isViewer, opacity = 1 }: NodeItemProps) {
-  const {
-    updateNode,
-    updateNodeWithoutHistory,
-    updateNodeWithOriginal,
-    setSelectedIds,
-    removeNode,
-    addToSelection,
-    removeFromSelection,
-    editingId: globalEditingId,
-    setEditingId,
-  } = useCanvasStore()
+  // D7: 字段级订阅，避免 store 任意字段变化导致所有 NodeItem 重渲染
+  const updateNode = useStoreField(useCanvasStore, (s) => s.updateNode)
+  const updateNodeWithoutHistory = useStoreField(useCanvasStore, (s) => s.updateNodeWithoutHistory)
+  const updateNodeWithOriginal = useStoreField(useCanvasStore, (s) => s.updateNodeWithOriginal)
+  const setSelectedIds = useStoreField(useCanvasStore, (s) => s.setSelectedIds)
+  const removeNode = useStoreField(useCanvasStore, (s) => s.removeNode)
+  const addToSelection = useStoreField(useCanvasStore, (s) => s.addToSelection)
+  const removeFromSelection = useStoreField(useCanvasStore, (s) => s.removeFromSelection)
+  const globalEditingId = useStoreField(useCanvasStore, (s) => s.editingId)
+  const setEditingId = useStoreField(useCanvasStore, (s) => s.setEditingId)
 
-  const { setSelectedType, currentTool, draggingNodeFromCanvas, isOverNodePool, quickEditMode } = useUIStore()
+  const setSelectedType = useStoreField(useUIStore, (s) => s.setSelectedType)
+  const currentTool = useStoreField(useUIStore, (s) => s.currentTool)
+  const draggingNodeFromCanvas = useStoreField(useUIStore, (s) => s.draggingNodeFromCanvas)
+  const isOverNodePool = useStoreField(useUIStore, (s) => s.isOverNodePool)
+  const quickEditMode = useStoreField(useUIStore, (s) => s.quickEditMode)
+  const addToast = useStoreField(useUIStore, (s) => s.addToast)
 
   const [isDragging, setIsDragging] = useState(false)
   const [isResizing, setIsResizing] = useState(false)
@@ -239,6 +288,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
   const contextMenuStartRef = useRef({ x: 0, y: 0 })
   const timerRefsRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set())
   const imageRef = useRef<HTMLImageElement | null>(null)
+  const uploadSeqRef = useRef(0)
   const inputSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const dragSyncThrottleRef = useRef<number>(0)
   const resizeSyncThrottleRef = useRef<number>(0)
@@ -246,7 +296,6 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
   const isResizingRef = useRef(false)
   const localPositionRef = useRef(localPosition)
   const localSizeRef = useRef(localSize)
-  const { addToast } = useUIStore()
 
   const dispatchEditingFieldChange = useCallback((field: 'title' | 'content' | null, nodeId: string | null) => {
     setEditingFieldForCollab(nodeId, field)
@@ -311,17 +360,23 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
 
   // Image Upload Handler
   const handleImageUpload = useCallback(async (file: File) => {
+    // 请求序号：防止快速连续上传时旧请求的 onload 覆盖新结果（D13）
+    const requestSeq = ++uploadSeqRef.current
     try {
       // 使用 import.meta.glob 预加载的模块
       const apiModule = await loadApiModule()
       const { uploadImage } = apiModule
       const { url } = await uploadImage(file)
 
+      // 已有更新的上传请求，丢弃本次结果
+      if (requestSeq !== uploadSeqRef.current) return
+
       // Load image to get dimensions
       const img = new Image()
       imageRef.current = img
       img.src = url
       img.onload = () => {
+        if (requestSeq !== uploadSeqRef.current) return
         const aspectRatio = img.width / img.height
         updateNode(node.id, {
           imageUrl: url,
@@ -332,6 +387,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
         addToast({ type: 'success', title: '上传成功', message: '图片已上传' })
       }
     } catch (error) {
+      if (requestSeq !== uploadSeqRef.current) return
       addToast({
         type: 'error',
         title: '上传失败',
@@ -604,16 +660,9 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
       const text = temp.textContent || ''
       const title = text.replace(/\n/g, '').replace(/\u200B/g, '').trim()
 
-      if (!title && editingTitleRef.current && editingTitleRef.current.trim()) {
-        logger.debug('[NodeItem] saveTitle skipped: title appears empty but ref has content, possible initialization issue')
-        return
-      }
-
-      if (!title && node.title && node.title.trim()) {
-        logger.debug('[NodeItem] saveTitle skipped: node title has remote update, not overwriting with empty')
-        return
-      }
-
+      // 注意: 这里不再用 editingTitleRef/node.title 内容判断"是否初始化异常"——
+      // 初始化竞态已由上方 domReadyRef.current.title 检查覆盖(与 saveContent 一致)。
+      // 旧的空值守卫会把用户"清空标题"当成初始化异常直接吞掉(D2)。
       if (title !== editingTitleRef.current) {
         const originalTitle = editingTitleRef.current
         updateNodeWithOriginal(node.id, { title }, { title: originalTitle })
@@ -640,18 +689,13 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
       const textContent = tempDiv.textContent || ''
       const hasVisibleContent = textContent.replace(/\s+/g, '').trim().length > 0
       const hasLineBreaks = cleanedHtml.includes('<br')
-      const isEmpty = !hasVisibleContent && !hasLineBreaks
+      // contenteditable 清空后浏览器会留下占位 <br>，视为空内容（R3 #4）
+      const isEmpty = (!hasVisibleContent && !hasLineBreaks) || cleanedHtml === '<br>'
 
-      if (isEmpty && editingContentRef.current && editingContentRef.current.trim()) {
-        logger.debug('[NodeItem] saveContent skipped: content appears empty but ref has content, possible initialization issue')
-        return
-      }
-
-      if (isEmpty && node.content && node.content.trim() && node.content !== '<br>') {
-        logger.debug('[NodeItem] saveContent skipped: node content has remote update, not overwriting with empty')
-        return
-      }
-
+      // 注意: 这里不再用 editingContentRef/node.content 内容判断"是否初始化异常"——
+      // 初始化竞态已由上方 domReadyRef.current.content 检查覆盖（与 saveTitle 的 D2
+      // 修复一致）。旧的空值守卫会把用户"清空内容"当成初始化异常直接吞掉，
+      // 导致内容字段无法清空（R3 #4）。
       const trimmedContent = isEmpty ? '' : cleanedHtml
       if (trimmedContent !== editingContentRef.current) {
         const originalContent = editingContentRef.current
@@ -660,6 +704,13 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
       }
     }
   }, [isEditingContent, node.id, node.content, updateNodeWithOriginal, cleanHtmlContent])
+
+  // 切换编辑字段时重置目标字段的初始化状态，确保从最新的 store 值重新初始化 DOM
+  // （修复 title↔content 切换后 editing ref 未重置导致的边界问题，D24）
+  const resetFieldEditState = useCallback((field: 'title' | 'content') => {
+    hasInitializedEditRef.current[field] = false
+    domReadyRef.current[field] = false
+  }, [])
 
   // Handle node selection
   const handleMouseDown = useCallback(
@@ -703,6 +754,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
               saveContent()
             }
             setEditingFieldForCollab(node.id, clickedField)
+            resetFieldEditState(clickedField)
             setEditingField(clickedField)
             dispatchEditingFieldChange(clickedField, node.id)
             return
@@ -768,6 +820,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
           saveContent()
         }
         setEditingFieldForCollab(node.id, field)
+        resetFieldEditState(field)
         setEditingField(field)
         setEditingId(node.id)
         dispatchEditingFieldChange(field, node.id)
@@ -1052,11 +1105,17 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
       }
 
       setEditingFieldForCollab(node.id, field)
+      // 同字段重复双击（如正在编辑 content 时再次双击 content）不重置初始化状态：
+      // 此时 editingField 未变、初始化 effect 不会重跑，重置 domReadyRef 会导致
+      // 本次编辑的保存被"DOM not ready"跳过，改动丢失（R3 #3）
+      if (!((isEditingTitle && field === 'title') || (isEditingContent && field === 'content'))) {
+        resetFieldEditState(field)
+      }
       setEditingField(field)
       setEditingId(node.id)
       dispatchEditingFieldChange(field, node.id)
     },
-    [node.locked, node.title, node.type, isEditingTitle, isEditingContent, saveTitle, saveContent, isViewer, node.id, dispatchEditingFieldChange]
+    [node.locked, node.title, node.type, isEditingTitle, isEditingContent, saveTitle, saveContent, isViewer, node.id, dispatchEditingFieldChange, resetFieldEditState]
   )
 
   // 中文输入法开始
@@ -1351,19 +1410,7 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
 
   return (
     <>
-      <style>{`
-        .node-dragging,
-        .node-dragging * {
-          cursor: move !important;
-        }
-        .node-content-placeholder {
-          color: #9ca3af;
-          font-style: italic;
-        }
-        .dark .node-content-placeholder {
-          color: #6b7280;
-        }
-      `}</style>
+      {/* 全局样式已由 ensureNodeItemStyles() 注入一次（D12） */}
       {/* Wrapper for node and resize handles */}
       <div
         style={{

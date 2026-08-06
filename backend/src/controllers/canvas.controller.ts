@@ -47,10 +47,21 @@ async function withPostSaveMutex<T>(canvasId: number, fn: () => Promise<T>): Pro
   try {
     return await Promise.race([next, timeoutPromise])
   } catch (error) {
-    // If timed out, wait for fn() to actually finish before propagating the error.
-    // This ensures mutex integrity — the next operation won't start until fn() completes.
+    // B20: 超时后等待 fn() 完成以维持 mutex 完整性，但设置等待上限（再等一个
+    // MUTEX_TIMEOUT），避免 fn() 永不完成时请求永久挂起。
     if (!done) {
-      await next.catch(() => { })
+      const graceTimeout = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Canvas save timed out (waiting for in-flight save)')), MUTEX_TIMEOUT),
+      )
+      try {
+        await Promise.race([next.catch(() => { }), graceTimeout])
+      } catch {
+        // R4 #5: 不再立即删除 mutex 条目——fn() 可能仍在运行，删除后新请求
+        // 会绕过 mutex，与未完成的写操作并发进入。保留条目让后续请求继续
+        // 排队；fn() 完成后上方注册的 cleanupGuard.finally 会自动删除条目
+        // （entry 仍指向 cleanupGuard 时）。若 fn() 永不完成，后续请求会在
+        // 各自的 MUTEX_TIMEOUT 后超时失败，不会永久挂起，也不会并发写。
+      }
     }
     throw error
   }
@@ -103,6 +114,17 @@ canvasRouter.get('/detail/:id', authenticate, asyncHandler(async (req: AuthReque
     })
   }
 
+  // A3 (IDOR): 复用项目权限检查——仅项目 owner/成员可读取画布详情
+  // （详情含 yjsUpdate/yjsData 全量数据）。
+  const detailCanvasProjectId = getProperty<number>(canvas, 'project_id', 'projectId') || canvas.projectId
+  const detailAccess = await checkProjectAccess(detailCanvasProjectId, req.user!.id)
+  if (!detailAccess.isOwner && !detailAccess.isMember) {
+    return res.status(403).json({
+      success: false,
+      error: '访问被拒绝',
+    })
+  }
+
   const transformedCanvas = transformResponse(canvas, ['createdAt', 'updatedAt'])
 
   res.json({
@@ -130,9 +152,15 @@ canvasRouter.get('/:projectId', authenticate, asyncHandler(async (req: AuthReque
     })
   }
 
+  // A12: 列表接口排除 yjsUpdate/yjsData 大字段（base64 可达数 MB），
+  // 避免性能损耗与全量数据暴露；详情接口仍返回完整数据。
   const projectCanvases = await db.query.canvases.findMany({
     where: eq(canvases.projectId, projectId),
     orderBy: (canvases, { asc }) => [asc(canvases.sortOrder)],
+    columns: {
+      yjsUpdate: false,
+      yjsData: false,
+    },
   })
 
   const transformedCanvases = transformResponseArray(projectCanvases, ['createdAt', 'updatedAt'])
@@ -169,12 +197,39 @@ canvasRouter.post('/:projectId', authenticate, asyncHandler(async (req: AuthRequ
     })
   }
 
+  // B12: folderId 必须属于当前项目，防止跨项目挂载/越权引用
+  let resolvedFolderId: number | null = null
+  if (folderId !== undefined && folderId !== null) {
+    const numericFolderId = typeof folderId === 'number'
+      ? folderId
+      : parseInt(String(folderId), 10)
+    if (isNaN(numericFolderId)) {
+      return res.status(400).json({
+        success: false,
+        error: '无效的文件夹',
+      })
+    }
+    const folder = await db.query.folders.findFirst({
+      where: eq(folders.id, numericFolderId),
+    })
+    const folderProjectId = folder
+      ? (getProperty<number>(folder, 'project_id', 'projectId') || folder.projectId)
+      : null
+    if (!folder || folderProjectId !== projectId) {
+      return res.status(400).json({
+        success: false,
+        error: '文件夹不属于该项目',
+      })
+    }
+    resolvedFolderId = numericFolderId
+  }
+
   const [newCanvas] = await db
     .insert(canvases)
     .values({
       name,
       projectId,
-      folderId: folderId || null,
+      folderId: resolvedFolderId,
       // R3: 显式毫秒时间戳，避免走 schema 默认值 strftime('%s','now')（秒级）。
       // 秒级行会让升级前的两个并发缩略图 PUT 都通过 lte 检查（等值允许），
       // 且旧 bundle 的秒级 clientVersion 对新毫秒行会永久 409。
@@ -207,14 +262,32 @@ canvasRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, res
 
   const { name, yjsData, previewText, thumbnail, folderId, sortOrder, clientVersion } = req.body
 
-  log('PUT canvas - Start', { canvasId, userId: req.user!.id, body: { name, yjsData: typeof yjsData, previewText, thumbnail, folderId, sortOrder, clientVersion } })
+  // A11: 日志只记录元数据（类型/布尔），不再记录 thumbnail/yjsData 等
+  // 大字段或敏感内容，避免日志膨胀与敏感信息落盘。
+  log('PUT canvas - Start', {
+    canvasId,
+    userId: req.user!.id,
+    body: {
+      name: typeof name,
+      hasYjsData: yjsData !== undefined,
+      hasPreviewText: previewText !== undefined,
+      hasThumbnail: thumbnail !== undefined,
+      hasFolderId: folderId !== undefined,
+      hasSortOrder: sortOrder !== undefined,
+      clientVersion,
+    },
+  })
 
   try {
     const canvas = await db.query.canvases.findFirst({
       where: eq(canvases.id, canvasId),
     })
 
-    log('PUT canvas - Canvas query result', { canvasId, canvasFound: !!canvas, canvas: canvas ? JSON.stringify(canvas) : null })
+    log('PUT canvas - Canvas query result', {
+      canvasId,
+      canvasFound: !!canvas,
+      canvasMeta: canvas ? { id: canvas.id, projectId: canvas.projectId } : null,
+    })
 
     if (!canvas) {
       log('PUT canvas - Canvas not found', { canvasId })
@@ -263,14 +336,38 @@ canvasRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, res
       return await withPostSaveMutex(canvasId, async () => {
         if (yjsData !== undefined) {
           log('PUT canvas - Thumbnail branch also has yjsData; merging first', { canvasId })
+          // R5 #3: 与主分支一致——数据损坏（解码/解析失败）→ 400；
+          // loadCanvasStateFromDb/merge 的 DB/状态故障 → 抛出（由外层
+          // catch 重新抛出 → error.middleware 返回 500）。
+          let parsed: unknown
           try {
             const jsonStr = Buffer.from(yjsData, 'base64').toString('utf-8')
-            const parsed = JSON.parse(jsonStr)
-            const snapshot: { nodes?: unknown[]; groups?: unknown[]; domains?: unknown[]; connections?: unknown[] } = {}
-            if (Array.isArray(parsed.nodes)) snapshot.nodes = parsed.nodes
-            if (Array.isArray(parsed.groups)) snapshot.groups = parsed.groups
-            if (Array.isArray(parsed.domains)) snapshot.domains = parsed.domains
-            if (Array.isArray(parsed.connections)) snapshot.connections = parsed.connections
+            parsed = JSON.parse(jsonStr)
+          } catch (err) {
+            log('PUT canvas - Failed to decode yjsData JSON in thumbnail branch', {
+              canvasId,
+              error: err instanceof Error ? err.message : String(err),
+            })
+            return res.status(400).json({
+              success: false,
+              error: 'Failed to merge canvas data: invalid or corrupt yjsData',
+            })
+          }
+          const snapshot: { nodes?: unknown[]; groups?: unknown[]; domains?: unknown[]; connections?: unknown[] } = {}
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            const parsedObj = parsed as { nodes?: unknown[]; groups?: unknown[]; domains?: unknown[]; connections?: unknown[] }
+            if (Array.isArray(parsedObj.nodes)) snapshot.nodes = parsedObj.nodes
+            if (Array.isArray(parsedObj.groups)) snapshot.groups = parsedObj.groups
+            if (Array.isArray(parsedObj.domains)) snapshot.domains = parsedObj.domains
+            if (Array.isArray(parsedObj.connections)) snapshot.connections = parsedObj.connections
+          } else {
+            log('PUT canvas - yjsData JSON is not an object in thumbnail branch', { canvasId })
+            return res.status(400).json({
+              success: false,
+              error: 'Failed to merge canvas data: invalid or corrupt yjsData',
+            })
+          }
+          try {
             await loadCanvasStateFromDb(canvasId)
             // R1: 快照缺失 doc 实体 → upsertOnly（与 POST /data 一致）。
             const upsertOnly = snapshotMissingDocEntities(canvasId, snapshot)
@@ -281,10 +378,8 @@ canvasRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, res
               canvasId,
               error: err instanceof Error ? err.message : String(err),
             })
-            return res.status(400).json({
-              success: false,
-              error: 'Failed to merge canvas data: invalid or corrupt yjsData',
-            })
+            // DB/状态加载等非客户端故障 → 抛出让 error.middleware 返回 500
+            throw err
           }
         }
 
@@ -329,7 +424,17 @@ canvasRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, res
       })
     }
 
-    log('PUT canvas - About to update', { canvasId, updateData: { name, yjsData: typeof yjsData, previewText, thumbnail, folderId, sortOrder } })
+    log('PUT canvas - About to update', {
+      canvasId,
+      updateMeta: {
+        hasName: name !== undefined,
+        hasYjsData: yjsData !== undefined,
+        hasPreviewText: previewText !== undefined,
+        hasThumbnail: thumbnail !== undefined,
+        hasFolderId: folderId !== undefined,
+        hasSortOrder: sortOrder !== undefined,
+      },
+    })
 
     const updateData: Record<string, unknown> = {
       // R3: 与缩略图版本检查分支保持同一精度（毫秒），否则该分支写入的秒级
@@ -342,19 +447,45 @@ canvasRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, res
     }
     if (yjsData !== undefined) {
       log('PUT canvas - yjsData provided; merging into Yjs doc instead of legacy column', { canvasId })
+      // R5 #3: 区分两类失败——① 客户端数据损坏（base64 解码/JSON 解析失败）
+      // → 400 'invalid or corrupt yjsData'；② loadCanvasStateFromDb /
+      // mergeJsonSnapshotIntoCanvas 阶段的 DB/状态故障 → 抛出让全局
+      // error.middleware 返回 500。旧实现把所有异常混在一个 catch 里全部
+      // 回 400，DB 故障也会被误报成"数据损坏"，掩盖真实原因。
+      let parsed: unknown
+      try {
+        const jsonStr = Buffer.from(yjsData, 'base64').toString('utf-8')
+        parsed = JSON.parse(jsonStr)
+      } catch (err) {
+        log('PUT canvas - Failed to decode yjsData JSON', {
+          canvasId,
+          error: err instanceof Error ? err.message : String(err),
+        })
+        return res.status(400).json({
+          success: false,
+          error: 'Failed to merge canvas data: invalid or corrupt yjsData',
+        })
+      }
+      const snapshot: { nodes?: unknown[]; groups?: unknown[]; domains?: unknown[]; connections?: unknown[] } = {}
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        const parsedObj = parsed as { nodes?: unknown[]; groups?: unknown[]; domains?: unknown[]; connections?: unknown[] }
+        if (Array.isArray(parsedObj.nodes)) snapshot.nodes = parsedObj.nodes
+        if (Array.isArray(parsedObj.groups)) snapshot.groups = parsedObj.groups
+        if (Array.isArray(parsedObj.domains)) snapshot.domains = parsedObj.domains
+        if (Array.isArray(parsedObj.connections)) snapshot.connections = parsedObj.connections
+      } else {
+        log('PUT canvas - yjsData JSON is not an object', { canvasId })
+        return res.status(400).json({
+          success: false,
+          error: 'Failed to merge canvas data: invalid or corrupt yjsData',
+        })
+      }
       try {
         // Wrap in withPostSaveMutex to prevent TOCTOU race (C1/C2):
         // snapshotMissingDocEntities/shouldUpsertOnlyForSnapshot decision and
         // mergeJsonSnapshotIntoCanvas must be atomic with respect to concurrent
         // POST /data and WS save operations.
         await withPostSaveMutex(canvasId, async () => {
-          const jsonStr = Buffer.from(yjsData, 'base64').toString('utf-8')
-          const parsed = JSON.parse(jsonStr)
-          const snapshot: { nodes?: unknown[]; groups?: unknown[]; domains?: unknown[]; connections?: unknown[] } = {}
-          if (Array.isArray(parsed.nodes)) snapshot.nodes = parsed.nodes
-          if (Array.isArray(parsed.groups)) snapshot.groups = parsed.groups
-          if (Array.isArray(parsed.domains)) snapshot.domains = parsed.domains
-          if (Array.isArray(parsed.connections)) snapshot.connections = parsed.connections
           await loadCanvasStateFromDb(canvasId)
           // R1: 快照缺失 doc 实体 → upsertOnly（与 POST /data 一致）。
           const upsertOnly = snapshotMissingDocEntities(canvasId, snapshot)
@@ -366,10 +497,8 @@ canvasRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, res
           canvasId,
           error: err instanceof Error ? err.message : String(err),
         })
-        return res.status(400).json({
-          success: false,
-          error: 'Failed to merge canvas data: invalid or corrupt yjsData',
-        })
+        // DB/状态加载等非客户端故障 → 交给 error.middleware 返回 500
+        throw err
       }
     }
     if (previewText !== undefined) {
@@ -379,13 +508,50 @@ canvasRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, res
       updateData.thumbnail = thumbnail
     }
     if (folderId !== undefined) {
-      updateData.folderId = folderId
+      // R4 #1: 与 POST 创建一致——folderId 必须存在且属于当前画布所在项目，
+      // 防止跨项目挂载/越权引用。null 表示移出文件夹（合法清空）。
+      if (folderId === null) {
+        updateData.folderId = null
+      } else {
+        const numericFolderId = typeof folderId === 'number'
+          ? folderId
+          : parseInt(String(folderId), 10)
+        if (isNaN(numericFolderId)) {
+          return res.status(400).json({
+            success: false,
+            error: '无效的文件夹',
+          })
+        }
+        const folder = await db.query.folders.findFirst({
+          where: eq(folders.id, numericFolderId),
+        })
+        const folderProjectId = folder
+          ? (getProperty<number>(folder, 'project_id', 'projectId') || folder.projectId)
+          : null
+        if (!folder || folderProjectId !== canvasProjectId) {
+          return res.status(400).json({
+            success: false,
+            error: '文件夹不属于该项目',
+          })
+        }
+        updateData.folderId = numericFolderId
+      }
     }
     if (sortOrder !== undefined) {
       updateData.sortOrder = sortOrder
     }
 
-    log('PUT canvas - Final update data', { canvasId, updateData })
+    log('PUT canvas - Final update meta', {
+      canvasId,
+      updateMeta: {
+        hasName: updateData.name !== undefined,
+        hasYjsData: yjsData !== undefined,
+        hasPreviewText: updateData.previewText !== undefined,
+        hasThumbnail: updateData.thumbnail !== undefined,
+        hasFolderId: updateData.folderId !== undefined,
+        hasSortOrder: updateData.sortOrder !== undefined,
+      },
+    })
 
     const [updatedCanvas] = await db
       .update(canvases)
@@ -440,7 +606,8 @@ canvasRouter.delete('/:id', authenticate, asyncHandler(async (req: AuthRequest, 
 
   const canvasProjectId = getProperty<number>(canvas, 'project_id', 'projectId') || canvas.projectId
 
-  log('DELETE canvas - Canvas found', { canvasId, projectId: canvasProjectId, canvas: JSON.stringify(canvas) })
+  // A11: 不再记录画布全量内容
+  log('DELETE canvas - Canvas found', { canvasId, projectId: canvasProjectId })
 
   try {
     log('DELETE canvas - About to check access', { canvasId, projectId: canvasProjectId })
@@ -595,7 +762,10 @@ canvasRouter.post('/:id/data', authenticate, asyncHandler(async (req: AuthReques
       if (upsertOnly) {
         log('POST canvas data - upsertOnly mode (snapshot missing doc entities or active/recent collaboration)', { canvasId })
       }
-      await mergeJsonSnapshotIntoCanvas(canvasId, snapshot, upsertOnly)
+      // R4 #11: 传入 clientDeletedIds——upsertOnly 模式下声明删除的实体
+      // 仍会执行删除（删除声明是"知情删除"的明确信号，不应被保护吞掉），
+      // 未声明的缺失实体继续受 upsertOnly 保护。
+      await mergeJsonSnapshotIntoCanvas(canvasId, snapshot, upsertOnly, clientDeletedIds)
     } else {
       // 无内容变更也要确保 doc 已加载（供后续读取一致）
       await loadCanvasStateFromDb(canvasId)
@@ -726,7 +896,8 @@ canvasRouter.put(
     const result = await db
       .update(folders)
       .set({
-        name: name || folder.name,
+        // B13: nullish 合并——空字符串可正常清空文件夹名称
+        name: name ?? folder.name,
       })
       .where(eq(folders.id, folderId))
       .returning()

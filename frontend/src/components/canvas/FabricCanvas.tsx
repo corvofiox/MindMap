@@ -45,6 +45,7 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
     setPan,
     setEditingId,
     setHoveredId,
+    executeCommand,
   } = useCanvasStore()
 
   const { currentTool, nodeDefaults, relationshipHighlightMode, zoomStep } = useUIStore()
@@ -52,6 +53,15 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
   // Selection handlers
   const handleSelectionChanged = useCallback((e: { selected?: fabric.Object[] }) => {
     const selected = e.selected?.map((obj) => obj.data?.id).filter(Boolean) || []
+    // R4 #1（D6）：组/多选 ActiveSelection 的旋转把手会产生 obj.angle，
+    // 而组提交公式（组中心 + 本地坐标 × 缩放）不含旋转项，旋转后提交会写入
+    // 错误坐标。从源头禁用组的旋转把手（lockRotation），并在 object:modified
+    // 组分支做 angle 防御检查（见 handleObjectModified）。
+    for (const obj of e.selected || []) {
+      if (obj && (obj.type === 'group' || obj.type === 'activeselection')) {
+        obj.set({ lockRotation: true })
+      }
+    }
     setSelectedIds(selected)
   }, [setSelectedIds])
 
@@ -91,6 +101,16 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
   const lastThrottleUpdateRef = useRef<number>(0)
   const THROTTLE_MS = 100
 
+  // —— 多选组（fabric.Group / ActiveSelection）拖动/缩放支持（D6，R3 #1 修复）——
+  // R3 #1：ActiveSelection 子对象的 left/top 是相对组中心的本地坐标（fabric 组模型），
+  // 拖动期间把"组位移增量"写进 store 会让渲染器把本地坐标当画布坐标回写子对象，
+  // 导致节点在组内错位/飞出、坐标永久错乱。因此组交互期间一律不写 store
+  // （object:moving / object:scaling 对组直接返回），仅在 object:modified 时用
+  // 组变换矩阵一次性计算各子节点的画布坐标提交 store（带历史，可撤销、可持久化）。
+  const isGroupObject = useCallback((obj: any): boolean => {
+    return !!obj && (obj.type === 'group' || obj.type === 'activeselection')
+  }, [])
+
   const flushThrottledGeometry = useCallback(
     (obj: any) => {
       const now = Date.now()
@@ -121,7 +141,14 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
     (e: any) => {
       if (mouseButtonRef.current !== 0) return
       const obj = e.target
-      if (!obj || !obj.data || obj.data.type !== 'node') return
+      if (!obj) return
+
+      // 多选组拖动：不写 store（R3 #1，见上方说明），组内子对象由 fabric 组变换渲染
+      if (isGroupObject(obj)) {
+        return
+      }
+
+      if (!obj.data || obj.data.type !== 'node') return
       if (activeObjectRef.current !== obj.data.id) {
         // Reset the throttle timer so the first frame of a new drag flushes
         // immediately rather than waiting up to 100ms.
@@ -130,7 +157,7 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
       startObjectInteraction(obj.data.id)
       flushThrottledGeometry(obj)
     },
-    [startObjectInteraction, flushThrottledGeometry]
+    [startObjectInteraction, flushThrottledGeometry, isGroupObject]
   )
 
   // object:modified fires once after drag/scale/rotate ends. This is the
@@ -140,7 +167,80 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
     (e: any) => {
       if (mouseButtonRef.current !== 0) return
       const obj = e.target
-      if (!obj || !obj.data || obj.data.type !== 'node') return
+      if (!obj) return
+
+      // 多选组：用组变换矩阵一次性计算子节点画布坐标提交 store（带历史）。
+      // 组矩阵的平移分量 = 组中心画布坐标；子节点画布坐标 = 组中心 + 本地坐标 × 组缩放。
+      // 该公式与 fabric 反组（ActiveSelection.destroy）还原出的绝对坐标完全一致
+      // （已在 fabric 5.5 上实测验证）。不重置组 scale：保留当前几何，取消选择时
+      // fabric 还原的绝对坐标与 store 一致。组旋转暂不支持（与 D6 行为一致）。
+      // R4 #1：组旋转（obj.angle）时上述公式缺少旋转变换，会把子节点坐标写错到
+      // store —— 防御性跳过提交（正常路径已被 lockRotation 禁用旋转把手挡住）。
+      if (isGroupObject(obj)) {
+        if (obj.angle) {
+          // 旋转后的组无法用平移+缩放公式还原子节点画布坐标，跳过提交防止
+          // 错误坐标写入 store（子节点会在取消选择时由 fabric 还原为实际位置）。
+          lastThrottleUpdateRef.current = 0
+          return
+        }
+        const matrix = obj.calcTransformMatrix()
+        const groupCenterX = matrix[4]
+        const groupCenterY = matrix[5]
+        const groupScaleX = obj.scaleX || 1
+        const groupScaleY = obj.scaleY || 1
+        const children = typeof obj.getObjects === 'function' ? obj.getObjects() : []
+        // R4 #3：N 个子节点 = N 条 updateNode = N 条 undo 历史，Ctrl+Z 需要按 N 次
+        // 才能撤销一次组操作。改为单次批量 executeCommand（单条命令内循环更新
+        // 全部子节点），一次 Ctrl+Z 撤销整个组操作。
+        const positionUpdates = children
+          .filter((child: any) => child?.data && child.data.type === 'node')
+          .map((child: any) => ({
+            id: child.data.id,
+            x: groupCenterX + child.left * groupScaleX,
+            y: groupCenterY + child.top * groupScaleY,
+            width: child.width * (child.scaleX || 1) * groupScaleX,
+            height: child.height * (child.scaleY || 1) * groupScaleY,
+          }))
+        if (positionUpdates.length > 0) {
+          // 捕获提交前的原始几何,供 undo 一次性还原。
+          // R5 #2: 必须从 store 实时读取——handleObjectModified 是 useCallback
+          // 且 deps 不含 nodes,闭包里的 nodes 是组件挂载首帧的 Map 引用;对挂载
+          // 后新增/更新的节点取不到当前值,originals 为空会导致 undo 空操作。
+          // 与 execute/undo 闭包内 useCanvasStore.getState() 的用法保持一致。
+          const liveState = useCanvasStore.getState()
+          const originals = new Map<string, { x: number; y: number; width: number; height: number }>()
+          positionUpdates.forEach((u) => {
+            const n = liveState.nodes.get(u.id)
+            if (n) originals.set(u.id, { x: n.x, y: n.y, width: n.width, height: n.height })
+          })
+          executeCommand({
+            type: 'moveGroupChildren',
+            timestamp: Date.now(),
+            execute: () => {
+              const state = useCanvasStore.getState()
+              const nextNodes = new Map(state.nodes)
+              positionUpdates.forEach((u) => {
+                const n = nextNodes.get(u.id)
+                if (n) nextNodes.set(u.id, { ...n, x: u.x, y: u.y, width: u.width, height: u.height })
+              })
+              return { nodes: nextNodes, isDirty: true }
+            },
+            undo: () => {
+              const state = useCanvasStore.getState()
+              const nextNodes = new Map(state.nodes)
+              originals.forEach((orig, id) => {
+                const n = nextNodes.get(id)
+                if (n) nextNodes.set(id, { ...n, ...orig })
+              })
+              return { nodes: nextNodes, isDirty: true }
+            },
+          })
+        }
+        lastThrottleUpdateRef.current = 0
+        return
+      }
+
+      if (!obj.data || obj.data.type !== 'node') return
 
       const finalWidth = obj.width * obj.scaleX
       const finalHeight = obj.height * obj.scaleY
@@ -156,7 +256,7 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
       }
       lastThrottleUpdateRef.current = 0
     },
-    [updateNode]
+    [updateNode, isGroupObject]
   )
 
   // object:scaling fires during scale drag — refresh interaction timer,
@@ -165,20 +265,29 @@ export function FabricCanvas({ canvasId, width, height }: FabricCanvasProps) {
   const handleObjectScaling = useCallback(
     (e: any) => {
       const obj = e.target
-      if (!obj || !obj.data || obj.data.type !== 'node') return
+      if (!obj) return
+
+      // 多选组缩放：不写 store、不重置 scale（R3 #1，见上方说明），
+      // 最终几何在 object:modified 时一次性提交
+      if (isGroupObject(obj)) {
+        return
+      }
+
+      if (!obj.data || obj.data.type !== 'node') return
 
       if (activeObjectRef.current !== obj.data.id) {
         lastThrottleUpdateRef.current = 0
       }
       startObjectInteraction(obj.data.id)
 
+      // 先 flush（读取缩放后尺寸），再重置 scale，避免 store 拿到未缩放尺寸（D6）
+      flushThrottledGeometry(obj)
+
       if (obj.scaleX !== 1 || obj.scaleY !== 1) {
         obj.set({ scaleX: 1, scaleY: 1 })
       }
-
-      flushThrottledGeometry(obj)
     },
-    [startObjectInteraction, flushThrottledGeometry]
+    [startObjectInteraction, flushThrottledGeometry, isGroupObject]
   )
 
   // Mouse event handlers

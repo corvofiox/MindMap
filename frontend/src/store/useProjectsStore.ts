@@ -44,7 +44,7 @@ interface ProjectsState {
   deleteProject: (id: number) => Promise<void>
 
   // Canvas actions
-  createCanvas: (projectId: number, data: Partial<Canvas>) => Promise<Canvas | null>
+  createCanvas: (projectId: number, data: Partial<Canvas>) => Promise<Canvas>
   updateCanvas: (id: number, data: Partial<Canvas> & { clientVersion?: number }, silent?: boolean) => Promise<void>
   deleteCanvas: (id: number) => Promise<void>
   moveCanvasToFolder: (canvasId: number, folderId: number | null, silent?: boolean) => Promise<void>
@@ -347,8 +347,8 @@ export const useProjectsStore = create<ProjectsState>()(
               canvases: state.canvases.filter(c => c.id !== tempId),
             }))
 
+            // handleError 内部会 throw，调用方通过 catch 感知失败（C13 统一错误处理）
             handleError(error, '创建画布失败')
-            return null
           }
         },
 
@@ -408,15 +408,10 @@ export const useProjectsStore = create<ProjectsState>()(
           if (!canvas) return
           const originalFolderId = canvas.folderId
 
-          if (!silent) {
-            set((state) => ({
-              canvases: state.canvases.map((c) => (c.id === canvasId ? { ...c, folderId } : c)),
-            }))
-          } else {
-            set((state) => ({
-              canvases: state.canvases.map((c) => (c.id === canvasId ? { ...c, folderId } : c)),
-            }))
-          }
+          // 乐观更新（silent 与非 silent 行为一致，合并两分支）
+          set((state) => ({
+            canvases: state.canvases.map((c) => (c.id === canvasId ? { ...c, folderId } : c)),
+          }))
 
           try {
             await api.updateCanvas(canvasId, { folderId })
@@ -559,8 +554,8 @@ export const useProjectsStore = create<ProjectsState>()(
               nodePool: state.nodePool.filter(c => c.id !== tempId),
             }))
 
+            // handleError 内部会 throw，此处不再重复抛错（C13 统一错误处理）
             handleError(error, '添加到节点池失败')
-            throw error
           }
         },
 

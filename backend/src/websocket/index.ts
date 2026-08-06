@@ -3,7 +3,7 @@ import type { WebSocket } from 'ws'
 import { db } from '../database/connection.js'
 import { canvases, projects, projectMembers, users } from '../database/schema.js'
 import { eq, and } from 'drizzle-orm'
-import { getValidatedEnv } from '../utils/env.js'
+import { getValidatedEnv, isTrustProxyEnabled } from '../utils/env.js'
 import { log, logError } from '../utils/logger.js'
 import * as encoding from 'lib0/encoding'
 import * as decoding from 'lib0/decoding'
@@ -14,9 +14,22 @@ import * as awarenessProtocol from 'y-protocols/awareness'
 // Per-connection rate limits for WebSocket messages. SYNC messages are
 // CPU-heavy (Y.applyUpdate + N-way broadcast); AWARENESS is high-frequency
 // cursor/selection; text frames are low-frequency business JSON.
+//
+// B10 评估结论：
+// - SYNC 已是滑动窗口限速（handleMessage 内按时间戳数组裁剪）；超限断连是
+//   有意的反制措施——SYNC 是 CPU 密集操作，逐连接打满时断连比继续受理更安全。
+// - cursor 遥测实际走 AWARENESS 二进制帧（AWARE_RATE_LIMIT=200/s），不受
+//   TEXT 限制影响；TEXT 帧目前仅承载 ping/pong 等低频业务 JSON。原 10/s
+//   过严，放宽到 30/s 以容纳未来可能的文本业务消息，同时仍可防滥用。
 const SYNC_RATE_LIMIT = 50   // per second
 const AWARE_RATE_LIMIT = 200 // per second
-const TEXT_RATE_LIMIT = 10   // per second
+const TEXT_RATE_LIMIT = 30   // per second
+
+// #3: awareness clientID 绑定上限。合法客户端每连接只声明一个 clientID
+// （连接级随机数），这两个上限只可能命中滥用方——单帧声明大量 clientID，
+// 或单连接累积大量 clientID 放大断连清理成本。
+const MAX_AWARENESS_CLIENT_IDS_PER_FRAME = 64
+const MAX_AWARENESS_CLIENT_IDS_PER_CONNECTION = 64
 
 // Type-safe property accessors for database records that may have
 // either camelCase or snake_case property names due to Drizzle ORM inconsistencies
@@ -365,24 +378,6 @@ export function getCanvasActiveUsers(canvasId: number): CanvasActiveUser[] {
 }
 
 /**
- * Get active users for each canvas room that has connected users.
- * NOTE: projectId parameter is kept for API compatibility but currently
- * unused — this function returns data for ALL canvases regardless of
- * project. If per-project filtering is needed, add a canvasId→projectId
- * lookup table.
- */
-export function getProjectActiveUsers(projectId: number): Map<number, CanvasActiveUser[]> {
-  const result = new Map<number, CanvasActiveUser[]>()
-  if (!projectId) return result
-  for (const [canvasId, room] of canvasRooms.entries()) {
-    if (room.activeUsers.size > 0) {
-      result.set(canvasId, Array.from(room.activeUsers.values()))
-    }
-  }
-  return result
-}
-
-/**
  * P3: 踢出某画布内指定用户的所有 WS 连接（owner 移除成员后调用）。
  * 先发送 kicked 通知让前端提示用户并跳转，再调用 handleClientDisconnect(..., true)
  * 触发引用计数清理 + ws.terminate()（复用现有断连逻辑，正确广播 user-leave）。
@@ -460,11 +455,24 @@ function normalizeClientIp(ip: string): string {
   return ip
 }
 
+/**
+ * Resolve the client IP used for per-IP connection rate limiting.
+ *
+ * `X-Forwarded-For` is only trusted when the deployment explicitly sits behind
+ * a trusted reverse proxy (TRUST_PROXY=true). With the server directly exposed
+ * (the default) the header is fully client-controlled: blindly trusting it
+ * would let anyone spoof arbitrary IPs and bypass the per-IP connection limit
+ * (A10). In that case the socket's remote address is used instead.
+ */
 function getClientIp(req: { socket: { remoteAddress?: string }; headers: { 'x-forwarded-for'?: string | string[] } }): string {
-  const forwarded = req.headers['x-forwarded-for']
-  if (typeof forwarded === 'string' && forwarded) {
-    const first = forwarded.split(',')[0].trim()
-    if (first) return normalizeClientIp(first)
+  // #7: 与 HTTP 侧（index.ts 的 express trust proxy）共用 utils/env.ts 的
+  // isTrustProxyEnabled()——true/1/yes 任一形式都视为开启，保证两侧一致。
+  if (isTrustProxyEnabled()) {
+    const forwarded = req.headers['x-forwarded-for']
+    if (typeof forwarded === 'string' && forwarded) {
+      const first = forwarded.split(',')[0].trim()
+      if (first) return normalizeClientIp(first)
+    }
   }
   return normalizeClientIp(req.socket.remoteAddress || 'unknown')
 }
@@ -533,11 +541,21 @@ async function handleConnection(ws: WebSocketWithUserData, req: any) {
     return
   }
 
-  // Supports three transport mechanisms (ordered by security preference):
-  // 1. Authorization: Bearer header (standard, preferred)
-  // 2. Sec-WebSocket-Protocol header (used by browser WebSocket API)
-  // 3. URL query parameter ?token=... (fallback, accepted for compatibility
-  //    but not recommended — tokens in URLs can leak via server logs/Referer)
+  // Authentication is accepted from three places, in order of preference:
+  // 1. `Authorization: Bearer <jwt>` — standard header; works for any client
+  //    that can set custom headers (Node/curl/etc.).
+  // 2. `Sec-WebSocket-Protocol: <jwt>` — the only way a browser WebSocket API
+  //    could carry credentials (browsers cannot set custom headers). NOTE (B8):
+  //    the WebSocketServer is created WITHOUT a `handleProtocols` option, so the
+  //    ws library never echoes the subprotocol during the handshake and a
+  //    browser that sends this header will FAIL the handshake. The token is
+  //    therefore only readable for non-browser clients that set the header
+  //    manually and do not require a subprotocol response. The supported
+  //    browser path is the query parameter below.
+  // 3. `?token=...` query parameter — used by the official frontend provider
+  //    (browser WebSocket API cannot set custom headers). Kept as the primary
+  //    browser channel; tokens in URLs can leak via logs/Referer, so this
+  //    trade-off is documented rather than silently claimed to be secure.
   const authHeader = req.headers.authorization?.replace('Bearer ', '')
     || (req.headers['sec-websocket-protocol'] as string)
     || tokenParam
@@ -931,11 +949,46 @@ function handleYjsBinaryMessage(ws: WebSocketWithUserData, room: CanvasRoom, dat
       // awareness update 格式：[length, [clientID, clock, state], ...]
       // 累积所有涉及的 clientID，断连时一次性清理，避免多 clientID 场景下残留状态。
       const newClientIds = extractAllAwarenessClientIds(update)
-      const existing = new Set(ws.awarenessClientIds ?? [])
-      for (const id of newClientIds) {
-        existing.add(id)
+      // #3: 单帧 clientID 数量上限——一帧声明大量 clientID 是滥用信号
+      // （合法客户端每连接只有一个 clientID），超限直接拒绝整帧。
+      if (newClientIds.length > MAX_AWARENESS_CLIENT_IDS_PER_FRAME) {
+        log('Awareness update rejected: too many clientIDs in single frame', {
+          userId: ws.userId,
+          canvasId: room.id,
+          count: newClientIds.length,
+        })
+        return
       }
-      ws.awarenessClientIds = Array.from(existing)
+      // B9: clientID 由客户端自由声明,协议层无法验证其"真实性"。若允许一个
+      // 连接声明已被房间内其他连接绑定的 clientID,伪造者可在断连时借
+      // removeAwarenessStates 清除受害者的光标/选区,或持续污染其状态。
+      // 拒绝任何与现存连接绑定的 clientID 冲突的 update;合法客户端(clientID
+      // 为连接级随机数,见 y-websocket Awareness 默认构造)不会与他人冲突。
+      if (!areAwarenessClientIdsAvailable(ws, room, newClientIds)) {
+        log('Awareness update rejected: clientID already bound to another connection', {
+          userId: ws.userId,
+          canvasId: room.id,
+          clientIds: newClientIds,
+        })
+        return
+      }
+      // #3: 每连接绑定 clientID 总数上限——防止单连接无限累积 clientID，
+      // 把断连清理（removeAwarenessStates）和绑定表变成内存/CPU 放大点。
+      // 在副本上合并去重后检查，超限拒绝整帧且不修改已绑定集合。
+      const merged = new Set(ws.awarenessClientIds ?? [])
+      for (const id of newClientIds) {
+        merged.add(id)
+      }
+      if (merged.size > MAX_AWARENESS_CLIENT_IDS_PER_CONNECTION) {
+        log('Awareness update rejected: per-connection clientID limit exceeded', {
+          userId: ws.userId,
+          canvasId: room.id,
+          boundCount: merged.size,
+          limit: MAX_AWARENESS_CLIENT_IDS_PER_CONNECTION,
+        })
+        return
+      }
+      ws.awarenessClientIds = Array.from(merged)
       awarenessProtocol.applyAwarenessUpdate(room.awareness, update, ws)
       // 转发给房间内其他客户端。
       const wrapped = encoding.createEncoder()
@@ -974,6 +1027,35 @@ function extractAllAwarenessClientIds(update: Uint8Array): number[] {
   } catch {
     return []
   }
+}
+
+/**
+ * B9: 校验声明的 awareness clientID 是否可被本连接使用。
+ *
+ * clientID 由客户端任意声明（通常是一个随机数），服务端无法从协议层验证
+ * 其与用户的真实绑定。若允许伪造，攻击者可声明受害者的 clientID 并：
+ * 1. 在断连时触发 removeAwarenessStates，清除受害者的光标/选区状态；
+ * 2. 持续以受害者 clientID 发布状态，污染其他客户端的协作 UI。
+ *
+ * 因此每个连接声明的 clientID 都会绑定到该 ws 实例（ws.awarenessClientIds），
+ * 断连时仅按本连接的绑定清理；任何已被房间内其他连接绑定的 clientID 都会
+ * 导致整个 update 被拒绝。合法客户端（clientID 为连接级随机数）不会与
+ * 他人冲突，拒绝只会命中伪造者。
+ */
+function areAwarenessClientIdsAvailable(
+  ws: WebSocketWithUserData,
+  room: CanvasRoom,
+  clientIds: number[],
+): boolean {
+  if (clientIds.length === 0) return true
+  for (const other of room.clients) {
+    if (other === ws) continue
+    const bound = other.awarenessClientIds
+    if (bound && bound.some((id) => clientIds.includes(id))) {
+      return false
+    }
+  }
+  return true
 }
 
 /**

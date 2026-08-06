@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { X, User, Key, Trash2, Camera, Loader2 } from 'lucide-react'
 import { useUIStore } from '@/store/useUIStore'
@@ -30,6 +30,17 @@ export function AccountSettingsDialog() {
   const [nickname, setNickname] = useState(user?.nickname || '')
   const [avatarFile, setAvatarFile] = useState<File | null>(null)
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null)
+  // 跟踪 blob URL 以便替换/卸载时 revoke，避免内存泄漏
+  const avatarPreviewUrlRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (avatarPreviewUrlRef.current) {
+        URL.revokeObjectURL(avatarPreviewUrlRef.current)
+        avatarPreviewUrlRef.current = null
+      }
+    }
+  }, [])
 
   // Password state
   const [currentPassword, setCurrentPassword] = useState('')
@@ -45,8 +56,14 @@ export function AccountSettingsDialog() {
   const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (file) {
+      // 释放上一次预览的 blob URL，避免泄漏
+      if (avatarPreviewUrlRef.current) {
+        URL.revokeObjectURL(avatarPreviewUrlRef.current)
+      }
+      const previewUrl = URL.createObjectURL(file)
+      avatarPreviewUrlRef.current = previewUrl
       setAvatarFile(file)
-      setAvatarPreview(URL.createObjectURL(file))
+      setAvatarPreview(previewUrl)
     }
   }
 
@@ -70,6 +87,10 @@ export function AccountSettingsDialog() {
         title: '保存成功',
         message: '个人资料已更新',
       })
+      if (avatarPreviewUrlRef.current) {
+        URL.revokeObjectURL(avatarPreviewUrlRef.current)
+        avatarPreviewUrlRef.current = null
+      }
       setAvatarFile(null)
       setAvatarPreview(null)
     } catch (error) {

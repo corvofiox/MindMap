@@ -181,18 +181,3 @@ export function decodeBase64ToDoc(base64: string | null | undefined): Y.Doc | nu
     return null
   }
 }
-
-/**
- * Apply a base64-encoded update onto an existing doc in-place.
- * Used by the REST POST /canvases/:id/data endpoint.
- */
-export function applyBase64Update(doc: Y.Doc, base64: string): boolean {
-  try {
-    const bytes = Buffer.from(base64, 'base64')
-    if (bytes.length === 0) return false
-    Y.applyUpdate(doc, new Uint8Array(bytes))
-    return true
-  } catch {
-    return false
-  }
-}
