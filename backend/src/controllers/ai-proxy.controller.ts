@@ -4,7 +4,7 @@
 // - GET  /providers   查询已配置的提供商（不返回明文密钥）
 // - DELETE /providers/:providerId  删除密钥
 // - POST /models      代理获取模型列表
-// - POST /chat        SSE 流式代理聊天请求（Ollama NDJSON 统一转换为 OpenAI SSE 格式）
+// - POST /chat        SSE 流式代理聊天请求
 
 import { Router } from 'express'
 import type { Response as ExpressResponse } from 'express'
@@ -22,11 +22,9 @@ import { logError } from '../utils/logger.js'
 
 // 提供商元信息（仅代理所需的最小信息）
 const PROVIDER_META: Record<string, { defaultBaseUrl: string; apiKeyRequired: boolean }> = {
-  moonshot: { defaultBaseUrl: 'https://api.moonshot.cn/v1', apiKeyRequired: true },
   deepseek: { defaultBaseUrl: 'https://api.deepseek.com', apiKeyRequired: true },
-  zhipu: { defaultBaseUrl: 'https://open.bigmodel.cn/api/paas/v4', apiKeyRequired: true },
-  gemini: { defaultBaseUrl: 'https://generativelanguage.googleapis.com/v1beta', apiKeyRequired: true },
-  ollama: { defaultBaseUrl: 'http://localhost:11434', apiKeyRequired: false },
+  'opencode-go': { defaultBaseUrl: 'https://opencode.ai/zen/go/v1', apiKeyRequired: true },
+  'opencode-zen': { defaultBaseUrl: 'https://opencode.ai/zen/v1', apiKeyRequired: true },
   custom: { defaultBaseUrl: '', apiKeyRequired: true },
 }
 
@@ -321,86 +319,12 @@ async function getProviderKey(userId: number, providerId: string) {
   })
 }
 
-function buildUpstreamHeaders(providerId: string, apiKey: string): Record<string, string> {
+function buildUpstreamHeaders(apiKey: string): Record<string, string> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (apiKey) {
-    if (providerId === 'gemini') {
-      headers['x-goog-api-key'] = apiKey
-    } else {
-      headers['Authorization'] = `Bearer ${apiKey}`
-    }
+    headers['Authorization'] = `Bearer ${apiKey}`
   }
   return headers
-}
-
-// 将 Ollama 的 NDJSON 流转换为 OpenAI 兼容的 SSE 格式
-async function pipeOllamaStream(
-  body: ReadableStream<Uint8Array>,
-  res: ExpressResponse,
-  // R4 #7: 每个数据块到达时回调（用于重置流式 idle 超时）
-  onActivity?: () => void,
-) {
-  const decoder = new TextDecoder()
-  let buffer = ''
-
-  for await (const chunk of body) {
-    onActivity?.()
-    buffer += decoder.decode(chunk, { stream: true })
-    const lines = buffer.split('\n')
-    buffer = lines.pop() || ''
-
-    for (const line of lines) {
-      const trimmed = line.trim()
-      if (!trimmed) continue
-      try {
-        const parsed = JSON.parse(trimmed) as {
-          error?: unknown
-          done?: boolean
-          message?: {
-            content?: string
-            reasoning_content?: string
-            tool_calls?: Array<{
-              id?: string
-              function?: { name?: string; arguments?: unknown }
-            }>
-          }
-        }
-
-        if (parsed.error) {
-          res.write(`data: ${JSON.stringify({ error: parsed.error })}\n\n`)
-          continue
-        }
-
-        const delta: Record<string, unknown> = {}
-        if (parsed.message?.reasoning_content) {
-          delta.reasoning_content = parsed.message.reasoning_content
-        }
-        if (parsed.message?.content) {
-          delta.content = parsed.message.content
-        }
-        if (parsed.message?.tool_calls && parsed.message.tool_calls.length > 0) {
-          delta.tool_calls = parsed.message.tool_calls.map((tc, index) => ({
-            index,
-            id: tc.id || `call_${index}`,
-            type: 'function',
-            function: {
-              name: tc.function?.name || '',
-              arguments: JSON.stringify(tc.function?.arguments || {}),
-            },
-          }))
-        }
-
-        if (Object.keys(delta).length > 0) {
-          res.write(`data: ${JSON.stringify({ choices: [{ delta }] })}\n\n`)
-        }
-        if (parsed.done) {
-          res.write('data: [DONE]\n\n')
-        }
-      } catch {
-        // 忽略无法解析的行
-      }
-    }
-  }
 }
 
 // Create router
@@ -425,7 +349,7 @@ router.get(
     const configured = new Map(rows.map((row) => [row.providerId, row.baseUrl]))
     const data = Object.entries(PROVIDER_META).map(([providerId, meta]) => ({
       providerId,
-      // 无需密钥的提供商（如本地 Ollama）始终视为已配置
+      // 无需密钥的提供商始终视为已配置
       configured: !meta.apiKeyRequired || configured.has(providerId),
       baseUrl: configured.get(providerId) || undefined,
     }))
@@ -589,7 +513,7 @@ router.post(
       // fetch 建连不再二次解析 DNS（杜绝校验与建连之间的 DNS rebinding）
       const upstream = await fetch(`${effectiveBaseUrl.url}${urlPath}`, {
         method: 'GET',
-        headers: buildUpstreamHeaders(providerId, apiKey),
+        headers: buildUpstreamHeaders(apiKey),
         signal: controller.signal,
         redirect: 'manual',
         ...(effectiveBaseUrl.addresses.length > 0
@@ -682,7 +606,7 @@ router.post(
       // R5 #2: 与 /models 一致——域名场景锁定已校验 IP，杜绝二次解析
       upstream = await fetch(`${effectiveBaseUrl.url}${urlPath}`, {
         method: 'POST',
-        headers: buildUpstreamHeaders(providerId, apiKey),
+        headers: buildUpstreamHeaders(apiKey),
         body: JSON.stringify(body),
         signal: controller.signal,
         redirect: 'manual',
@@ -708,12 +632,6 @@ router.post(
     if (!upstream.ok) {
       const text = sanitizeUpstreamErrorText(await upstream.text())
       return res.status(502).json({ success: false, error: `AI 服务请求失败: ${text}` })
-    }
-
-    // Ollama 非流式请求：直接透传原始 JSON，不做 SSE 转换
-    if (providerId === 'ollama' && (body as { stream?: unknown }).stream === false) {
-      const data = await upstream.json()
-      return res.json({ success: true, data })
     }
 
     if (!upstream.body) {
@@ -750,13 +668,9 @@ router.post(
     resetStreamIdleTimer()
 
     try {
-      if (providerId === 'ollama') {
-        await pipeOllamaStream(upstream.body, res, resetStreamIdleTimer)
-      } else {
-        for await (const chunk of upstream.body) {
-          resetStreamIdleTimer()
-          res.write(chunk)
-        }
+      for await (const chunk of upstream.body) {
+        resetStreamIdleTimer()
+        res.write(chunk)
       }
     } catch (error) {
       // idle 超时触发的 abort 会在此抛出 AbortError，属预期行为

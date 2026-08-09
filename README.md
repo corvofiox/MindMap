@@ -30,7 +30,7 @@ MindMap 试图解决一个具体的问题:当想法还处于未成形的状态�
 
 ### AI 辅助
 
-- 内置 AI 对话面板,支持 Moonshot、DeepSeek、GLM、Gemini 及本地 Ollama 等模型
+- 内置 AI 对话面板,支持 DeepSeek、OpenCode Go/Zen 聚合网关(汇聚多家模型)及自定义 OpenAI 兼容 API
 - AI 可读取画布内容,并直接执行节点创建、编辑、连线等操作
 - API 密钥以加密形式存储于服务端,不经过浏览器或第三方服务
 

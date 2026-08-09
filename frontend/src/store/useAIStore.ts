@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { AI_PROVIDERS } from '@/services/aiService'
 import type { AIModel } from '@/services/aiService'
 
 // 每个提供商的独立配置（API 密钥不再存储在前端，由服务端加密保存）
@@ -11,15 +12,6 @@ export interface ProviderConfig {
   enableThinking?: boolean
   reasoningEffort?: 'high' | 'max'
   responseFormat?: 'text' | 'json_object'
-  glmConfig?: {
-    thinking?: { type: 'enabled' | 'disabled' }
-    toolStream?: boolean
-    clearThinking?: boolean
-  }
-  moonshotConfig?: {
-    partial?: boolean
-    name?: string
-  }
 }
 
 // 所有提供商的配置集合
@@ -59,11 +51,9 @@ const defaultProviderConfig: ProviderConfig = {
 
 // 获取默认配置，包含各提供商的默认地址
 const getDefaultProviderConfigs = (): ProviderConfigs => ({
-  moonshot: { ...defaultProviderConfig, baseUrl: 'https://api.moonshot.cn/v1' },
   deepseek: { ...defaultProviderConfig, baseUrl: 'https://api.deepseek.com' },
-  zhipu: { ...defaultProviderConfig, baseUrl: 'https://open.bigmodel.cn/api/paas/v4' },
-  gemini: { ...defaultProviderConfig, baseUrl: 'https://generativelanguage.googleapis.com/v1beta' },
-  ollama: { ...defaultProviderConfig, baseUrl: 'http://localhost:11434' },
+  'opencode-go': { ...defaultProviderConfig, baseUrl: 'https://opencode.ai/zen/go/v1' },
+  'opencode-zen': { ...defaultProviderConfig, baseUrl: 'https://opencode.ai/zen/v1' },
   custom: { ...defaultProviderConfig, baseUrl: '' },
 })
 
@@ -126,6 +116,34 @@ export const useAIStore = create<AIState>()(
         // isConnected 是会话级运行状态（每次打开侧边栏都会重新验证），
         // 持久化会导致重启后误显示"已连接"，因此不持久化。
       }),
+      // 供应商裁剪后迁移兜底：旧 localStorage 中可能残留已删除供应商
+      // （moonshot/zhipu/gemini/ollama）。rehydrate 时过滤掉非法配置，
+      // currentProvider 非法时回退到 deepseek，避免下拉空白/未知提供商报错。
+      merge: (persisted, current) => {
+        const persistedState = persisted as Partial<AIState> | undefined
+        const validIds = new Set(AI_PROVIDERS.map((p) => p.id))
+        const providerConfigs = { ...current.providerConfigs }
+        if (persistedState?.providerConfigs && typeof persistedState.providerConfigs === 'object') {
+          for (const [id, cfg] of Object.entries(persistedState.providerConfigs)) {
+            if (validIds.has(id) && cfg && typeof cfg === 'object') {
+              providerConfigs[id] = {
+                ...(providerConfigs[id] || defaultProviderConfig),
+                ...(cfg as Partial<ProviderConfig>),
+              }
+            }
+          }
+        }
+        const currentProvider =
+          persistedState?.currentProvider && validIds.has(persistedState.currentProvider)
+            ? persistedState.currentProvider
+            : current.currentProvider
+        return {
+          ...current,
+          ...persistedState,
+          currentProvider,
+          providerConfigs,
+        }
+      },
     }
   )
 )

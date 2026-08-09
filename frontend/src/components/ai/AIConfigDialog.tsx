@@ -317,7 +317,7 @@ export function AIConfigDialog({ open, onClose }: AIConfigDialogProps) {
           )}
 
           {/* 自定义 Base URL */}
-          {(localProvider === 'custom' || localProvider === 'ollama') && (
+          {['custom', 'opencode-go', 'opencode-zen'].includes(localProvider) && (
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                 服务地址
@@ -505,45 +505,8 @@ export function AIConfigDialog({ open, onClose }: AIConfigDialogProps) {
             </div>
           )}
 
-          {/* GLM 思考模式设置 */}
-          {localProvider === 'zhipu' && (
-            <div className="space-y-3 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
-              <div className="flex items-center gap-2 text-sm font-medium text-blue-700 dark:text-blue-300">
-                <Brain className="w-4 h-4" />
-                深度思考
-              </div>
-              <div className="flex items-center justify-between">
-                <label className="text-sm text-gray-600 dark:text-gray-400">
-                  启用深度思考
-                </label>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={localConfig.enableThinking !== false}
-                  onClick={() =>
-                    setLocalConfig((prev) => ({
-                      ...prev,
-                      enableThinking: prev.enableThinking === false ? true : false,
-                    }))
-                  }
-                  className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
-                    localConfig.enableThinking !== false
-                      ? 'bg-blue-500'
-                      : 'bg-gray-300 dark:bg-gray-600'
-                  }`}
-                >
-                  <span
-                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                      localConfig.enableThinking !== false ? 'translate-x-4' : 'translate-x-0.5'
-                    }`}
-                  />
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* JSON Output 模式（DeepSeek/GLM/Moonshot） */}
-          {['deepseek', 'zhipu', 'moonshot'].includes(localProvider) && (
+          {/* JSON Output 模式（DeepSeek） */}
+          {localProvider === 'deepseek' && (
             <div className="space-y-3 p-3 bg-amber-50 dark:bg-amber-900/20 rounded-lg border border-amber-200 dark:border-amber-800">
               <div className="flex items-center gap-2 text-sm font-medium text-amber-700 dark:text-amber-300">
                 <Braces className="w-4 h-4" />

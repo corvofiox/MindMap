@@ -135,11 +135,11 @@ describe('AI Proxy Controller', () => {
       expect(res.body.success).toBe(true)
       const deepseek = res.body.data.find((p: any) => p.providerId === 'deepseek')
       expect(deepseek.configured).toBe(true)
-      // 无密钥要求的提供商（ollama）始终视为已配置
-      const ollama = res.body.data.find((p: any) => p.providerId === 'ollama')
-      expect(ollama.configured).toBe(true)
-      const moonshot = res.body.data.find((p: any) => p.providerId === 'moonshot')
-      expect(moonshot.configured).toBe(false)
+      // 无密钥要求的提供商始终视为已配置（当前无此类提供商）
+      const opencodeGo = res.body.data.find((p: any) => p.providerId === 'opencode-go')
+      expect(opencodeGo.configured).toBe(false)
+      const opencodeZen = res.body.data.find((p: any) => p.providerId === 'opencode-zen')
+      expect(opencodeZen.configured).toBe(false)
     })
   })
 
@@ -340,37 +340,6 @@ describe('AI Proxy Controller', () => {
       expect(res.text).toContain('[DONE]')
     })
 
-    it('should convert Ollama NDJSON to OpenAI SSE format', async () => {
-      const upstreamBody = new ReadableStream({
-        start(controller) {
-          const encoder = new TextEncoder()
-          controller.enqueue(encoder.encode(JSON.stringify({
-            model: 'qwen',
-            message: { role: 'assistant', content: 'hi' },
-            done: false,
-          }) + '\n'))
-          controller.enqueue(encoder.encode(JSON.stringify({
-            model: 'qwen',
-            message: { role: 'assistant', content: '' },
-            done: true,
-          }) + '\n'))
-          controller.close()
-        },
-      })
-      fetchMock.mockResolvedValue({
-        ok: true,
-        body: upstreamBody,
-      })
-      const res = await request(app).post('/api/ai/chat').send({
-        providerId: 'ollama',
-        urlPath: '/api/chat',
-        body: { model: 'qwen', messages: [{ role: 'user', content: 'hi' }], stream: true },
-      })
-      expect(res.status).toBe(200)
-      expect(res.text).toContain('data: {"choices":[{"delta":{"content":"hi"}}]}')
-      expect(res.text).toContain('data: [DONE]')
-    })
-
     it('should return 502 when upstream fails', async () => {
       const encrypted = encryptApiKey('sk-stored')
       mockFindFirst.mockResolvedValue({ providerId: 'deepseek', apiKeyEncrypted: encrypted, baseUrl: null })
@@ -397,49 +366,5 @@ describe('AI Proxy Controller', () => {
       expect(res.status).toBe(400)
     })
 
-    it('should allow IPv6 loopback base url for ollama', async () => {
-      const encoder = new TextEncoder()
-      fetchMock.mockResolvedValue({
-        ok: true,
-        body: new ReadableStream({
-          start(controller) {
-            controller.enqueue(encoder.encode(JSON.stringify({
-              model: 'qwen',
-              message: { role: 'assistant', content: 'hi' },
-              done: false,
-            }) + '\n'))
-            controller.enqueue(encoder.encode(JSON.stringify({
-              model: 'qwen',
-              message: { role: 'assistant', content: '' },
-              done: true,
-            }) + '\n'))
-            controller.close()
-          },
-        }),
-      })
-      const res = await request(app).post('/api/ai/chat').send({
-        providerId: 'ollama',
-        urlPath: '/api/chat',
-        baseUrl: 'http://[::1]:11434',
-        body: { model: 'qwen', messages: [{ role: 'user', content: 'hi' }], stream: true },
-      })
-      expect(res.status).toBe(200)
-      expect(res.text).toContain('hi')
-    })
-
-    it('should pass through raw JSON for ollama non-stream requests', async () => {
-      fetchMock.mockResolvedValue({
-        ok: true,
-        json: async () => ({ message: { content: 'non-stream reply' } }),
-        body: null,
-      })
-      const res = await request(app).post('/api/ai/chat').send({
-        providerId: 'ollama',
-        urlPath: '/api/chat',
-        body: { model: 'qwen', messages: [{ role: 'user', content: 'hi' }], stream: false },
-      })
-      expect(res.status).toBe(200)
-      expect(res.body).toEqual({ success: true, data: { message: { content: 'non-stream reply' } } })
-    })
   })
 })

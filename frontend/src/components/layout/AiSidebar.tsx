@@ -341,7 +341,7 @@ export function AiSidebar({ open }: AiSidebarProps) {
       role: 'assistant',
       content: isConnected
         ? '你好！我是你的 AI 思维导图助手。我可以帮你：\n\n• 生成思维导图结构\n• 扩展节点内容\n• 优化布局建议\n• 回答相关问题\n\n请告诉我你想创建什么样的思维导图？'
-        : '欢迎使用 AI 思维导图助手！\n\n⚠️ 尚未配置 AI 服务\n\n请点击右上角的设置按钮，配置您的 AI 服务提供商和 API 密钥。\n\n支持的提供商：\n• DeepSeek (DeepSeek 系列)\n• 智谱 AI (GLM 系列)\n• Google Gemini (Gemini 系列)\n• Ollama (本地模型)\n• 自定义 OpenAI 兼容 API',
+        : '欢迎使用 AI 思维导图助手！\n\n⚠️ 尚未配置 AI 服务\n\n请点击右上角的设置按钮，配置您的 AI 服务提供商和 API 密钥。\n\n支持的提供商：\n• DeepSeek (DeepSeek 系列)\n• OpenCode Go (聚合网关)\n• OpenCode Zen (聚合网关)\n• 自定义 OpenAI 兼容 API',
       timestamp: Date.now(),
     },
   ])
@@ -374,7 +374,7 @@ export function AiSidebar({ open }: AiSidebarProps) {
     role: 'assistant',
     content: isConnected
       ? '你好！我是你的 AI 思维导图助手。我可以帮你：\n\n• 生成思维导图结构\n• 扩展节点内容\n• 优化布局建议\n• 回答相关问题\n\n请告诉我你想创建什么样的思维导图？'
-      : '欢迎使用 AI 思维导图助手！\n\n⚠️ 尚未配置 AI 服务\n\n请点击右上角的设置按钮，配置您的 AI 服务提供商和 API 密钥。\n\n支持的提供商：\n• DeepSeek (DeepSeek 系列)\n• 智谱 AI (GLM 系列)\n• Google Gemini (Gemini 系列)\n• Ollama (本地模型)\n• 自定义 OpenAI 兼容 API',
+      : '欢迎使用 AI 思维导图助手！\n\n⚠️ 尚未配置 AI 服务\n\n请点击右上角的设置按钮，配置您的 AI 服务提供商和 API 密钥。\n\n支持的提供商：\n• DeepSeek (DeepSeek 系列)\n• OpenCode Go (聚合网关)\n• OpenCode Zen (聚合网关)\n• 自定义 OpenAI 兼容 API',
     timestamp: Date.now(),
   })
 
@@ -472,7 +472,7 @@ export function AiSidebar({ open }: AiSidebarProps) {
               role: 'assistant',
               content: isConnected
                 ? '你好！我是你的 AI 思维导图助手。我可以帮你：\n\n• 生成思维导图结构\n• 扩展节点内容\n• 优化布局建议\n• 回答相关问题\n\n请告诉我你想创建什么样的思维导图？'
-                : '欢迎使用 AI 思维导图助手！\n\n⚠️ 尚未配置 AI 服务\n\n请点击右上角的设置按钮，配置您的 AI 服务提供商和 API 密钥。\n\n支持的提供商：\n• DeepSeek (DeepSeek 系列)\n• 智谱 AI (GLM 系列)\n• Google Gemini (Gemini 系列)\n• Ollama (本地模型)\n• 自定义 OpenAI 兼容 API',
+                : '欢迎使用 AI 思维导图助手！\n\n⚠️ 尚未配置 AI 服务\n\n请点击右上角的设置按钮，配置您的 AI 服务提供商和 API 密钥。\n\n支持的提供商：\n• DeepSeek (DeepSeek 系列)\n• OpenCode Go (聚合网关)\n• OpenCode Zen (聚合网关)\n• 自定义 OpenAI 兼容 API',
               timestamp: Date.now(),
             },
           ])
