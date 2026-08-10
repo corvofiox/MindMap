@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { X, Check, RefreshCw, AlertCircle, Settings, Brain, Braces, Trash2 } from 'lucide-react'
-import { AI_PROVIDERS, fetchModels, validateApiKey } from '@/services/aiService'
+import { AI_PROVIDERS, fetchModels, validateApiKey, resolveThinkingConfig } from '@/services/aiService'
 import { useAIStore, type ProviderConfig } from '@/store/useAIStore'
 import { getAIProviders, saveAIProviderKey, deleteAIProviderKey, type AIProviderStatus } from '@/services/api'
 
@@ -35,6 +35,8 @@ export function AIConfigDialog({ open, onClose }: AIConfigDialogProps) {
   const [providerStatuses, setProviderStatuses] = useState<Record<string, AIProviderStatus>>({})
 
   const provider = AI_PROVIDERS.find((p) => p.id === localProvider)
+  // 思考能力声明解析（动态 provider 按模型 ID 匹配，无能力/无匹配 → 不渲染思考面板）
+  const thinkingCfg = provider ? resolveThinkingConfig(provider, localConfig.model) : undefined
 
   // 加载服务端密钥配置状态
   const loadProviderStatuses = useCallback(async () => {
@@ -401,8 +403,8 @@ export function AIConfigDialog({ open, onClose }: AIConfigDialogProps) {
             </select>
           </div>
 
-          {/* DeepSeek 思考模式设置 */}
-          {localProvider === 'deepseek' && (
+          {/* 思考模式设置（由 provider 能力声明驱动） */}
+          {thinkingCfg && (
             <div className="space-y-3 p-3 bg-purple-50 dark:bg-purple-900/20 rounded-lg border border-purple-200 dark:border-purple-800">
               <div className="flex items-center gap-2 text-sm font-medium text-purple-700 dark:text-purple-300">
                 <Brain className="w-4 h-4" />
@@ -435,23 +437,26 @@ export function AIConfigDialog({ open, onClose }: AIConfigDialogProps) {
                   />
                 </button>
               </div>
-              {localConfig.enableThinking !== false && (
+              {localConfig.enableThinking !== false && thinkingCfg.effortLevels.length > 0 && (
                 <div className="flex items-center justify-between">
                   <label className="text-sm text-gray-600 dark:text-gray-400">
                     思考强度
                   </label>
                   <select
-                    value={localConfig.reasoningEffort || 'high'}
+                    value={localConfig.reasoningEffort || thinkingCfg.defaultEffort || 'high'}
                     onChange={(e) =>
                       setLocalConfig((prev) => ({
                         ...prev,
-                        reasoningEffort: e.target.value as 'high' | 'max',
+                        reasoningEffort: e.target.value,
                       }))
                     }
                     className="px-2 py-1 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-sm text-gray-900 dark:text-white focus:ring-2 focus:ring-purple-500 focus:outline-none"
                   >
-                    <option value="high">High（默认）</option>
-                    <option value="max">Max（深度推理）</option>
+                    {thinkingCfg.effortLevels.map((level) => (
+                      <option key={level} value={level}>
+                        {level.charAt(0).toUpperCase() + level.slice(1)}
+                      </option>
+                    ))}
                   </select>
                 </div>
               )}

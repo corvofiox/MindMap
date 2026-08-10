@@ -8,7 +8,7 @@ export interface ProviderConfig {
   baseUrl: string
   model: string
   enableThinking?: boolean
-  reasoningEffort?: 'high' | 'max'
+  reasoningEffort?: string
   responseFormat?: 'text' | 'json_object'
 }
 

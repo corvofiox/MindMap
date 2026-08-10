@@ -15,6 +15,12 @@ export interface AIProvider {
   chatEndpoint: string
   parseModels: (response: unknown) => AIModel[]
   parseChatResponse: (response: unknown) => { content: string; reasoningContent?: string; toolCalls?: Array<{ name: string; arguments: Record<string, unknown> }> }
+  // 思考模式/强度能力声明（不声明 = 不支持思考，UI 不渲染）
+  thinking?: {
+    kind: 'deepseek' | 'glm' | 'dynamic'
+    effortLevels: string[]
+    defaultEffort: string
+  }
 }
 
 export interface AIModel {
@@ -31,7 +37,7 @@ export interface AIConfig {
   baseUrl: string
   model: string
   enableThinking?: boolean  // DeepSeek 思考模式
-  reasoningEffort?: 'high' | 'max'  // DeepSeek 思考强度控制
+  reasoningEffort?: string  // 思考强度控制（档位由 provider 能力声明决定）
   responseFormat?: 'text' | 'json_object'  // DeepSeek JSON Output 模式
 }
 
@@ -45,6 +51,7 @@ export const AI_PROVIDERS: AIProvider[] = [
     apiKeyRequired: true,
     modelsEndpoint: '/models',
     chatEndpoint: '/chat/completions',
+    thinking: { kind: 'deepseek', effortLevels: ['low', 'high', 'max'], defaultEffort: 'high' },
     parseModels: (response: unknown) => {
       const data = response as { data: Array<{ id: string }> }
       return data.data
@@ -104,6 +111,8 @@ export const AI_PROVIDERS: AIProvider[] = [
     apiKeyRequired: true,
     modelsEndpoint: '/models',
     chatEndpoint: '/chat/completions',
+    // dynamic: 实际档位由 resolveThinkingConfig 按模型 ID 匹配硬编码，此处字段仅占位（不用作计算）
+    thinking: { kind: 'dynamic', effortLevels: [], defaultEffort: 'high' },
     parseModels: (response: unknown) => {
       const data = response as { data: Array<{ id: string }> }
       return data.data.map((m) => {
@@ -155,6 +164,8 @@ export const AI_PROVIDERS: AIProvider[] = [
     apiKeyRequired: true,
     modelsEndpoint: '/models',
     chatEndpoint: '/chat/completions',
+    // dynamic: 实际档位由 resolveThinkingConfig 按模型 ID 匹配硬编码，此处字段仅占位（不用作计算）
+    thinking: { kind: 'dynamic', effortLevels: [], defaultEffort: 'high' },
     parseModels: (response: unknown) => {
       const data = response as { data: Array<{ id: string }> }
       return data.data.map((m) => {
@@ -244,6 +255,54 @@ export const AI_PROVIDERS: AIProvider[] = [
     },
   },
 ]
+
+// 思考配置解析结果
+export interface ThinkingConfig {
+  kind: 'deepseek' | 'glm'
+  effortLevels: string[]
+  defaultEffort?: string
+}
+
+// 解析 provider 的思考能力声明：
+// - kind='deepseek'/'glm' 为静态声明（直连 provider），直接返回
+// - kind='dynamic' 为网关类 provider，按模型 ID 动态匹配（deepseek/glm 系模型）
+// - 不声明或无匹配模型 → undefined（不渲染 UI、不注入参数）
+export function resolveThinkingConfig(provider: AIProvider, modelId: string): ThinkingConfig | undefined {
+  if (!provider.thinking) return undefined
+  if (provider.thinking.kind === 'deepseek' || provider.thinking.kind === 'glm') {
+    return {
+      kind: provider.thinking.kind,
+      effortLevels: provider.thinking.effortLevels,
+      defaultEffort: provider.thinking.defaultEffort,
+    }
+  }
+  // kind === 'dynamic'：按模型 ID 匹配（网关模型）
+  const m = (modelId || '').toLowerCase()
+  if (m.includes('deepseek')) return { kind: 'deepseek', effortLevels: ['low', 'high', 'max'], defaultEffort: 'high' }
+  if (m.includes('glm')) return { kind: 'glm', effortLevels: [], defaultEffort: 'high' }
+  return undefined
+}
+
+// 思考参数统一映射。
+// ⚠️ 关键坑：thinking 与 reasoning_effort 永不同发（网关会 HTTP 400）。
+// - deepseek: 关 → thinking disabled；开且无 effort → thinking enabled；开且有 effort → 仅 reasoning_effort
+//   （DeepSeek 官方 thinking 默认 enabled，语义等效）
+// - glm: 关 → thinking disabled；开 → thinking enabled（无强度概念）
+export function buildThinkingParams(
+  kind: 'deepseek' | 'glm',
+  opts: { enabled: boolean; effort?: string }
+): Record<string, unknown> | undefined {
+  if (kind === 'deepseek') {
+    if (!opts.enabled) return { thinking: { type: 'disabled' } }
+    if (opts.effort) return { reasoning_effort: opts.effort }
+    return { thinking: { type: 'enabled' } }
+  }
+  if (kind === 'glm') {
+    if (!opts.enabled) return { thinking: { type: 'disabled' } }
+    return { thinking: { type: 'enabled' } }
+  }
+  return undefined
+}
 
 // 获取模型列表（通过服务端代理，密钥不进入浏览器）
 export async function fetchModels(
@@ -368,31 +427,26 @@ export async function sendStreamChatMessage(
 
   // DeepSeek 特殊处理
   if (providerId === 'deepseek') {
-    const supportsThinking = config.model.includes('deepseek')
-    const isThinkingEnabled = supportsThinking && config.enableThinking !== false
-
     // 思考模式下不支持 temperature/top_p/presence_penalty/frequency_penalty
     // (上游忽略这些参数,前端已不再发送)
 
-    // JSON Output 模式
+    // JSON Output 模式（DeepSeek 独立特性）
     if (config.responseFormat === 'json_object') {
       body.response_format = { type: 'json_object' }
     }
 
-    // 思考模式控制（顶级参数，非 extra_body）
-    if (supportsThinking && config.enableThinking === false) {
-      body.thinking = { type: 'disabled' }
-    } else if (supportsThinking) {
-      body.thinking = { type: 'enabled' }
-    }
-
-    // 思考强度控制（顶级参数）
-    if (isThinkingEnabled && config.reasoningEffort) {
-      body.reasoning_effort = config.reasoningEffort
-    }
-
-    // 流式输出包含 usage 信息
+    // 流式输出包含 usage 信息（仅 DeepSeek 直连，网关请求不新增字段）
     body.stream_options = { include_usage: true }
+  }
+
+  // 思考模式/思考强度统一注入（由 provider 能力声明 + 模型 ID 动态解析）
+  const thinkingCfg = resolveThinkingConfig(provider, config.model)
+  if (thinkingCfg) {
+    const params = buildThinkingParams(thinkingCfg.kind, {
+      enabled: config.enableThinking !== false,
+      effort: config.enableThinking !== false ? config.reasoningEffort : undefined,
+    })
+    if (params) Object.assign(body, params)
   }
 
 
