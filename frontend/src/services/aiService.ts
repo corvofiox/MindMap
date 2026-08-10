@@ -311,9 +311,6 @@ export function abortCurrentRequest() {
   }
 }
 
-// 工具调用最大轮数，防止模型无限请求工具导致死循环
-export const MAX_TOOL_ROUNDS = 5
-
 // 流式输出回调类型
 export interface StreamCallbacks {
   onReasoningChunk?: (chunk: string) => void
@@ -332,7 +329,8 @@ export async function sendStreamChatMessage(
   messages: Array<Record<string, unknown>>,
   callbacks: StreamCallbacks,
   enableTools: boolean = true,
-  depth: number = 0
+  depth: number = 0,
+  failureCount: number = 0
 ): Promise<void> {
   // 创建新的 AbortController（递归调用时不中断外层请求）
   if (depth === 0) {
@@ -585,11 +583,6 @@ export async function sendStreamChatMessage(
 
     // 如果有工具调用，执行工具并将结果返回给 AI
     if (toolCalls.length > 0) {
-      // 工具调用轮次限制，防止死循环
-      if (depth >= MAX_TOOL_ROUNDS) {
-        callbacks.onError?.(new Error(`工具调用超过 ${MAX_TOOL_ROUNDS} 轮上限，已停止`))
-        return
-      }
       // 压缩稀疏数组（流式 tool_calls 的 index 可能不连续）
       const calls = toolCalls.filter(() => true)
       // 用户已中断则跳过工具执行
@@ -608,6 +601,16 @@ export async function sendStreamChatMessage(
           args
         )
         toolResults.push({ tool: tc.function.name, result })
+      }
+
+      // 连续失败保护：任一工具调用失败则累计，连续 10 次失败停止（不再限制总轮数）
+      const anyFailed = toolResults.some(
+        (r) => (r.result as { success?: boolean } | null | undefined)?.success === false
+      )
+      const nextFailureCount = anyFailed ? failureCount + 1 : 0
+      if (nextFailureCount >= 10) {
+        callbacks.onError?.(new Error('连续 10 次工具调用失败，已停止'))
+        return
       }
 
 
@@ -657,7 +660,8 @@ export async function sendStreamChatMessage(
         [...messages, assistantMessage, ...toolResultMessages],
         callbacks,
         true,  // 保持工具调用启用，支持多轮思考+工具调用
-        depth + 1
+        depth + 1,  // depth 仅用于顶层 abort 守卫，不再限制轮数
+        nextFailureCount
       )
       return
     }

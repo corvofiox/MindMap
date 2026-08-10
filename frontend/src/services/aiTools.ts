@@ -150,9 +150,13 @@ function createNode(args: Record<string, unknown>): ToolCallResult {
     const { addNode } = useCanvasStore.getState()
     const nodeId = `node-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
     const nodeType = (args.type as Node['type']) || 'text'
+    const title = String(args.title || '').trim()
+    if (!title) {
+      return { success: false, error: '缺少节点标题(title)' }
+    }
     const node: Node = {
       id: nodeId,
-      title: String(args.title || '新节点'),
+      title,
       content: String(args.content || ''),
       x: toFiniteNumber(args.x, 0),
       y: toFiniteNumber(args.y, 0),
@@ -187,25 +191,28 @@ function updateNode(args: Record<string, unknown>): ToolCallResult {
     }
     // 读取当前节点作为数值兜底（toFiniteNumber fallback）
     const existingNode = nodes.get(nodeId)
+    if (!existingNode) {
+      return { success: false, error: `节点不存在: ${nodeId},可用 getAllNodes 获取有效节点 ID` }
+    }
 
     const updates: Partial<Node> = {}
-    if (args.title !== undefined) updates.title = String(args.title)
-    if (args.content !== undefined) updates.content = String(args.content)
-    if (args.x !== undefined) updates.x = toFiniteNumber(args.x, existingNode?.x ?? 0)
-    if (args.y !== undefined) updates.y = toFiniteNumber(args.y, existingNode?.y ?? 0)
-    if (args.width !== undefined) updates.width = toFiniteNumber(args.width, existingNode?.width ?? 200)
-    if (args.height !== undefined) updates.height = toFiniteNumber(args.height, existingNode?.height ?? 160)
-    if (args.color !== undefined) updates.color = String(args.color)
-    if (args.fontSize !== undefined) updates.fontSize = toFiniteNumber(args.fontSize, existingNode?.fontSize ?? 14)
-    if (args.textAlign !== undefined) updates.textAlign = args.textAlign as Node['textAlign']
-    if (args.titleAlign !== undefined) updates.titleAlign = args.titleAlign as Node['titleAlign']
-    if (args.contentAlign !== undefined) updates.contentAlign = args.contentAlign as Node['contentAlign']
-    if (args.collapsedTitleAlign !== undefined) updates.collapsedTitleAlign = args.collapsedTitleAlign as Node['collapsedTitleAlign']
-    if (args.collapsed !== undefined) updates.collapsed = Boolean(args.collapsed)
-    if (args.locked !== undefined) updates.locked = Boolean(args.locked)
-    if (args.type !== undefined) updates.type = args.type as Node['type']
-    if (args.imageUrl !== undefined) updates.imageUrl = String(args.imageUrl)
-    if (args.aspectRatio !== undefined) updates.aspectRatio = toFiniteNumber(args.aspectRatio, existingNode?.aspectRatio ?? 1)
+    if (args.title !== undefined && args.title !== null) updates.title = String(args.title)
+    if (args.content !== undefined && args.content !== null) updates.content = String(args.content)
+    if (args.x !== undefined && args.x !== null) updates.x = toFiniteNumber(args.x, existingNode?.x ?? 0)
+    if (args.y !== undefined && args.y !== null) updates.y = toFiniteNumber(args.y, existingNode?.y ?? 0)
+    if (args.width !== undefined && args.width !== null) updates.width = toFiniteNumber(args.width, existingNode?.width ?? 200)
+    if (args.height !== undefined && args.height !== null) updates.height = toFiniteNumber(args.height, existingNode?.height ?? 160)
+    if (args.color !== undefined && args.color !== null) updates.color = String(args.color)
+    if (args.fontSize !== undefined && args.fontSize !== null) updates.fontSize = toFiniteNumber(args.fontSize, existingNode?.fontSize ?? 14)
+    if (args.textAlign !== undefined && args.textAlign !== null) updates.textAlign = args.textAlign as Node['textAlign']
+    if (args.titleAlign !== undefined && args.titleAlign !== null) updates.titleAlign = args.titleAlign as Node['titleAlign']
+    if (args.contentAlign !== undefined && args.contentAlign !== null) updates.contentAlign = args.contentAlign as Node['contentAlign']
+    if (args.collapsedTitleAlign !== undefined && args.collapsedTitleAlign !== null) updates.collapsedTitleAlign = args.collapsedTitleAlign as Node['collapsedTitleAlign']
+    if (args.collapsed !== undefined && args.collapsed !== null) updates.collapsed = Boolean(args.collapsed)
+    if (args.locked !== undefined && args.locked !== null) updates.locked = Boolean(args.locked)
+    if (args.type !== undefined && args.type !== null) updates.type = args.type as Node['type']
+    if (args.imageUrl !== undefined && args.imageUrl !== null) updates.imageUrl = String(args.imageUrl)
+    if (args.aspectRatio !== undefined && args.aspectRatio !== null) updates.aspectRatio = toFiniteNumber(args.aspectRatio, existingNode?.aspectRatio ?? 1)
 
     updateNode(nodeId, updates)
     return { success: true, data: { nodeId, updates } }
@@ -214,13 +221,63 @@ function updateNode(args: Record<string, unknown>): ToolCallResult {
   }
 }
 
+// 批量更新多个节点(R6)
+function batchUpdateNodes(args: Record<string, unknown>): ToolCallResult {
+  try {
+    const { updateNode } = useCanvasStore.getState()
+    if (!Array.isArray(args.nodeIds)) {
+      return { success: false, error: '缺少节点 ID 列表(nodeIds)' }
+    }
+    const nodeIds = args.nodeIds as string[]
+
+    const updates: Partial<Node> = {}
+    if (args.title !== undefined && args.title !== null) updates.title = String(args.title)
+    if (args.content !== undefined && args.content !== null) updates.content = String(args.content)
+    if (args.x !== undefined && args.x !== null) updates.x = toFiniteNumber(args.x, 0)
+    if (args.y !== undefined && args.y !== null) updates.y = toFiniteNumber(args.y, 0)
+    if (args.width !== undefined && args.width !== null) updates.width = toFiniteNumber(args.width, 200)
+    if (args.height !== undefined && args.height !== null) updates.height = toFiniteNumber(args.height, 160)
+    if (args.color !== undefined && args.color !== null) updates.color = String(args.color)
+    if (args.fontSize !== undefined && args.fontSize !== null) updates.fontSize = toFiniteNumber(args.fontSize, 14)
+    if (args.textAlign !== undefined && args.textAlign !== null) updates.textAlign = args.textAlign as Node['textAlign']
+    if (args.titleAlign !== undefined && args.titleAlign !== null) updates.titleAlign = args.titleAlign as Node['titleAlign']
+    if (args.contentAlign !== undefined && args.contentAlign !== null) updates.contentAlign = args.contentAlign as Node['contentAlign']
+    if (args.collapsedTitleAlign !== undefined && args.collapsedTitleAlign !== null) updates.collapsedTitleAlign = args.collapsedTitleAlign as Node['collapsedTitleAlign']
+    if (args.collapsed !== undefined && args.collapsed !== null) updates.collapsed = Boolean(args.collapsed)
+    if (args.locked !== undefined && args.locked !== null) updates.locked = Boolean(args.locked)
+    if (args.type !== undefined && args.type !== null) updates.type = args.type as Node['type']
+    if (args.imageUrl !== undefined && args.imageUrl !== null) updates.imageUrl = String(args.imageUrl)
+    if (args.aspectRatio !== undefined && args.aspectRatio !== null) updates.aspectRatio = toFiniteNumber(args.aspectRatio, 1)
+
+    const skipped: string[] = []
+    let updated = 0
+    for (const id of nodeIds) {
+      if (!useCanvasStore.getState().nodes.has(id)) {
+        skipped.push(id)
+        continue
+      }
+      updateNode(id, updates)
+      updated++
+    }
+    if (updated === 0) {
+      return { success: false, error: '所有节点均不存在,可用 getAllNodes 获取有效节点 ID' }
+    }
+    return { success: true, data: { updated, skipped } }
+  } catch (error) {
+    return { success: false, error: String(error) }
+  }
+}
+
 // 删除节点
 function deleteNode(args: Record<string, unknown>): ToolCallResult {
   try {
-    const { removeNode } = useCanvasStore.getState()
+    const { removeNode, nodes } = useCanvasStore.getState()
     const nodeId = String(args.nodeId)
     if (!nodeId) {
       return { success: false, error: '缺少节点 ID' }
+    }
+    if (!nodes.has(nodeId)) {
+      return { success: false, error: `节点不存在: ${nodeId},可用 getAllNodes 获取有效节点 ID` }
     }
     removeNode(nodeId)
     return { success: true, data: { deletedNodeId: nodeId } }
@@ -243,6 +300,12 @@ function createConnection(args: Record<string, unknown>): ToolCallResult {
     // 智能计算端口位置：根据两个节点的相对位置
     const fromNode = nodes.get(fromNodeId)
     const toNode = nodes.get(toNodeId)
+    if (!fromNode) {
+      return { success: false, error: `节点不存在: ${fromNodeId},可用 getAllNodes 获取有效节点 ID` }
+    }
+    if (!toNode) {
+      return { success: false, error: `节点不存在: ${toNodeId},可用 getAllNodes 获取有效节点 ID` }
+    }
     let fromPort: Connection['fromPort'] = 'bottom'
     let toPort: Connection['toPort'] = 'top'
 
@@ -287,10 +350,13 @@ function createConnection(args: Record<string, unknown>): ToolCallResult {
 // 删除连接
 function deleteConnection(args: Record<string, unknown>): ToolCallResult {
   try {
-    const { removeConnection } = useCanvasStore.getState()
+    const { removeConnection, connections } = useCanvasStore.getState()
     const connectionId = String(args.connectionId)
     if (!connectionId) {
       return { success: false, error: '缺少连接 ID' }
+    }
+    if (!connections.has(connectionId)) {
+      return { success: false, error: `连接不存在: ${connectionId},可用 getAllConnections 获取有效连接 ID` }
     }
     removeConnection(connectionId)
     return { success: true, data: { deletedConnectionId: connectionId } }
@@ -302,24 +368,28 @@ function deleteConnection(args: Record<string, unknown>): ToolCallResult {
 // 更新连接
 function updateConnection(args: Record<string, unknown>): ToolCallResult {
   try {
-    const { updateConnection } = useCanvasStore.getState()
+    const { updateConnection, connections } = useCanvasStore.getState()
     const connectionId = String(args.connectionId)
     if (!connectionId) {
       return { success: false, error: '缺少连接 ID' }
     }
+    const existingConnection = connections.get(connectionId)
+    if (!existingConnection) {
+      return { success: false, error: `连接不存在: ${connectionId},可用 getAllConnections 获取有效连接 ID` }
+    }
 
     const updates: Partial<Connection> = {}
-    if (args.fromNodeId !== undefined) updates.fromNodeId = String(args.fromNodeId)
-    if (args.toNodeId !== undefined) updates.toNodeId = String(args.toNodeId)
-    if (args.fromPort !== undefined) updates.fromPort = args.fromPort as Connection['fromPort']
-    if (args.toPort !== undefined) updates.toPort = args.toPort as Connection['toPort']
-    if (args.type !== undefined) updates.type = args.type as Connection['type']
-    if (args.style !== undefined) updates.style = args.style as Connection['style']
-    if (args.color !== undefined) updates.color = String(args.color)
-    if (args.width !== undefined) updates.width = Number(args.width)
-    if (args.arrowType !== undefined) updates.arrowType = args.arrowType as Connection['arrowType']
-    if (args.direction !== undefined) updates.direction = args.direction as Connection['direction']
-    if (args.label !== undefined) updates.label = String(args.label)
+    if (args.fromNodeId !== undefined && args.fromNodeId !== null) updates.fromNodeId = String(args.fromNodeId)
+    if (args.toNodeId !== undefined && args.toNodeId !== null) updates.toNodeId = String(args.toNodeId)
+    if (args.fromPort !== undefined && args.fromPort !== null) updates.fromPort = args.fromPort as Connection['fromPort']
+    if (args.toPort !== undefined && args.toPort !== null) updates.toPort = args.toPort as Connection['toPort']
+    if (args.type !== undefined && args.type !== null) updates.type = args.type as Connection['type']
+    if (args.style !== undefined && args.style !== null) updates.style = args.style as Connection['style']
+    if (args.color !== undefined && args.color !== null) updates.color = String(args.color)
+    if (args.width !== undefined && args.width !== null) updates.width = toFiniteNumber(args.width, existingConnection?.width ?? 2)
+    if (args.arrowType !== undefined && args.arrowType !== null) updates.arrowType = args.arrowType as Connection['arrowType']
+    if (args.direction !== undefined && args.direction !== null) updates.direction = args.direction as Connection['direction']
+    if (args.label !== undefined && args.label !== null) updates.label = String(args.label)
 
     updateConnection(connectionId, updates)
     return { success: true, data: { connectionId, updates } }
@@ -371,6 +441,10 @@ function createGroup(args: Record<string, unknown>): ToolCallResult {
     if (nodeIds.length > 0) {
       bounds = calculateNodesBounds(nodeIds, nodes)
     }
+    // 指定的节点全部无效时不允许创建空容器
+    if (nodeIds.length > 0 && bounds === null) {
+      return { success: false, error: '指定的节点均不存在,可用 getAllNodes 获取有效节点 ID' }
+    }
 
     const groupId = `group-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
     const group: NodeGroup = {
@@ -398,25 +472,29 @@ function createGroup(args: Record<string, unknown>): ToolCallResult {
 // 更新组
 function updateGroup(args: Record<string, unknown>): ToolCallResult {
   try {
-    const { updateGroup } = useCanvasStore.getState()
+    const { updateGroup, groups } = useCanvasStore.getState()
     const groupId = String(args.groupId)
     if (!groupId) {
       return { success: false, error: '缺少组 ID' }
     }
+    const existingGroup = groups.get(groupId)
+    if (!existingGroup) {
+      return { success: false, error: `组不存在: ${groupId},可用 getAllGroups 获取有效组 ID` }
+    }
 
     const updates: Partial<NodeGroup> = {}
-    if (args.name !== undefined) updates.name = String(args.name)
-    if (args.description !== undefined) updates.description = String(args.description)
-    if (args.nodeIds !== undefined) updates.nodeIds = args.nodeIds as string[]
-    if (args.x !== undefined) updates.x = Number(args.x)
-    if (args.y !== undefined) updates.y = Number(args.y)
-    if (args.width !== undefined) updates.width = Number(args.width)
-    if (args.height !== undefined) updates.height = Number(args.height)
-    if (args.borderColor !== undefined) updates.borderColor = String(args.borderColor)
-    if (args.backgroundColor !== undefined) updates.backgroundColor = String(args.backgroundColor)
-    if (args.borderWidth !== undefined) updates.borderWidth = Number(args.borderWidth)
-    if (args.borderRadius !== undefined) updates.borderRadius = Number(args.borderRadius)
-    if (args.collapsed !== undefined) updates.collapsed = Boolean(args.collapsed)
+    if (args.name !== undefined && args.name !== null) updates.name = String(args.name)
+    if (args.description !== undefined && args.description !== null) updates.description = String(args.description)
+    if (args.nodeIds !== undefined && args.nodeIds !== null) updates.nodeIds = args.nodeIds as string[]
+    if (args.x !== undefined && args.x !== null) updates.x = toFiniteNumber(args.x, existingGroup?.x ?? 0)
+    if (args.y !== undefined && args.y !== null) updates.y = toFiniteNumber(args.y, existingGroup?.y ?? 0)
+    if (args.width !== undefined && args.width !== null) updates.width = toFiniteNumber(args.width, existingGroup?.width ?? 300)
+    if (args.height !== undefined && args.height !== null) updates.height = toFiniteNumber(args.height, existingGroup?.height ?? 200)
+    if (args.borderColor !== undefined && args.borderColor !== null) updates.borderColor = String(args.borderColor)
+    if (args.backgroundColor !== undefined && args.backgroundColor !== null) updates.backgroundColor = String(args.backgroundColor)
+    if (args.borderWidth !== undefined && args.borderWidth !== null) updates.borderWidth = toFiniteNumber(args.borderWidth, existingGroup?.borderWidth ?? 2)
+    if (args.borderRadius !== undefined && args.borderRadius !== null) updates.borderRadius = toFiniteNumber(args.borderRadius, existingGroup?.borderRadius ?? 8)
+    if (args.collapsed !== undefined && args.collapsed !== null) updates.collapsed = Boolean(args.collapsed)
 
     updateGroup(groupId, updates)
     return { success: true, data: { groupId, updates } }
@@ -428,10 +506,13 @@ function updateGroup(args: Record<string, unknown>): ToolCallResult {
 // 删除组
 function deleteGroup(args: Record<string, unknown>): ToolCallResult {
   try {
-    const { removeGroup } = useCanvasStore.getState()
+    const { removeGroup, groups } = useCanvasStore.getState()
     const groupId = String(args.groupId)
     if (!groupId) {
       return { success: false, error: '缺少组 ID' }
+    }
+    if (!groups.has(groupId)) {
+      return { success: false, error: `组不存在: ${groupId},可用 getAllGroups 获取有效组 ID` }
     }
     removeGroup(groupId)
     return { success: true, data: { deletedGroupId: groupId } }
@@ -450,6 +531,10 @@ function createDomain(args: Record<string, unknown>): ToolCallResult {
     let bounds: { x: number; y: number; width: number; height: number } | null = null
     if (nodeIds.length > 0) {
       bounds = calculateNodesBounds(nodeIds, nodes)
+    }
+    // 指定的节点全部无效时不允许创建空容器
+    if (nodeIds.length > 0 && bounds === null) {
+      return { success: false, error: '指定的节点均不存在,可用 getAllNodes 获取有效节点 ID' }
     }
 
     const domainId = `domain-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
@@ -473,23 +558,27 @@ function createDomain(args: Record<string, unknown>): ToolCallResult {
 // 更新域
 function updateDomain(args: Record<string, unknown>): ToolCallResult {
   try {
-    const { updateDomain } = useCanvasStore.getState()
+    const { updateDomain, domains } = useCanvasStore.getState()
     const domainId = String(args.domainId)
     if (!domainId) {
       return { success: false, error: '缺少域 ID' }
     }
+    const existingDomain = domains.get(domainId)
+    if (!existingDomain) {
+      return { success: false, error: `域不存在: ${domainId},可用 getAllDomains 获取有效域 ID` }
+    }
 
     const updates: Partial<Domain> = {}
-    if (args.name !== undefined) updates.name = String(args.name)
-    if (args.x !== undefined) updates.x = Number(args.x)
-    if (args.y !== undefined) updates.y = Number(args.y)
-    if (args.width !== undefined) updates.width = Number(args.width)
-    if (args.height !== undefined) updates.height = Number(args.height)
-    if (args.backgroundColor !== undefined) updates.backgroundColor = String(args.backgroundColor)
-    if (args.titleVisible !== undefined) updates.titleVisible = Boolean(args.titleVisible)
-    if (args.titleColor !== undefined) updates.titleColor = String(args.titleColor)
-    if (args.titleFontSize !== undefined) updates.titleFontSize = Number(args.titleFontSize)
-    if (args.titleScale !== undefined) updates.titleScale = Number(args.titleScale)
+    if (args.name !== undefined && args.name !== null) updates.name = String(args.name)
+    if (args.x !== undefined && args.x !== null) updates.x = toFiniteNumber(args.x, existingDomain?.x ?? 0)
+    if (args.y !== undefined && args.y !== null) updates.y = toFiniteNumber(args.y, existingDomain?.y ?? 0)
+    if (args.width !== undefined && args.width !== null) updates.width = toFiniteNumber(args.width, existingDomain?.width ?? 400)
+    if (args.height !== undefined && args.height !== null) updates.height = toFiniteNumber(args.height, existingDomain?.height ?? 300)
+    if (args.backgroundColor !== undefined && args.backgroundColor !== null) updates.backgroundColor = String(args.backgroundColor)
+    if (args.titleVisible !== undefined && args.titleVisible !== null) updates.titleVisible = Boolean(args.titleVisible)
+    if (args.titleColor !== undefined && args.titleColor !== null) updates.titleColor = String(args.titleColor)
+    if (args.titleFontSize !== undefined && args.titleFontSize !== null) updates.titleFontSize = toFiniteNumber(args.titleFontSize, existingDomain?.titleFontSize ?? 14)
+    if (args.titleScale !== undefined && args.titleScale !== null) updates.titleScale = toFiniteNumber(args.titleScale, existingDomain?.titleScale ?? 1)
 
     updateDomain(domainId, updates)
     return { success: true, data: { domainId, updates } }
@@ -501,16 +590,84 @@ function updateDomain(args: Record<string, unknown>): ToolCallResult {
 // 删除域
 function deleteDomain(args: Record<string, unknown>): ToolCallResult {
   try {
-    const { removeDomain } = useCanvasStore.getState()
+    const { removeDomain, domains } = useCanvasStore.getState()
     const domainId = String(args.domainId)
     if (!domainId) {
       return { success: false, error: '缺少域 ID' }
+    }
+    if (!domains.has(domainId)) {
+      return { success: false, error: `域不存在: ${domainId},可用 getAllDomains 获取有效域 ID` }
     }
     removeDomain(domainId)
     return { success: true, data: { deletedDomainId: domainId } }
   } catch (error) {
     return { success: false, error: String(error) }
   }
+}
+
+// 撤销上一步画布操作(R7)
+async function undo(_args: Record<string, unknown>): Promise<ToolCallResult> {
+  const store = useCanvasStore.getState()
+  if (!store.canUndo()) {
+    return { success: false, error: '没有可撤销的操作' }
+  }
+  await store.undo()
+  return { success: true, data: { undone: true } }
+}
+
+// 重做被撤销的画布操作(R7)
+async function redo(_args: Record<string, unknown>): Promise<ToolCallResult> {
+  const store = useCanvasStore.getState()
+  if (!store.canRedo()) {
+    return { success: false, error: '没有可重做的操作' }
+  }
+  await store.redo()
+  return { success: true, data: { redone: true } }
+}
+
+// 搜索节点(R8)
+function searchNodes(args: Record<string, unknown>): ToolCallResult {
+  try {
+    const { nodes } = useCanvasStore.getState()
+    const query = String(args.query || '').trim().toLowerCase()
+    if (!query) {
+      return { success: false, error: '缺少搜索关键词(query)' }
+    }
+    const scope = (args.scope as string) || 'all'
+    const matches: Array<{ id: string; title: string; match: 'title' | 'content'; snippet: string }> = []
+
+    for (const node of nodes.values()) {
+      const title = node.title || ''
+      const content = node.content || ''
+      if (scope === 'title' || scope === 'all') {
+        const index = title.toLowerCase().indexOf(query)
+        if (index !== -1) {
+          matches.push({ id: node.id, title, match: 'title', snippet: makeSnippet(title, index) })
+          continue
+        }
+      }
+      if (scope === 'content' || scope === 'all') {
+        const index = content.toLowerCase().indexOf(query)
+        if (index !== -1) {
+          matches.push({ id: node.id, title, match: 'content', snippet: makeSnippet(content, index) })
+        }
+      }
+    }
+
+    return { success: true, data: { matches } }
+  } catch (error) {
+    return { success: false, error: String(error) }
+  }
+}
+
+// 截取命中片段(约 200 字符)
+function makeSnippet(text: string, matchIndex: number): string {
+  const maxLength = 200
+  if (text.length <= maxLength) return text
+  const start = Math.max(0, Math.min(matchIndex - 60, text.length - maxLength))
+  const prefix = start > 0 ? '...' : ''
+  const suffix = start + maxLength < text.length ? '...' : ''
+  return prefix + text.slice(start, start + maxLength) + suffix
 }
 
 // 生成唯一ID
@@ -1083,9 +1240,9 @@ export const AI_TOOLS: Array<{
     },
     {
       name: 'createNode',
-      description: '在画布上创建一个新节点。建议节点大小不小于200x160以确保内容显示完整',
+      description: '在画布上创建一个新节点。建议节点大小不小于200x160以确保内容显示完整。创建成功会返回 nodeId(形如 node-xxx)。建议先调用 getCanvasData 了解画布现有布局再指定 x/y 坐标,避免节点重叠',
       parameters: {
-        title: { type: 'string', description: '节点标题' },
+        title: { type: 'string', description: '节点标题', required: true },
         content: { type: 'string', description: '节点内容' },
         x: { type: 'number', description: 'X 坐标位置' },
         y: { type: 'number', description: 'Y 坐标位置' },
@@ -1107,43 +1264,89 @@ export const AI_TOOLS: Array<{
     },
     {
       name: 'updateNode',
-      description: '更新现有节点的属性，包括标题、内容、位置、大小、颜色、字体大小、对齐方式和折叠/锁定状态。建议节点大小不小于200x160以确保内容显示完整',
+      description: '更新现有节点的属性，包括标题、内容、位置、大小、颜色、字体大小、对齐方式和折叠/锁定状态。建议节点大小不小于200x160以确保内容显示完整。节点 ID 通过 getAllNodes 或 createNode 返回值获取',
       parameters: {
-        nodeId: { type: 'string', description: '要更新的节点 ID' },
-        title: { type: 'string', description: '新的节点标题' },
-        content: { type: 'string', description: '新的节点内容' },
-        x: { type: 'number', description: '新的 X 坐标' },
-        y: { type: 'number', description: '新的 Y 坐标' },
-        width: { type: 'number', description: '新的节点宽度，建议不小于200' },
-        height: { type: 'number', description: '新的节点高度，建议不小于160' },
-        color: { type: 'string', description: '新的节点颜色，十六进制格式' },
-        fontSize: { type: 'number', description: '新的字体大小' },
-        textAlign: { type: 'string', enum: ['left', 'center', 'right'], description: '文本统一对齐方式' },
-        titleAlign: { type: 'string', enum: ['left', 'center', 'right'], description: '标题对齐方式' },
-        contentAlign: { type: 'string', enum: ['left', 'center', 'right'], description: '内容对齐方式' },
-        collapsedTitleAlign: { type: 'string', enum: ['left', 'center', 'right'], description: '折叠状态下标题对齐方式' },
-        collapsed: { type: 'boolean', description: '是否折叠' },
-        locked: { type: 'boolean', description: '是否锁定' },
-        type: { type: 'string', enum: ['text', 'image'], description: '节点类型，可切换为image图片节点' },
-        imageUrl: { type: 'string', description: '图片URL地址，切换为图片节点时必填' },
-        aspectRatio: { type: 'number', description: '图片宽高比' },
+        nodeId: { type: 'string', description: '要更新的节点 ID', required: true },
+        title: { type: 'string', description: '新的节点标题', nullable: true },
+        content: { type: 'string', description: '新的节点内容', nullable: true },
+        x: { type: 'number', description: '新的 X 坐标', nullable: true },
+        y: { type: 'number', description: '新的 Y 坐标', nullable: true },
+        width: { type: 'number', description: '新的节点宽度，建议不小于200', nullable: true },
+        height: { type: 'number', description: '新的节点高度，建议不小于160', nullable: true },
+        color: { type: 'string', description: '新的节点颜色，十六进制格式', nullable: true },
+        fontSize: { type: 'number', description: '新的字体大小', nullable: true },
+        textAlign: { type: 'string', enum: ['left', 'center', 'right'], description: '文本统一对齐方式', nullable: true },
+        titleAlign: { type: 'string', enum: ['left', 'center', 'right'], description: '标题对齐方式', nullable: true },
+        contentAlign: { type: 'string', enum: ['left', 'center', 'right'], description: '内容对齐方式', nullable: true },
+        collapsedTitleAlign: { type: 'string', enum: ['left', 'center', 'right'], description: '折叠状态下标题对齐方式', nullable: true },
+        collapsed: { type: 'boolean', description: '是否折叠', nullable: true },
+        locked: { type: 'boolean', description: '是否锁定', nullable: true },
+        type: { type: 'string', enum: ['text', 'image'], description: '节点类型，可切换为image图片节点', nullable: true },
+        imageUrl: { type: 'string', description: '图片URL地址，切换为图片节点时必填', nullable: true },
+        aspectRatio: { type: 'number', description: '图片宽高比', nullable: true },
       },
       handler: updateNode,
     },
     {
-      name: 'deleteNode',
-      description: '删除指定的节点及其相关连接',
+      name: 'batchUpdateNodes',
+      description: '批量更新多个节点的相同属性,适用于统一修改(如全部改颜色、全部移动)。传入节点ID列表和要修改的字段,未提供的字段保持不变;不存在的节点会被跳过并记录',
       parameters: {
-        nodeId: { type: 'string', description: '要删除的节点 ID' },
+        nodeIds: { type: 'array', items: { type: 'string' }, description: '要更新的节点 ID 列表', required: true },
+        title: { type: 'string', description: '新的节点标题', nullable: true },
+        content: { type: 'string', description: '新的节点内容', nullable: true },
+        x: { type: 'number', description: '新的 X 坐标', nullable: true },
+        y: { type: 'number', description: '新的 Y 坐标', nullable: true },
+        width: { type: 'number', description: '新的节点宽度，建议不小于200', nullable: true },
+        height: { type: 'number', description: '新的节点高度，建议不小于160', nullable: true },
+        color: { type: 'string', description: '新的节点颜色，十六进制格式', nullable: true },
+        fontSize: { type: 'number', description: '新的字体大小', nullable: true },
+        textAlign: { type: 'string', enum: ['left', 'center', 'right'], description: '文本统一对齐方式', nullable: true },
+        titleAlign: { type: 'string', enum: ['left', 'center', 'right'], description: '标题对齐方式', nullable: true },
+        contentAlign: { type: 'string', enum: ['left', 'center', 'right'], description: '内容对齐方式', nullable: true },
+        collapsedTitleAlign: { type: 'string', enum: ['left', 'center', 'right'], description: '折叠状态下标题对齐方式', nullable: true },
+        collapsed: { type: 'boolean', description: '是否折叠', nullable: true },
+        locked: { type: 'boolean', description: '是否锁定', nullable: true },
+        type: { type: 'string', enum: ['text', 'image'], description: '节点类型，可切换为image图片节点', nullable: true },
+        imageUrl: { type: 'string', description: '图片URL地址，切换为图片节点时必填', nullable: true },
+        aspectRatio: { type: 'number', description: '图片宽高比', nullable: true },
+      },
+      handler: batchUpdateNodes,
+    },
+    {
+      name: 'undo',
+      description: '撤销上一步画布操作(AI 或用户的操作)。AI 的所有写操作都会进入撤销历史,可用于纠正误操作。无操作可撤销时返回错误',
+      parameters: {},
+      handler: undo,
+    },
+    {
+      name: 'redo',
+      description: '重做被撤销的画布操作。无操作可重做时返回错误',
+      parameters: {},
+      handler: redo,
+    },
+    {
+      name: 'searchNodes',
+      description: '在画布节点中搜索,按标题和/或内容匹配关键词(不区分大小写),返回匹配节点列表及命中片段',
+      parameters: {
+        query: { type: 'string', description: '搜索关键词', required: true },
+        scope: { type: 'string', enum: ['title', 'content', 'all'], description: '搜索范围,默认 all(标题+内容)' },
+      },
+      handler: searchNodes,
+    },
+    {
+      name: 'deleteNode',
+      description: '删除指定的节点及其相关连接。节点 ID 通过 getAllNodes 或 createNode 返回值获取',
+      parameters: {
+        nodeId: { type: 'string', description: '要删除的节点 ID', required: true },
       },
       handler: deleteNode,
     },
     {
       name: 'createConnection',
-      description: '在两个节点之间创建连接。系统会根据节点相对位置自动选择最佳端口（水平连接使用左右端口，垂直连接使用上下端口），默认创建蓝色连线',
+      description: '在两个节点之间创建连接。系统会根据节点相对位置自动选择最佳端口（水平连接使用左右端口，垂直连接使用上下端口），默认创建蓝色连线。源节点和目标节点必须已存在，节点 ID 通过 getAllNodes 或 createNode 返回值获取',
       parameters: {
-        fromNodeId: { type: 'string', description: '源节点 ID' },
-        toNodeId: { type: 'string', description: '目标节点 ID' },
+        fromNodeId: { type: 'string', description: '源节点 ID', required: true },
+        toNodeId: { type: 'string', description: '目标节点 ID', required: true },
         fromPort: { type: 'string', enum: ['top', 'right', 'bottom', 'left'], description: '源端口位置，如不指定则自动根据节点位置计算' },
         toPort: { type: 'string', enum: ['top', 'right', 'bottom', 'left'], description: '目标端口位置，如不指定则自动根据节点位置计算' },
         type: { type: 'string', enum: ['straight', 'curve', 'step'], description: '连线类型，默认curve曲线' },
@@ -1158,28 +1361,28 @@ export const AI_TOOLS: Array<{
     },
     {
       name: 'deleteConnection',
-      description: '删除指定的连接',
+      description: '删除指定的连接。连接 ID 通过 getAllConnections 获取',
       parameters: {
-        connectionId: { type: 'string', description: '要删除的连接 ID' },
+        connectionId: { type: 'string', description: '要删除的连接 ID', required: true },
       },
       handler: deleteConnection,
     },
     {
       name: 'updateConnection',
-      description: '更新现有连接的属性，包括连线类型、样式、方向、箭头类型、颜色、宽度、标签和端口位置',
+      description: '更新现有连接的属性，包括连线类型、样式、方向、箭头类型、颜色、宽度、标签和端口位置。连接 ID 通过 getAllConnections 获取',
       parameters: {
         connectionId: { type: 'string', description: '要更新的连接 ID', required: true },
-        fromNodeId: { type: 'string', description: '新的源节点 ID' },
-        toNodeId: { type: 'string', description: '新的目标节点 ID' },
-        fromPort: { type: 'string', enum: ['top', 'right', 'bottom', 'left'], description: '新的源端口位置' },
-        toPort: { type: 'string', enum: ['top', 'right', 'bottom', 'left'], description: '新的目标端口位置' },
-        type: { type: 'string', enum: ['straight', 'curve', 'step'], description: '连线类型：直线、曲线、阶梯' },
-        style: { type: 'string', enum: ['solid', 'dashed', 'dotted'], description: '连线样式：实线、虚线、点线' },
-        color: { type: 'string', description: '连线颜色（十六进制颜色码，如 #666666）' },
-        width: { type: 'number', description: '连线宽度（像素）' },
-        arrowType: { type: 'string', enum: ['none', 'start', 'end', 'both'], description: '箭头类型：无箭头、起点箭头、终点箭头、双向箭头' },
-        direction: { type: 'string', enum: ['directed', 'bidirectional', 'undirected'], description: '方向类型：有向、双向、无向' },
-        label: { type: 'string', description: '连接标签文本' },
+        fromNodeId: { type: 'string', description: '新的源节点 ID', nullable: true },
+        toNodeId: { type: 'string', description: '新的目标节点 ID', nullable: true },
+        fromPort: { type: 'string', enum: ['top', 'right', 'bottom', 'left'], description: '新的源端口位置', nullable: true },
+        toPort: { type: 'string', enum: ['top', 'right', 'bottom', 'left'], description: '新的目标端口位置', nullable: true },
+        type: { type: 'string', enum: ['straight', 'curve', 'step'], description: '连线类型：直线、曲线、阶梯', nullable: true },
+        style: { type: 'string', enum: ['solid', 'dashed', 'dotted'], description: '连线样式：实线、虚线、点线', nullable: true },
+        color: { type: 'string', description: '连线颜色（十六进制颜色码，如 #666666）', nullable: true },
+        width: { type: 'number', description: '连线宽度（像素）', nullable: true },
+        arrowType: { type: 'string', enum: ['none', 'start', 'end', 'both'], description: '箭头类型：无箭头、起点箭头、终点箭头、双向箭头', nullable: true },
+        direction: { type: 'string', enum: ['directed', 'bidirectional', 'undirected'], description: '方向类型：有向、双向、无向', nullable: true },
+        label: { type: 'string', description: '连接标签文本', nullable: true },
       },
       handler: updateConnection,
     },
@@ -1195,29 +1398,29 @@ export const AI_TOOLS: Array<{
     },
     {
       name: 'updateGroup',
-      description: '更新现有组的属性，包括名称、描述、位置、大小、颜色、边框样式和包含的节点',
+      description: '更新现有组的属性，包括名称、描述、位置、大小、颜色、边框样式和包含的节点。组 ID 通过 getAllGroups 获取',
       parameters: {
-        groupId: { type: 'string', description: '要更新的组 ID' },
-        name: { type: 'string', description: '新的组名称' },
-        description: { type: 'string', description: '新的组描述' },
-        nodeIds: { type: 'array', items: { type: 'string' }, description: '新的节点 ID 列表' },
-        x: { type: 'number', description: '新的 X 坐标位置' },
-        y: { type: 'number', description: '新的 Y 坐标位置' },
-        width: { type: 'number', description: '新的宽度' },
-        height: { type: 'number', description: '新的高度' },
-        borderColor: { type: 'string', description: '边框颜色，十六进制格式，如#3b82f6' },
-        backgroundColor: { type: 'string', description: '背景颜色，十六进制格式或rgba，如rgba(59, 130, 246, 0.1)' },
-        borderWidth: { type: 'number', description: '边框宽度，如2' },
-        borderRadius: { type: 'number', description: '边框圆角，如8' },
-        collapsed: { type: 'boolean', description: '是否折叠' },
+        groupId: { type: 'string', description: '要更新的组 ID', required: true },
+        name: { type: 'string', description: '新的组名称', nullable: true },
+        description: { type: 'string', description: '新的组描述', nullable: true },
+        nodeIds: { type: 'array', items: { type: 'string' }, description: '新的节点 ID 列表', nullable: true },
+        x: { type: 'number', description: '新的 X 坐标位置', nullable: true },
+        y: { type: 'number', description: '新的 Y 坐标位置', nullable: true },
+        width: { type: 'number', description: '新的宽度', nullable: true },
+        height: { type: 'number', description: '新的高度', nullable: true },
+        borderColor: { type: 'string', description: '边框颜色，十六进制格式，如#3b82f6', nullable: true },
+        backgroundColor: { type: 'string', description: '背景颜色，十六进制格式或rgba，如rgba(59, 130, 246, 0.1)', nullable: true },
+        borderWidth: { type: 'number', description: '边框宽度，如2', nullable: true },
+        borderRadius: { type: 'number', description: '边框圆角，如8', nullable: true },
+        collapsed: { type: 'boolean', description: '是否折叠', nullable: true },
       },
       handler: updateGroup,
     },
     {
       name: 'deleteGroup',
-      description: '删除指定的组',
+      description: '删除指定的组。组 ID 通过 getAllGroups 获取',
       parameters: {
-        groupId: { type: 'string', description: '要删除的组 ID' },
+        groupId: { type: 'string', description: '要删除的组 ID', required: true },
       },
       handler: deleteGroup,
     },
@@ -1232,27 +1435,27 @@ export const AI_TOOLS: Array<{
     },
     {
       name: 'updateDomain',
-      description: '更新现有域的属性，包括名称、位置、大小、背景颜色和标题样式',
+      description: '更新现有域的属性，包括名称、位置、大小、背景颜色和标题样式。域 ID 通过 getAllDomains 获取',
       parameters: {
-        domainId: { type: 'string', description: '要更新的域 ID' },
-        name: { type: 'string', description: '新的域名称' },
-        x: { type: 'number', description: '新的 X 坐标位置' },
-        y: { type: 'number', description: '新的 Y 坐标位置' },
-        width: { type: 'number', description: '新的宽度' },
-        height: { type: 'number', description: '新的高度' },
-        backgroundColor: { type: 'string', description: '背景颜色，十六进制格式或rgba，如rgba(139, 92, 246, 0.1)' },
-        titleVisible: { type: 'boolean', description: '标题是否可见' },
-        titleColor: { type: 'string', description: '标题颜色，十六进制格式' },
-        titleFontSize: { type: 'number', description: '标题字体大小' },
-        titleScale: { type: 'number', description: '标题缩放比例' },
+        domainId: { type: 'string', description: '要更新的域 ID', required: true },
+        name: { type: 'string', description: '新的域名称', nullable: true },
+        x: { type: 'number', description: '新的 X 坐标位置', nullable: true },
+        y: { type: 'number', description: '新的 Y 坐标位置', nullable: true },
+        width: { type: 'number', description: '新的宽度', nullable: true },
+        height: { type: 'number', description: '新的高度', nullable: true },
+        backgroundColor: { type: 'string', description: '背景颜色，十六进制格式或rgba，如rgba(139, 92, 246, 0.1)', nullable: true },
+        titleVisible: { type: 'boolean', description: '标题是否可见', nullable: true },
+        titleColor: { type: 'string', description: '标题颜色，十六进制格式', nullable: true },
+        titleFontSize: { type: 'number', description: '标题字体大小', nullable: true },
+        titleScale: { type: 'number', description: '标题缩放比例', nullable: true },
       },
       handler: updateDomain,
     },
     {
       name: 'deleteDomain',
-      description: '删除指定的域',
+      description: '删除指定的域。域 ID 通过 getAllDomains 获取',
       parameters: {
-        domainId: { type: 'string', description: '要删除的域 ID' },
+        domainId: { type: 'string', description: '要删除的域 ID', required: true },
       },
       handler: deleteDomain,
     },
@@ -1576,12 +1779,28 @@ export function getToolsForAI(useStrict: boolean = false): Array<{
     for (const [key, value] of Object.entries(tool.parameters)) {
       if (typeof value === 'object' && value !== null) {
         const param = value as Record<string, unknown>
-        properties[key] = {
-          type: param.type,
-          description: param.description,
-          ...(param.enum && { enum: param.enum }),
-          ...(param.items && { items: param.items }),
-          ...(param.properties && { properties: param.properties }),
+        if (param.nullable === true) {
+          // nullable 字段输出 anyOf 结构，避免 strict 模式下模型用 null 污染可选字段
+          properties[key] = {
+            anyOf: [
+              {
+                type: param.type,
+                ...(param.enum && { enum: param.enum }),
+                ...(param.items && { items: param.items }),
+                ...(param.properties && { properties: param.properties }),
+              },
+              { type: 'null' },
+            ],
+            description: param.description,
+          }
+        } else {
+          properties[key] = {
+            type: param.type,
+            description: param.description,
+            ...(param.enum && { enum: param.enum }),
+            ...(param.items && { items: param.items }),
+            ...(param.properties && { properties: param.properties }),
+          }
         }
         if (param.required === true) {
           required.push(key)
