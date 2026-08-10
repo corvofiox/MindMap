@@ -30,8 +30,6 @@ export interface AIConfig {
   apiKey?: string
   baseUrl: string
   model: string
-  temperature: number
-  maxTokens: number
   enableThinking?: boolean  // DeepSeek 思考模式
   reasoningEffort?: 'high' | 'max'  // DeepSeek 思考强度控制
   responseFormat?: 'text' | 'json_object'  // DeepSeek JSON Output 模式
@@ -367,8 +365,6 @@ export async function sendStreamChatMessage(
   body = {
     model: config.model,
     messages: messages,
-    temperature: config.temperature,
-    max_tokens: config.maxTokens,
     stream: true,
   }
 
@@ -377,13 +373,8 @@ export async function sendStreamChatMessage(
     const supportsThinking = config.model.includes('deepseek')
     const isThinkingEnabled = supportsThinking && config.enableThinking !== false
 
-    // 思考模式下不支持 temperature、top_p、presence_penalty、frequency_penalty
-    if (isThinkingEnabled) {
-      delete body.temperature
-      delete body.top_p
-      delete body.presence_penalty
-      delete body.frequency_penalty
-    }
+    // 思考模式下不支持 temperature/top_p/presence_penalty/frequency_penalty
+    // (上游忽略这些参数,前端已不再发送)
 
     // JSON Output 模式
     if (config.responseFormat === 'json_object') {

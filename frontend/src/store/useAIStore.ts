@@ -7,8 +7,6 @@ import type { AIModel } from '@/services/aiService'
 export interface ProviderConfig {
   baseUrl: string
   model: string
-  temperature: number
-  maxTokens: number
   enableThinking?: boolean
   reasoningEffort?: 'high' | 'max'
   responseFormat?: 'text' | 'json_object'
@@ -45,8 +43,6 @@ interface AIState {
 const defaultProviderConfig: ProviderConfig = {
   baseUrl: '',
   model: '',
-  temperature: 0.7,
-  maxTokens: 4096,
 }
 
 // 获取默认配置，包含各提供商的默认地址
@@ -126,9 +122,14 @@ export const useAIStore = create<AIState>()(
         if (persistedState?.providerConfigs && typeof persistedState.providerConfigs === 'object') {
           for (const [id, cfg] of Object.entries(persistedState.providerConfigs)) {
             if (validIds.has(id) && cfg && typeof cfg === 'object') {
+              // 剔除已移除字段(temperature/maxTokens):旧 localStorage 数据自愈,
+              // 避免残留键被展开进 state 并随 persist 持续回写
+              const cfgClean: Partial<ProviderConfig> = { ...(cfg as Partial<ProviderConfig>) }
+              delete (cfgClean as Record<string, unknown>).temperature
+              delete (cfgClean as Record<string, unknown>).maxTokens
               providerConfigs[id] = {
                 ...(providerConfigs[id] || defaultProviderConfig),
-                ...(cfg as Partial<ProviderConfig>),
+                ...cfgClean,
               }
             }
           }

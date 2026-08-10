@@ -1024,7 +1024,7 @@ function generateMindMapFromJSON(args: Record<string, unknown>): ToolCallResult 
       errorMessage.includes('Unterminated string')) {
       return {
         success: false,
-        error: `JSON 格式错误: ${errorMessage}\n\n这通常是因为 AI 模型生成的 JSON 格式不正确。可能的原因:\n1. 属性名没有用双引号包裹（如 {name: "value"} 应该是 {"name": "value"}）\n2. 使用了单引号而不是双引号\n3. JSON 被截断或不完整（AI 输出被截断）\n4. 字符串中包含未转义的换行符或引号\n\n建议:\n1. 如果是生成思维导图，请尝试简化需求，减少节点数量\n2. 检查 AI 模型的 max_tokens 设置是否足够大\n3. 重新发送请求，让 AI 重新生成`,
+        error: `JSON 格式错误: ${errorMessage}\n\n这通常是因为 AI 模型生成的 JSON 格式不正确。可能的原因:\n1. 属性名没有用双引号包裹（如 {name: "value"} 应该是 {"name": "value"}）\n2. 使用了单引号而不是双引号\n3. JSON 被截断或不完整（AI 输出被截断）\n4. 字符串中包含未转义的换行符或引号\n\n建议:\n1. 如果是生成思维导图，请尝试简化需求，减少节点数量\n2. 重新发送请求，让 AI 重新生成`,
       }
     }
 

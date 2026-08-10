@@ -751,8 +751,8 @@ export function AiSidebar({ open }: AiSidebarProps) {
       return
     }
 
-    // 上下文裁剪：预算约为 maxTokens 的 2 倍（给输出留空间），防止长对话超限
-    const budget = Math.max(4000, Math.min(32000, (config.maxTokens || 4096) * 2))
+    // 上下文裁剪：输入侧预算固定 32K（防止长对话请求体超限；与输出长度限制无关）
+    const budget = 32000
     const trimmedHistory = trimMessageHistory(messageHistory, budget)
 
     const systemMessage = {

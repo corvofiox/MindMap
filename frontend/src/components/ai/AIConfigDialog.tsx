@@ -401,48 +401,6 @@ export function AIConfigDialog({ open, onClose }: AIConfigDialogProps) {
             </select>
           </div>
 
-          {/* 高级设置 */}
-          <div className="grid grid-cols-2 gap-4">
-            <div className="flex flex-col">
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1 h-5">
-                温度
-              </label>
-              <input
-                type="number"
-                min={0}
-                max={2}
-                step={0.1}
-                value={localConfig.temperature}
-                onChange={(e) =>
-                  setLocalConfig((prev) => ({
-                    ...prev,
-                    temperature: parseFloat(e.target.value),
-                  }))
-                }
-                className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white focus:ring-2 focus:ring-purple-500 focus:outline-none"
-              />
-            </div>
-            <div className="flex flex-col">
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1 h-5">
-                最大 Token
-              </label>
-              <input
-                type="number"
-                min={100}
-                max={65536}
-                step={100}
-                value={localConfig.maxTokens}
-                onChange={(e) =>
-                  setLocalConfig((prev) => ({
-                    ...prev,
-                    maxTokens: parseInt(e.target.value),
-                  }))
-                }
-                className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white focus:ring-2 focus:ring-purple-500 focus:outline-none"
-              />
-            </div>
-          </div>
-
           {/* DeepSeek 思考模式设置 */}
           {localProvider === 'deepseek' && (
             <div className="space-y-3 p-3 bg-purple-50 dark:bg-purple-900/20 rounded-lg border border-purple-200 dark:border-purple-800">
@@ -499,7 +457,7 @@ export function AIConfigDialog({ open, onClose }: AIConfigDialogProps) {
               )}
               {localConfig.enableThinking !== false && (
                 <p className="text-xs text-gray-500 dark:text-gray-400">
-                  思考模式下不支持温度、top_p 等参数
+                  温度、最大 Token 等参数已移除,由上游 API 默认值控制
                 </p>
               )}
             </div>
