@@ -52,6 +52,16 @@ function getProjectOwnerId(project: Record<string, unknown>): number | undefined
   }
   return undefined
 }
+
+function getProjectIsCollaborative(project: Record<string, unknown>): boolean {
+  if ('isCollaborative' in project) {
+    return project.isCollaborative === true
+  }
+  if ('is_collaborative' in project) {
+    return project.is_collaborative === true
+  }
+  return false
+}
 import {
   loadCanvasStateFromDb,
   persistCanvasState,
@@ -638,6 +648,17 @@ async function handleConnection(ws: WebSocketWithUserData, req: any) {
   if (!isOwner && !isMember) {
     cleanupEarlyListeners()
     ws.close(1008, 'Access denied')
+    return
+  }
+
+  // 私人项目不提供协作房间：仅协作项目(is_collaborative)允许 WS 连接。
+  // 前端按 project.isCollaborative 判定是否连接（CanvasPage 协作判定），
+  // 此处兜底拒绝旧客户端/直连客户端为私人项目建立实时房间。
+  // 注意：owner 同样被拒——私人项目数据走 REST 保存路径，无 WS 需求。
+  const projectIsCollaborative = getProjectIsCollaborative(project as Record<string, unknown>)
+  if (!projectIsCollaborative) {
+    cleanupEarlyListeners()
+    ws.close(1008, 'Not a collaborative project')
     return
   }
 

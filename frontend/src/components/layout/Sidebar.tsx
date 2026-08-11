@@ -1072,6 +1072,9 @@ function CanvasItem({
   onDragEnd?: () => void
   isViewer?: boolean
 }) {
+  // 协作判定与 CanvasPage 同源：仅协作项目画布显示在线人数徽标
+  const { projects } = useProjectsStore()
+  const canvasIsCollaborative = projects.find((p) => p.id === canvas?.projectId)?.isCollaborative ?? false
   const navigate = useNavigate()
   const { updateCanvas, deleteCanvas, folders } = useProjectsStore()
   const { addToast } = useUIStore()
@@ -1262,8 +1265,9 @@ function CanvasItem({
                 </div>
               )}
 
-              {/* 活跃用户指示器 */}
-              {canvas.activeUsers && canvas.activeUsers.length > 0 && (
+              {/* 活跃用户指示器 — 仅协作项目画布显示(与 CanvasPage 协作判定同源,
+                  私人项目不建 WS 房间,即便后端 room 有残留数据也不显示) */}
+              {canvasIsCollaborative && canvas.activeUsers && canvas.activeUsers.length > 0 && (
                 <div className="absolute bottom-2 left-2 flex items-center gap-1 bg-black/60 backdrop-blur-sm rounded-full px-2 py-1">
                   <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
                   <Users className="w-3 h-3 text-white" />

@@ -2,6 +2,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { WebSocketServer } from 'ws'
 import { setupWebSocket } from '../websocket/index.js'
+import { db } from '../database/connection'
 
 // Mock database
 vi.mock('../database/connection', () => ({
@@ -11,7 +12,7 @@ vi.mock('../database/connection', () => ({
         findFirst: vi.fn().mockResolvedValue({ id: 1, projectId: 1, yjsData: null }),
       },
       projects: {
-        findFirst: vi.fn().mockResolvedValue({ id: 1, ownerId: 1 }),
+        findFirst: vi.fn().mockResolvedValue({ id: 1, ownerId: 1, isCollaborative: true }),
       },
     },
   },
@@ -144,6 +145,35 @@ describe('WebSocket Server', () => {
         await handler(mockWs, mockReq as any)
 
         expect(mockWs.close).toHaveBeenCalledWith(1008, 'Invalid token')
+      }
+    })
+
+    it('should reject connection to a non-collaborative (private) project', async () => {
+      const { setupWebSocket } = await import('../websocket/index')
+      setupWebSocket(mockWss as any)
+
+      ;(db.query.projects.findFirst as any).mockResolvedValueOnce({
+        id: 1,
+        ownerId: 1,
+        isCollaborative: false,
+      })
+
+      const mockReq = {
+        url: 'ws://localhost:3001?canvasId=1',
+        headers: {
+          'authorization': 'Bearer valid-token',
+          'x-forwarded-for': '127.0.0.1',
+        },
+      }
+
+      const connectionHandler = mockWss.on.mock.calls.find((call: any) => call[0] === 'connection')
+      if (connectionHandler) {
+        const handler = connectionHandler[1]
+        const mockWs = { readyState: 1, userId: undefined, canvasId: undefined, close: vi.fn() }
+
+        await handler(mockWs, mockReq as any)
+
+        expect(mockWs.close).toHaveBeenCalledWith(1008, 'Not a collaborative project')
       }
     })
 
