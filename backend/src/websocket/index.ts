@@ -470,8 +470,13 @@ function getClientIp(req: { socket: { remoteAddress?: string }; headers: { 'x-fo
   if (isTrustProxyEnabled()) {
     const forwarded = req.headers['x-forwarded-for']
     if (typeof forwarded === 'string' && forwarded) {
-      const first = forwarded.split(',')[0].trim()
-      if (first) return normalizeClientIp(first)
+      // B12: 取末条目（最右）与 HTTP 侧 Express trust proxy=1 的 req.ip
+      // 语义一致。取首条目是客户端可伪造的——攻击者直接写入第一跳地址即可
+      // 伪造任意 IP 绕过 WS 每 IP 连接限速；末条目由直连的反向代理追加，
+      // 只有 TRUST_PROXY=true（确认存在可信反代）时才被采用。
+      const parts = forwarded.split(',').map(s => s.trim()).filter(s => s.length > 0)
+      const last = parts.length > 0 ? parts[parts.length - 1] : null
+      if (last) return normalizeClientIp(last)
     }
   }
   return normalizeClientIp(req.socket.remoteAddress || 'unknown')

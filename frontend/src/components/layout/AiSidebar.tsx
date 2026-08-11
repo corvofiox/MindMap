@@ -513,6 +513,10 @@ export function AiSidebar({ open }: AiSidebarProps) {
   const dirtyRef = useRef(false)
   // 画布切换中断标记：中断时只标记 interrupted，不写错误文案
   const abortOnSwitchRef = useRef(false)
+  // N6: 请求序号——每次发起新请求递增;回调执行时若序号已过期(旧流被
+  // 清空/切换中止后又发起了新请求),直接丢弃,防止旧流的 onError/onComplete
+  // 把新流的 loading 复位
+  const requestSeqRef = useRef(0)
 
   // D9: revoke blob URL 帮助函数（blob URL 不 revoke 会持续占用内存）
   const revokeAttachmentUrl = (attachment: Attachment) => {
@@ -615,12 +619,14 @@ export function AiSidebar({ open }: AiSidebarProps) {
   }, [canvasId])
 
   // 创建流式输出回调（handleSend / handleRegenerate 共用）
-  const createStreamCallbacks = (assistantMessageId: string, showEmptyHint: boolean): StreamCallbacks => {
+  const createStreamCallbacks = (assistantMessageId: string, showEmptyHint: boolean, seq?: number): StreamCallbacks => {
     // C2: 绑定回调创建时的画布。回调执行时若用户已切换画布则整体丢弃——
     // 否则旧画布被中断的流式 chunk 会写入新画布的消息列表，进而被防抖
     // 保存成新画布的对话记录（跨画布串写）。
     const streamCanvasId = canvasIdRef.current
     const isCurrentCanvas = () => canvasIdRef.current === streamCanvasId
+    // N6: 回调是否仍属于当前请求(seq 不匹配说明已被更新的请求取代)
+    const isCurrentRequest = () => seq === undefined || seq === requestSeqRef.current
     return {
       onReasoningChunk: (chunk) => {
         if (!isCurrentCanvas()) return
@@ -663,6 +669,8 @@ export function AiSidebar({ open }: AiSidebarProps) {
         )
       },
       onComplete: () => {
+        // N6: 旧流完成回调不再复位新流的 loading
+        if (!isCurrentRequest()) return
         if (!isCurrentCanvas()) return
         setIsLoading(false)
         // 如果内容为空，显示提示信息
@@ -677,6 +685,9 @@ export function AiSidebar({ open }: AiSidebarProps) {
         }
       },
       onError: (error) => {
+        // N6: 旧流被中止时的 onError 不再无条件 setIsLoading(false)——若
+        // 清空/切换后又发起了新请求,旧流的复位会把新流 loading 关掉
+        if (!isCurrentRequest()) return
         if (!isCurrentCanvas()) {
           // 已切画布：仅确保 loading 复位，不写任何消息
           setIsLoading(false)
@@ -726,6 +737,8 @@ export function AiSidebar({ open }: AiSidebarProps) {
     messageHistory: Array<Record<string, unknown>>,
     currentUserMessage: Record<string, unknown>
   ) => {
+    // N6: 本轮请求序号——回调里用它识别"被中止的流是否是当前流"
+    const seq = ++requestSeqRef.current
     const assistantMessageId = crypto.randomUUID()
     const assistantMessage: Message = {
       id: assistantMessageId,
@@ -765,7 +778,7 @@ export function AiSidebar({ open }: AiSidebarProps) {
         currentProvider,
         { ...config, provider: currentProvider },
         [systemMessage, ...trimmedHistory, currentUserMessage],
-        createStreamCallbacks(assistantMessageId, true)
+        createStreamCallbacks(assistantMessageId, true, seq)
       )
     } catch (error) {
       // 流式请求本身抛出的错误（如未知提供商）写入占位符
@@ -889,6 +902,10 @@ export function AiSidebar({ open }: AiSidebarProps) {
 
   const handleClear = async () => {
     if (confirm('确定要清空所有对话吗？')) {
+      // N6: 先中止在途流式请求,否则旧流会继续生成/执行工具(可能继续改画布),
+      // 且其 onComplete/onError 可能复位新请求的 loading
+      abortCurrentRequest()
+      setIsLoading(false)
       // 先清空本地状态
       setMessages([
         {

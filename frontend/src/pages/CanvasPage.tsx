@@ -735,6 +735,8 @@ export function CanvasPage() {
   const justFinishedBoxSelectingRef = useRef(false) // Track if just finished box selection
   const justFinishedEndpointDraggingRef = useRef(false) // Track if just finished dragging endpoint
   const justFinishedBendPointDraggingRef = useRef(false) // Track if just finished dragging bend point
+  // M3: bend point 拖动起点快照——mouseup 提交合并命令时用于 undo 恢复原位置。
+  const bendPointDragOriginRef = useRef<{ x: number; y: number; bendPointId: string; connectionId: string } | null>(null)
 
   // Thumbnail worker ref
   const thumbnailWorkerRef = useRef<Worker | null>(null)
@@ -850,74 +852,84 @@ export function CanvasPage() {
     setBendPointContextMenu(null)
   }, [])
 
+  // M7: NodeItem 的 onMouseDown 需要引用稳定（React.memo 生效的前提）——
+  // 内联箭头函数每次渲染都是新引用，会导致所有 NodeItem 的 memo 失效。
+  const handleNodeMouseDown = useCallback(() => {
+    // E13-fix: NodeItem 的 mousedown 会 stopPropagation，绕过
+    // handleMouseDown 中的 lastMouseUpAtRef 重置。此处同步重置，
+    // 防快速双击节点时 mouseup 去重吞掉第二次结算（状态卡死+幻影 undo）。
+    lastMouseUpAtRef.current = 0
+    closeAllContextMenus()
+  }, [])
 
-  const {
-    nodes,
-    groups,
-    domains,
-    connections,
-    zoom,
-    panX,
-    panY,
-    selectedIds,
-    editingId,
-    isDirty,
-    setCanvasId,
-    setCanvasData,
-    setZoom,
-    setPan,
-    setEditingId,
-    setSelectedIds,
-    addToSelection,
-    removeFromSelection,
-    clearCanvas,
-    addNode,
-    addDomain,
-    addGroup,
-    updateGroup,
-    updateGroupWithoutHistory,
-    removeGroup,
-    addConnection,
-    removeConnection,
-    updateConnection,
-    setDirty,
-    undo,
-    redo,
-    canUndo,
-    canRedo,
-  } = useCanvasStore()
 
-  const {
-    currentTool,
-    dragMode,
-    nodePoolOpen,
-    aiSidebarOpen,
-    stylePanelOpen,
-    sidebarOpen,
-    minimapVisible,
-    relationshipHighlightMode,
-    setCurrentTool,
-    toggleGrid,
-    toggleQuickEditMode,
-    toggleRelationshipHighlightMode,
-    toggleDragMode,
-    toggleMinimap,
-    setSelectedType,
-    isLoading,
-    setLoading,
-    connectionType,
-    connectionDirection,
-    connectionStyle,
-    closeStylePanel,
-    openStylePanel,
-    addToast,
-    nodeDefaults,
-    toggleSidebar,
-    toggleNodePool,
-    setSettingsOpen,
-    setCommandPaletteOpen,
-    zoomStep,
-  } = useUIStore()
+  // M7: 字段级 selector 订阅——无参 useStore() 会订阅整个 store，任意字段
+  // 变更（isDirty/history/selectedIds 等）都触发 CanvasPage 重渲染并级联
+  // 整棵画布树。逐字段订阅后，只有实际使用的字段变化才重渲染。
+  const nodes = useCanvasStore((s) => s.nodes)
+  const groups = useCanvasStore((s) => s.groups)
+  const domains = useCanvasStore((s) => s.domains)
+  const connections = useCanvasStore((s) => s.connections)
+  const zoom = useCanvasStore((s) => s.zoom)
+  const panX = useCanvasStore((s) => s.panX)
+  const panY = useCanvasStore((s) => s.panY)
+  const selectedIds = useCanvasStore((s) => s.selectedIds)
+  const editingId = useCanvasStore((s) => s.editingId)
+  const isDirty = useCanvasStore((s) => s.isDirty)
+  const setCanvasId = useCanvasStore((s) => s.setCanvasId)
+  const setCanvasData = useCanvasStore((s) => s.setCanvasData)
+  const setZoom = useCanvasStore((s) => s.setZoom)
+  const setPan = useCanvasStore((s) => s.setPan)
+  const setEditingId = useCanvasStore((s) => s.setEditingId)
+  const setSelectedIds = useCanvasStore((s) => s.setSelectedIds)
+  const addToSelection = useCanvasStore((s) => s.addToSelection)
+  const removeFromSelection = useCanvasStore((s) => s.removeFromSelection)
+  const clearCanvas = useCanvasStore((s) => s.clearCanvas)
+  const addNode = useCanvasStore((s) => s.addNode)
+  const addDomain = useCanvasStore((s) => s.addDomain)
+  const addGroup = useCanvasStore((s) => s.addGroup)
+  const updateGroup = useCanvasStore((s) => s.updateGroup)
+  const updateGroupWithoutHistory = useCanvasStore((s) => s.updateGroupWithoutHistory)
+  const removeGroup = useCanvasStore((s) => s.removeGroup)
+  const addConnection = useCanvasStore((s) => s.addConnection)
+  const removeConnection = useCanvasStore((s) => s.removeConnection)
+  const updateConnection = useCanvasStore((s) => s.updateConnection)
+  const setDirty = useCanvasStore((s) => s.setDirty)
+  const undo = useCanvasStore((s) => s.undo)
+  const redo = useCanvasStore((s) => s.redo)
+  const canUndo = useCanvasStore((s) => s.canUndo)
+  const canRedo = useCanvasStore((s) => s.canRedo)
+
+  // M7: useUIStore 同样改字段级订阅。
+  const currentTool = useUIStore((s) => s.currentTool)
+  const dragMode = useUIStore((s) => s.dragMode)
+  const nodePoolOpen = useUIStore((s) => s.nodePoolOpen)
+  const aiSidebarOpen = useUIStore((s) => s.aiSidebarOpen)
+  const stylePanelOpen = useUIStore((s) => s.stylePanelOpen)
+  const sidebarOpen = useUIStore((s) => s.sidebarOpen)
+  const minimapVisible = useUIStore((s) => s.minimapVisible)
+  const relationshipHighlightMode = useUIStore((s) => s.relationshipHighlightMode)
+  const setCurrentTool = useUIStore((s) => s.setCurrentTool)
+  const toggleGrid = useUIStore((s) => s.toggleGrid)
+  const toggleQuickEditMode = useUIStore((s) => s.toggleQuickEditMode)
+  const toggleRelationshipHighlightMode = useUIStore((s) => s.toggleRelationshipHighlightMode)
+  const toggleDragMode = useUIStore((s) => s.toggleDragMode)
+  const toggleMinimap = useUIStore((s) => s.toggleMinimap)
+  const setSelectedType = useUIStore((s) => s.setSelectedType)
+  const isLoading = useUIStore((s) => s.isLoading)
+  const setLoading = useUIStore((s) => s.setLoading)
+  const connectionType = useUIStore((s) => s.connectionType)
+  const connectionDirection = useUIStore((s) => s.connectionDirection)
+  const connectionStyle = useUIStore((s) => s.connectionStyle)
+  const closeStylePanel = useUIStore((s) => s.closeStylePanel)
+  const openStylePanel = useUIStore((s) => s.openStylePanel)
+  const addToast = useUIStore((s) => s.addToast)
+  const nodeDefaults = useUIStore((s) => s.nodeDefaults)
+  const toggleSidebar = useUIStore((s) => s.toggleSidebar)
+  const toggleNodePool = useUIStore((s) => s.toggleNodePool)
+  const setSettingsOpen = useUIStore((s) => s.setSettingsOpen)
+  const setCommandPaletteOpen = useUIStore((s) => s.setCommandPaletteOpen)
+  const zoomStep = useUIStore((s) => s.zoomStep)
 
   const rawId = canvasId ? parseInt(canvasId) : null
   const id = rawId !== null && !isNaN(rawId) ? rawId : null
@@ -1062,8 +1074,13 @@ export function CanvasPage() {
     }
   }, [addToast, panX, panY, zoom])
 
-  const { loadProjects, restoreCurrentProject, canvases, updateCanvas: updateCanvasInStore, currentMemberRole } = useProjectsStore()
-  const { user } = useAuthStore()
+  // M7: useProjectsStore / useAuthStore 改字段级订阅。
+  const loadProjects = useProjectsStore((s) => s.loadProjects)
+  const restoreCurrentProject = useProjectsStore((s) => s.restoreCurrentProject)
+  const canvases = useProjectsStore((s) => s.canvases)
+  const updateCanvasInStore = useProjectsStore((s) => s.updateCanvas)
+  const currentMemberRole = useProjectsStore((s) => s.currentMemberRole)
+  const user = useAuthStore((s) => s.user)
 
   const canEdit = currentMemberRole === 'owner' || currentMemberRole === 'editor'
   const isViewer = currentMemberRole === 'viewer'
@@ -1890,11 +1907,12 @@ export function CanvasPage() {
     }
   }, [canvasId, setDirty, generateThumbnail, addToast])
 
-  // E1: 工具栏保存按钮适配——handleManualSave 现在返回 boolean(供 Ctrl+S
-  // 判断成功与否),工具栏 onSave 期望 Promise<void>,这里丢弃返回值;
-  // 失败提示已由 handleManualSave 内部完成。
-  const handleToolbarSave = useCallback(async () => {
-    await handleManualSave()
+  // M1: 工具栏保存按钮适配——透传 handleManualSave 的 boolean 返回值,
+  // 让 CanvasToolbar.handleSave 依据返回值决定是否弹"保存成功"(参照
+  // Ctrl+S 路径 2132 的既有修法),避免失败时误报成功。失败提示仍由
+  // handleManualSave 内部完成。
+  const handleToolbarSave = useCallback(async (): Promise<boolean> => {
+    return handleManualSave()
   }, [handleManualSave])
 
   // Handle page refresh/close - save data immediately before unloading
@@ -2145,18 +2163,10 @@ export function CanvasPage() {
       // Delete/Backspace
       if ((e.key === 'Delete' || e.key === 'Backspace') && selectedIdsRef.current.length > 0) {
         e.preventDefault()
-        const { removeNode, removeConnection, removeGroup, removeDomain, nodes: currentNodes, connections: currentConnections, groups: currentGroups, domains: currentDomains } = useCanvasStore.getState()
-        selectedIdsRef.current.forEach((id) => {
-          if (currentNodes.has(id)) {
-            removeNode(id)
-          } else if (currentConnections.has(id)) {
-            removeConnection(id)
-          } else if (currentGroups.has(id)) {
-            removeGroup(id)
-          } else if (currentDomains.has(id)) {
-            removeDomain(id)
-          }
-        })
+        // M6: 批量删除合并为单条 undo 历史命令（此前对每个选中实体各调
+        // removeXxx、各入一条历史，撤销粒度破碎且容易打满历史上限）。
+        const { deleteEntitiesByIds } = useCanvasStore.getState()
+        deleteEntitiesByIds(selectedIdsRef.current)
         setSelectedIds([])
         return
       }
@@ -2814,7 +2824,11 @@ export function CanvasPage() {
         const scaleX = newWidth / resizeInitialGroup.width
         const scaleY = newHeight / resizeInitialGroup.height
 
-        updateGroup(resizingGroupId, {
+        // M2: 拖动期间不逐帧入 undo 历史（一次 resize 手势 60+ 条记录会打满
+        // maxHistorySize=100，撤销粒度破碎），改用 WithoutHistory 变体；
+        // mouseup 时提交一条合并命令（execute 幂等重放，undo 恢复初始快照）。
+        const { updateGroupWithoutHistory, updateNodeWithoutHistory } = useCanvasStore.getState()
+        updateGroupWithoutHistory(resizingGroupId, {
           x: newX,
           y: newY,
           width: newWidth,
@@ -2825,8 +2839,7 @@ export function CanvasPage() {
           const node = nodes.get(nodeId)
           const nodeInitialPos = resizeInitialNodePositions.get(nodeId)
           if (node && nodeInitialPos) {
-            const { updateNode } = useCanvasStore.getState()
-            updateNode(nodeId, {
+            updateNodeWithoutHistory(nodeId, {
               x: nodeInitialPos.x,
               y: nodeInitialPos.y,
               width: nodeInitialPos.width,
@@ -2906,8 +2919,10 @@ export function CanvasPage() {
       const canvasX = (mouseX - panX) / zoom
       const canvasY = (mouseY - panY) / zoom
 
-      const { updateConnectionBendPoint } = useCanvasStore.getState()
-      updateConnectionBendPoint(draggingConnectionId, draggingBendPointId, canvasX, canvasY)
+      // M3: 拖动期间不逐帧入 undo 历史（一次手势 60+ 条记录），改用
+      // WithoutHistory 变体；mouseup 时提交一条合并命令。
+      const { updateConnectionBendPointWithoutHistory } = useCanvasStore.getState()
+      updateConnectionBendPointWithoutHistory(draggingConnectionId, draggingBendPointId, canvasX, canvasY)
     }
 
     // Check if mouse is near any endpoint of selected connections to update cursor
@@ -3214,6 +3229,14 @@ export function CanvasPage() {
     }
 
     if (isResizingGroup) {
+      // M2: 拖动期间 mousemove 只走 WithoutHistory 更新（不逐帧入历史），
+      // 结束时在这里提交一条合并命令（仿组拖动 3120-3203 的模式）：
+      // execute 幂等重放最终几何 + nodeIds + 节点最终位置，undo 恢复
+      // 拖动前快照。无实际变化的点按（未拖动）不入历史。
+      const currentResizingGroupId = resizingGroupId
+      const currentResizeInitialGroup = resizeInitialGroup
+      const currentResizeInitialNodePositions = resizeInitialNodePositions
+
       setIsResizingGroup(false)
       setResizingGroupId(null)
       setResizeHandle(null)
@@ -3221,13 +3244,96 @@ export function CanvasPage() {
       setResizeInitialGroup(null)
       setResizeInitialNodePositions(new Map())
 
-      if (resizingGroupId) {
-        const group = groups.get(resizingGroupId)
-        if (group) {
-          const nodeIds = Array.from(nodes.values())
-            .filter(node => isNodeInGroup(node, group.x, group.y, group.width, group.height))
+      if (currentResizingGroupId && currentResizeInitialGroup) {
+        const { executeCommand } = useCanvasStore.getState()
+        const s = useCanvasStore.getState()
+        const finalGroup = s.groups.get(currentResizingGroupId)
+
+        if (finalGroup) {
+          const finalNodePositions = new Map<string, { x: number; y: number; width: number; height: number }>()
+          currentResizeInitialNodePositions.forEach((_, nodeId) => {
+            const node = s.nodes.get(nodeId)
+            if (node) {
+              finalNodePositions.set(nodeId, { x: node.x, y: node.y, width: node.width, height: node.height })
+            }
+          })
+
+          const nodeIds = Array.from(s.nodes.values())
+            .filter(node => isNodeInGroup(node, finalGroup.x, finalGroup.y, finalGroup.width, finalGroup.height))
             .map(node => node.id)
-          updateGroup(resizingGroupId, { nodeIds })
+
+          const geometryChanged =
+            finalGroup.x !== currentResizeInitialGroup.x ||
+            finalGroup.y !== currentResizeInitialGroup.y ||
+            finalGroup.width !== currentResizeInitialGroup.width ||
+            finalGroup.height !== currentResizeInitialGroup.height
+          let nodePosChanged = false
+          currentResizeInitialNodePositions.forEach((pos, nodeId) => {
+            const finalPos = finalNodePositions.get(nodeId)
+            if (finalPos && (finalPos.x !== pos.x || finalPos.y !== pos.y || finalPos.width !== pos.width || finalPos.height !== pos.height)) {
+              nodePosChanged = true
+            }
+          })
+          // 保留原实现"nodeIds 会员变化也刷新"的语义（如远端把节点移入组内）。
+          const currentNodeIds = finalGroup.nodeIds ?? []
+          const nodeIdsChanged =
+            nodeIds.length !== currentNodeIds.length ||
+            nodeIds.some((nid, idx) => nid !== currentNodeIds[idx])
+
+          if (geometryChanged || nodePosChanged || nodeIdsChanged) {
+            executeCommand({
+              type: 'resizeGroup',
+              timestamp: Date.now(),
+              execute: () => {
+                const st = useCanvasStore.getState()
+                const groups = new Map(st.groups)
+                const nodes = new Map(st.nodes)
+                const g = groups.get(currentResizingGroupId)
+                if (g) {
+                  groups.set(currentResizingGroupId, {
+                    ...g,
+                    x: finalGroup.x,
+                    y: finalGroup.y,
+                    width: finalGroup.width,
+                    height: finalGroup.height,
+                    nodeIds,
+                  })
+                  finalNodePositions.forEach((pos, nodeId) => {
+                    const node = nodes.get(nodeId)
+                    if (node) {
+                      nodes.set(nodeId, { ...node, x: pos.x, y: pos.y, width: pos.width, height: pos.height })
+                    }
+                  })
+                  return { groups, nodes, isDirty: true }
+                }
+                return {}
+              },
+              undo: () => {
+                const st = useCanvasStore.getState()
+                const groups = new Map(st.groups)
+                const nodes = new Map(st.nodes)
+                const g = groups.get(currentResizingGroupId)
+                if (g) {
+                  groups.set(currentResizingGroupId, {
+                    ...g,
+                    x: currentResizeInitialGroup.x,
+                    y: currentResizeInitialGroup.y,
+                    width: currentResizeInitialGroup.width,
+                    height: currentResizeInitialGroup.height,
+                    nodeIds: Array.from(currentResizeInitialNodePositions.keys()),
+                  })
+                  currentResizeInitialNodePositions.forEach((pos, nodeId) => {
+                    const node = nodes.get(nodeId)
+                    if (node) {
+                      nodes.set(nodeId, { ...node, x: pos.x, y: pos.y, width: pos.width, height: pos.height })
+                    }
+                  })
+                  return { groups, nodes, isDirty: true }
+                }
+                return {}
+              },
+            })
+          }
         }
       }
       return
@@ -3434,13 +3540,39 @@ export function CanvasPage() {
       )
 
       if (existingConnection) {
-        updateConnection(existingConnection.id, {
-          fromNodeId: newFromNodeId,
-          fromPort: newFromPort,
-          toNodeId: newToNodeId,
-          toPort: newToPort,
+        // M9: 端点重连 = 更新已存在连接 + 删除被拖连接。此前各调一次
+        // updateConnection/removeConnection 产生两条历史记录（撤销需按
+        // 两次且顺序颠倒会出错），合并为单条命令。
+        const existingConnectionSnapshot = { ...existingConnection }
+        const draggingConnectionSnapshot = { ...connection }
+        const { executeCommand } = useCanvasStore.getState()
+        executeCommand({
+          type: 'mergeConnectionOnReconnect',
+          timestamp: Date.now(),
+          execute: () => {
+            const st = useCanvasStore.getState()
+            const connections = new Map(st.connections)
+            const existing = connections.get(existingConnectionSnapshot.id)
+            if (existing) {
+              connections.set(existingConnectionSnapshot.id, {
+                ...existing,
+                fromNodeId: newFromNodeId,
+                fromPort: newFromPort,
+                toNodeId: newToNodeId,
+                toPort: newToPort,
+              })
+            }
+            connections.delete(draggingConnectionId)
+            return { connections, isDirty: true }
+          },
+          undo: () => {
+            const st = useCanvasStore.getState()
+            const connections = new Map(st.connections)
+            connections.set(existingConnectionSnapshot.id, existingConnectionSnapshot)
+            connections.set(draggingConnectionSnapshot.id, draggingConnectionSnapshot)
+            return { connections, isDirty: true }
+          },
         })
-        removeConnection(draggingConnectionId)
         setSelectedIds([existingConnection.id])
         setSelectedType('connection')
       } else {
@@ -3465,6 +3597,13 @@ export function CanvasPage() {
     }
 
     if (isDraggingBendPoint) {
+      // M3: 拖动期间 mousemove 只走 WithoutHistory 更新，结束时提交一条
+      // 合并命令：execute 幂等重放最终位置，undo 恢复拖动前位置。
+      const origin = bendPointDragOriginRef.current
+      const draggingBendPointIdAtUp = draggingBendPointId
+      const draggingConnectionIdAtUp = draggingConnectionId
+      bendPointDragOriginRef.current = null
+
       setIsDraggingBendPoint(false)
       setDraggingBendPointId(null)
       setDraggingConnectionId(null)
@@ -3472,8 +3611,56 @@ export function CanvasPage() {
       setTimeout(() => {
         justFinishedBendPointDraggingRef.current = false
       }, 0)
+
+      if (origin && draggingBendPointIdAtUp === origin.bendPointId && draggingConnectionIdAtUp === origin.connectionId) {
+        const s = useCanvasStore.getState()
+        const conn = s.connections.get(origin.connectionId)
+        const bendPoint = conn?.bendPoints?.find(bp => bp.id === origin.bendPointId)
+        if (conn && bendPoint) {
+          const finalX = bendPoint.x
+          const finalY = bendPoint.y
+          // 未实际拖动（位置没变）不入历史。
+          if (finalX !== origin.x || finalY !== origin.y) {
+            const { executeCommand } = useCanvasStore.getState()
+            executeCommand({
+              type: 'updateConnectionBendPoint',
+              timestamp: Date.now(),
+              execute: () => {
+                const st = useCanvasStore.getState()
+                const connections = new Map(st.connections)
+                const c = connections.get(origin.connectionId)
+                if (c && c.bendPoints) {
+                  connections.set(origin.connectionId, {
+                    ...c,
+                    bendPoints: c.bendPoints.map(bp =>
+                      bp.id === origin.bendPointId ? { ...bp, x: finalX, y: finalY } : bp
+                    ),
+                  })
+                  return { connections, isDirty: true }
+                }
+                return {}
+              },
+              undo: () => {
+                const st = useCanvasStore.getState()
+                const connections = new Map(st.connections)
+                const c = connections.get(origin.connectionId)
+                if (c && c.bendPoints) {
+                  connections.set(origin.connectionId, {
+                    ...c,
+                    bendPoints: c.bendPoints.map(bp =>
+                      bp.id === origin.bendPointId ? { ...bp, x: origin.x, y: origin.y } : bp
+                    ),
+                  })
+                  return { connections, isDirty: true }
+                }
+                return {}
+              },
+            })
+          }
+        }
+      }
     }
-  }, [isDragging, isDraggingGroup, isCreatingGroup, groupStartPos, groupEndPos, groupDragStart, groupInitialPositions, initialGroupNodeIds, groupDragInitialGroupPos, draggingGroupId, groupDragOffset, nodes, groups, updateGroup, addGroup, isCreatingConnection, connectionStartNodeId, connectionStartPort, isDraggingConnectionEndpoint, draggingConnectionId, draggingEndpoint, connections, panX, panY, zoom, containerRef, updateConnection, findBestPort, snappedPort, addConnection, removeConnection, isBoxSelecting, boxSelectionStart, boxSelectionEnd, addToSelection, isCreatingDomain, domainBoxStart, domainBoxEnd, domains, addDomain, isDraggingBendPoint, draggingBendPointId, setSelectedIds, setSelectedType, connectionType])
+  }, [isDragging, isDraggingGroup, isCreatingGroup, groupStartPos, groupEndPos, groupDragStart, groupInitialPositions, initialGroupNodeIds, groupDragInitialGroupPos, draggingGroupId, groupDragOffset, nodes, groups, updateGroup, addGroup, isCreatingConnection, connectionStartNodeId, connectionStartPort, isDraggingConnectionEndpoint, draggingConnectionId, draggingEndpoint, connections, panX, panY, zoom, containerRef, updateConnection, findBestPort, snappedPort, addConnection, removeConnection, isBoxSelecting, boxSelectionStart, boxSelectionEnd, addToSelection, isCreatingDomain, domainBoxStart, domainBoxEnd, domains, addDomain, isDraggingBendPoint, draggingBendPointId, isResizingGroup, resizingGroupId, resizeInitialGroup, resizeInitialNodePositions, setSelectedIds, setSelectedType, connectionType])
 
   // E13: window 级 mouseup 兜底——拖拽过程中指针移出容器甚至移出窗口时,
   // 释放鼠标仍能触发 handleMouseUp 结束拖拽。
@@ -4943,6 +5130,13 @@ export function CanvasPage() {
                             setSelectedType('connection')
                           }
                           closeAllContextMenus()
+                          // M3: 记录拖动前位置，供 mouseup 合并命令的 undo 恢复。
+                          bendPointDragOriginRef.current = {
+                            x: bendPoint.x,
+                            y: bendPoint.y,
+                            bendPointId: bendPoint.id,
+                            connectionId: conn.id,
+                          }
                           setIsDraggingBendPoint(true)
                           setDraggingBendPointId(bendPoint.id)
                           setDraggingConnectionId(conn.id)
@@ -5026,13 +5220,7 @@ export function CanvasPage() {
                       zoom={zoom}
                       groupDragOffset={nodeGroupDragOffset}
                       onNodeContextMenuOpen={handleNodeContextMenu}
-                      onMouseDown={() => {
-                        // E13-fix: NodeItem 的 mousedown 会 stopPropagation，绕过
-                        // handleMouseDown 中的 lastMouseUpAtRef 重置。此处同步重置，
-                        // 防快速双击节点时 mouseup 去重吞掉第二次结算（状态卡死+幻影 undo）。
-                        lastMouseUpAtRef.current = 0
-                        closeAllContextMenus()
-                      }}
+                      onMouseDown={handleNodeMouseDown}
                       isViewer={isViewer}
                       opacity={nodeOpacity}
                     />

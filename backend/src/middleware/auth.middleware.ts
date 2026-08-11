@@ -61,6 +61,13 @@ export async function authenticate(req: AuthRequest, res: Response, next: NextFu
     next()
   } catch (error) {
     logError('Authentication error', error)
+    // B18: 区分 DB 故障与认证失败——catch-all 此前把 DB 错误也回 401
+    // '认证失败'，客户端会把服务端故障误判为登录态失效并反复重登，
+    // 掩盖真实原因。SQLite 原生错误带 code（SQLITE_*），据此分类。
+    const code = (error as { code?: unknown })?.code
+    if (typeof code === 'string' && code.startsWith('SQLITE')) {
+      return res.status(500).json({ success: false, error: '数据库错误，请稍后重试' })
+    }
     return res.status(401).json({ success: false, error: '认证失败，请重新登录' })
   }
 }

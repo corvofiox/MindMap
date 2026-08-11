@@ -650,6 +650,8 @@ export async function sendStreamChatMessage(
         } catch {
           /* accumulated arguments malformed, fall back to empty */
         }
+        // N1: 工具执行期间用户可能已点停止——逐个执行前检查,中止则不再执行剩余工具
+        if (signal.aborted) return
         const result = await executeToolCall(
           tc.function.name,
           args
@@ -704,6 +706,10 @@ export async function sendStreamChatMessage(
 
       // 通知调用方持久化本轮工具交换消息，用于后续多轮对话上下文拼接
       callbacks.onToolExchange?.([assistantMessage, ...toolResultMessages])
+
+      // N1: 递归前再次检查——工具执行期间被中止时不得再发起新请求(递归会新建
+      // AbortController,abortCurrentRequest 只中止最内层,外层 signal 不会置位)
+      if (signal.aborted) return
 
       // 递归调用获取最终响应
       // 注意：思考模式下模型可能需要多轮工具调用，所以保持 enableTools=true

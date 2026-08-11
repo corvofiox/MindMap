@@ -384,7 +384,11 @@ export const useUIStore = create<UIState>()(
           try {
             await updateNodeDefaults(nodeDefaults)
           } catch (error) {
-            get().addErrorToast('保存节点默认配置失败')
+            // N3: 与 useAuthStore.updateProfile 行为一致——store 层不吞错,
+            // rethrow 让调用方(NodeDefaultsDialog)的 catch 弹失败 toast。
+            // 此前此处吞掉异常,调用方 try 继续走成功分支,"保存失败"与
+            // "保存成功"同时弹
+            throw error
           }
         },
         resetNodeDefaults: () => set({ nodeDefaults: getDefaultNodeDefaults() }),

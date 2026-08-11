@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, memo } from 'react'
 import type { Connection } from '@/types'
 import {
   calculateCurveControlPoints,
@@ -22,7 +22,10 @@ interface ConnectionLineProps {
   opacity?: number
 }
 
-export function ConnectionLine({
+// M7: React.memo 包裹——CanvasPage 重渲染时未变化的连线跳过重渲染。
+// props 均为原始值或稳定引用（onClick/onContextMenu/onDoubleClick 在
+// CanvasPage 侧已 useCallback）。
+export const ConnectionLine = memo(function ConnectionLine({
   conn,
   fromX,
   fromY,
@@ -238,4 +241,4 @@ export function ConnectionLine({
   }, [conn.id, conn.type, conn.color, conn.width, conn.style, conn.arrowType, conn.bendPoints, fromX, fromY, toX, toY, fromPort, toPort, onClick, onContextMenu, onDoubleClick])
 
   return element
-}
+})

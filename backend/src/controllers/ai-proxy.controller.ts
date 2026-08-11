@@ -5,6 +5,12 @@
 // - DELETE /providers/:providerId  删除密钥
 // - POST /models      代理获取模型列表
 // - POST /chat        SSE 流式代理聊天请求
+//
+// ⚠️ B20（单用户部署假设）: 本模块允许配置 http(s)://localhost 本机地址作为
+// 自定义 baseUrl（供单机推理服务使用），且 baseUrl 可逐请求覆盖存储值。
+// 多用户共享部署时，任一登录用户都可借此访问宿主机 localhost 上的任意服务
+// （SSRF）。当前产品定位为单用户/自托管，此行为是有意为之；若将来支持多租户
+// 部署，必须先收紧 localhost 白名单与 baseUrl 覆盖权限。
 
 import { Router } from 'express'
 import type { Response as ExpressResponse } from 'express'
@@ -382,6 +388,8 @@ router.post(
       ? baseUrl.trim()
       : undefined
 
+    // B20: baseUrl 逐请求覆盖存储值——单用户部署假设下允许；多用户部署时
+    // 此覆盖入口会让用户绕过服务端配置直接指定任意 baseUrl（含 localhost）
     if (trimmedBaseUrl && !(await resolveBaseUrl(trimmedBaseUrl, undefined, meta))) {
       // R4 #4: 文案如实描述当前策略——公网 https 或本机 http(s) 回环
       return res.status(400).json({ success: false, error: '无效的服务地址（仅支持公网 https 地址，或 http(s)://localhost 本机地址）' })
@@ -416,13 +424,24 @@ router.post(
         })
         .where(eq(aiProviderKeys.id, existing.id))
     } else {
-      await db.insert(aiProviderKeys).values({
-        userId,
-        providerId,
-        apiKeyEncrypted: encrypted,
-        baseUrl: trimmedBaseUrl ?? null,
-        updatedAt: Math.floor(Date.now() / 1000),
-      })
+      try {
+        await db.insert(aiProviderKeys).values({
+          userId,
+          providerId,
+          apiKeyEncrypted: encrypted,
+          baseUrl: trimmedBaseUrl ?? null,
+          updatedAt: Math.floor(Date.now() / 1000),
+        })
+      } catch (error) {
+        // B14: check-then-insert 并发窗口——两个请求同时通过 getProviderKey
+        // 检查后，第二个 INSERT 撞唯一索引 ai_provider_keys_user_provider_idx。
+        // 数据内容相同，按幂等成功处理返回 200（重试安全），避免 500。
+        const code = (error as { code?: unknown })?.code
+        if (typeof code === 'string' && code.startsWith('SQLITE_CONSTRAINT')) {
+          return res.json({ success: true, data: { providerId, configured: true } })
+        }
+        throw error
+      }
     }
 
     return res.json({ success: true, data: { providerId, configured: true } })

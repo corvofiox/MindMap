@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { Search, X, UserPlus, Loader2, Crown, Edit3, Eye, Clock, XCircle, Check, ChevronDown, ChevronLeft, Plus } from 'lucide-react'
 import { Dialog } from './Dialog'
 import { useUIStore } from '@/store/useUIStore'
@@ -129,18 +129,30 @@ export function CollaborationDialog() {
     }
   }, [selectedProject?.id, loadProjectMembers])
 
+  // N10: 请求序号——300ms 防抖挡不住慢响应:旧 query 的响应晚到时若已有
+  // 更新的搜索请求,直接丢弃,避免旧结果覆盖新结果
+  const searchSeqRef = useRef(0)
+
   const handleSearch = useCallback(async (query: string) => {
     if (!query.trim()) {
+      // R2-2-fix: 空/纯空白 query 早退——递增 seq 使在途旧请求过期,并复位
+      // isSearching。正常路径下 debounce effect 已拦截空 query(见下方 effect),
+      // 此分支为防御性保留,防止未来出现绕过 effect 的调用路径时
+      // 重蹈"seq 递增后旧请求 finally 失配不复位 spinner"的回归。
+      ++searchSeqRef.current
       setSearchResults([])
       setSearchError(null)
+      setIsSearching(false)
       return
     }
 
+    const seq = ++searchSeqRef.current
     setIsSearching(true)
     setSearchError(null)
 
     try {
       const results = await searchUsers(query)
+      if (seq !== searchSeqRef.current) return // 过期响应,丢弃
       const existingUserIds = new Set([
         ...members.map(m => m.userId),
         currentUser?.id,
@@ -148,17 +160,30 @@ export function CollaborationDialog() {
       const filteredResults = results.filter(u => !existingUserIds.has(u.id))
       setSearchResults(filteredResults)
     } catch (error) {
+      if (seq !== searchSeqRef.current) return // 过期响应,丢弃
       setSearchError(error instanceof Error ? error.message : '搜索失败')
       setSearchResults([])
     } finally {
-      setIsSearching(false)
+      if (seq === searchSeqRef.current) setIsSearching(false)
     }
   }, [members, currentUser?.id])
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      if (searchQuery && view === 'search') {
+      if (searchQuery.trim() && view === 'search') {
         handleSearch(searchQuery)
+      } else if (!searchQuery.trim() && view === 'search') {
+        // R2-2-fix: 空/纯空白 query(清空输入框)在 effect 层直接处理——
+        // 递增 seq 使在途旧请求过期(旧响应 seq 失配被丢弃,不落地覆盖
+        // 已清空的列表),同时复位 isSearching 防止 spinner 卡死。
+        // 原因:handleSearch 唯一调用点带 `searchQuery &&` 守卫,空字符串
+        // 永不调用 handleSearch,旧实现把空分支写在 handleSearch 内只对
+        // 纯空白字符串可达;且该分支递增 seq 后,旧请求 finally 因 seq
+        // 失配不复位 isSearching,空分支自身也不复位 → spinner 永久旋转。
+        ++searchSeqRef.current
+        setSearchResults([])
+        setSearchError(null)
+        setIsSearching(false)
       }
     }, 300)
 

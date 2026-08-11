@@ -65,14 +65,29 @@ authRouter.post('/register', authLimiter(), asyncHandler(async (req, res) => {
   const rawNickname = typeof nickname === 'string' ? nickname.trim() : ''
 
   // Create user
-  const result = await db
-    .insert(users)
-    .values({
-      email: normalizedEmail,
-      password: hashedPassword,
-      nickname: rawNickname ? rawNickname : null,
-    })
-    .returning()
+  let result
+  try {
+    result = await db
+      .insert(users)
+      .values({
+        email: normalizedEmail,
+        password: hashedPassword,
+        nickname: rawNickname ? rawNickname : null,
+      })
+      .returning()
+  } catch (error) {
+    // B10: 先查后插存在并发窗口——两个同邮箱注册请求同时通过 existingUser
+    // 检查后，第二个 INSERT 撞 UNIQUE(email) 约束。捕获约束错误返回 409
+    // 而非 500（不做邮箱大小写归一，避免行为变更风险）。
+    const code = (error as { code?: unknown })?.code
+    if (typeof code === 'string' && code.startsWith('SQLITE_CONSTRAINT')) {
+      return res.status(409).json({
+        success: false,
+        error: '该邮箱已被注册',
+      })
+    }
+    throw error
+  }
 
   const newUser = result[0]
 

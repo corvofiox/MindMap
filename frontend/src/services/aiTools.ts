@@ -113,6 +113,12 @@ function getCanvasData(): ToolCallResult {
           type: n.type,
           collapsed: n.collapsed,
           locked: n.locked,
+          // N12: 补充位置/尺寸字段,与 createNode 描述一致——模型据此指定
+          // x/y 避免节点重叠
+          x: n.x,
+          y: n.y,
+          width: n.width,
+          height: n.height,
         })),
         connections: connections.map((c) => ({
           id: c.id,
@@ -434,6 +440,11 @@ function calculateNodesBounds(nodeIds: string[], nodes: Map<string, Node>): { x:
 function createGroup(args: Record<string, unknown>): ToolCallResult {
   try {
     const { addGroup, nodes } = useCanvasStore.getState()
+    // N7: nodeIds 运行时校验——非 strict 供应商模型可能传字符串/数字,
+    // 直接 as string[] 会让下游 .length/.map 抛 TypeError
+    if (args.nodeIds !== undefined && args.nodeIds !== null && !Array.isArray(args.nodeIds)) {
+      return { success: false, error: 'nodeIds 必须是字符串数组' }
+    }
     const nodeIds = (args.nodeIds as string[]) ?? []
 
     // 如果有节点ID，自动计算边界
@@ -485,7 +496,13 @@ function updateGroup(args: Record<string, unknown>): ToolCallResult {
     const updates: Partial<NodeGroup> = {}
     if (args.name !== undefined && args.name !== null) updates.name = String(args.name)
     if (args.description !== undefined && args.description !== null) updates.description = String(args.description)
-    if (args.nodeIds !== undefined && args.nodeIds !== null) updates.nodeIds = args.nodeIds as string[]
+    if (args.nodeIds !== undefined && args.nodeIds !== null) {
+      // N7: 运行时校验,非法值返回错误而非让下游 TypeError
+      if (!Array.isArray(args.nodeIds)) {
+        return { success: false, error: 'nodeIds 必须是字符串数组' }
+      }
+      updates.nodeIds = args.nodeIds as string[]
+    }
     if (args.x !== undefined && args.x !== null) updates.x = toFiniteNumber(args.x, existingGroup?.x ?? 0)
     if (args.y !== undefined && args.y !== null) updates.y = toFiniteNumber(args.y, existingGroup?.y ?? 0)
     if (args.width !== undefined && args.width !== null) updates.width = toFiniteNumber(args.width, existingGroup?.width ?? 300)
@@ -1240,7 +1257,7 @@ export const AI_TOOLS: Array<{
     },
     {
       name: 'createNode',
-      description: '在画布上创建一个新节点。建议节点大小不小于200x160以确保内容显示完整。创建成功会返回 nodeId(形如 node-xxx)。建议先调用 getCanvasData 了解画布现有布局再指定 x/y 坐标,避免节点重叠',
+      description: '在画布上创建一个新节点。建议节点大小不小于200x160以确保内容显示完整。创建成功会返回 nodeId(形如 node-xxx)。未指定 x/y 时节点默认放置在画布 (0,0) 位置,可先调用 getCanvasData 查看现有节点坐标(含 x/y/width/height)再指定 x/y 避免重叠',
       parameters: {
         title: { type: 'string', description: '节点标题', required: true },
         content: { type: 'string', description: '节点内容' },

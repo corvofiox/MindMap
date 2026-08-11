@@ -114,6 +114,18 @@ function generateJWTSecret() {
   return crypto.randomBytes(64).toString('hex');
 }
 
+// B2: .env.example 模板中的示例占位符不算真实密钥——检测到占位符时仍应生成
+// 随机密钥覆盖,否则全新部署会带着公开的弱密钥运行。
+function isPlaceholderSecret(value) {
+  if (!value) return true;
+  const v = value.trim();
+  // R2-6: 识别 dev 环境模板密钥（backend/.env.development 的
+  // dev-jwt-secret-key-for-development-only / dev-csrf-secret-key-for-development-only）——
+  // 否则 dev 环境会从"每次启动随机生成"变成"保留公开已知密钥"。
+  return v === '' || v.includes('change-me-in-production') || v === 'your-secret-key'
+    || (v.startsWith('dev-') && v.includes('key-for-development'));
+}
+
 function ensureDirectoryExists(dirPath) {
   if (!fs.existsSync(dirPath)) {
     fs.mkdirSync(dirPath, { recursive: true });
@@ -229,18 +241,33 @@ async function setupEnvironmentFiles() {
       logStep('INFO', 'Using JWT_SECRET from environment variable');
       updateEnvFile(backendTargetPath, 'JWT_SECRET', process.env.JWT_SECRET);
     } else if (shouldGenerateSecrets) {
-      const jwtSecret = generateJWTSecret();
-      updateEnvFile(backendTargetPath, 'JWT_SECRET', jwtSecret);
-      logSuccess(`Generated and set JWT_SECRET for Backend`);
+      // B2: .env 已有非空密钥时保留原值——Docker 容器内 backend/.env 不在
+      // 持久卷上,若每次启动都重新生成随机密钥,重建容器会使所有 JWT 会话
+      // 失效,且 AI_KEY_SECRET 轮换会导致数据库已存 AI 密钥 AES 解密失败。
+      // 固定密钥由 docker-compose environment 注入,或首次生成后保持不变。
+      const existingSecret = getEnvValue(backendTargetPath, 'JWT_SECRET');
+      if (existingSecret && !isPlaceholderSecret(existingSecret)) {
+        logStep('SKIP', `JWT_SECRET already exists in .env - keeping existing value`);
+      } else {
+        const jwtSecret = generateJWTSecret();
+        updateEnvFile(backendTargetPath, 'JWT_SECRET', jwtSecret);
+        logSuccess(`Generated and set JWT_SECRET for Backend`);
+      }
     }
 
     if (process.env.CSRF_SECRET) {
       logStep('INFO', 'Using CSRF_SECRET from environment variable');
       updateEnvFile(backendTargetPath, 'CSRF_SECRET', process.env.CSRF_SECRET);
     } else if (shouldGenerateSecrets) {
-      const csrfSecret = generateJWTSecret();
-      updateEnvFile(backendTargetPath, 'CSRF_SECRET', csrfSecret);
-      logSuccess(`Generated and set CSRF_SECRET for Backend`);
+      // B2: 同 JWT_SECRET——保留已有值,避免容器重建后 CSRF token 全部失效
+      const existingSecret = getEnvValue(backendTargetPath, 'CSRF_SECRET');
+      if (existingSecret && !isPlaceholderSecret(existingSecret)) {
+        logStep('SKIP', `CSRF_SECRET already exists in .env - keeping existing value`);
+      } else {
+        const csrfSecret = generateJWTSecret();
+        updateEnvFile(backendTargetPath, 'CSRF_SECRET', csrfSecret);
+        logSuccess(`Generated and set CSRF_SECRET for Backend`);
+      }
     }
 
     // AI 密钥加密专用密钥（独立于 JWT_SECRET，避免 JWT 轮换导致已存储的 AI 密钥全部失效）
@@ -249,9 +276,16 @@ async function setupEnvironmentFiles() {
       logStep('INFO', 'Using AI_KEY_SECRET from environment variable');
       updateEnvFile(backendTargetPath, 'AI_KEY_SECRET', process.env.AI_KEY_SECRET);
     } else if (shouldGenerateSecrets) {
-      const aiKeySecret = generateJWTSecret();
-      updateEnvFile(backendTargetPath, 'AI_KEY_SECRET', aiKeySecret);
-      logSuccess(`Generated and set AI_KEY_SECRET for Backend`);
+      // B2: 同 JWT_SECRET——AI_KEY_SECRET 轮换会使数据库已存 AI 密钥
+      // AES-256-GCM 解密失败,必须保持稳定
+      const existingSecret = getEnvValue(backendTargetPath, 'AI_KEY_SECRET');
+      if (existingSecret && !isPlaceholderSecret(existingSecret)) {
+        logStep('SKIP', `AI_KEY_SECRET already exists in .env - keeping existing value`);
+      } else {
+        const aiKeySecret = generateJWTSecret();
+        updateEnvFile(backendTargetPath, 'AI_KEY_SECRET', aiKeySecret);
+        logSuccess(`Generated and set AI_KEY_SECRET for Backend`);
+      }
     }
 
     // R5 #1: TRUST_PROXY / CSRF_COOKIE_SECURE 从环境透传到生成的 .env——
@@ -640,8 +674,10 @@ function printUsage() {
    --env-only        Run Module 1 only (initialize environment files)
    --db-only         Run Module 2 only (initialize database)
    --start-only      Run Module 3 only (start servers, skip setup)
+   --install-only    Install dependencies only (npm install)
    --production      Run in production mode
    --help, -h        Show this help message
+   (--generate-env-only 为 --env-only 的兼容别名)
 
  Examples:
    node start.js               Full setup and start (development)
@@ -675,9 +711,12 @@ async function main() {
     process.exit(0);
   }
 
-  const envOnly = args.includes('--env-only');
+  // B19: 兼容 package.json 旧脚本参数（--generate-env-only / --install-only）,
+  // 避免历史 npm 脚本触发完整启动
+  const envOnly = args.includes('--env-only') || args.includes('--generate-env-only');
   const dbOnly = args.includes('--db-only');
   const startOnly = args.includes('--start-only');
+  const installOnly = args.includes('--install-only');
   const productionMode = args.includes('--production') || isProduction();
 
   const isDocker = isDockerEnvironment();
@@ -693,6 +732,13 @@ async function main() {
   console.log('='.repeat(60) + '\n');
 
   try {
+    if (installOnly) {
+      logSection('Running Install Only');
+      await executeCommand(getNpmCommand(), ['install'], { cwd: __dirname });
+      logSuccess('Dependencies installed.');
+      process.exit(0);
+    }
+
     if (envOnly) {
       await setupEnvironmentFiles();
       logSuccess('Module 1 (Environment Files) completed.');

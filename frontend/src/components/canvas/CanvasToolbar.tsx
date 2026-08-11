@@ -38,7 +38,12 @@ import {
 } from '@/utils/canvasExport'
 
 interface CanvasToolbarProps {
-  onSave?: () => Promise<void>
+  /**
+   * M1: 返回 boolean 表示保存是否成功（handleManualSave 内部 catch 全部
+   * 错误并返回 false，不 throw）。handleSave 依据返回值决定是否提示
+   * "保存成功"，失败时错误 toast 已由 handleManualSave 内部弹出。
+   */
+  onSave?: () => Promise<boolean>
   isViewer?: boolean
   isCollabConnected?: boolean
 }
@@ -77,10 +82,6 @@ export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToo
   } = useUIStore()
   const {
     selectedIds,
-    removeNode,
-    removeConnection,
-    removeGroup,
-    removeDomain,
     nodes,
     undo,
     redo,
@@ -89,6 +90,7 @@ export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToo
     domains,
     addGroup,
     connections,
+    deleteEntitiesByIds,
     zoom,
     panX,
     panY,
@@ -146,17 +148,22 @@ export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToo
     setSaveSuccess(false)
 
     try {
-      await onSave()
-      setSaveSuccess(true)
-      setTimeout(() => setSaveSuccess(false), 2000)
+      // M1: 依据返回值判断成功/失败（参照 Ctrl+S 路径 2132 的既有修法）。
+      // handleManualSave 失败时返回 false 且已弹出具体错误 toast，这里
+      // 不再重复弹"保存失败"，仅成功时弹"保存成功"。
+      const saved = await onSave()
+      if (saved) {
+        setSaveSuccess(true)
+        setTimeout(() => setSaveSuccess(false), 2000)
 
-      // Show success toast
-      addToast({
-        type: 'success',
-        title: '保存成功',
-        message: '画布内容已保存到服务器',
-        duration: 3000,
-      })
+        // Show success toast
+        addToast({
+          type: 'success',
+          title: '保存成功',
+          message: '画布内容已保存到服务器',
+          duration: 3000,
+        })
+      }
     } catch (error) {
       // Show error toast
       addToast({
@@ -171,17 +178,8 @@ export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToo
   }, [onSave, isSaving, addToast, isCollabConnected])
 
   const handleDelete = () => {
-    selectedIds.forEach((id) => {
-      if (nodes.has(id)) {
-        removeNode(id)
-      } else if (groups.has(id)) {
-        removeGroup(id)
-      } else if (domains.has(id)) {
-        removeDomain(id)
-      } else {
-        removeConnection(id)
-      }
-    })
+    // M6: 批量删除合并为单条 undo 历史命令（避免 N 个实体产生 N 条记录）。
+    deleteEntitiesByIds(selectedIds)
   }
 
   const hasSelectedNodes = selectedIds.some((id) => nodes.has(id))

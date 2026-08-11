@@ -39,12 +39,29 @@ export function validateEnvVars(): void {
 /**
  * Get all validated environment variables
  */
+// B18: JWT_EXPIRES_IN 格式校验——jsonwebtoken 对非法值（如 'abc'）会在
+// 登录/注册时抛错转 500，且 index.ts 启动即调用 getValidatedEnv()，
+// 非法值会在启动阶段 fail-fast 暴露，而不是等用户登录时才炸。
+// 合法形态: 纯秒数数字（'3600'）、ms 单位（'86400000ms'）或
+// ms 包支持的时长字符串（'7d'、'12h'、'30m'、'2 days' 等）。
+// R2-5: 允许小数时长（'1.5h'）——ms 包/jsonwebtoken 支持小数，B18 的
+// 整数正则把合法配置 fail-fast 拒掉了。
+const JWT_EXPIRES_IN_PATTERN = /^\d+(\.\d+)?\s*(ms|s|m|h|d|w|y|days?|hours?|minutes?|seconds?|weeks?|months?|years?)?$/i
+
 export function getValidatedEnv(): EnvVars {
   validateEnvVars()
 
+  const jwtExpiresIn = getEnv('JWT_EXPIRES_IN')
+  if (jwtExpiresIn !== undefined && !JWT_EXPIRES_IN_PATTERN.test(jwtExpiresIn.trim())) {
+    throw new Error(
+      `Invalid JWT_EXPIRES_IN value '${jwtExpiresIn}'. ` +
+      `Expected a duration like '7d', '12h', '30m', '3600' (seconds) or '86400000ms'.`,
+    )
+  }
+
   return {
     JWT_SECRET: getEnv('JWT_SECRET', true),
-    JWT_EXPIRES_IN: getEnv('JWT_EXPIRES_IN'),
+    JWT_EXPIRES_IN: jwtExpiresIn,
     PORT: getEnv('PORT'),
     WS_PORT: getEnv('WS_PORT'),
     DB_FILE: getEnv('DB_FILE'),

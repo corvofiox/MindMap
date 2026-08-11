@@ -205,6 +205,23 @@ export const useAuthStore = create<AuthState>()(
               logger.error('Failed to reset UI store on logout', err)
             })
 
+            // N5: 重置各内存 store,防止换账号后上一账号的数据残留渲染
+            // (如 ProjectsPage 挂载时 loadProjects 失败,旧账号的
+            // projects/canvases 列表仍会渲染)
+            Promise.all([
+              import('@/store/useProjectsStore'),
+              import('@/store/useCanvasStore'),
+              import('@/features/node-pool/stores/useNodePoolStore'),
+              import('@/store/useAIStore'),
+            ]).then(([projectsModule, canvasModule, nodePoolModule, aiModule]) => {
+              projectsModule.useProjectsStore.getState().reset()
+              canvasModule.useCanvasStore.getState().clearCanvas()
+              nodePoolModule.useNodePoolStore.getState().reset()
+              aiModule.useAIStore.getState().resetConfig()
+            }).catch(err => {
+              logger.error('Failed to reset memory stores on logout', err)
+            })
+
             set({
               user: null,
               token: null,
@@ -255,6 +272,9 @@ export const useAuthStore = create<AuthState>()(
             set({ user: updatedUser, isLoading: false })
           } catch (error) {
             handleError(error, '更新个人资料失败')
+            // N3: handleError 只写 error 状态不抛错,必须 rethrow 让调用方感知
+            // 失败(否则 AccountSettingsDialog 的 try 会继续走成功分支误弹"保存成功")
+            throw error
           }
         },
 

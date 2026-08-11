@@ -65,3 +65,10 @@ lpt1-lpt9
 *.he
 *.cpuprofile
 *.log
+# Core dumps (node/vitest crash remnants)
+core
+core.*
+frontend/core
+
+# Pipeline working dir
+.cache/

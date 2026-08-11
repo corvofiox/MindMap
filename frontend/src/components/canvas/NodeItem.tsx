@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo, memo } from 'react'
 import { useCanvasStore, getYjsBinding } from '@/store/useCanvasStore'
 import { useUIStore } from '@/store/useUIStore'
 import { snapToGrid } from '@/utils/canvas'
@@ -236,7 +236,11 @@ interface HighlightState {
   timestamp: number
 }
 
-export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, groupDragOffset, onNodeContextMenuOpen, onMouseDown, isViewer, opacity = 1 }: NodeItemProps) {
+// M7: React.memo 包裹——CanvasPage 全量订阅 store 时（字段级 selector 改造前）
+// 任意 store 变更都会重渲染整棵画布树，memo 让未变化的节点跳过重渲染。
+// 注意：传参必须引用稳定（node/zoom/opacity 为原始值或 Map 稳定引用，
+// onMouseDown 等在 CanvasPage 侧已 useCallback）。
+export const NodeItem = memo(function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, groupDragOffset, onNodeContextMenuOpen, onMouseDown, isViewer, opacity = 1 }: NodeItemProps) {
   // D7: 字段级订阅，避免 store 任意字段变化导致所有 NodeItem 重渲染
   const updateNode = useStoreField(useCanvasStore, (s) => s.updateNode)
   const updateNodeWithoutHistory = useStoreField(useCanvasStore, (s) => s.updateNodeWithoutHistory)
@@ -1899,4 +1903,4 @@ export function NodeItem({ node, isSelected, zoom, onDragStart, onDragEnd, group
       {/* End wrapper for node and resize handles */}
     </>
   )
-}
+})

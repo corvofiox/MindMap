@@ -55,7 +55,6 @@ export class ApiClient {
   private token: string | null = null
   private baseUrl: string
   private defaultTimeout = 30000 // 30 seconds default timeout
-  private maxRetries = 2 // Maximum retry attempts
 
   constructor(baseUrl: string = API_BASE_URL) {
     this.baseUrl = baseUrl
@@ -120,9 +119,15 @@ export class ApiClient {
   private createTimeoutController(
     timeout: number,
     externalSignal?: AbortSignal
-  ): { controller: AbortController; timeoutId: ReturnType<typeof setTimeout>; cleanup: () => void } {
+  ): { controller: AbortController; timeoutId: ReturnType<typeof setTimeout>; cleanup: () => void; timedOut: () => boolean } {
+    // N8: 记录是否由超时触发中止——便于把浏览器原生 AbortError 本地化为
+    // "请求超时"(而非外部取消的"请求已取消")
+    let timedOut = false
     const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), timeout)
+    const timeoutId = setTimeout(() => {
+      timedOut = true
+      controller.abort()
+    }, timeout)
     let externalAbortHandler: (() => void) | null = null
     if (externalSignal) {
       externalAbortHandler = () => controller.abort()
@@ -134,7 +139,7 @@ export class ApiClient {
         externalSignal.removeEventListener('abort', externalAbortHandler)
       }
     }
-    return { controller, timeoutId, cleanup }
+    return { controller, timeoutId, cleanup, timedOut: () => timedOut }
   }
 
 
@@ -244,6 +249,8 @@ export class ApiClient {
     timeout: number = this.defaultTimeout,
     isCsrfRetry: boolean = false
   ): Promise<T> {
+    // N8: timedOut 标记需在下方 catch 中使用,故在 try 外创建
+    const { controller, cleanup, timedOut } = this.createTimeoutController(timeout, options.signal)
     try {
       // 确保CSRF token有效（针对非GET请求）
       if (options.method && options.method !== 'GET' && options.method !== 'HEAD' && options.method !== 'OPTIONS') {
@@ -257,7 +264,6 @@ export class ApiClient {
         contentType = 'multipart/form-data'
       }
 
-      const { controller, cleanup } = this.createTimeoutController(timeout, options.signal)
       const response = await fetch(`${this.baseUrl}${endpoint}`, {
         ...options,
         signal: controller.signal,
@@ -303,12 +309,14 @@ export class ApiClient {
       // 解析响应
       const data = await this.parseResponse<T>(response)
 
-      // 检查业务状态
-      if ('success' in data && !data.success) {
+      // N8: 检查业务状态(null 响应体安全判断——空 body/字面量 null 时
+      // 'success' in data 会抛 TypeError)
+      if (data && typeof data === 'object' && 'success' in data && !data.success) {
         throw new Error(data.error || '请求失败')
       }
 
-      return data.data as T
+      // 空响应体视为无数据,避免 data.data 访问抛 TypeError
+      return data ? (data as ApiResponse<T>).data as T : undefined as unknown as T
     } catch (error) {
       // 处理网络错误
       if (error instanceof TypeError && error.message.includes('Failed to fetch')) {
@@ -318,6 +326,13 @@ export class ApiClient {
       // 保留 ApiError 以便调用方根据 status 做结构化处理（如 409 乐观锁冲突）
       if (error instanceof ApiError) {
         throw error
+      }
+
+      // N8: 超时/主动中止统一本地化文案,避免用户看到浏览器英文原文
+      // ("This operation was aborted")
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        const message = timedOut() ? '请求超时' : '请求已取消'
+        throw new Error(this.handleError(new Error(message), message))
       }
 
       // 处理其他错误

@@ -6,7 +6,8 @@ import { authenticate, type AuthRequest } from '../middleware/auth.middleware.js
 import { asyncHandler } from '../middleware/error.middleware.js'
 import { transformResponse, transformResponseArray, getProperty } from '../utils/transformResponse.js'
 import { removeCanvasState } from '../websocket/canvas-state.js'
-import { closeRoom } from '../websocket/index.js'
+import { closeRoom, kickUserFromRoom } from '../websocket/index.js'
+import { logError } from '../utils/logger.js'
 
 export const projectRouter = Router()
 
@@ -396,9 +397,18 @@ projectRouter.delete(
       where: eq(projects.id, projectId),
     })
 
-    const projectOwnerId = project.ownerId
+    // B1: ownerId 在 !project 判空之前解引用，项目不存在时抛 TypeError 500。
+    // 先判空返回 404，再校验所有权（与添加成员端点语义一致）。
+    if (!project) {
+      return res.status(404).json({
+        success: false,
+        error: '项目未找到',
+      })
+    }
 
-    if (!project || projectOwnerId !== req.user!.id) {
+    const projectOwnerId = getProperty<number>(project, 'owner_id', 'ownerId') || project.ownerId
+
+    if (projectOwnerId !== req.user!.id) {
       return res.status(403).json({
         success: false,
         error: '访问被拒绝',
@@ -413,6 +423,25 @@ projectRouter.delete(
           eq(projectMembers.userId, userId)
         )
       )
+
+    // B1: 对齐 collaboration.controller 移除成员端点的行为——被移除成员的
+    // 在线 WS 连接仍持有 editor 权限可继续写入 Y.Doc，必须踢出该项目下所有
+    // 协作画布的房间（kickUserFromRoom 发 kicked 通知并断开连接）。
+    try {
+      const projectCanvases = await db.query.canvases.findMany({
+        where: eq(canvases.projectId, projectId),
+      })
+      for (const c of projectCanvases) {
+        kickUserFromRoom(c.id, userId, 'removed')
+      }
+    } catch (error) {
+      // 踢人失败不应阻塞 API 响应，记录后继续
+      logError('Failed to kick removed member from rooms', {
+        projectId,
+        userId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
 
     res.json({
       success: true,

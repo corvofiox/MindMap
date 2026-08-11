@@ -73,6 +73,8 @@ interface ProjectsState {
   reorderNodeCards: (updates: Array<{ id: number; sortOrder: number }>) => Promise<void>
 
   clearError: () => void
+  /** 重置内存态(登出/换账号时调用,防止上一账号数据残留渲染) */
+  reset: () => void
 }
 
 export const useProjectsStore = create<ProjectsState>()(
@@ -394,10 +396,17 @@ export const useProjectsStore = create<ProjectsState>()(
             // 后台执行API请求
             await api.deleteCanvas(id)
           } catch (error) {
-            // API失败：回滚到原始状态
-            set((_state) => ({
-              canvases: originalCanvases,
-            }))
+            // N9: 回滚前检查当前引用——若失败前有其他操作替换过 canvases 数组,
+            // 全量覆盖会丢失中间变更;此时合并回滚(只恢复被删项)
+            set((state) => {
+              if (state.canvases === originalCanvases) {
+                return { canvases: originalCanvases }
+              }
+              const missing = originalCanvases.filter(
+                (c) => c.id === id && !state.canvases.some((cur) => cur.id === c.id)
+              )
+              return missing.length > 0 ? { canvases: [...state.canvases, ...missing] } : {}
+            })
 
             handleError(error, '删除画布失败')
           }
@@ -416,11 +425,14 @@ export const useProjectsStore = create<ProjectsState>()(
           try {
             await api.updateCanvas(canvasId, { folderId })
           } catch (error) {
+            // N4: silent 与非 silent 一致回滚——失败不恢复 folderId 会让本地
+            // UI 与服务器不一致(刷新后画布"跳回"原文件夹,更困惑)。
+            // 拖拽到根目录等静默更新失败同样需要恢复本地状态
+            const canvases = get().canvases
+            set((_state) => ({
+              canvases: canvases.map((c) => (c.id === canvasId ? { ...c, folderId: originalFolderId } : c)),
+            }))
             if (!silent) {
-              const canvases = get().canvases
-              set((_state) => ({
-                canvases: canvases.map((c) => (c.id === canvasId ? { ...c, folderId: originalFolderId } : c)),
-              }))
               handleError(error, '移动画布失败')
             }
           }
@@ -510,11 +522,23 @@ export const useProjectsStore = create<ProjectsState>()(
             // 后台执行API请求
             await api.deleteFolder(id)
           } catch (error) {
-            // API失败：回滚到原始状态
-            set((_state) => ({
-              folders: originalFolders,
-              canvases: originalCanvases,
-            }))
+            // N9: 回滚前检查当前引用——若失败前有其他操作替换过数组,全量覆盖
+            // 会丢失中间变更;此时合并回滚(只恢复被删的文件夹及其画布)
+            set((state) => {
+              if (state.folders === originalFolders && state.canvases === originalCanvases) {
+                return { folders: originalFolders, canvases: originalCanvases }
+              }
+              const missingFolders = originalFolders.filter(
+                (f) => folderIdsToDelete.has(f.id) && !state.folders.some((cur) => cur.id === f.id)
+              )
+              const missingCanvases = originalCanvases.filter(
+                (c) => c.folderId !== null && folderIdsToDelete.has(c.folderId) && !state.canvases.some((cur) => cur.id === c.id)
+              )
+              return {
+                ...(missingFolders.length > 0 ? { folders: [...state.folders, ...missingFolders] } : {}),
+                ...(missingCanvases.length > 0 ? { canvases: [...state.canvases, ...missingCanvases] } : {}),
+              }
+            })
 
             handleError(error, '删除文件夹失败')
           }
@@ -673,13 +697,23 @@ export const useProjectsStore = create<ProjectsState>()(
           })
           set({ nodePoolFolders: updatedFolders })
 
-          try {
-            await Promise.all(
-              updates.map(u => api.updateNodePoolFolder(u.id, { sortOrder: u.sortOrder }))
+          // N11: Promise.allSettled 替代 Promise.all——单个 update 失败不再全量
+          // 回滚(服务器部分成功时全退会让刷新后顺序与本地不一致),
+          // 服务器已成功的项保留新顺序,失败项回退原顺序
+          const settled = await Promise.allSettled(
+            updates.map(u => api.updateNodePoolFolder(u.id, { sortOrder: u.sortOrder }))
+          )
+          const failed = settled.filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+          if (failed.length > 0) {
+            const failedIds = new Set(
+              updates.filter((_, i) => settled[i].status === 'rejected').map(u => u.id)
             )
-          } catch (error) {
-            set({ nodePoolFolders: originalFolders })
-            handleError(error, '重新排序节点池文件夹失败')
+            set((state) => ({
+              nodePoolFolders: state.nodePoolFolders.map(f =>
+                failedIds.has(f.id) ? (originalFolders.find(o => o.id === f.id) ?? f) : f
+              ),
+            }))
+            handleError(failed[0].reason, '重新排序节点池文件夹失败')
           }
         },
 
@@ -692,17 +726,45 @@ export const useProjectsStore = create<ProjectsState>()(
           })
           set({ nodePool: updatedCards })
 
-          try {
-            await Promise.all(
-              updates.map(u => api.updateNodeCard(u.id, { sortOrder: u.sortOrder }))
+          // N11: Promise.allSettled 替代 Promise.all——单个 update 失败不再全量
+          // 回滚(服务器部分成功时全退会让刷新后顺序与本地不一致),
+          // 服务器已成功的项保留新顺序,失败项回退原顺序
+          const settled = await Promise.allSettled(
+            updates.map(u => api.updateNodeCard(u.id, { sortOrder: u.sortOrder }))
+          )
+          const failed = settled.filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+          if (failed.length > 0) {
+            const failedIds = new Set(
+              updates.filter((_, i) => settled[i].status === 'rejected').map(u => u.id)
             )
-          } catch (error) {
-            set({ nodePool: originalNodePool })
-            handleError(error, '重新排序节点卡片失败')
+            set((state) => ({
+              nodePool: state.nodePool.map(c =>
+                failedIds.has(c.id) ? (originalNodePool.find(o => o.id === c.id) ?? c) : c
+              ),
+            }))
+            handleError(failed[0].reason, '重新排序节点卡片失败')
           }
         },
 
         clearError: () => set({ error: null }),
+
+        // N5: 重置内存态(登出/换账号时调用,防止上一账号的 projects/canvases
+        // 等数据残留渲染)。持久化的 currentProjectId 一并清空,避免新账号
+        // 恢复旧账号的项目。偏好类字段(nodePoolSortBy/SortOrder/projectFilters)
+        // 属于设备级设置,不在重置范围
+        reset: () => set({
+          projects: [],
+          currentProject: null,
+          currentProjectId: null,
+          currentMemberRole: null,
+          canvases: [],
+          folders: [],
+          nodePool: [],
+          nodePoolFolders: [],
+          isLoading: false,
+          loadingMessage: '',
+          error: null,
+        }),
       }
     },
     {

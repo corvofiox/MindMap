@@ -310,6 +310,18 @@ export async function loadCanvasStateFromDb(canvasId: number): Promise<YjsCanvas
         }
       }
 
+      // B11: 权威列 yjs_update 存在但解码失败（损坏数据）→ 抛错，而不是
+      // 静默返回空 doc + loaded=true。空 doc 一旦被客户端编辑并 persist，
+      // 会覆盖损坏前的真实数据，造成不可恢复丢失。对齐下方 B14 注释意图：
+      // 所有调用方（WS 握手、REST 合并路径）以抛错为失败信号——WS 拒绝
+      // 连接、REST 返回 500，不覆盖、不写入。legacy yjs_data 成功转换时
+      // doc 已非空，不会走到这里。
+      if (!doc && yjsUpdateBase64) {
+        throw new Error(
+          `Corrupt yjs_update data for canvas ${canvasId}: base64/Yjs decode failed`,
+        )
+      }
+
       if (doc) {
         // Swap into the existing state container without losing listeners.
         state.doc.off('update', state.updateListener)

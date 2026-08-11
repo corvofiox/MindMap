@@ -280,4 +280,68 @@ describe('useCanvasStore', () => {
       expect(state.history.commands.length).toBeLessThanOrEqual(state.history.maxHistorySize)
     })
   })
+
+  describe('M5: clearCanvas history reset + canvasId ownership', () => {
+    it('clearCanvas clears undo/redo history', () => {
+      const store = useCanvasStore.getState()
+      store.addNode(createTestNode('n1'))
+      store.addNode(createTestNode('n2'))
+      expect(useCanvasStore.getState().history.commands.length).toBe(2)
+
+      store.clearCanvas()
+
+      const state = useCanvasStore.getState()
+      expect(state.history.commands.length).toBe(0)
+      expect(state.history.currentIndex).toBe(-1)
+    })
+
+    it('undo skips commands stamped for a different canvasId', async () => {
+      useCanvasStore.setState({ canvasId: 1 })
+      useCanvasStore.getState().addNode(createTestNode('n1'))
+      useCanvasStore.setState({ canvasId: 2 })
+      useCanvasStore.getState().clearCanvas()
+      expect(useCanvasStore.getState().history.commands.length).toBe(0)
+
+      // 新画布下执行一条命令，再切到第三个画布尝试 undo——命令属于
+      // canvasId=2，当前 canvasId=3 → 归属校验跳过，节点不得被误删。
+      useCanvasStore.getState().addNode(createTestNode('n2'))
+      useCanvasStore.setState({ canvasId: 3 })
+      await useCanvasStore.getState().undo()
+      expect(useCanvasStore.getState().nodes.has('n2')).toBe(true)
+
+      // 切回 canvasId=2 后可正常 undo
+      useCanvasStore.setState({ canvasId: 2 })
+      await useCanvasStore.getState().undo()
+      expect(useCanvasStore.getState().nodes.has('n2')).toBe(false)
+    })
+  })
+
+  describe('M6: deleteEntitiesByIds batch delete', () => {
+    it('removes nodes, attached connections and other entities in a single history command', async () => {
+      const store = useCanvasStore.getState()
+      store.addNode(createTestNode('n1'))
+      store.addNode(createTestNode('n2'))
+      store.addConnection({ id: 'c1', fromNodeId: 'n1', toNodeId: 'n2' } as unknown as Connection)
+      const before = useCanvasStore.getState().history.commands.length // 3
+
+      useCanvasStore.getState().deleteEntitiesByIds(['n1', 'c1'])
+
+      let state = useCanvasStore.getState()
+      expect(state.nodes.has('n1')).toBe(false)
+      expect(state.connections.has('c1')).toBe(false)
+      expect(state.nodes.has('n2')).toBe(true)
+      // 整批删除只产生一条历史命令
+      expect(state.history.commands.length).toBe(before + 1)
+
+      await useCanvasStore.getState().undo()
+      state = useCanvasStore.getState()
+      expect(state.nodes.has('n1')).toBe(true)
+      expect(state.connections.has('c1')).toBe(true)
+    })
+
+    it('deleteEntitiesByIds on empty selection is a no-op', () => {
+      useCanvasStore.getState().deleteEntitiesByIds([])
+      expect(useCanvasStore.getState().history.commands.length).toBe(0)
+    })
+  })
 })

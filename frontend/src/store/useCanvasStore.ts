@@ -39,6 +39,8 @@ type YjsBindingHandle = {
   }) => boolean
   /** Copy all entities from the Zustand store into the Y.Doc (initial sync). */
   syncLocalStateToYDoc: () => void
+  /** M4: 握手窗口内本地编辑过的实体整字段写回 doc（即使 doc 中已存在）。 */
+  syncLocalEditsToYDoc: (ids: Set<string>) => void
   /** Copy entities present in the Y.Doc but missing from the store back into
    *  the store (doc → store). Called after STEP2 sync so server-only entities
    *  appear in the UI.
@@ -160,6 +162,13 @@ interface Command {
   type: string
   timestamp: number
   userId?: number
+  /**
+   * M5: 命令归属的画布 ID（执行时 store.canvasId 的快照）。undo/redo 时与
+   * 当前画布比对，防止切画布后历史残留（如 clearCanvas 路径）跨画布执行
+   * 旧命令污染新画布。null 表示执行时尚未加载画布（初始会话），此类命令
+   * 不受归属校验限制。
+   */
+  canvasId?: number | null
   execute: () => Partial<CanvasState>
   undo: () => Partial<CanvasState>
   /** Optional async side effect that runs after the synchronous execute(). */
@@ -245,6 +254,8 @@ interface CanvasState {
   updateDomain: (id: string, updates: Partial<Domain>) => void
   updateDomainWithoutHistory: (id: string, updates: Partial<Domain>, markDirty?: boolean) => void
   removeDomain: (id: string) => void
+  /** M6: 批量删除实体（合并为单条 undo 历史命令）。 */
+  deleteEntitiesByIds: (ids: string[]) => void
 
   // Connection actions
   addConnection: (connection: Connection) => void
@@ -255,6 +266,7 @@ interface CanvasState {
   // Bend point actions
   addConnectionBendPoint: (connectionId: string, bendPointId: string, x: number, y: number, insertIndex?: number) => void
   updateConnectionBendPoint: (connectionId: string, bendPointId: string, x: number, y: number) => void
+  updateConnectionBendPointWithoutHistory: (connectionId: string, bendPointId: string, x: number, y: number, markDirty?: boolean) => void
   removeConnectionBendPoint: (connectionId: string, bendPointId: string) => void
 
   // Selection actions
@@ -764,6 +776,80 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     })
   },
 
+  // M6: 批量删除选中实体——一次手势/一次按键对多个实体各调 removeXxx 会
+  // 产生 N 条历史记录，撤销粒度破碎且容易打满历史上限。这里把整批删除
+  // 合并为单条命令：execute 删除全部实体（含被删节点附带的连接），undo
+  // 整体恢复。
+  deleteEntitiesByIds: (ids: string[]) => {
+    const state = get()
+    const idSet = new Set(ids)
+    const removedNodes = new Map<string, Node>()
+    const removedGroups = new Map<string, NodeGroup>()
+    const removedDomains = new Map<string, Domain>()
+    const removedConnections = new Map<string, Connection>()
+
+    // 收集被删节点附带的连接（与 removeNode 的语义一致），以及被直接选中的连接。
+    for (const [connId, conn] of state.connections) {
+      if (
+        idSet.has(connId) ||
+        idSet.has(conn.fromNodeId) ||
+        idSet.has(conn.toNodeId)
+      ) {
+        removedConnections.set(connId, conn)
+      }
+    }
+    for (const id of ids) {
+      const node = state.nodes.get(id)
+      if (node) removedNodes.set(id, node)
+      const group = state.groups.get(id)
+      if (group) removedGroups.set(id, group)
+      const domain = state.domains.get(id)
+      if (domain) removedDomains.set(id, domain)
+    }
+
+    if (
+      removedNodes.size + removedGroups.size + removedDomains.size + removedConnections.size === 0
+    ) {
+      return
+    }
+
+    get().executeCommand({
+      type: 'deleteEntities',
+      timestamp: Date.now(),
+      execute: () => {
+        const s = get()
+        const nodes = new Map(s.nodes)
+        const groups = new Map(s.groups)
+        const domains = new Map(s.domains)
+        const connections = new Map(s.connections)
+        for (const id of removedNodes.keys()) nodes.delete(id)
+        for (const id of removedGroups.keys()) groups.delete(id)
+        for (const id of removedDomains.keys()) domains.delete(id)
+        for (const id of removedConnections.keys()) connections.delete(id)
+        return {
+          nodes,
+          groups,
+          domains,
+          connections,
+          selectedIds: s.selectedIds.filter((sid) => !idSet.has(sid)),
+          isDirty: true,
+        }
+      },
+      undo: () => {
+        const s = get()
+        const nodes = new Map(s.nodes)
+        const groups = new Map(s.groups)
+        const domains = new Map(s.domains)
+        const connections = new Map(s.connections)
+        for (const [id, node] of removedNodes) nodes.set(id, node)
+        for (const [id, group] of removedGroups) groups.set(id, group)
+        for (const [id, domain] of removedDomains) domains.set(id, domain)
+        for (const [id, conn] of removedConnections) connections.set(id, conn)
+        return { nodes, groups, domains, connections, isDirty: true }
+      },
+    })
+  },
+
   addConnectionBendPoint: (connectionId, bendPointId, x, y, insertIndex = undefined) => {
     const state = get()
     const connection = state.connections.get(connectionId)
@@ -856,6 +942,27 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         return { connections, isDirty: true }
       },
     })
+  },
+
+  // M3: 拖动 bend point 过程中的高频更新——不逐帧入历史（一次手势 60+ 条
+  // 记录会打满 maxHistorySize=100），由 CanvasPage 在 mouseup 时提交一条
+  // 合并命令（execute 幂等重放最终值，undo 恢复拖动前原值）。
+  updateConnectionBendPointWithoutHistory: (connectionId, bendPointId, x, y, markDirty = true) => {
+    const beforeSnapshot = captureSnapshot(get())
+    set((state) => {
+      const connections = new Map(state.connections)
+      const conn = connections.get(connectionId)
+      if (conn && conn.bendPoints) {
+        connections.set(connectionId, {
+          ...conn,
+          bendPoints: conn.bendPoints.map(bp =>
+            bp.id === bendPointId ? { ...bp, x, y } : bp
+          ),
+        })
+      }
+      return markDirty ? { connections, isDirty: true } : { connections }
+    })
+    syncDiffToYDoc(beforeSnapshot, get())
   },
 
   removeConnectionBendPoint: (connectionId, bendPointId) => {
@@ -1035,7 +1142,8 @@ moveNodeToPool: (nodeId: string, nodeData: Node, afterExecute?: () => Promise<vo
   // Undo/Redo actions
   executeCommand: (command, skipHistory = false, markDirty = true) => {
     const currentUserId = getCurrentUserId()
-    const commandWithUser = { ...command, id: command.id ?? ++nextCommandId, userId: currentUserId ?? undefined }
+    // M5: 记录命令归属画布，供 undo/redo 跨画布校验。
+    const commandWithUser = { ...command, id: command.id ?? ++nextCommandId, userId: currentUserId ?? undefined, canvasId: get().canvasId }
     // When the Yjs binding is applying remote changes, force skipHistory so
     // remote operations never enter the local undo stack.
     const effectiveSkipHistory = skipHistory || (yjsBinding?.isApplyingRemoteChanges ?? false)
@@ -1122,9 +1230,16 @@ moveNodeToPool: (nodeId: string, nodeData: Node, afterExecute?: () => Promise<vo
       const state = get()
       const currentUserId = getCurrentUserId()
 
+      const currentCanvasId = state.canvasId
       let targetIndex = state.history.currentIndex
       while (targetIndex >= 0) {
         const cmd = state.history.commands[targetIndex]
+        // M5: 跳过属于其他画布的历史命令，防止 clearCanvas 后残留的旧画布
+        // 命令被跨画布执行（redo 污染新画布 / undo 误删新画布内容）。
+        if (cmd.canvasId !== undefined && cmd.canvasId !== currentCanvasId) {
+          targetIndex--
+          continue
+        }
         if (cmd.userId === currentUserId || cmd.userId === undefined) {
           break
         }
@@ -1187,9 +1302,15 @@ moveNodeToPool: (nodeId: string, nodeData: Node, afterExecute?: () => Promise<vo
       const state = get()
       const currentUserId = getCurrentUserId()
 
+      const currentCanvasId = state.canvasId
       let targetIndex = state.history.currentIndex + 1
       while (targetIndex < state.history.commands.length) {
         const cmd = state.history.commands[targetIndex]
+        // M5: 跨画布校验（与 undo 一致）。
+        if (cmd.canvasId !== undefined && cmd.canvasId !== currentCanvasId) {
+          targetIndex++
+          continue
+        }
         if (cmd.userId === currentUserId || cmd.userId === undefined) {
           break
         }
@@ -1245,8 +1366,11 @@ moveNodeToPool: (nodeId: string, nodeData: Node, afterExecute?: () => Promise<vo
     const state = get()
     const currentUserId = getCurrentUserId()
 
+    const currentCanvasId = get().canvasId
     for (let i = state.history.currentIndex; i >= 0; i--) {
       const cmd = state.history.commands[i]
+      // M5: 跨画布历史命令不计入可撤销范围。
+      if (cmd.canvasId !== undefined && cmd.canvasId !== currentCanvasId) continue
       if (cmd.userId === currentUserId || cmd.userId === undefined) {
         return true
       }
@@ -1257,9 +1381,12 @@ moveNodeToPool: (nodeId: string, nodeData: Node, afterExecute?: () => Promise<vo
   canRedo: () => {
     const state = get()
     const currentUserId = getCurrentUserId()
+    const currentCanvasId = state.canvasId
 
     for (let i = state.history.currentIndex + 1; i < state.history.commands.length; i++) {
       const cmd = state.history.commands[i]
+      // M5: 跨画布历史命令不计入可重做范围。
+      if (cmd.canvasId !== undefined && cmd.canvasId !== currentCanvasId) continue
       if (cmd.userId === currentUserId || cmd.userId === undefined) {
         return true
       }
@@ -1339,7 +1466,7 @@ moveNodeToPool: (nodeId: string, nodeData: Node, afterExecute?: () => Promise<vo
   },
 
   clearCanvas: () => {
-    set({
+    set((state) => ({
       nodes: new Map(),
       groups: new Map(),
       domains: new Map(),
@@ -1348,7 +1475,16 @@ moveNodeToPool: (nodeId: string, nodeData: Node, afterExecute?: () => Promise<vo
       hoveredId: null,
       editingId: null,
       isDirty: false,
-    })
+      // M5: 清空 undo/redo 历史——clearCanvas 用于切画布/删除画布等
+      // 会话重置场景，残留的旧画布命令会让 redo 把上一张画布的节点
+      // 写进新画布（store 349-353 的 addNode execute 无条件 nodes.set）。
+      // setCanvasData 已有同等清理（1305-1309），这里补齐 clearCanvas 路径。
+      history: {
+        ...state.history,
+        commands: [],
+        currentIndex: -1,
+      },
+    }))
     // clearCanvas is a local state reset — it must NOT broadcast empty state
     // to peers. All callers use it before loading new canvas data or when
     // navigating away from a deleted canvas; in neither case should the empty

@@ -113,11 +113,23 @@ export function useCollaboration({
           const prev = prevState.nodes.get(id)
           if (!prev || prev !== n) editedDuringHandshake.add(id)
         }
+        // R2-4: 握手窗口内被本地删除的实体（store 中已不存在，正向循环收集不到）
+        // 也记入集合——syncLocalEditsToYDoc 会从 doc 删除并声明，防止实体残留
+        // doc、重连/重载后复活。批量替换（setCanvasData）已由上方 bulkLoadVersion
+        // 守卫排除；clearCanvas 类清空不 bump bulkLoadVersion，但实体 id 为
+        // 前缀+时间戳+随机串（generateId），跨画布 doc 无同 id 实体，doc 扫描
+        // 找不到即无副作用。
+        for (const id of prevState.nodes.keys()) {
+          if (!state.nodes.has(id)) editedDuringHandshake.add(id)
+        }
       }
       if (state.groups !== prevState.groups) {
         for (const [id, g] of state.groups) {
           const prev = prevState.groups.get(id)
           if (!prev || prev !== g) editedDuringHandshake.add(id)
+        }
+        for (const id of prevState.groups.keys()) {
+          if (!state.groups.has(id)) editedDuringHandshake.add(id)
         }
       }
       if (state.domains !== prevState.domains) {
@@ -125,11 +137,17 @@ export function useCollaboration({
           const prev = prevState.domains.get(id)
           if (!prev || prev !== d) editedDuringHandshake.add(id)
         }
+        for (const id of prevState.domains.keys()) {
+          if (!state.domains.has(id)) editedDuringHandshake.add(id)
+        }
       }
       if (state.connections !== prevState.connections) {
         for (const [id, c] of state.connections) {
           const prev = prevState.connections.get(id)
           if (!prev || prev !== c) editedDuringHandshake.add(id)
+        }
+        for (const id of prevState.connections.keys()) {
+          if (!state.connections.has(id)) editedDuringHandshake.add(id)
         }
       }
     }
@@ -179,6 +197,15 @@ export function useCollaboration({
         // edited locally while the handshake was in flight. On reconnects,
         // remove local entities deleted by peers and apply server updates
         // normally.
+        // R2-4: 握手窗口内的本地编辑/删除先写回 doc。applyDiff 在 STEP2 前丢弃
+        // store→doc diff，syncLocalStateToYDoc 又只补缺失实体——对已存在实体的
+        // 编辑/删除会永远上不了行。syncLocalEditsToYDoc 在 doc→store 镜像之前
+        // 执行：被删实体先从 doc 删除并声明（recordLocalDeletion），下方
+        // syncYDocToLocalState 的 C14 守卫（isLocalDeletion → 跳过）就不会把
+        // 已声明删除的实体重新加回 store（防止瞬时复活）。
+        if (isFirstSync && editedDuringHandshake.size > 0) {
+          binding.syncLocalEditsToYDoc(editedDuringHandshake)
+        }
         // If the server doc is empty but the local store still has entities,
         // syncYDocToLocalState already mirrors local state back into the doc
         // and returns true; skip the redundant syncLocalStateToYDoc() call.
@@ -193,10 +220,10 @@ export function useCollaboration({
           isFirstSync = false
         }
       }
-      // Thumbnail generation is driven by the local edit / auto-save /
-      // manual-save paths; firing it on every sync (including reconnects)
-      // causes a storm of thumbnail PUTs and 409 Conflicts in collaboration
-      // mode.
+      // M8: 缩略图只由本地编辑（isDirty）驱动——自动保存 tick 在协作分支
+      // 里生成缩略图后清 dirty。远端变更（applyRemote*）不置 dirty（见
+      // yjsBinding），因此不会触发缩略图；每次同步/重连也不生成，避免
+      // 双端竞速 PUT 造成 409 风暴。
     })
 
     const onKickedUnsub = provider.onKicked((reason) => {
@@ -214,10 +241,9 @@ export function useCollaboration({
       }
     })
 
-    // Thumbnails are generated from the local edit / auto-save path. We
-    // intentionally do not trigger thumbnail generation on every remote dirty
-    // change, because in collaboration mode both peers would otherwise race to
-    // PUT the thumbnail and produce a storm of 409 Conflict responses.
+    // M8: 缩略图由本地编辑 / 自动保存路径驱动。远端变更在 yjsBinding 的
+    // applyRemote* 中以 markDirty=false 应用（不置 isDirty），因此不会触发
+    // 缩略图生成——否则协作双方会互相触发 PUT，产生 409 风暴。
 
     provider.connect()
 

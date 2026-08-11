@@ -82,6 +82,8 @@ export interface YjsCanvasBinding {
   }) => boolean
   /** Copy all entities from the Zustand store into the Y.Doc (initial sync). */
   syncLocalStateToYDoc: () => void
+  /** M4: 握手窗口内本地编辑过的实体整字段写回 doc（即使 doc 中已存在）。 */
+  syncLocalEditsToYDoc: (ids: Set<string>) => void
   /** Copy entities present in the Y.Doc but missing from the store back into
    *  the store (doc → store). Called after STEP2 sync so entities the server
    *  already had (but the local API load did not include) appear in the UI.
@@ -200,11 +202,12 @@ export function bindYjsToStore(
           }
         }
         if (Object.keys(toApply).length > 0) {
-          store.updateNodeWithoutHistory(nodeId, toApply, true)
+          // M8: 远端派生更新不置 dirty——本地拖拽已置 dirty，远端值只需落到 store。
+          store.updateNodeWithoutHistory(nodeId, toApply, false)
         }
       } else {
         // doc 尚无该节点（罕见），直接应用远端值
-        store.updateNodeWithoutHistory(nodeId, deferred, true)
+        store.updateNodeWithoutHistory(nodeId, deferred, false)
       }
     }
   }
@@ -239,6 +242,16 @@ export function bindYjsToStore(
    *  Field deletions are handled explicitly: keys present in the local node
    *  but absent from the remote Y.Map are set to undefined before the update,
    *  so the store's merge ({ ...current, ...obj }) removes them. */
+  // M8: 远端变更一律不置 store.isDirty。
+  // 协作模式下 isDirty 的主要消费者是自动保存 tick——已连接时它只做
+  // 缩略图生成（POST 被协作分支跳过）。若远端变更也置 dirty，两个协作者
+  // 会互相触发缩略图 PUT，产生 409 风暴（useCollaboration 注释明确不想要
+  // 这种行为）。本地编辑仍由各自的 mutator 置 dirty，缩略图照常生成；
+  // 远端更新只需落到 store（UI 展示），不产生副作用。addNode/removeNode
+  // 的新实体路径同样经由 executeCommand 的 skipHistory 分支——其 markDirty
+  // 默认值保持 true 会让新实体同步也置 dirty，但这类事件每次同步只发生
+  // 一次（实体创建/删除），不构成风暴；字段级更新（高频）全部走
+  // updateXxxWithoutHistory(…, false)。
   const applyRemoteNode = (id: string, ymap: Y.Map<unknown>) => {
     const obj = ymapToObject(ymap) as unknown as Node
     const existing = useCanvasStore.getState().nodes.get(id)
@@ -282,7 +295,8 @@ export function bindYjsToStore(
             }
           }
           if (Object.keys(nonPositionUpdates).length > 0) {
-            store.updateNodeWithoutHistory(id, nonPositionUpdates, true)
+            // M8: 远端变更不置 dirty（见 applyRemote* 顶部注释）。
+            store.updateNodeWithoutHistory(id, nonPositionUpdates, false)
           }
           return  // skip the full apply below; position deferred
         }
@@ -302,7 +316,7 @@ export function bindYjsToStore(
           (obj as unknown as Record<string, unknown>)[key] = undefined
         }
       }
-      store.updateNodeWithoutHistory(id, obj, true)
+      store.updateNodeWithoutHistory(id, obj, false)
     }
   }
 
@@ -320,7 +334,7 @@ export function bindYjsToStore(
           (obj as unknown as Record<string, unknown>)[key] = undefined
         }
       }
-      store.updateGroupWithoutHistory(id, obj, true)
+      store.updateGroupWithoutHistory(id, obj, false)
     }
   }
 
@@ -338,7 +352,7 @@ export function bindYjsToStore(
           (obj as unknown as Record<string, unknown>)[key] = undefined
         }
       }
-      store.updateDomainWithoutHistory(id, obj, true)
+      store.updateDomainWithoutHistory(id, obj, false)
     }
   }
 
@@ -356,7 +370,7 @@ export function bindYjsToStore(
           (obj as unknown as Record<string, unknown>)[key] = undefined
         }
       }
-      store.updateConnectionWithoutHistory(id, obj, true)
+      store.updateConnectionWithoutHistory(id, obj, false)
     }
   }
 
@@ -539,6 +553,73 @@ export function bindYjsToStore(
       }
       for (const [id, entity] of s.connections) {
         if (!collections.connections.has(id)) collections.connections.set(id, entityToYMap(entity as unknown as Record<string, unknown>))
+      }
+    }, LOCAL_ORIGIN)
+  }
+
+  /**
+   * M4 + R2-3 + R2-4: 将握手窗口内被本地编辑/删除过的实体同步回 Y.Doc。
+   *
+   * 背景：STEP2 完成前 applyDiff 会丢弃 store→doc 的 diff（486 行守卫），
+   * 而 syncLocalStateToYDoc 只补 doc 缺失的实体——握手期间对"已存在实体"
+   * 的编辑因此永远无法上行，形成静默数据丢失。
+   *
+   * R2-3: 写回采用字段级合并（mergeEntityFields）：以 doc 现有 ymap 为基底，
+   * 仅覆盖本地 store 中存在的字段，本地缺失的字段保留 doc 现值——避免整字段
+   * 覆盖回退"连接前远端对该实体其他字段的更新"（本地快照较旧时 LWW 本地胜出）。
+   *
+   * R2-4: store 中不存在的 id（握手窗口内被本地删除的实体——useCollaboration
+   * 的 editedDuringHandshake 采集时补录了 prevState 中消失的 id）执行与
+   * applyDiff 删除分支等价的处理：从 doc 删除该实体 ymap 并 recordLocalDeletion
+   * 声明。applyDiff 的删除声明守卫（STEP2 前 return）在握手窗口内不执行，
+   * 因此这里必须补上，否则实体残留 doc，重连/重载后复活。
+   */
+  function syncLocalEditsToYDoc(ids: Set<string>) {
+    if (ids.size === 0) return
+    // 与 syncLocalStateToYDoc 相同的双守卫：viewer 只读；STEP2 前不建根。
+    if (provider.getRole() === 'viewer') return
+    const existingRoot = getExistingRoot(doc)
+    if (!existingRoot && !provider.getIsSynced()) return
+    const s = useCanvasStore.getState()
+    const collections = existingRoot ?? ensureRoot(doc)
+    doc.transact(() => {
+      for (const id of ids) {
+        const node = s.nodes.get(id)
+        if (node) {
+          // R2-3: 字段级合并写回（保留 doc 中本地缺失的字段）
+          mergeEntityFields(collections.nodes, id, node as unknown as Record<string, unknown>)
+          continue
+        }
+        const group = s.groups.get(id)
+        if (group) {
+          mergeEntityFields(collections.groups, id, group as unknown as Record<string, unknown>)
+          continue
+        }
+        const domain = s.domains.get(id)
+        if (domain) {
+          mergeEntityFields(collections.domains, id, domain as unknown as Record<string, unknown>)
+          continue
+        }
+        const conn = s.connections.get(id)
+        if (conn) {
+          mergeEntityFields(collections.connections, id, conn as unknown as Record<string, unknown>)
+          continue
+        }
+        // R2-4: store 中不存在该 id = 握手窗口内被本地删除 → 从 doc 删除 + 声明
+        // （记录删除声明与 applyDiff 删除分支一致，供 REST 快照 deletedIds 使用）
+        const deletedKinds: Array<[DeletionCollection, Y.Map<Y.Map<unknown>>]> = [
+          ['nodes', collections.nodes],
+          ['groups', collections.groups],
+          ['domains', collections.domains],
+          ['connections', collections.connections],
+        ]
+        for (const [kind, ymap] of deletedKinds) {
+          if (ymap.has(id)) {
+            ymap.delete(id)
+            recordLocalDeletion(provider.canvasId, kind, id)
+            break
+          }
+        }
       }
     }, LOCAL_ORIGIN)
   }
@@ -758,6 +839,7 @@ export function bindYjsToStore(
     getYConnections,
     importIntoDoc,
     syncLocalStateToYDoc,
+    syncLocalEditsToYDoc,
     syncYDocToLocalState,
     reconnectObservers,
     destroy: () => {
@@ -774,6 +856,48 @@ export function bindYjsToStore(
     suppressSync,
     startInteraction,
     endInteraction,
+  }
+}
+
+/** R2-3: 握手写回用的实体字段级合并——以 doc 现有 ymap 为基底，仅覆盖本地
+ *  实体中"存在的字段"（嵌套对象递归合并、数组增量更新），本地缺失的字段保留
+ *  doc 现值。与 writeFields 的差异：① undefined 字段跳过而非删除（本地快照
+ *  可能较旧，undefined 常表示"快照里没有"，删除会回退远端新字段）；② 嵌套
+ *  对象递归合并，不删除本地缺失的嵌套字段（writeFields 会删）。 */
+function mergeEntityFields(collections: Y.Map<Y.Map<unknown>>, id: string, entity: Record<string, unknown>): void {
+  const existing = collections.get(id)
+  if (existing) {
+    mergeFieldsIntoYMap(existing, entity)
+  } else {
+    collections.set(id, entityToYMap(entity))
+  }
+}
+
+function mergeFieldsIntoYMap(ymap: Y.Map<unknown>, obj: Record<string, unknown>): void {
+  for (const [k, v] of Object.entries(obj)) {
+    if (v === undefined) continue // 本地无此字段值 → 保留 doc 现值（R2-3）
+    if (Array.isArray(v)) {
+      const existing = ymap.get(k)
+      if (existing instanceof Y.Array) {
+        const current = (existing as Y.Array<unknown>).toArray()
+        const target = v as unknown[]
+        if (arrayContentEqual(current, target)) continue
+        diffAndUpdateYArray(existing as Y.Array<unknown>, current, target)
+      } else {
+        const arr = new Y.Array<unknown>()
+        arr.insert(0, v as unknown[])
+        ymap.set(k, arr)
+      }
+    } else if (v !== null && typeof v === 'object') {
+      const existing = ymap.get(k)
+      if (existing instanceof Y.Map) {
+        mergeFieldsIntoYMap(existing as Y.Map<unknown>, v as Record<string, unknown>)
+      } else {
+        ymap.set(k, entityToYMap(v as Record<string, unknown>))
+      }
+    } else {
+      ymap.set(k, v)
+    }
   }
 }
 

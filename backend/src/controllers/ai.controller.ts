@@ -143,6 +143,25 @@ router.post(
       return res.status(400).json({ success: false, error: 'Invalid messages format' })
     }
 
+    // B15: 消息数组大小与结构校验——防止超大请求打爆内存、脏数据入库。
+    // 每条消息必须有字符串 role 与 content（tool/divider 等扩展角色沿用
+    // 同一结构，不在此白名单角色）。
+    if (messages.length > 200) {
+      return res.status(400).json({ success: false, error: '消息数量不能超过 200 条' })
+    }
+    for (const msg of messages) {
+      if (!msg || typeof msg !== 'object' || Array.isArray(msg)) {
+        return res.status(400).json({ success: false, error: '消息格式不正确' })
+      }
+      const m = msg as Record<string, unknown>
+      if (typeof m.role !== 'string' || m.role.length === 0) {
+        return res.status(400).json({ success: false, error: '消息缺少 role 字段' })
+      }
+      if (typeof m.content !== 'string') {
+        return res.status(400).json({ success: false, error: '消息缺少 content 字段' })
+      }
+    }
+
     // B5: 画布访问权校验
     if (!(await assertCanvasAccess(canvasId, userId, res))) return
 

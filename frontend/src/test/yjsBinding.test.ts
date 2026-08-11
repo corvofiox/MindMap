@@ -141,7 +141,9 @@ describe('yjsBinding', () => {
         ymap.set('title', 'New')
       })
 
-      expect(store.updateNodeWithoutHistory).toHaveBeenCalledWith('n1', expect.objectContaining({ title: 'New' }), true)
+      // M8: 远端变更以 markDirty=false 应用（不置 isDirty，避免协作时
+      // 互相触发缩略图生成/自动保存）。
+      expect(store.updateNodeWithoutHistory).toHaveBeenCalledWith('n1', expect.objectContaining({ title: 'New' }), false)
       binding.destroy()
     })
 
@@ -539,6 +541,120 @@ describe('yjsBinding', () => {
       const collections = ensureRoot(doc)
       expect(collections.nodes.has('n1')).toBe(false)
       binding.destroy()
+    })
+
+    // M4: 握手窗口内的本地编辑写回——applyDiff 在 STEP2 前丢弃 store→doc
+    // diff，syncLocalStateToYDoc 又只补 doc 缺失的实体；对"已存在实体"的
+    // 编辑必须由 syncLocalEditsToYDoc 整字段写回，否则编辑永不上行（静默丢失）。
+    it('syncLocalEditsToYDoc writes back locally-edited entities even when already in the doc', () => {
+      const doc = new Y.Doc()
+      const collections = ensureRoot(doc)
+      // 服务端 doc 中已有该节点（旧值）
+      doc.transact(() => {
+        collections.nodes.set('n1', entityToYMap({ id: 'n1', x: 10, y: 20, title: 'Server' }))
+      })
+      const store = createMockStore()
+      // 握手期间本地编辑了同一节点（新值，尚未上行）
+      store.nodes.set('n1', { id: 'n1', x: 10, y: 20, title: 'Local-edit' } as any)
+      const binding = bindYjsToStore(createMockProvider(doc, true), store as any)
+
+      binding.syncLocalEditsToYDoc(new Set(['n1']))
+
+      expect(collections.nodes.get('n1')!.get('title')).toBe('Local-edit')
+      binding.destroy()
+    })
+
+    // R2-3: 字段级合并写回——本地缺失的字段保留 doc 现值，不回退远端在连接前
+    // 对该实体其他字段的更新（旧实现整字段覆盖，LWW 本地胜出）。
+    it('syncLocalEditsToYDoc merges fields: doc-only fields survive, local fields overwrite (R2-3)', () => {
+      const doc = new Y.Doc()
+      const collections = ensureRoot(doc)
+      // 服务端 doc 已有该节点，含本地快照没有的字段 remoteOnly / style.width
+      // （连接前远端更新）
+      doc.transact(() => {
+        collections.nodes.set('n1', entityToYMap({
+          id: 'n1', x: 10, y: 20, title: 'Server', remoteOnly: 'keep-me',
+          style: { color: 'blue', width: 2 },
+        }))
+      })
+      const store = createMockStore()
+      // 本地快照较旧：无 remoteOnly，style 缺 width；握手期间本地编辑了 title/style.color
+      store.nodes.set('n1', {
+        id: 'n1', x: 10, y: 20, title: 'Local-edit', style: { color: 'red' },
+      } as any)
+      const binding = bindYjsToStore(createMockProvider(doc, true), store as any)
+
+      binding.syncLocalEditsToYDoc(new Set(['n1']))
+
+      const ymap = collections.nodes.get('n1')!
+      expect(ymap.get('title')).toBe('Local-edit')   // 本地编辑上行
+      expect(ymap.get('remoteOnly')).toBe('keep-me') // 本地缺失字段保留 doc 值
+      expect(ymap.get('x')).toBe(10)                 // 未变字段不受影响
+      const style = ymap.get('style') as Y.Map<unknown>
+      expect(style.get('color')).toBe('red')         // 嵌套字段：本地值覆盖
+      expect(style.get('width')).toBe(2)             // 嵌套字段：本地缺失保留 doc 值
+      binding.destroy()
+    })
+
+    it('syncLocalEditsToYDoc writes back groups/domains/connections by kind lookup', () => {
+      const doc = new Y.Doc()
+      const collections = ensureRoot(doc)
+      doc.transact(() => {
+        collections.groups.set('g1', entityToYMap({ id: 'g1', x: 0, y: 0, width: 100, height: 100, name: 'Old' }))
+        collections.domains.set('d1', entityToYMap({ id: 'd1', x: 0, y: 0, width: 100, height: 100, name: 'Old' }))
+        collections.connections.set('c1', entityToYMap({ id: 'c1', fromNodeId: 'a', toNodeId: 'b', color: '#000' }))
+      })
+      const store = createMockStore()
+      store.groups.set('g1', { id: 'g1', x: 0, y: 0, width: 100, height: 100, name: 'New' } as any)
+      store.domains.set('d1', { id: 'd1', x: 0, y: 0, width: 100, height: 100, name: 'New' } as any)
+      store.connections.set('c1', { id: 'c1', fromNodeId: 'a', toNodeId: 'b', color: '#f00' } as any)
+      const binding = bindYjsToStore(createMockProvider(doc, true), store as any)
+
+      binding.syncLocalEditsToYDoc(new Set(['g1', 'd1', 'c1']))
+
+      expect(collections.groups.get('g1')!.get('name')).toBe('New')
+      expect(collections.domains.get('d1')!.get('name')).toBe('New')
+      expect(collections.connections.get('c1')!.get('color')).toBe('#f00')
+      binding.destroy()
+    })
+
+    it('syncLocalEditsToYDoc does nothing before STEP2 sync', () => {
+      const doc = new Y.Doc()
+      const store = createMockStore()
+      store.nodes.set('n1', { id: 'n1', x: 10, y: 20, title: 'Local' } as any)
+      const binding = bindYjsToStore(createMockProvider(doc, false), store as any)
+
+      binding.syncLocalEditsToYDoc(new Set(['n1']))
+
+      expect(getExistingRoot(doc)).toBeNull()
+      binding.destroy()
+    })
+
+    // R2-4: 握手窗口内被本地删除的实体——旧实现既不声明也不写 doc，实体残留
+    // doc、重连/重载后复活（recordLocalDeletion 只在 applyDiff 内执行，而
+    // applyDiff 在 STEP2 前被守卫跳过）。修复后：从 doc 删除并记录删除声明。
+    it('syncLocalEditsToYDoc deletes handshake-deleted entities from doc and records deletion (R2-4)', async () => {
+      const doc = new Y.Doc()
+      const collections = ensureRoot(doc)
+      doc.transact(() => {
+        collections.nodes.set('del-n1', entityToYMap({ id: 'del-n1', x: 10, y: 20, title: 'Server' }))
+      })
+      const store = createMockStore() // store 中无 del-n1（握手期间被本地删除）
+      // 独立 canvasId，避免污染其他测试的模块级 localDeletions
+      const provider = { ...createMockProvider(doc, true), canvasId: 9998 } as any
+      const binding = bindYjsToStore(provider, store as any)
+      const yjsProvider = await import('../services/yjsProvider')
+
+      binding.syncLocalEditsToYDoc(new Set(['del-n1']))
+
+      // 实体不再残留 doc（否则重连/重载后复活）
+      expect(collections.nodes.has('del-n1')).toBe(false)
+      // 删除声明已记录（与 applyDiff 删除分支一致，供 REST 快照 deletedIds 使用）
+      expect(yjsProvider.getLocalDeletions(9998).nodes).toContain('del-n1')
+
+      binding.destroy()
+      // 清理模块级 localDeletions，避免污染其他测试
+      yjsProvider.clearLocalDeletions(9998)
     })
 
     it('syncYDocToLocalState adds server-only entities to the store', () => {

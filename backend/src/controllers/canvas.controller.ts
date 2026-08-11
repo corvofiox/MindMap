@@ -188,6 +188,21 @@ canvasRouter.post('/:projectId', authenticate, asyncHandler(async (req: AuthRequ
 
   const { name, folderId } = req.body
 
+  // B17: name 缺失/非字符串会撞 NOT NULL 约束返回 500——前置校验返回 400，
+  // 并加长度上限防止超长名称入库。
+  if (typeof name !== 'string' || name.trim().length === 0) {
+    return res.status(400).json({
+      success: false,
+      error: '画布名称不能为空',
+    })
+  }
+  if (name.length > 200) {
+    return res.status(400).json({
+      success: false,
+      error: '画布名称长度不能超过 200 字符',
+    })
+  }
+
   const access = await checkProjectAccess(projectId, req.user!.id)
 
   if (!access.canEdit) {
@@ -315,11 +330,26 @@ canvasRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, res
     // clientVersion，说明画布已被更新，本次缩略图过期，返回 409 让客户端静默跳过。
     // 缩略图是"尽力而为"的展示辅助，过期丢弃比覆盖更安全。
     //
+    // R2-1: clientVersion === undefined 的纯缩略图请求（协作模式）不走本分支——
+    // 前端协作模式有意不发 clientVersion（CanvasPage 注释：多端并发 PUT 版本
+    // 校验会产生 409 风暴，"last thumbnail wins" 是可接受语义），这些请求落入
+    // 下方无锁主分支正常写缩略图（P1 之前的既有行为）。本分支只处理显式携带
+    // clientVersion 的版本检查请求。
+    //
     // 注意：本分支假定 payload 仅含缩略图（前端 generateThumbnail 只发
     // { thumbnail, clientVersion }）。若未来在同一请求附带 name/yjsData 等其他
     // 可写字段，它们会被此分支忽略（仅写 thumbnail+updatedAt）。下方日志会在
     // 检测到其他字段时记录，便于及时发现该误用模式。
-    if (thumbnail !== undefined && typeof clientVersion === 'number') {
+    if (thumbnail !== undefined && clientVersion !== undefined) {
+      // B16 + R2-1: 仅拒绝"显式携带 clientVersion 但非数字"的异常形态；
+      // clientVersion 缺失（协作模式纯缩略图请求）保留旧的无锁 fallback
+      // （主分支），不再被 400 误杀。
+      if (typeof clientVersion !== 'number' || isNaN(clientVersion)) {
+        return res.status(400).json({
+          success: false,
+          error: '缩略图更新必须携带数字类型 clientVersion',
+        })
+      }
       if (name !== undefined || yjsData !== undefined || previewText !== undefined
         || folderId !== undefined || sortOrder !== undefined) {
         log('PUT canvas - version-checked thumbnail branch received extra writable fields', {
@@ -553,26 +583,35 @@ canvasRouter.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, res
       },
     })
 
-    const [updatedCanvas] = await db
-      .update(canvases)
-      .set(updateData)
-      .where(eq(canvases.id, canvasId))
-      .returning()
+    // B3: 主分支的行更新纳入同一 mutex——否则与缩略图分支（mutex 内带乐观锁
+    // lte 检查的行更新）交错时，本分支在 mutex 外写入的 updatedAt 可能比缩略图
+    // 分支已写入的值更旧，把乐观锁版本"倒退回旧值"，重开并发窗口（过时缩略图
+    // 可通过 lte 检查覆盖新版本）。mutex 内写入保证 updatedAt 单调不倒退。
+    return await withPostSaveMutex(canvasId, async () => {
+      // 进入 mutex 后重新取时间戳，确保写入值不早于任何已完成的并发更新
+      updateData.updatedAt = Date.now()
 
-    if (canvasProjectId) {
-      await db
-        .update(projects)
-        .set({ updatedAt: Math.floor(Date.now() / 1000) })
-        .where(eq(projects.id, canvasProjectId))
-    }
+      const [updatedCanvas] = await db
+        .update(canvases)
+        .set(updateData)
+        .where(eq(canvases.id, canvasId))
+        .returning()
 
-    log('PUT canvas - Success', { canvasId })
+      if (canvasProjectId) {
+        await db
+          .update(projects)
+          .set({ updatedAt: Math.floor(Date.now() / 1000) })
+          .where(eq(projects.id, canvasProjectId))
+      }
 
-    const transformedCanvas = transformResponse(updatedCanvas, ['createdAt', 'updatedAt'])
+      log('PUT canvas - Success', { canvasId })
 
-    res.json({
-      success: true,
-      data: transformedCanvas,
+      const transformedCanvas = transformResponse(updatedCanvas, ['createdAt', 'updatedAt'])
+
+      res.json({
+        success: true,
+        data: transformedCanvas,
+      })
     })
   } catch (error) {
     log('PUT canvas - Error', { canvasId, error: error instanceof Error ? error.message : String(error) })
@@ -838,12 +877,40 @@ canvasRouter.post(
       })
     }
 
+    // B4: parentId 必须属于当前项目（对齐画布 folderId 的 B12 校验模式）——
+    // 否则可把其他项目的文件夹挂为父级，造成跨项目孤儿树与级联误删。
+    let resolvedParentId: number | null = null
+    if (parentId !== undefined && parentId !== null && parentId !== '') {
+      const numericParentId = typeof parentId === 'number'
+        ? parentId
+        : parseInt(String(parentId), 10)
+      if (isNaN(numericParentId)) {
+        return res.status(400).json({
+          success: false,
+          error: '无效的父文件夹',
+        })
+      }
+      const parentFolder = await db.query.folders.findFirst({
+        where: eq(folders.id, numericParentId),
+      })
+      const parentProjectId = parentFolder
+        ? (getProperty<number>(parentFolder, 'project_id', 'projectId') || parentFolder.projectId)
+        : null
+      if (!parentFolder || parentProjectId !== projectId) {
+        return res.status(400).json({
+          success: false,
+          error: '父文件夹不属于该项目',
+        })
+      }
+      resolvedParentId = numericParentId
+    }
+
     const result = await db
       .insert(folders)
       .values({
         name,
         projectId,
-        parentId: parentId || null,
+        parentId: resolvedParentId,
       })
       .returning()
 

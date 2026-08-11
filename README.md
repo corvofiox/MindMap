@@ -63,9 +63,26 @@ docker run -p 9000:9000 \
   corvofiox/mindmap:latest
 ```
 
+或使用 docker-compose（`docker compose up -d`，仓库自带 compose 文件）:
+
+```bash
+# docker-compose.yml 已注入固定 JWT_SECRET / CSRF_SECRET / AI_KEY_SECRET
+# ⚠️ 生产部署前务必改为强随机值（openssl rand -hex 32）,仅修改
+#    docker-compose.yml 的 environment 段后重启即可
+docker compose up -d
+```
+
 ## 部署说明
 
 - 数据为单文件 SQLite 数据库,挂载 volume 即可持久化
+- ⚠️ **密钥稳定性**: `JWT_SECRET` / `CSRF_SECRET` / `AI_KEY_SECRET` 必须保持稳定。容器内
+  `backend/.env` 不在持久卷上,若每次启动随机生成,重建容器会使全部登录会话失效,
+  且 `AI_KEY_SECRET` 轮换会导致数据库已存 AI 服务密钥 AES 解密失败（需全部重新配置）。
+  故 compose 注入固定密钥,start.js 对已有非占位符密钥也不会重新生成。
+  修改密钥 = 全部会话失效 + AI 密钥需重配,请谨慎。
+- ⚠️ **单用户部署假设**: AI 代理端点允许配置 `http://localhost` 本机地址作为自定义
+  baseUrl（用于连接本机推理服务）。多用户共享部署时,任一用户可借此访问宿主机
+  localhost 服务,请仅在单用户/可信环境部署
 - 反向代理部署时需设置 `TRUST_PROXY=true`,否则速率限制可能按代理 IP 聚合误判;HTTPS 环境下需设置 `CSRF_COOKIE_SECURE=true`
 - 完整环境变量说明见各配置文件的注释
 

@@ -149,9 +149,11 @@ export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 2)
 }
 
-// 上下文裁剪：超出预算时移除最早的消息，保证最后一条消息保留
+// 上下文裁剪：超出预算时移除最早的消息，尽量保留最后的消息
 // 并避免以 assistant/tool 消息开头（多数 API 要求首条消息为 user/system；
 // tool 消息前面必须有对应的 assistant tool_calls 消息，单独出现会 400）
+// 注意：末尾残留的孤儿 tool（前置 assistant 已被裁掉）也会一并移除，
+// 极端预算下结果可能为空数组，由调用方兜底
 export function trimMessageHistory(
   history: Array<Record<string, unknown>>,
   maxTokens: number
@@ -173,7 +175,9 @@ export function trimMessageHistory(
       // assistant 消息，其后续的 role:'tool' 消息立即成为孤儿（前面没有
       // 对应的 assistant），必须一并移除，否则上游 API 会 400。
       if (removed.role === 'assistant' && (removed as Record<string, unknown>).tool_calls) {
-        while (result.length > 1 && result[0]?.role === 'tool') {
+        // N2: 条件用 length > 0 而非 length > 1——若 assistant 是倒数第二条、
+        // 其 tool 是最后一条,旧条件会因长度只剩 1 而停下,残留孤儿 tool 消息
+        while (result.length > 0 && result[0]?.role === 'tool') {
           const t = result.shift()!
           total -= estimateTokens(JSON.stringify(t))
         }
@@ -182,8 +186,10 @@ export function trimMessageHistory(
   }
 
   // 兜底：首条不能是 assistant 或 tool（预算恰好停在 tool 消息上时，
-  // 它同样没有前置 assistant，属于孤儿，必须移除）
-  while (result.length > 1 && (result[0]?.role === 'assistant' || result[0]?.role === 'tool')) {
+  // 它同样没有前置 assistant，属于孤儿，必须移除）。
+  // N2: 条件用 length > 0——最后一条是孤儿 tool 时也要移除(即使结果为空数组),
+  // 否则上游 API 会因"tool 前无 assistant"返回 400
+  while (result.length > 0 && (result[0]?.role === 'assistant' || result[0]?.role === 'tool')) {
     result.shift()
   }
 
