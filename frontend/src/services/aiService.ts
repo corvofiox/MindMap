@@ -304,6 +304,49 @@ export function buildThinkingParams(
   return undefined
 }
 
+/* CSRF-FIX2: 原生 fetch 的 CSRF 403 自愈（与 apiClient.request 相同模式）。
+   CSRF token 绑定 req.ip + CSRF_SECRET——容器重启（secret 轮换）/IP 变化/cookie 过期时
+   旧 token 校验失败 → 403 invalid csrf token → 清 cookie + 重新获取 token + 重试一次。
+   isCsrfRetry 标记防止 403 循环递归（最多重试一次）。 */
+async function fetchWithCsrfRetry(
+  url: string,
+  options: RequestInit,
+  isCsrfRetry: boolean = false
+): Promise<Response> {
+  const response = await fetch(url, options)
+  if (response.status === 403 && !isCsrfRetry) {
+    let errorText = ''
+    try {
+      const data = (await response.clone().json()) as { error?: string }
+      errorText = data?.error ?? ''
+    } catch {
+      // 响应体非 JSON，无法判定为 CSRF 错误，按普通 403 处理
+    }
+    if (errorText && /csrf/i.test(errorText)) {
+      // 清除旧 token 并重新获取（getAuthHeaders 从 cookie 读取新 token）
+      document.cookie = 'x-csrf-token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;'
+      await apiClient.getCsrfTokenFromServer()
+      // 用 Headers API 归一合并：options.headers 可能是 Headers 实例或对象字面量，
+      // 直接 spread 强转会静默丢失 Headers 实例的全部内容（含 Content-Type 等）；
+      // 新 auth headers 覆盖同名旧值
+      const mergedHeaders = new Headers(options.headers)
+      for (const [k, v] of new Headers(apiClient.getAuthHeaders()).entries()) {
+        mergedHeaders.set(k, v)
+      }
+      return fetchWithCsrfRetry(
+        url,
+        {
+          ...options,
+          // 保留原 headers 附加项（如 Accept: text/event-stream），用新 auth headers 覆盖
+          headers: mergedHeaders,
+        },
+        true
+      )
+    }
+  }
+  return response
+}
+
 // 获取模型列表（通过服务端代理，密钥不进入浏览器）
 export async function fetchModels(
   provider: AIProvider,
@@ -319,7 +362,7 @@ export async function fetchModels(
     const controller = new AbortController()
     const connectTimer = setTimeout(() => controller.abort(), 20000)
     try {
-      response = await fetch('/api/ai/models', {
+      response = await fetchWithCsrfRetry('/api/ai/models', {
         method: 'POST',
         headers,
         body: JSON.stringify({
@@ -488,7 +531,7 @@ export async function sendStreamChatMessage(
       }
     }, CONNECT_TIMEOUT_MS)
     try {
-      response = await fetch('/api/ai/chat', {
+      response = await fetchWithCsrfRetry('/api/ai/chat', {
         method: 'POST',
         headers: {
           ...apiClient.getAuthHeaders(),

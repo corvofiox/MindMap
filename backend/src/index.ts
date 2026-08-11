@@ -79,7 +79,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     timestamp: new Date().toISOString(),
     service: 'mindmap-backend',
-    version: '1.0.0'
+    version: '1.9.10'
   })
 })
 
@@ -98,10 +98,17 @@ app.use('/api/canvases', apiLimiter(), csrfProtectionMiddleware, canvasRouter)
 // 裸挂载，限速永远不会生效（曾发生）。
 app.use('/api/upload', apiLimiter(), csrfProtectionMiddleware, uploadRouter)
 app.use('/api/collaboration', apiLimiter(), csrfProtectionMiddleware, collaborationRouter)
-app.use('/api/ai', apiLimiter(), csrfProtectionMiddleware, aiProxyRouter)
-app.use('/api/ai', apiLimiter(), csrfProtectionMiddleware, aiRouter)
+// CSRF-FIX1: 合并为单挂载——原双重挂载导致 POST /api/ai/conversation/* 二次校验失败:
+// 第一挂载校验时 req.user 不存在（csrf-csrf 会话标识=req.ip）通过后，aiProxyRouter 内
+// authenticate 设置了 req.user；落到第二挂载再校验时会话标识变为 req.user.id → HMAC
+// 不匹配 → 403 invalid csrf token。合并后 csrfProtectionMiddleware 在 authenticate 之前
+// 只执行一次；aiRouter 内部自身的 router.use(authenticate) 仍会执行（幂等），
+// CSRF 对全部 /api/ai 请求（含 /chat）的覆盖不变。
+app.use('/api/ai', apiLimiter(), csrfProtectionMiddleware, aiProxyRouter, aiRouter)
 // A1: /api/logs 同样受全局限速保护（日志写入/读取/清空均可被滥用）
-app.use('/api/logs', apiLimiter(), logRouter)
+// B13: 与其余受保护路由一致补挂 CSRF——前端 debugLogger.saveToServer 已
+// 携带 x-csrf-token 头（GET 读取被 doubleCsrf ignoredMethods 豁免）。
+app.use('/api/logs', apiLimiter(), csrfProtectionMiddleware, logRouter)
 
 // 静态文件服务
 const frontendDistPath = path.join(__dirname, '../../frontend/dist')
