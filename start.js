@@ -3,8 +3,14 @@
 import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import crypto from 'crypto';
 import { fileURLToPath } from 'url';
+import {
+  getEnvValue,
+  updateEnvFile,
+  ensureDirectoryExists,
+  resolveSecrets,
+  getSecretsFilePath,
+} from './scripts/secret-persistence.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -110,28 +116,6 @@ async function executeCommand(command, args, options = {}) {
   });
 }
 
-function generateJWTSecret() {
-  return crypto.randomBytes(64).toString('hex');
-}
-
-// B2: .env.example 模板中的示例占位符不算真实密钥——检测到占位符时仍应生成
-// 随机密钥覆盖,否则全新部署会带着公开的弱密钥运行。
-function isPlaceholderSecret(value) {
-  if (!value) return true;
-  const v = value.trim();
-  // R2-6: 识别 dev 环境模板密钥（backend/.env.development 的
-  // dev-jwt-secret-key-for-development-only / dev-csrf-secret-key-for-development-only）——
-  // 否则 dev 环境会从"每次启动随机生成"变成"保留公开已知密钥"。
-  return v === '' || v.includes('change-me-in-production') || v === 'your-secret-key'
-    || (v.startsWith('dev-') && v.includes('key-for-development'));
-}
-
-function ensureDirectoryExists(dirPath) {
-  if (!fs.existsSync(dirPath)) {
-    fs.mkdirSync(dirPath, { recursive: true });
-  }
-}
-
 function copyEnvFile(sourcePath, targetPath) {
   if (!fs.existsSync(targetPath)) {
     fs.copyFileSync(sourcePath, targetPath);
@@ -139,30 +123,6 @@ function copyEnvFile(sourcePath, targetPath) {
   }
   return false;
 }
-
-function updateEnvFile(envPath, key, value) {
-  let content = '';
-  if (fs.existsSync(envPath)) {
-    content = fs.readFileSync(envPath, 'utf-8');
-  }
-
-  const lines = content.split('\n');
-  let found = false;
-  const updatedLines = lines.map(line => {
-    if (line.startsWith(`${key}=`)) {
-      found = true;
-      return `${key}=${value}`;
-    }
-    return line;
-  });
-
-  if (!found) {
-    updatedLines.push(`${key}=${value}`);
-  }
-
-  fs.writeFileSync(envPath, updatedLines.join('\n'));
-}
-
 function checkEnvFileExists(envPath) {
   return fs.existsSync(envPath);
 }
@@ -237,54 +197,38 @@ async function setupEnvironmentFiles() {
       updateEnvFile(backendTargetPath, 'ALLOWED_ORIGINS', process.env.ALLOWED_ORIGINS);
     }
 
-    if (process.env.JWT_SECRET) {
-      logStep('INFO', 'Using JWT_SECRET from environment variable');
-      updateEnvFile(backendTargetPath, 'JWT_SECRET', process.env.JWT_SECRET);
-    } else if (shouldGenerateSecrets) {
-      // B2: .env 已有非空密钥时保留原值——Docker 容器内 backend/.env 不在
-      // 持久卷上,若每次启动都重新生成随机密钥,重建容器会使所有 JWT 会话
-      // 失效,且 AI_KEY_SECRET 轮换会导致数据库已存 AI 密钥 AES 解密失败。
-      // 固定密钥由 docker-compose environment 注入,或首次生成后保持不变。
-      const existingSecret = getEnvValue(backendTargetPath, 'JWT_SECRET');
-      if (existingSecret && !isPlaceholderSecret(existingSecret)) {
-        logStep('SKIP', `JWT_SECRET already exists in .env - keeping existing value`);
-      } else {
-        const jwtSecret = generateJWTSecret();
-        updateEnvFile(backendTargetPath, 'JWT_SECRET', jwtSecret);
-        logSuccess(`Generated and set JWT_SECRET for Backend`);
-      }
-    }
+    // B2(根治):JWT_SECRET / CSRF_SECRET / AI_KEY_SECRET 统一走密钥持久化——
+    // 从数据卷文件 backend/data/.secrets 恢复(容器重建不轮换密钥),避免重建后
+    // JWT 会话失效 / CSRF token 失效 / AI 密钥 AES-256-GCM 解密失败。
+    // 优先级: process.env 注入 > .secrets > .env 已有值(迁移到 .secrets) > 生成随机(双写)。
+    // canGenerate=shouldGenerateSecrets: 生产非 Docker 且 .env 有效时不凭空生成
+    // (缺失 AI_KEY_SECRET 时后端回退 JWT_SECRET 派生,生成反而破坏已存 AI 密钥解密)。
+    const secretsFilePath = getSecretsFilePath(path.join(__dirname, 'backend'));
+    const secretResults = resolveSecrets({
+      envPath: backendTargetPath,
+      secretsPath: secretsFilePath,
+      canGenerate: shouldGenerateSecrets,
+    });
 
-    if (process.env.CSRF_SECRET) {
-      logStep('INFO', 'Using CSRF_SECRET from environment variable');
-      updateEnvFile(backendTargetPath, 'CSRF_SECRET', process.env.CSRF_SECRET);
-    } else if (shouldGenerateSecrets) {
-      // B2: 同 JWT_SECRET——保留已有值,避免容器重建后 CSRF token 全部失效
-      const existingSecret = getEnvValue(backendTargetPath, 'CSRF_SECRET');
-      if (existingSecret && !isPlaceholderSecret(existingSecret)) {
-        logStep('SKIP', `CSRF_SECRET already exists in .env - keeping existing value`);
-      } else {
-        const csrfSecret = generateJWTSecret();
-        updateEnvFile(backendTargetPath, 'CSRF_SECRET', csrfSecret);
-        logSuccess(`Generated and set CSRF_SECRET for Backend`);
+    for (const result of secretResults) {
+      if (result.conflictWithEnvFile) {
+        logStep('WARN', `${result.key}: .secrets value overrides .env - rotate keys by updating backend/data/.secrets (or inject via env var)`);
       }
-    }
-
-    // AI 密钥加密专用密钥（独立于 JWT_SECRET，避免 JWT 轮换导致已存储的 AI 密钥全部失效）
-    // 注意：不作为必需项，旧部署缺失时后端自动回退到 JWT_SECRET 派生
-    if (process.env.AI_KEY_SECRET) {
-      logStep('INFO', 'Using AI_KEY_SECRET from environment variable');
-      updateEnvFile(backendTargetPath, 'AI_KEY_SECRET', process.env.AI_KEY_SECRET);
-    } else if (shouldGenerateSecrets) {
-      // B2: 同 JWT_SECRET——AI_KEY_SECRET 轮换会使数据库已存 AI 密钥
-      // AES-256-GCM 解密失败,必须保持稳定
-      const existingSecret = getEnvValue(backendTargetPath, 'AI_KEY_SECRET');
-      if (existingSecret && !isPlaceholderSecret(existingSecret)) {
-        logStep('SKIP', `AI_KEY_SECRET already exists in .env - keeping existing value`);
-      } else {
-        const aiKeySecret = generateJWTSecret();
-        updateEnvFile(backendTargetPath, 'AI_KEY_SECRET', aiKeySecret);
-        logSuccess(`Generated and set AI_KEY_SECRET for Backend`);
+      switch (result.source) {
+        case 'env':
+          logStep('INFO', `Using ${result.key} from environment variable`);
+          break;
+        case 'secrets':
+          logStep('INFO', `Using ${result.key} from persistent secrets file (backend/data/.secrets)`);
+          break;
+        case 'envfile':
+          logStep('SKIP', `${result.key} already exists in .env - keeping existing value (migrated to .secrets)`);
+          break;
+        case 'generated':
+          logSuccess(`Generated and set ${result.key} for Backend`);
+          break;
+        default:
+          break;
       }
     }
 
@@ -358,15 +302,6 @@ async function initializeDatabase() {
 
   return dbExists;
 }
-
-function getEnvValue(envPath, key) {
-  if (!fs.existsSync(envPath)) return undefined;
-  const content = fs.readFileSync(envPath, 'utf-8');
-  const regex = new RegExp(`^${key}=(.*)$`, 'm');
-  const match = content.match(regex);
-  return match ? match[1].trim() : undefined;
-}
-
 async function waitForProcessReady(childProcess, healthUrl, name, options = {}) {
   const timeoutMs = options.timeoutMs || 30000;
   const intervalMs = options.intervalMs || 500;

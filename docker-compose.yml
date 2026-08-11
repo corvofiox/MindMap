@@ -9,15 +9,16 @@ services:
     ports:
       - "9000:9000"
     environment:
-      # B2: 注入固定密钥——容器内 backend/.env 不在持久卷上,start.js 在 Docker
-      # 模式下发现缺密钥会每次启动随机生成,重建容器后:① 所有 JWT 会话失效
-      # (全部用户被迫重新登录);② AI_KEY_SECRET 轮换使数据库已存 AI 密钥
-      # AES 解密失败(需全部重新配置)。固定注入保证重建后密钥不变。
-      # ⚠️ 生产环境必须修改为强随机值(生成方式: openssl rand -hex 32)。
-      # 修改这些值同样会使会话失效/AI 密钥需重配,请谨慎操作。
-      - JWT_SECRET=2b5777dad6d5b27f015c2fcc29c2cfd4c83d0d3f54112193c15e78988fce4cf5
-      - CSRF_SECRET=6ea4c82542c15941077c88be0d1f95e30925bc9f2737e6d0bb349cc33fcc6679
-      - AI_KEY_SECRET=6d6e2ae075740b73b0bdc72c21a42e55d9acbb67b18a8fc47361a0a413355e3f
+      # B2(根治,start.js 密钥持久化):从 v1.9.13 起,start.js 会把三个密钥
+      # 持久化到数据卷文件 backend/data/.secrets(即下方 ./data 挂载目录),
+      # 容器重建后自动恢复,不再随机轮换——无需再通过环境变量注入固定密钥。
+      # 此段 environment 注入为可选项,优先级最高(仅更新 .env,不写 .secrets):
+      #   - 不配置:start.js 首启生成随机密钥并双写 .secrets/.env,后续重建从
+      #     .secrets 恢复(推荐,密钥不出现在 compose 文件/仓库历史中)
+      #   - 配置:注入值生效,但 .secrets 不会创建;若之后移除注入,.secrets
+      #     为空会一次性轮换三键(所有会话失效一次 + AI 密钥需重配)
+      # ⚠️ 如需使用注入,生产环境必须改为强随机值(openssl rand -hex 32)。
+      # 修改注入值同样会使会话失效/AI 密钥需重配,请谨慎操作。
     volumes:
       # 持久化数据库数据
       - ./data:/app/backend/data

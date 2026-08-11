@@ -68,3 +68,4 @@ tailwind.config.js
 # Coverage reports
 coverage/
 *.lcov
+backend/data/

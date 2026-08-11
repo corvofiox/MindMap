@@ -23,12 +23,11 @@
     "shared"
   ],
   "scripts": {
-    "init:env": "node start.js --generate-env-only",
+    "init:env": "node start.js --env-only",
     "start": "node start.js",
     "start:backend": "cd backend && npm run start",
     "start:frontend": "cd frontend && npm run dev",
     "install:all": "node start.js --install-only",
-
     "build": "npm run build:shared && npm run build:frontend && npm run build:backend",
     "build:shared": "cd shared && npm run build",
     "build:frontend": "cd frontend && npm run build",
