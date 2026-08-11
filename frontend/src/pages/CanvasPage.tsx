@@ -27,6 +27,7 @@ import { saveToCache, loadFromCache } from '@/utils/nodeCache'
 import { logger } from '@/utils/logger'
 import { execFormatCommand } from '@/utils/richTextCommands'
 import { exportCanvas, downloadJsonFile } from '@/utils/canvasExport'
+import { resolveCanvasIsCollaborative } from '@/utils/collaboration'
 import { SAVE_COMMAND_EVENT } from '@/components/ui/CommandPalette'
 import { loadCanvasNodesData, apiClient } from '@/services/api'
 import { ApiError } from '@/services/apiClient'
@@ -956,9 +957,19 @@ export function CanvasPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canvasId])
 
+  // 协作模式判定：仅协作项目(isCollaborative)启用 WS 协作与协作 UI。
+  // 私人项目不建立 WS 连接——否则房间人数/实时同步/"已实时保存"拦截等
+  // 协作专属行为会串到私人画布（手动保存按钮被禁用、不落 REST 快照）。
+  const projects = useProjectsStore((s) => s.projects)
+  const canvases = useProjectsStore((s) => s.canvases)
+  const isCollaborative = useMemo(
+    () => resolveCanvasIsCollaborative(canvases, projects, id),
+    [id, canvases, projects],
+  )
+
   const { sendCursor, sendSelection, awarenessStates, activeUsers } = useCollaboration({
     canvasId: id || 0,
-    enabled: id !== null && id > 0,
+    enabled: id !== null && id > 0 && isCollaborative,
     // P3: 被 owner 移除成员资格时提示并跳转回项目列表
     onKicked: () => {
       addToast({
@@ -1086,7 +1097,6 @@ export function CanvasPage() {
   // M7: useProjectsStore / useAuthStore 改字段级订阅。
   const loadProjects = useProjectsStore((s) => s.loadProjects)
   const restoreCurrentProject = useProjectsStore((s) => s.restoreCurrentProject)
-  const canvases = useProjectsStore((s) => s.canvases)
   const updateCanvasInStore = useProjectsStore((s) => s.updateCanvas)
   const currentMemberRole = useProjectsStore((s) => s.currentMemberRole)
   const user = useAuthStore((s) => s.user)
@@ -4315,9 +4325,13 @@ export function CanvasPage() {
           className="absolute inset-0 pointer-events-none"
           style={{ zIndex: Z_INDEX.COLLAB_OVERLAY }}
         >
-          <CollaborationCursors cursors={awarenessStates} zoom={zoom} panX={panX} panY={panY} />
-          <RemoteSelection selections={awarenessStates} nodes={nodes} zoom={zoom} panX={panX} panY={panY} />
-          <UserAvatars users={activeUsers} />
+          {isCollaborative && (
+            <>
+              <CollaborationCursors cursors={awarenessStates} zoom={zoom} panX={panX} panY={panY} />
+              <RemoteSelection selections={awarenessStates} nodes={nodes} zoom={zoom} panX={panX} panY={panY} />
+              <UserAvatars users={activeUsers} />
+            </>
+          )}
         </div>
 
         {minimapVisible && (
