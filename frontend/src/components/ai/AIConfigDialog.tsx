@@ -460,11 +460,6 @@ export function AIConfigDialog({ open, onClose }: AIConfigDialogProps) {
                   </select>
                 </div>
               )}
-              {localConfig.enableThinking !== false && (
-                <p className="text-xs text-gray-500 dark:text-gray-400">
-                  温度、最大 Token 等参数已移除,由上游 API 默认值控制
-                </p>
-              )}
             </div>
           )}
 

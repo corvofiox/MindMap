@@ -326,6 +326,28 @@ export class MindMapYjsProvider {
     return this.activeUsers
   }
 
+  /**
+   * 订阅 awareness 状态变化（远端 cursor/selection/user 字段，本地写入也会触发）。
+   *
+   * 回调收到 clientID → 状态的完整快照（y-protocols Awareness.getStates()），
+   * clientID 是连接级随机数而非业务 userId；调用方需把含 user.id 的条目
+   * 映射为业务键并过滤本地用户。返回取消订阅函数。
+   */
+  onAwarenessChange(fn: (states: Map<number, Record<string, unknown>>) => void): () => void {
+    const handler = () => {
+      fn(this.awareness.getStates())
+    }
+    this.awareness.on('change', handler)
+    return () => {
+      this.awareness.off('change', handler)
+    }
+  }
+
+  /** 当前 awareness 快照（clientID → 状态，与 AwarenessState 同构）。 */
+  getAwarenessStates(): Map<number, Record<string, unknown>> {
+    return this.awareness.getStates()
+  }
+
   /** Whether the initial sync handshake completed (STEP2 received & applied). */
   getIsSynced(): boolean {
     return this.isSynced

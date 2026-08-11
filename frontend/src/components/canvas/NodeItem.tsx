@@ -343,12 +343,25 @@ export const NodeItem = memo(function NodeItem({ node, isSelected, zoom, onDragS
 
   useEffect(() => {
     const handleHighlight = (e: Event) => {
-      const customEvent = e as CustomEvent<{ nodeId: string | null; keywords: string[] }>
-      if (customEvent.detail.nodeId === null) {
+      const customEvent = e as CustomEvent<{
+        nodeId: string | null
+        nodeIds?: string[]
+        keywords: string[]
+      }>
+      const { nodeId, nodeIds, keywords } = customEvent.detail
+      if (nodeId === null) {
         setHighlightState(null)
-      } else if (customEvent.detail.nodeId === node.id) {
+      } else if (Array.isArray(nodeIds)) {
+        // m-1: 批量高亮协议——单次事件携带全部匹配 nodeId,按集合成员判断
+        // (与逐条派发"后发覆盖先发"不同,多结果可同时保持高亮)
+        setHighlightState(
+          nodeIds.includes(node.id)
+            ? { keywords, timestamp: Date.now() }
+            : null
+        )
+      } else if (nodeId === node.id) {
         setHighlightState({
-          keywords: customEvent.detail.keywords,
+          keywords,
           timestamp: Date.now(),
         })
       } else {

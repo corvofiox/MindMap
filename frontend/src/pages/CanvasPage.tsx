@@ -10,6 +10,7 @@ import { useCollaboration, getActiveYjsProvider } from '@/hooks/useCollaboration
 import { CanvasToolbar } from '@/components/canvas/CanvasToolbar'
 import { CanvasGrid } from '@/components/canvas/CanvasGrid'
 import { CanvasMinimap } from '@/components/canvas/CanvasMinimap'
+import { CollaborationCursors, RemoteSelection, UserAvatars } from '@/components/canvas/CollaborationCursors'
 import { ZoomControls } from '@/components/canvas/ZoomControls'
 import { NodeItem } from '@/components/canvas/NodeItem'
 import { NodeContextMenu } from '@/components/canvas/NodeContextMenu'
@@ -25,6 +26,8 @@ import { generateId, colorToHex, hexToRgba, calculateSmartPortPosition, buildCon
 import { saveToCache, loadFromCache } from '@/utils/nodeCache'
 import { logger } from '@/utils/logger'
 import { execFormatCommand } from '@/utils/richTextCommands'
+import { exportCanvas, downloadJsonFile } from '@/utils/canvasExport'
+import { SAVE_COMMAND_EVENT } from '@/components/ui/CommandPalette'
 import { loadCanvasNodesData, apiClient } from '@/services/api'
 import { ApiError } from '@/services/apiClient'
 import { collabService } from '@/services/collaboration'
@@ -953,7 +956,7 @@ export function CanvasPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canvasId])
 
-  const { sendCursor } = useCollaboration({
+  const { sendCursor, sendSelection, awarenessStates, activeUsers } = useCollaboration({
     canvasId: id || 0,
     enabled: id !== null && id > 0,
     // P3: 被 owner 移除成员资格时提示并跳转回项目列表
@@ -966,6 +969,12 @@ export function CanvasPage() {
       navigate('/')
     },
   })
+
+  // 选区变化 → 广播 awareness selection，远端 RemoteSelection 据此渲染虚线框。
+  // 空选区也发送（远端清除旧的远端选区高亮）。
+  useEffect(() => {
+    sendSelection(selectedIds)
+  }, [selectedIds, sendSelection])
 
   // Refs to store latest values for global event listeners
   const panXRef = useRef(panX)
@@ -2122,6 +2131,13 @@ export function CanvasPage() {
         return
       }
 
+      // m-3: 命令面板打开时快捷键(再次 Ctrl+K 关闭、面板内 Ctrl+N/S/E/缩放等)
+      // 由面板自身 keydown 处理——这里提前返回,避免面板打开且焦点不在输入框
+      // (如落在命令按钮上)时两侧双重执行(如 Ctrl+S 触发两次保存)。
+      if (useUIStore.getState().commandPaletteOpen) {
+        return
+      }
+
       // Don't handle most shortcuts when editing
       const { editingId: currentEditingId } = useCanvasStore.getState()
       if (currentEditingId !== null) {
@@ -2157,6 +2173,40 @@ export function CanvasPage() {
             })
           }
         }).catch(() => { })
+        return
+      }
+
+      // Ctrl+N new canvas（与 Sidebar 新建画布一致；CommandPalette 同款命令）
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'n' || e.key === 'N')) {
+        e.preventDefault()
+        const projectsState = useProjectsStore.getState()
+        if (!projectsState.currentProject) {
+          addToast({ type: 'warning', title: '未选择项目', message: '请先选择一个项目' })
+          return
+        }
+        projectsState.createCanvas(projectsState.currentProject.id, {
+          name: `未命名画布 ${projectsState.canvases.length + 1}`,
+          projectId: projectsState.currentProject.id,
+        }).catch((error) => {
+          addToast({ type: 'error', title: '创建画布失败', message: error instanceof Error ? error.message : '未知错误' })
+        })
+        return
+      }
+
+      // Ctrl+E export（与 CanvasToolbar 导出一致；CommandPalette 同款命令）
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'e' || e.key === 'E')) {
+        e.preventDefault()
+        const canvasState = useCanvasStore.getState()
+        const jsonString = exportCanvas(
+          canvasState.nodes,
+          canvasState.connections,
+          canvasState.groups,
+          canvasState.domains,
+          { zoom: canvasState.zoom, panX: canvasState.panX, panY: canvasState.panY },
+        )
+        const filename = `mindmap-${new Date().toISOString().slice(0, 10)}.json`
+        downloadJsonFile(jsonString, filename)
+        addToast({ type: 'success', title: '导出成功', message: '画布数据已导出为 JSON 文件', duration: 3000 })
         return
       }
 
@@ -2445,6 +2495,36 @@ export function CanvasPage() {
     // E12: deps 全部为稳定引用——易变值(zoom/currentTool/nodes/groups/selectedIds)
     // 通过 ref 读取,避免每次编辑/选择变化都解绑并重绑全局 keydown 监听。
   }, [setCurrentTool, setZoom, setPan, toggleGrid, toggleQuickEditMode, toggleRelationshipHighlightMode, toggleDragMode, toggleMinimap, setEditingId, addGroup, toggleSidebar, toggleNodePool, setSettingsOpen, setCommandPaletteOpen, handleManualSave, setIsCreatingConnection, setConnectionStartNodeId, setStartPortPreview, setSelectedIds, canUndo, canRedo, undo, redo, addNode, addToast])
+
+  // CommandPalette "Save" 命令：复用 Ctrl+S 的完整保存逻辑（协作模式守卫/
+  // 本地删除声明/缩略图/错误提示），避免在面板内复制一份漂移的保存实现
+  useEffect(() => {
+    const handlePaletteSave = () => {
+      if (collabService.isConnected()) {
+        addToast({
+          type: 'info',
+          title: '已实时保存',
+          message: '协作模式下编辑内容会实时同步到服务器',
+          duration: 3000,
+        })
+        return
+      }
+      handleManualSave()
+        .then((ok) => {
+          if (ok) {
+            addToast({
+              type: 'success',
+              title: '保存成功',
+              message: '画布内容已保存到服务器',
+              duration: 3000,
+            })
+          }
+        })
+        .catch(() => { })
+    }
+    window.addEventListener(SAVE_COMMAND_EVENT, handlePaletteSave)
+    return () => window.removeEventListener(SAVE_COMMAND_EVENT, handlePaletteSave)
+  }, [handleManualSave, addToast])
 
   // Space key for canvas drag
   useEffect(() => {
@@ -4226,6 +4306,19 @@ export function CanvasPage() {
         }}
       >
         <CanvasGrid zoom={zoom} panX={panX} panY={panY} />
+
+        {/* 协作覆盖层：远端光标 / 远端选区虚线框 / 在线协作者头像 */}
+        {/* m-2: 内容层(data-canvas-content)带 zoom/transform 构成独立 stacking
+            context,按 DOM 顺序绘制在覆盖层之上——覆盖层必须显式 z-index 才
+            不会被节点/连线遮挡。pointer-events-none 保证不拦截画布交互。 */}
+        <div
+          className="absolute inset-0 pointer-events-none"
+          style={{ zIndex: Z_INDEX.COLLAB_OVERLAY }}
+        >
+          <CollaborationCursors cursors={awarenessStates} zoom={zoom} panX={panX} panY={panY} />
+          <RemoteSelection selections={awarenessStates} nodes={nodes} zoom={zoom} panX={panX} panY={panY} />
+          <UserAvatars users={activeUsers} />
+        </div>
 
         {minimapVisible && (
           <CanvasMinimap

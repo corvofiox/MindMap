@@ -11,6 +11,7 @@ import * as Y from 'yjs'
 import * as encoding from 'lib0/encoding'
 import * as decoding from 'lib0/decoding'
 import * as syncProtocol from 'y-protocols/sync'
+import * as awarenessProtocol from 'y-protocols/awareness'
 import {
   MindMapYjsProvider,
   clearCollaborationEvidence,
@@ -437,5 +438,77 @@ describe('R1: local deletion declarations', () => {
     expect(getLocalDeletions(1)).toEqual({ groups: ['g1'] })
     clearLocalDeletions(1)
     expect(getLocalDeletions(1)).toEqual({})
+  })
+})
+
+describe('Awareness: remote cursor/selection subscription', () => {
+  let OriginalWebSocket: typeof WebSocket
+
+  beforeEach(() => {
+    OriginalWebSocket = global.WebSocket
+    global.WebSocket = MockWebSocket as unknown as typeof WebSocket
+    MockWebSocket.reset()
+  })
+
+  afterEach(() => {
+    global.WebSocket = OriginalWebSocket
+    MockWebSocket.reset()
+  })
+
+  function sendRemoteAwareness(remote: awarenessProtocol.Awareness) {
+    const encoder = encoding.createEncoder()
+    encoding.writeVarUint(encoder, 1) // AWARENESS envelope
+    encoding.writeVarUint8Array(
+      encoder,
+      awarenessProtocol.encodeAwarenessUpdate(remote, [remote.doc.clientID]),
+    )
+    MockWebSocket.last().receiveBinary(encoding.toUint8Array(encoder))
+  }
+
+  it('fires onAwarenessChange and exposes remote awareness states', async () => {
+    const provider = createProvider()
+    const onChange = vi.fn()
+    provider.onAwarenessChange(onChange)
+    provider.connect()
+    await tick()
+
+    // 模拟远端用户广播 awareness（user + cursor + selection）
+    const remote = new awarenessProtocol.Awareness(new Y.Doc())
+    remote.setLocalState({
+      user: { id: 2, name: 'Alice', color: '#f97316', avatar: null },
+      cursor: { x: 10, y: 20 },
+      selection: ['node-1'],
+    })
+    sendRemoteAwareness(remote)
+
+    expect(onChange).toHaveBeenCalled()
+    const states = provider.getAwarenessStates()
+    const remoteEntry = Array.from(states.entries()).find(
+      ([, s]) => (s as { user?: { id?: number } }).user?.id === 2,
+    )
+    expect(remoteEntry).toBeDefined()
+    const [clientId, state] = remoteEntry as [number, Record<string, unknown>]
+    expect(clientId).toBe(remote.doc.clientID)
+    expect((state as { cursor?: { x: number; y: number } }).cursor).toEqual({ x: 10, y: 20 })
+    expect((state as { selection?: string[] }).selection).toEqual(['node-1'])
+    provider.disconnect()
+  })
+
+  it('stops delivering awareness changes after unsubscribe', async () => {
+    const provider = createProvider()
+    const onChange = vi.fn()
+    provider.onAwarenessChange(onChange)()
+    provider.connect()
+    await tick()
+
+    const remote = new awarenessProtocol.Awareness(new Y.Doc())
+    remote.setLocalState({
+      user: { id: 2, name: 'Alice', color: '#f97316', avatar: null },
+      cursor: { x: 1, y: 2 },
+    })
+    sendRemoteAwareness(remote)
+
+    expect(onChange).not.toHaveBeenCalled()
+    provider.disconnect()
   })
 })

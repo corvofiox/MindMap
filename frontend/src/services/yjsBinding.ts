@@ -15,7 +15,17 @@
  */
 import * as Y from 'yjs'
 import type { Node, NodeGroup, Domain, Connection } from '@/types'
-import { ensureRoot, getExistingRoot, entityToYMap, ymapToObject } from './yjs-schema'
+import {
+  ROOT_KEY,
+  NODES_KEY,
+  GROUPS_KEY,
+  DOMAINS_KEY,
+  CONNECTIONS_KEY,
+  ensureRoot,
+  getExistingRoot,
+  entityToYMap,
+  ymapToObject,
+} from './yjs-schema'
 import { type MindMapYjsProvider, type DeletionCollection, recordLocalDeletion, isLocalDeletion } from './yjsProvider'
 import { useCanvasStore } from '@/store/useCanvasStore'
 import { logger } from '@/utils/logger'
@@ -124,6 +134,49 @@ export interface YjsBindingOptions {
    * endInteraction 因组件卸载/异常路径未触发时兜底结束交互。
    */
   interactionMaxMs?: number
+}
+
+/**
+ * 判定 doc 是否只含 root 结构（无任何实体/删除历史）。
+ * yjs Item 的 map key 存在 parentSub 字段：root 结构 Items 的 parentSub
+ * 只可能是 ROOT_KEY / NODES_KEY / GROUPS_KEY / DOMAINS_KEY / CONNECTIONS_KEY
+ * 或 null/undefined（顶层 map 自身）；任何其他 parentSub 都意味着
+ * 实体内容或 tombstone（删除历史）存在。
+ *
+ * 不能用 Y.encodeStateAsUpdate 的长度比较做此判定：update 编码长度包含每个
+ * Item 的 clientID varUint 字节数，而 Y.Doc 的 clientID 是随机数，两个同样
+ * "只有 root 结构"的 doc 约 20% 概率长度不同 → 误判"有删除历史" →
+ * 服务器重启/空 yjsUpdate 后重连时清空用户本地画布（生产隐患）。
+ */
+function hasEntityHistory(doc: Y.Doc): boolean {
+  const ROOT_SUBS = new Set([
+    undefined,
+    null,
+    ROOT_KEY,
+    NODES_KEY,
+    GROUPS_KEY,
+    DOMAINS_KEY,
+    CONNECTIONS_KEY,
+  ])
+  const store = (doc as any).store
+  if (!store || !store.clients) return false
+  for (const client of store.clients.values()) {
+    for (const k in client) {
+      const s = client[k]
+      // Item 特有属性:parentSub(map key)与 content。GC struct 没有这两个属性。
+      // 不能用 constructor.name === 'Item':esbuild --minify 下类名被树摇重命名,
+      // 生产构建该判断恒 false(实测:压缩后 names=[e×5])→ wipe 分支变死代码。
+      if (
+        s &&
+        typeof s === 'object' &&
+        'parentSub' in s &&
+        'content' in s &&
+        !ROOT_SUBS.has(s.parentSub)
+      )
+        return true
+    }
+  }
+  return false
 }
 
 export function bindYjsToStore(
@@ -675,20 +728,15 @@ export function bindYjsToStore(
       liveState.domains.size +
       liveState.connections.size
     if (docEntityCount === 0 && localEntityCount > 0) {
-      // Distinguish between:
-      // 1. Brand-new empty doc (server lost in-memory state / yjsUpdate missing):
-      //    the local store is the only surviving copy, so preserve it.
-      // 2. Doc with history but currently empty (peers intentionally deleted all
-      //    entities while we were offline): trust the server snapshot and let
-      //    the normal removal logic clear the local store.
-      // An empty doc that only contains the root structure has a deterministic
-      // update size; anything larger means real edit history exists.
-      const emptyWithRoot = new Y.Doc()
-      ensureRoot(emptyWithRoot)
-      const emptyUpdateLen = Y.encodeStateAsUpdate(emptyWithRoot).length
-      const currentUpdateLen = Y.encodeStateAsUpdate(doc).length
-
-      if (currentUpdateLen <= emptyUpdateLen) {
+      // 区分两种"服务器文档为空"：
+      // 1. 全新空 doc（服务器丢失内存态 / yjsUpdate 缺失）：本地 store 是唯一
+      //    幸存副本，必须保留并镜像回 doc。
+      // 2. 有删除历史的空 doc（离线期间 peers 故意删光所有实体）：信任服务器
+      //    权威空快照，走下方正常移除逻辑清空本地 store。
+      // 判定依据是 doc 的 Item 结构（hasEntityHistory）：只有 root 结构说明无
+      // 任何实体/删除历史；不能用 update 编码长度判定（长度含随机 clientID
+      // 的 varUint 字节数，约 20% 概率误判，详见 hasEntityHistory 注释）。
+      if (!hasEntityHistory(doc)) {
         logger.warn(
           '[yjs-binding] server doc is empty (no history) but local store has entities; ' +
           'preserving local state and mirroring it back to the doc',
@@ -697,7 +745,7 @@ export function bindYjsToStore(
         syncLocalStateToYDoc()
         return true
       }
-      // Fall through: doc has deletion history, apply the authoritative empty state.
+      // doc 有删除历史（peers 故意清空）→ 应用权威空状态。
     }
 
     suppressSync(() => {

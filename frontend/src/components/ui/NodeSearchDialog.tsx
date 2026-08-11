@@ -6,11 +6,66 @@ import { Z_INDEX } from '@/constants'
 import type { Node } from '@/types'
 import clsx from 'clsx'
 
-interface SearchResult {
+export interface SearchResult {
   nodeId: string
   node: Node
   matchedFields: ('title' | 'content')[]
   matchedKeywords: string[]
+}
+
+/**
+ * 在节点 Map 中按关键字搜索(标题/内容全词匹配)。
+ * NodeSearchDialog 与 SearchPanel 共用同一套节点搜索逻辑。
+ */
+export function searchNodesInMap(nodes: Map<string, Node>, searchQuery: string): SearchResult[] {
+  if (!searchQuery.trim()) return []
+
+  const keywords = searchQuery.trim().toLowerCase().split(/\s+/).filter(k => k.length > 0)
+  if (keywords.length === 0) return []
+
+  const results: SearchResult[] = []
+
+  nodes.forEach((node, nodeId) => {
+    const titleLower = (node.title || '').toLowerCase()
+    const contentLower = (node.content || '').toLowerCase()
+
+    const matchedFields: ('title' | 'content')[] = []
+    const matchedKeywords: string[] = []
+
+    const titleMatches: string[] = []
+    const contentMatches: string[] = []
+
+    keywords.forEach(keyword => {
+      const inTitle = titleLower.includes(keyword)
+      const inContent = contentLower.includes(keyword)
+
+      if (inTitle || inContent) {
+        if (inTitle) titleMatches.push(keyword)
+        if (inContent) contentMatches.push(keyword)
+        matchedKeywords.push(keyword)
+      }
+    })
+
+    if (matchedKeywords.length === keywords.length) {
+      if (titleMatches.length === keywords.length) {
+        matchedFields.push('title')
+      }
+      if (contentMatches.length === keywords.length) {
+        matchedFields.push('content')
+      }
+
+      if (matchedFields.length > 0) {
+        results.push({
+          nodeId,
+          node,
+          matchedFields,
+          matchedKeywords,
+        })
+      }
+    }
+  })
+
+  return results
 }
 
 interface DragState {
@@ -60,54 +115,7 @@ export function NodeSearchDialog() {
   }, [nodeSearchOpen])
 
   const searchNodes = useCallback((searchQuery: string): SearchResult[] => {
-    if (!searchQuery.trim()) return []
-
-    const keywords = searchQuery.trim().toLowerCase().split(/\s+/).filter(k => k.length > 0)
-    if (keywords.length === 0) return []
-
-    const results: SearchResult[] = []
-
-    nodes.forEach((node, nodeId) => {
-      const titleLower = (node.title || '').toLowerCase()
-      const contentLower = (node.content || '').toLowerCase()
-
-      const matchedFields: ('title' | 'content')[] = []
-      const matchedKeywords: string[] = []
-
-      const titleMatches: string[] = []
-      const contentMatches: string[] = []
-
-      keywords.forEach(keyword => {
-        const inTitle = titleLower.includes(keyword)
-        const inContent = contentLower.includes(keyword)
-
-        if (inTitle || inContent) {
-          if (inTitle) titleMatches.push(keyword)
-          if (inContent) contentMatches.push(keyword)
-          matchedKeywords.push(keyword)
-        }
-      })
-
-      if (matchedKeywords.length === keywords.length) {
-        if (titleMatches.length === keywords.length) {
-          matchedFields.push('title')
-        }
-        if (contentMatches.length === keywords.length) {
-          matchedFields.push('content')
-        }
-
-        if (matchedFields.length > 0) {
-          results.push({
-            nodeId,
-            node,
-            matchedFields,
-            matchedKeywords,
-          })
-        }
-      }
-    })
-
-    return results
+    return searchNodesInMap(nodes, searchQuery)
   }, [nodes])
 
   useEffect(() => {

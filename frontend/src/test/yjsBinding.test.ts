@@ -717,6 +717,39 @@ describe('yjsBinding', () => {
       binding.destroy()
     })
 
+    it('preserves local store when empty doc update length exceeds the reference empty doc', () => {
+      // 回归测试:旧实现用 Y.encodeStateAsUpdate 的长度比较判定"空文档无历史",
+      // 但 update 编码长度包含每个 Item 的 clientID varUint 字节数(clientID
+      // 随机,varUint 1~5 字节不等),两个同样只有 root 结构的空 doc 只有约
+      // 6-20% 概率长度不同——旧实现是概率性缺陷而非必失败,同一次代码在不同
+      // clientID 下时而通过、时而误判"有删除历史"→ 清空本地画布。
+      // 本用例固定 clientID 构造"update 长度必然大于参考空 doc"的空 doc,使该
+      // 缺陷在旧实现下必然触发;新实现(struct 级 hasEntityHistory 检查
+      // parentSub)与 clientID 无关,确定性覆盖此场景、必然通过。
+      const doc = new Y.Doc()
+      doc.clientID = 2 ** 31 // 5 字节 varUint,确保 update 长度大于小 clientID 的参考 doc
+      ensureRoot(doc) // server STEP2 delivered an empty root structure only
+      const emptyWithRoot = new Y.Doc()
+      emptyWithRoot.clientID = 0 // 1 字节 varUint,固定参考长度
+      ensureRoot(emptyWithRoot)
+      // 前提成立:长度确实不同——这正是旧实现误判的触发条件。
+      expect(Y.encodeStateAsUpdate(doc).length).toBeGreaterThan(
+        Y.encodeStateAsUpdate(emptyWithRoot).length,
+      )
+
+      const store = createMockStore()
+      store.nodes.set('n1', { id: 'n1', x: 1, y: 2, title: 'Local' } as any)
+
+      const binding = bindYjsToStore(createMockProvider(doc, true), store as any)
+      binding.syncYDocToLocalState()
+
+      // 本地实体必须保留(即使 update 长度"看起来有历史")。
+      expect(store.removeNode).not.toHaveBeenCalled()
+      // 并且被镜像回空 doc。
+      expect(ensureRoot(doc).nodes.has('n1')).toBe(true)
+      binding.destroy()
+    })
+
     it('wipes local store when server doc was intentionally emptied by peers', () => {
       // If peers deleted all entities while we were offline, the server doc
       // still carries deletion history. We must trust that authoritative empty

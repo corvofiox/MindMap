@@ -27,7 +27,7 @@ export function CollaborationCursors({ cursors, zoom, panX, panY }: Collaboratio
         const y = cursor.y * zoom + panY
 
         return (
-          <g key={userId} transform={`translate(${x}, ${y})`}>
+          <g key={userId} data-collab-cursor={String(userId)} transform={`translate(${x}, ${y})`}>
             {/* Cursor pointer */}
             <path
               d="M 0 0 L 16 12 L 10 14 L 8 20 L 0 0"
@@ -89,6 +89,7 @@ export function RemoteSelection({ selections, nodes, zoom, panX, panY }: RemoteS
               return (
                 <rect
                   key={nodeId}
+                  data-collab-selection={nodeId}
                   x={x}
                   y={y}
                   width={width}
@@ -117,10 +118,11 @@ export function UserAvatars({ users }: UserAvatarsProps) {
   if (!users || users.length === 0) return null
 
   return (
-    <div className="absolute top-4 right-4 flex flex-col gap-2">
+    <div className="absolute top-4 right-4 flex flex-col gap-2" data-collab-avatars="true">
       {users.map((user) => (
         <div
           key={user.id}
+          data-collab-avatar={String(user.id)}
           className="flex items-center gap-2 px-3 py-2 rounded-lg glass-panel"
         >
           {user.avatar ? (

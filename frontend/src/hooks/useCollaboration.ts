@@ -1,8 +1,9 @@
-import { useEffect, useRef, useCallback } from 'react'
+import { useEffect, useRef, useCallback, useState } from 'react'
 import { useCanvasStore, setYjsBinding, getYjsBinding } from '@/store/useCanvasStore'
 import { MindMapYjsProvider, defaultWsUrlRoot, type CanvasActiveUser } from '@/services/yjsProvider'
 import { bindYjsToStore } from '@/services/yjsBinding'
 import { useAuthStore } from '@/store/useAuthStore'
+import type { AwarenessState, AwarenessUserData } from '@/types'
 import { useProjectsStore } from '@/store/useProjectsStore'
 import { apiClient } from '@/services/api'
 
@@ -13,6 +14,22 @@ const activeProviders = new Map<number, MindMapYjsProvider>()
 // 显式传入,让绑定层的交互超时兜底时长可被集中调整(默认 10s;长拖拽场景
 // 或低性能设备可调大)。
 const COLLAB_INTERACTION_MAX_MS = 10000
+
+// 协作者光标/头像颜色：按 userId 稳定取色，保证多端看到的同一位协作者颜色一致。
+const COLLAB_USER_COLORS = [
+  '#f97316',
+  '#8b5cf6',
+  '#06b6d4',
+  '#ec4899',
+  '#10b981',
+  '#eab308',
+  '#3b82f6',
+  '#ef4444',
+]
+
+export function collabUserColor(userId: number): string {
+  return COLLAB_USER_COLORS[Math.abs(userId) % COLLAB_USER_COLORS.length]
+}
 
 export function getActiveYjsProvider(canvasId?: number): MindMapYjsProvider | null {
   if (canvasId !== undefined) return activeProviders.get(canvasId) ?? null
@@ -41,6 +58,10 @@ export function useCollaboration({
 }: UseCollaborationOptions) {
   const onKickedRef = useRef(onKicked)
   onKickedRef.current = onKicked
+  const [awarenessStates, setAwarenessStates] = useState<Map<number, AwarenessState>>(new Map())
+  const [activeUsers, setActiveUsers] = useState<
+    Array<{ id: number; name: string; color: string; avatar: string | null }>
+  >([])
   const currentMemberRole = useProjectsStore((state) => state.currentMemberRole)
 
   useEffect(() => {
@@ -226,6 +247,64 @@ export function useCollaboration({
       // 双端竞速 PUT 造成 409 风暴。
     })
 
+    // 广播本地用户身份（昵称/颜色/头像）：协作光标标签与在线头像依赖
+    // awareness 的 user 字段（此前从未写入，远端永远拿不到展示数据）。
+    if (user?.id) {
+      provider.setLocalAwarenessField('user', {
+        id: user.id,
+        name: user.nickname || user.email,
+        color: collabUserColor(user.id),
+        avatar: user.avatar,
+      })
+    }
+
+    // 订阅远端 awareness：clientID（连接级随机数）→ 业务 userId 键的
+    // AwarenessState 映射，并过滤本地用户（含多标签页同账号）。
+    const buildAwarenessMap = () => {
+      const map = new Map<number, AwarenessState>()
+      for (const state of provider.getAwarenessStates().values()) {
+        const remoteUser = state?.user as AwarenessUserData | undefined
+        if (!remoteUser || typeof remoteUser.id !== 'number') continue
+        if (user?.id !== undefined && remoteUser.id === user.id) continue
+        map.set(remoteUser.id, state as unknown as AwarenessState)
+      }
+      // M-1: 本地 awareness 写入(如 sendCursor 每次 pointermove)同样触发
+      // y-protocols 'change' 事件。此处与上一份结果逐项比较(键集合 + 值引用):
+      // 只有自身/被过滤条目变化时新旧 map 完全一致 → 返回 prev 跳过 setState,
+      // 避免 CanvasPage 每次鼠标移动全量重渲染。远端条目状态对象仅在对应
+      // clientID 自身更新时被 y-protocols 替换(按 clientID set),引用比较可靠。
+      // M-1: 本地 awareness 写入(如 sendCursor 每次 pointermove)同样触发
+      // y-protocols 'change' 事件。此处与上一份结果逐项比较(键集合 + 值引用):
+      // 只有自身/被过滤条目变化时新旧 map 完全一致 → 返回 prev 跳过 setState,
+      // 避免 CanvasPage 每次鼠标移动全量重渲染。远端条目状态对象仅在对应
+      // clientID 自身更新时被 y-protocols 替换(按 clientID set),引用比较可靠。
+      setAwarenessStates((prev) => {
+        if (prev.size !== map.size) return map
+        for (const [key, value] of prev) {
+          if (map.get(key) !== value) return map
+        }
+        return prev
+      })
+    }
+    const onAwarenessUnsub = provider.onAwarenessChange(buildAwarenessMap)
+    buildAwarenessMap()
+
+    // 订阅在线协作者列表（room-state / user-join / user-leave 驱动），
+    // 映射为 UserAvatars 组件所需的 { id, name, color, avatar } 形状。
+    const mapActiveUsers = (users: CanvasActiveUser[]) =>
+      users
+        .filter((u) => u.userId !== user?.id)
+        .map((u) => ({
+          id: u.userId,
+          name: u.nickname || u.email,
+          color: collabUserColor(u.userId),
+          avatar: u.avatar,
+        }))
+    const onUsersUnsub = provider.onUserChange((users) => {
+      setActiveUsers(mapActiveUsers(users))
+    })
+    setActiveUsers(mapActiveUsers(provider.getActiveUsers()))
+
     const onKickedUnsub = provider.onKicked((reason) => {
       onKickedRef.current?.(reason)
     })
@@ -254,6 +333,8 @@ export function useCollaboration({
       }
       onRoleChangeUnsub()
       onKickedUnsub()
+      onAwarenessUnsub()
+      onUsersUnsub()
       onSyncedUnsub()
       // Clear store binding reference first so any subsequent store mutation
       // that calls syncDiffToYDoc becomes a no-op before we touch the Y.Doc.
@@ -282,8 +363,19 @@ export function useCollaboration({
     provider.setLocalAwarenessField('cursor', { x, y })
   }, [canvasId])
 
+  const sendSelection = useCallback((ids: string[]) => {
+    const provider = getActiveYjsProvider(canvasId)
+    if (!provider) return
+    provider.setLocalAwarenessField('selection', ids)
+  }, [canvasId])
+
   return {
     sendCursor,
+    sendSelection,
+    /** 远端协作者的 awareness 快照（userId → 状态），已过滤本地用户。 */
+    awarenessStates,
+    /** 在线协作者（含颜色分配），供头像列表展示。 */
+    activeUsers,
     isConnected: () => isCollabConnected(canvasId),
   }
 }
