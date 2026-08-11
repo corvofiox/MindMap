@@ -440,9 +440,18 @@ export class MindMapYjsProvider {
 
     ws.onmessage = (event) => this.handleMessage(event)
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       this.statusListeners.forEach((fn) => fn(false))
       this.stopHeartbeat()
+      // Close code 1008 (Policy Violation) is a deterministic server rejection
+      // (e.g. "Not a collaborative project") — retrying can never succeed, so
+      // stop reconnect scheduling entirely instead of burning ~17 min of
+      // exponential backoff. Mirrors the kicked-message handling above.
+      if (event.code === 1008) {
+        this.isIntentionallyClosed = true
+        this.clearReconnect()
+        return
+      }
       if (!this.isIntentionallyClosed) {
         this.scheduleReconnect()
       }
