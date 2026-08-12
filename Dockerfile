@@ -20,6 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # 复制 package.json 和 start.js
 COPY package.json package-lock.json* start.js ./
+COPY scripts ./scripts
 
 # 复制源代码
 COPY shared ./shared
@@ -59,6 +60,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # 从 builder 阶段复制构建产物
 COPY --from=builder /app/package.json /app/package-lock.json* /app/start.js ./
+COPY --from=builder /app/scripts ./scripts
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/backend/package.json ./backend/package.json
 COPY --from=builder /app/frontend/package.json ./frontend/package.json
