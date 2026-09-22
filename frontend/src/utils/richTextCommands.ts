@@ -127,6 +127,44 @@ function getTextNodesInRange(range: Range): Text[] {
 }
 
 /**
+ * 读取元素内联样式里的**文字颜色**（只认 `color` 属性）。
+ *
+ * 不能用 `/color\s*:\s*([^;]+)/i` 去匹配 style 字符串：那个正则没有左边界，
+ * `background-color: #fff`、`border-color`、`caret-color` 都会被当成文字颜色。
+ * 节点卡片恰好带内联 `background-color`（NodeItem 里 `backgroundColor: node.color`），
+ * 于是"刚打出来的默认文字"一划选就被判成"已改过颜色"，工具栏颜色按钮直接亮起。
+ * 用 CSSOM 读 `element.style.color` 才是精确的 —— 它只认 color 这一个属性。
+ */
+function getInlineTextColor(el: HTMLElement): string | null {
+  const value = el.style.color
+  return value ? value.trim() : null
+}
+
+/**
+ * 只清除内联样式里的 `color`，保留 background-color 等其它属性。
+ * （旧实现用 `style.replace(/color\s*:[^;]+/gi,'')`，会把 `background-color: #fef08a`
+ * 抠成残缺的 `background-` —— 不只丢背景色，还写坏了内联样式。）
+ */
+function clearInlineTextColor(el: HTMLElement): void {
+  el.style.removeProperty('color')
+  const remaining = el.getAttribute('style')
+  if (!remaining || !remaining.trim()) el.removeAttribute('style')
+}
+
+/**
+ * 是否是富文本编辑器的根容器 —— 向上找颜色到此为止，不再看更外层
+ * （卡片 / 画布 / body 的颜色不属于这段文字）。
+ *
+ * 浏览器里用 `isContentEditable` 即可；但 jsdom 没有实现该属性（恒为 undefined），
+ * 只靠它会让"边界"在测试里静默失效，所以同时看 contenteditable 属性。
+ */
+function isEditorRoot(el: HTMLElement): boolean {
+  if (el.isContentEditable) return true
+  const attr = el.getAttribute('contenteditable')
+  return attr === '' || attr === 'true' || attr === 'plaintext-only'
+}
+
+/**
  * 获取节点上显式设置的颜色（从 style 属性或 font 标签）
  */
 function getExplicitColor(node: Node): string | null {
@@ -134,13 +172,10 @@ function getExplicitColor(node: Node): string | null {
 
   let element: Element | null = node.parentElement
   while (element && element instanceof HTMLElement) {
-    // 检查 style 属性中的 color
-    const style = element.getAttribute('style')
-    if (style) {
-      const colorMatch = style.match(/color\s*:\s*([^;]+)/i)
-      if (colorMatch) {
-        return colorMatch[1].trim()
-      }
+    // 只认内联 style 里的 color 属性（不能拿 background-color 当文字颜色）
+    const inlineColor = getInlineTextColor(element)
+    if (inlineColor) {
+      return inlineColor
     }
 
     // 检查 font 标签的 color 属性
@@ -150,6 +185,10 @@ function getExplicitColor(node: Node): string | null {
         return fontColor
       }
     }
+
+    // 到 contenteditable 容器即止：更外层（节点卡片/画布）的颜色不属于这段文字。
+    // 与 getColorAtCursor 保持一致 —— 少了这一步，卡片的内联样式会被当成文字颜色。
+    if (isEditorRoot(element)) break
 
     element = element.parentElement
   }
@@ -186,16 +225,10 @@ function getColorAtCursor(range: Range): string | null {
       }
     } else if (offset === 0 || node.childNodes.length === 0) {
       // 光标在空元素或元素开头，没有前一个节点可以获取颜色
-      // 检查当前元素本身是否有显式设置的颜色
-      const style = node.getAttribute('style')
-      if (style) {
-        const colorMatch = style.match(/color\s*:\s*([^;]+)/i)
-        if (colorMatch) {
-          const color = colorMatch[1].trim()
-          if (!ColorUtils.isDefault(color)) {
-            return ColorUtils.toHex(color)
-          }
-        }
+      // 检查当前元素本身是否有显式设置的颜色（只认 color，不认 background-color）
+      const inlineColor = getInlineTextColor(node as HTMLElement)
+      if (inlineColor && !ColorUtils.isDefault(inlineColor)) {
+        return ColorUtils.toHex(inlineColor)
       }
       // 空元素或没有显式颜色，返回 null
       return null
@@ -205,31 +238,10 @@ function getColorAtCursor(range: Range): string | null {
   // 向上遍历 DOM 树查找颜色
   // 但只遍历到 contenteditable 元素为止，不检查更外层的元素
   while (node && node instanceof HTMLElement) {
-    // 如果到达 contenteditable 容器，停止遍历
-    if (node.isContentEditable) {
-      // 检查容器本身是否有显式颜色
-      const style = node.getAttribute('style')
-      if (style) {
-        const colorMatch = style.match(/color\s*:\s*([^;]+)/i)
-        if (colorMatch) {
-          const color = colorMatch[1].trim()
-          if (!ColorUtils.isDefault(color)) {
-            return ColorUtils.toHex(color)
-          }
-        }
-      }
-      break
-    }
-
-    const style = node.getAttribute('style')
-    if (style) {
-      const colorMatch = style.match(/color\s*:\s*([^;]+)/i)
-      if (colorMatch) {
-        const color = colorMatch[1].trim()
-        if (!ColorUtils.isDefault(color)) {
-          return ColorUtils.toHex(color)
-        }
-      }
+    // 只认内联 style 里的 color 属性（background-color 等不算文字颜色）
+    const inlineColor = getInlineTextColor(node)
+    if (inlineColor && !ColorUtils.isDefault(inlineColor)) {
+      return ColorUtils.toHex(inlineColor)
     }
 
     if (node.tagName === 'FONT') {
@@ -238,6 +250,9 @@ function getColorAtCursor(range: Range): string | null {
         return ColorUtils.toHex(fontColor)
       }
     }
+
+    // 到达 contenteditable 容器即停止遍历（容器本身已在上面检查过）
+    if (isEditorRoot(node)) break
 
     node = node.parentElement
   }
@@ -481,18 +496,12 @@ function removeColorAtCursor(range: Range): boolean {
       current = current.parentElement
     }
 
-    // 向上查找带颜色的 span
+    // 向上查找带**文字颜色**的 span（background-color / border-color 都不算）
     while (current && current instanceof Element) {
       if (current.tagName === 'SPAN') {
-        const style = (current as HTMLElement).getAttribute('style') || ''
-        if (style.includes('color')) {
-          // 移除颜色样式
-          const newStyle = style.replace(/color\s*:[^;]+;?\s*/gi, '').trim()
-          if (newStyle) {
-            (current as HTMLElement).setAttribute('style', newStyle)
-          } else {
-            (current as HTMLElement).removeAttribute('style')
-          }
+        const span = current as HTMLElement
+        if (getInlineTextColor(span)) {
+          clearInlineTextColor(span)
           return true
         }
       }

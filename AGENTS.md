@@ -131,6 +131,15 @@ import { asyncHandler } from '../middleware/error.middleware.js'
 ```
 TypeScript ESM + `moduleResolution: "bundler"` 强制执行此约定。
 
+### 判断样式里的属性必须走 CSSOM，不要字符串匹配
+读/改元素内联样式里的某个属性时，用 `element.style.<prop>` / `style.removeProperty(...)`，
+**不要** `style.match(/color\s*:\s*([^;]+)/)` 或 `style.includes('color')`：这些写法没有属性边界，
+`background-color` / `border-color` / `caret-color` 都会被误命中（曾导致"刚打出的默认文字一划选
+就被判成已改颜色"，且"移除文字颜色"会把 `background-color: x` 抠成残缺的 `background-`）。
+相关实现集中在 `frontend/src/utils/richTextCommands.ts` 的 `getInlineTextColor` /
+`clearInlineTextColor`，并有源码守卫测试（`frontend/src/test/richTextCommands.test.ts`）。
+另：向上找样式时要**在 contenteditable 边界停止**，否则会把节点卡片/画布的颜色当成本段文字的。
+
 ### WebSocket：开发 vs 生产（Yjs CRDT 协作）
 - **开发环境**: WebSocket 独立监听端口 3001
 - **生产环境**: WebSocket 与 HTTP 共享端口 9000（路径 `/ws`）
