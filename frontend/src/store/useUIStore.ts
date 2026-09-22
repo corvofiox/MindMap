@@ -7,6 +7,7 @@ import { getToastConfig } from '@/config/messageConfig'
 import { setupTheme, applyTheme, initThemeListener } from '@/utils/themeManager'
 import { updateNodeDefaults } from '@/services/api'
 import { logger } from '@/utils/logger'
+import { MINIMAP_MAX_FRAME_HEIGHT_PX, MINIMAP_TOP_PX } from '@/utils/panelOffset'
 
 const getDefaultNodeDefaults = (): NodeDefaults => DEFAULT_NODE_DEFAULTS
 
@@ -72,6 +73,15 @@ interface UIState {
   minimapVisible: boolean
   setMinimapVisible: (visible: boolean) => void
   toggleMinimap: () => void
+  /**
+   * 小地图外框在画布中的实际占位（距顶部距离 + 外框总高度，单位 px），
+   * 由 CanvasMinimap 实时上报。协作头像栏据此贴在小地图正下方。
+   *
+   * 之所以不用常量：小地图尺寸随画布内容宽高比动态变化（最长边在 41~165 之间），
+   * 按上限预留会在小地图偏小时把头像推得很远（表现为"孤悬"）。
+   */
+  minimapFrame: { top: number; height: number }
+  setMinimapFrame: (frame: { top: number; height: number }) => void
 
   // Quick Edit Mode
   quickEditMode: boolean
@@ -235,6 +245,8 @@ export const useUIStore = create<UIState>()(
         minimapVisible: true,
         setMinimapVisible: (visible) => set({ minimapVisible: visible }),
         toggleMinimap: createToggle('minimapVisible'),
+        minimapFrame: { top: MINIMAP_TOP_PX, height: MINIMAP_MAX_FRAME_HEIGHT_PX },
+        setMinimapFrame: (frame) => set({ minimapFrame: frame }),
 
         // Quick Edit Mode
         quickEditMode: false,

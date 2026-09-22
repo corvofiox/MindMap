@@ -15,7 +15,11 @@ import {
 } from '@/components/canvas/CollaborationCursors'
 import { useAuthStore } from '@/store/useAuthStore'
 import { useUIStore } from '@/store/useUIStore'
-import { MINIMAP_MAX_FRAME_WIDTH_PX, OVERLAY_GAP_PX } from '@/utils/panelOffset'
+import {
+  MINIMAP_MAX_FRAME_HEIGHT_PX,
+  MINIMAP_TOP_PX,
+  OVERLAY_GAP_PX,
+} from '@/utils/panelOffset'
 import type { AwarenessState } from '@/types'
 
 const selfUser = {
@@ -209,12 +213,36 @@ describe('UserAvatars', () => {
     expect(withAiSidebar.style.right).toBe('20.5rem')
   })
 
-  it('avoids the minimap in the canvas top-right corner', () => {
-    useUIStore.setState({ nodePoolOpen: true, aiSidebarOpen: false, minimapVisible: true })
+  // 变更（2026-09-23）：头像栏原在小地图**左侧**，横向偏移按"小地图最大宽度"预留；
+  // 小地图实际偏窄时头像就离它很远（用户反馈"孤悬海外"）。现改为贴在小地图**正下方**，
+  // 纵向起点取 CanvasMinimap 通过 store 上报的**实际**外框高度。
+  it('sits directly below the minimap, using its reported frame height', () => {
+    useUIStore.setState({
+      nodePoolOpen: true,
+      aiSidebarOpen: false,
+      minimapVisible: true,
+      minimapFrame: { top: MINIMAP_TOP_PX, height: 120 },
+    })
     const { container } = render(<UserAvatars users={alice} />)
     const bar = container.querySelector('[data-collab-avatars="true"]') as HTMLElement
-    expect(bar.style.right).toContain('18.25rem')
-    expect(bar.style.right).toContain(`${MINIMAP_MAX_FRAME_WIDTH_PX + OVERLAY_GAP_PX}px`)
+    // 横向：只避让右侧面板（与小地图右对齐），不再额外让出小地图宽度
+    expect(bar.style.right).toBe('18.25rem')
+    // 纵向：小地图 top + 实际高度 + 间隙
+    expect(bar.style.top).toBe(`${MINIMAP_TOP_PX + 120 + OVERLAY_GAP_PX}px`)
+  })
+
+  it('falls back to the store default frame before the minimap reports its size', () => {
+    useUIStore.setState({
+      nodePoolOpen: false,
+      aiSidebarOpen: false,
+      minimapVisible: true,
+      minimapFrame: { top: MINIMAP_TOP_PX, height: MINIMAP_MAX_FRAME_HEIGHT_PX },
+    })
+    const { container } = render(<UserAvatars users={alice} />)
+    const bar = container.querySelector('[data-collab-avatars="true"]') as HTMLElement
+    expect(bar.style.top).toBe(
+      `${MINIMAP_TOP_PX + MINIMAP_MAX_FRAME_HEIGHT_PX + OVERLAY_GAP_PX}px`,
+    )
   })
 
   it('needs no offset when no panel or minimap is open', () => {
@@ -222,5 +250,6 @@ describe('UserAvatars', () => {
     const { container } = render(<UserAvatars users={alice} />)
     const bar = container.querySelector('[data-collab-avatars="true"]') as HTMLElement
     expect(bar.style.right).toBe('1rem')
+    expect(bar.style.top).toBe(`${MINIMAP_TOP_PX}px`)
   })
 })

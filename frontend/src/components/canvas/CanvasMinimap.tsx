@@ -2,9 +2,13 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { Z_INDEX } from '@/constants'
 import {
   getRightPanelOffset,
+  MINIMAP_FRAME_PADDING_PX,
   MINIMAP_MAX_CONTENT_HEIGHT_PX,
   MINIMAP_MAX_CONTENT_WIDTH_PX,
+  MINIMAP_TOP_PX,
+  MINIMAP_TOP_WITH_TOOLBAR_PX,
 } from '@/utils/panelOffset'
+import { useUIStore } from '@/store/useUIStore'
 import type { Node, NodeGroup, Domain, Connection } from '@/types'
 
 const MINIMAP_DEFAULT_WIDTH = 200
@@ -520,16 +524,30 @@ export function CanvasMinimap({
   // 计算右侧偏移量（避开节点池面板 / AI 侧边栏）
   const rightOffset = getRightPanelOffset(nodePoolOpen, aiSidebarOpen)
 
+  // 小地图外框的实际占位（距顶距离 + 总高度），上报给 store。
+  // 协作头像栏据此贴在小地图正下方；必须用实际值而非上限常量 —— 小地图尺寸随
+  // 内容宽高比变化，按上限预留会在它偏小时把头推得很远（视觉上"孤悬"）。
+  const frameTop = secondaryToolbarOpen ? MINIMAP_TOP_WITH_TOOLBAR_PX : MINIMAP_TOP_PX
+  const frameHeight =
+    (Number.isFinite(minimapSize.height) ? minimapSize.height : MINIMAP_DEFAULT_HEIGHT) +
+    MINIMAP_FRAME_PADDING_PX * 2
+  const setMinimapFrame = useUIStore((state) => state.setMinimapFrame)
+
+  // 同步到 store，供 UserAvatars 定位。只依赖尺寸/位置，变化时不频繁。
+  useEffect(() => {
+    setMinimapFrame({ top: frameTop, height: frameHeight })
+  }, [frameTop, frameHeight, setMinimapFrame])
+
   return (
     <div
       className="minimap bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 overflow-hidden transition-all duration-200"
       style={{
         position: 'absolute',
-        top: secondaryToolbarOpen ? '64px' : '16px',
+        top: `${frameTop}px`,
         left: 'auto',
         right: rightOffset,
-        width: `${(Number.isFinite(minimapSize.width) ? minimapSize.width : MINIMAP_DEFAULT_WIDTH) + 8}px`,
-        height: `${(Number.isFinite(minimapSize.height) ? minimapSize.height : MINIMAP_DEFAULT_HEIGHT) + 8}px`,
+        width: `${(Number.isFinite(minimapSize.width) ? minimapSize.width : MINIMAP_DEFAULT_WIDTH) + MINIMAP_FRAME_PADDING_PX * 2}px`,
+        height: `${frameHeight}px`,
         zIndex: Z_INDEX.ZOOM_CONTROLS,
       }}
       onMouseDown={(e) => e.stopPropagation()}
