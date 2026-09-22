@@ -61,6 +61,29 @@ cd backend && npm run db:clean       # 删除数据库文件
 docker compose up -d        # 构建并启动（端口 9000）
 ```
 
+## 镜像发布（Docker Hub `corvofiox/mindmap`）
+
+构建机为内网 Ubuntu（`~/mindmap-build/mindmap_v<四位版本>/`）。双架构产物，版本 tag 与 `latest` 必须指向同一 digest：
+
+```bash
+docker buildx build --platform linux/amd64,linux/arm64 \
+  --build-arg APP_VERSION=v1.9.15 \
+  --build-arg GIT_REVISION=$(git rev-parse HEAD) \
+  -t corvofiox/mindmap:v1.9.15 -t corvofiox/mindmap:latest \
+  --push .
+```
+
+`APP_VERSION` 决定镜像 LABEL 与 `/health` 返回的版本号；不传则两处都显示 `dev`（宁可标"未知"也不谎报版本）。
+
+发布前后逐项核对：
+
+1. 工作区干净、前后端测试全绿；
+2. **`buildx push` 成功 ≠ 镜像能启动** —— v1.9.13 曾因 Dockerfile 漏 `COPY scripts/` 导致 `start.js` 崩溃循环；
+3. 起容器冒烟 `curl localhost:9000/health`，版本号必须是本次发布的，不能是 `dev`；
+4. `docker image inspect` 的 `org.opencontainers.image.revision` 应等于本次 commit；
+5. 打 git tag（`git tag v1.9.15 && git push origin v1.9.15`）—— 镜像版本与源码 commit 的对应关系只存在于此；
+6. 崩溃循环先 `docker logs` 定位；回滚 = 拉上一版 → 重新 tag 成 `latest` → `compose up -d`。
+
 ## 关键架构事实
 
 ### monorepo 构建顺序

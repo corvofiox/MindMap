@@ -49,6 +49,11 @@ const env = getValidatedEnv()
 const PORT = parseInt(env.PORT || '3000', 10)
 const WS_PORT = parseInt(env.WS_PORT || '3001', 10)
 
+// 镜像版本由构建时注入（Dockerfile 的 APP_VERSION build-arg），本地开发回退 'dev'。
+// 此前这里写死 '1.9.10' 且 1.9.11~1.9.14 四次发布都没回写，而发布冒烟正是
+// curl /health —— 它谎报版本，让冒烟验证失去意义。宁可返回 'dev' 也不报错的版本号。
+const APP_VERSION = process.env.APP_VERSION?.trim() || 'dev'
+
 // Middleware
 // CORS configuration
 import { createCorsMiddleware } from './middleware/cors.middleware.js'
@@ -79,7 +84,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     timestamp: new Date().toISOString(),
     service: 'mindmap-backend',
-    version: '1.9.10'
+    version: APP_VERSION
   })
 })
 

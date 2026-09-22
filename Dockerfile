@@ -53,6 +53,19 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV DOCKER_CONTAINER=true
 
+# 版本可追溯性：发布时由 build-arg 注入；未传时标为 dev/unknown —— 宁可标"未知"，
+# 也不要谎报一个版本号（历史上 /health 写死 1.9.10 曾让冒烟验证失去意义）。
+#   docker buildx build --build-arg APP_VERSION=v1.9.15 \
+#     --build-arg GIT_REVISION=$(git rev-parse HEAD) ...
+# APP_VERSION 同时被 /health 读取，冒烟时才能确认跑的是哪个版本。
+ARG APP_VERSION=dev
+ARG GIT_REVISION=unknown
+ENV APP_VERSION=${APP_VERSION}
+LABEL org.opencontainers.image.title="MindMap" \
+      org.opencontainers.image.version="${APP_VERSION}" \
+      org.opencontainers.image.revision="${GIT_REVISION}" \
+      org.opencontainers.image.source="https://github.com/corvofiox/MindMap"
+
 # 只安装运行时依赖
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
