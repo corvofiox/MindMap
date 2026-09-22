@@ -265,6 +265,44 @@ describe('WebSocket Server', () => {
       expect(ws2.close).not.toHaveBeenCalled()
     })
 
+    it('should exchange the user list when a second distinct user joins', async () => {
+      // First user (userId 1) joins and gets an empty room-state
+      const ws1 = await connect(115, '127.0.0.100')
+      const firstRoomState = ws1.send.mock.calls
+        .map((call: any) => call[0])
+        .find((s: any) => typeof s === 'string' && s.includes('"type":"room-state"'))
+      expect(JSON.parse(firstRoomState).users).toEqual([])
+
+      // Second distinct user (userId 2) joins
+      ;(jwt as any).verify.mockReturnValue({ userId: 2 })
+      ;(db.query.users.findFirst as any).mockResolvedValue({
+        id: 2,
+        email: 'peer@test.com',
+        nickname: 'peer',
+        avatar: null,
+      })
+      ;(db.query.projectMembers.findFirst as any).mockResolvedValue({
+        id: 2,
+        projectId: 1,
+        userId: 2,
+        role: 'editor',
+      })
+      const ws2 = await connect(115, '127.0.0.101')
+
+      // The joiner receives the existing user in its room-state
+      const joinerRoomState = ws2.send.mock.calls
+        .map((call: any) => call[0])
+        .find((s: any) => typeof s === 'string' && s.includes('"type":"room-state"'))
+      expect(JSON.parse(joinerRoomState).users.map((u: any) => u.userId)).toEqual([1])
+
+      // The already-present user is told a new user joined
+      const joinNotice = ws1.send.mock.calls
+        .map((call: any) => call[0])
+        .find((s: any) => typeof s === 'string' && s.includes('"type":"user-join"'))
+      expect(joinNotice).toBeDefined()
+      expect(JSON.parse(joinNotice).user.userId).toBe(2)
+    })
+
     it('should save document periodically', async () => {
       const ws = await connect(102, '127.0.0.73')
 

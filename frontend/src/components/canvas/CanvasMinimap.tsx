@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { Z_INDEX } from '@/constants'
+import {
+  getRightPanelOffset,
+  MINIMAP_MAX_CONTENT_HEIGHT_PX,
+  MINIMAP_MAX_CONTENT_WIDTH_PX,
+} from '@/utils/panelOffset'
 import type { Node, NodeGroup, Domain, Connection } from '@/types'
 
 const MINIMAP_DEFAULT_WIDTH = 200
@@ -53,8 +58,8 @@ export function CanvasMinimap({
 
   // Calculate minimap size from bounds, guarding against invalid aspect ratios.
   const calculateMinimapSize = useCallback((bounds: Bounds) => {
-    const maxMinimapWidth = 220
-    const maxMinimapHeight = 165
+    const maxMinimapWidth = MINIMAP_MAX_CONTENT_WIDTH_PX
+    const maxMinimapHeight = MINIMAP_MAX_CONTENT_HEIGHT_PX
     const aspectRatio =
       bounds.width > 0 && bounds.height > 0 && Number.isFinite(bounds.width) && Number.isFinite(bounds.height)
         ? bounds.width / bounds.height
@@ -512,12 +517,8 @@ export function CanvasMinimap({
     onViewportChange(newPanX, newPanY)
   }
 
-  // 计算右侧偏移量
-  const getRightOffset = () => {
-    if (aiSidebarOpen) return '20.5rem' // 320px + 16px margin
-    if (nodePoolOpen) return '18.25rem' // 288px + 16px margin
-    return '16px'
-  }
+  // 计算右侧偏移量（避开节点池面板 / AI 侧边栏）
+  const rightOffset = getRightPanelOffset(nodePoolOpen, aiSidebarOpen)
 
   return (
     <div
@@ -526,7 +527,7 @@ export function CanvasMinimap({
         position: 'absolute',
         top: secondaryToolbarOpen ? '64px' : '16px',
         left: 'auto',
-        right: getRightOffset(),
+        right: rightOffset,
         width: `${(Number.isFinite(minimapSize.width) ? minimapSize.width : MINIMAP_DEFAULT_WIDTH) + 8}px`,
         height: `${(Number.isFinite(minimapSize.height) ? minimapSize.height : MINIMAP_DEFAULT_HEIGHT) + 8}px`,
         zIndex: Z_INDEX.ZOOM_CONTROLS,

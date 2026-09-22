@@ -847,7 +847,8 @@ function handleMessage(ws: WebSocketWithUserData, room: CanvasRoom, data: Buffer
           : (ws.textTimestamps ??= [])
     while (window.length > 0 && window[0] < now - 1000) window.shift()
     if (window.length >= limit) {
-      ws.send(JSON.stringify({ type: 'error', message: 'rate limited' }))
+      // 结构化 code 供客户端稳定判定（文案可改、code 不变）；message 保留给日志与旧客户端。
+      ws.send(JSON.stringify({ type: 'error', code: 'rate_limited', message: 'rate limited' }))
       ws.close(1008, 'rate limited')
       return
     }

@@ -2,9 +2,10 @@ import { Plus, Minus, Maximize2 } from 'lucide-react'
 import { useCanvasStore } from '@/store/useCanvasStore'
 import { useUIStore } from '@/store/useUIStore'
 import { CANVAS_DEFAULTS, Z_INDEX } from '@/constants'
+import { getRightPanelOffset } from '@/utils/panelOffset'
 
 export function ZoomControls() {
-  const { zoom, setZoom, setPan } = useCanvasStore()
+  const { zoom, setZoom } = useCanvasStore()
   const { nodePoolOpen, aiSidebarOpen, zoomStep } = useUIStore()
 
   const handleZoomIn = () => {
@@ -20,17 +21,13 @@ export function ZoomControls() {
     setZoom(CANVAS_DEFAULTS.DEFAULT_ZOOM)
   }
 
-  // 计算右侧位置
-  const getRightPosition = () => {
-    if (aiSidebarOpen) return '20.5rem' // 320px + 16px margin
-    if (nodePoolOpen) return '18.25rem' // 288px + 16px margin
-    return '1rem' // right-4 = 16px
-  }
+  // 计算右侧位置（避开节点池面板 / AI 侧边栏）
+  const rightPosition = getRightPanelOffset(nodePoolOpen, aiSidebarOpen)
 
   return (
     <div
       className="absolute bottom-4 flex items-center gap-1 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 p-1 transition-all duration-200"
-      style={{ zIndex: Z_INDEX.ZOOM_CONTROLS, right: getRightPosition() }}
+      style={{ zIndex: Z_INDEX.ZOOM_CONTROLS, right: rightPosition }}
     >
       <button
         onClick={handleZoomOut}

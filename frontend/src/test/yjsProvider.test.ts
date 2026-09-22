@@ -92,10 +92,10 @@ class MockWebSocket {
     }
   }
 
-  simulateClose() {
+  simulateClose(code = 0, reason = '') {
     this.readyState = MockWebSocket.CLOSED
     if (this.onclose) {
-      this.onclose(new CloseEvent('close') as CloseEvent)
+      this.onclose(new CloseEvent('close', { code, reason }) as CloseEvent)
     }
   }
 
@@ -275,6 +275,173 @@ describe('MindMapYjsProvider', () => {
       ws2.receiveBinary(buildStep2Message(remoteDoc))
       expect(provider.getIsSynced()).toBe(true)
       expect(syncedFn).toHaveBeenCalledTimes(2)
+
+      provider.disconnect()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // 回归：拖动节点时每个 mousemove 都会产生一次 doc 变更，逐帧直发会超过服务端
+  // SYNC 限速（50 帧/秒）而被 close(1008)。合并窗口内只发一帧且语义无损。
+  it('coalesces a burst of local edits into a single SYNC frame', async () => {
+    const provider = createProvider()
+    provider.connect()
+    await tick()
+
+    const ws = MockWebSocket.last()
+    const before = ws.sent.length
+
+    const nodes = provider.doc.getMap<Y.Map<unknown>>('nodes')
+    nodes.set('n1', new Y.Map())
+    nodes.set('n2', new Y.Map())
+    nodes.set('n3', new Y.Map())
+
+    // 合并窗口未到：不得逐帧直发
+    expect(ws.sent.length).toBe(before)
+
+    await new Promise((resolve) => setTimeout(resolve, 150))
+
+    const frames = ws.sent.slice(before)
+    expect(frames.length).toBe(1)
+
+    // 合并帧语义等价：对端应用后包含全部三个变更
+    const view = frames[0] as Uint8Array
+    const decoder = decoding.createDecoder(view)
+    expect(decoding.readVarUint(decoder)).toBe(0) // SYNC envelope
+    expect(decoding.readVarUint(decoder)).toBe(syncProtocol.messageYjsUpdate)
+    const peerDoc = new Y.Doc()
+    Y.applyUpdate(peerDoc, decoding.readVarUint8Array(decoder))
+    expect(Array.from(peerDoc.getMap('nodes').keys()).sort()).toEqual(['n1', 'n2', 'n3'])
+
+    provider.disconnect()
+  })
+
+  // 回归：限速是瞬时故障，服务端先发 error 帧再 close(1008)，客户端必须重连，
+  // 否则协作会静默永久断开（此前 1008 一律视为永久拒绝）。
+  it('reconnects after a server rate-limit 1008 close', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const provider = createProvider()
+      provider.connect()
+      await vi.advanceTimersByTimeAsync(0)
+
+      const ws = MockWebSocket.last()
+      ws.receiveText(JSON.stringify({ type: 'error', message: 'rate limited' }))
+      const instancesAfterClose = MockWebSocket.instances.length
+      ws.simulateClose(1008)
+
+      // 退避 2000ms（含 0.75..1.25 抖动）后必须新建连接
+      await vi.advanceTimersByTimeAsync(2600)
+      expect(MockWebSocket.instances.length).toBeGreaterThan(instancesAfterClose)
+
+      provider.disconnect()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // 其他 1008（鉴权/权限拒绝）是永久性的，不能重连空转。
+  it('does not reconnect on a non-rate-limit 1008 close', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const provider = createProvider()
+      provider.connect()
+      await vi.advanceTimersByTimeAsync(0)
+
+      const ws = MockWebSocket.last()
+      const instancesAfterClose = MockWebSocket.instances.length
+      ws.simulateClose(1008)
+
+      await vi.advanceTimersByTimeAsync(30000)
+      expect(MockWebSocket.instances.length).toBe(instancesAfterClose)
+
+      provider.disconnect()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // 限速判定的主依据是结构化 code，不依赖后端文案（文案改了也不能静默失效）。
+  it('reconnects on the structured rate-limit code even if the text changed', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const provider = createProvider()
+      provider.connect()
+      await vi.advanceTimersByTimeAsync(0)
+
+      const ws = MockWebSocket.last()
+      ws.receiveText(
+        JSON.stringify({ type: 'error', code: 'rate_limited', message: '请求过于频繁' }),
+      )
+      const instancesAfterClose = MockWebSocket.instances.length
+      ws.simulateClose(1008, 'rate limited')
+
+      await vi.advanceTimersByTimeAsync(2600)
+      expect(MockWebSocket.instances.length).toBeGreaterThan(instancesAfterClose)
+
+      provider.disconnect()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // error 帧若在网络层丢失，close reason 是独立的兜底信号，不能退化成永久断连。
+  it('reconnects from the close reason alone when the error frame never arrived', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const provider = createProvider()
+      provider.connect()
+      await vi.advanceTimersByTimeAsync(0)
+
+      const ws = MockWebSocket.last()
+      const instancesAfterClose = MockWebSocket.instances.length
+      ws.simulateClose(1008, 'rate limited')
+
+      await vi.advanceTimersByTimeAsync(2600)
+      expect(MockWebSocket.instances.length).toBeGreaterThan(instancesAfterClose)
+
+      provider.disconnect()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // 固化原先"300 次连发"的端到端验证（原临时测试已删除，结论不能没有回归）。
+  // 用虚拟时间驱动，结果确定且不拖慢测试套件。
+  it('caps SYNC frames during a 300-edit burst and delivers every change', async () => {
+    vi.useFakeTimers()
+    try {
+      const provider = createProvider()
+      provider.connect()
+      await vi.advanceTimersByTimeAsync(0) // 让 MockWebSocket 完成 open
+
+      const ws = MockWebSocket.last()
+      const before = ws.sent.length
+
+      const nodes = provider.doc.getMap<Y.Map<unknown>>('nodes')
+      // 每 3ms 一次变更，共 300 次 ≈ 虚拟时间 1 秒，模拟拖动节点
+      for (let i = 0; i < 300; i++) {
+        nodes.set(`n${i}`, new Y.Map())
+        await vi.advanceTimersByTimeAsync(3)
+      }
+      await vi.advanceTimersByTimeAsync(120) // 等最后一个合并窗口落地
+
+      const frames = ws.sent.slice(before)
+      // 未合并时这里是 ~300 帧；合并后 1 秒内最多 ~20 帧（SYNC_COALESCE_MS = 50）
+      expect(frames.length).toBeGreaterThan(0)
+      expect(frames.length).toBeLessThanOrEqual(22)
+
+      // 合并必须无损：对端应用完所有 SYNC 帧后必须拿到全部 300 个键
+      const peerDoc = new Y.Doc()
+      for (const frame of frames) {
+        if (!(frame instanceof Uint8Array)) continue
+        const decoder = decoding.createDecoder(frame)
+        if (decoding.readVarUint(decoder) !== 0) continue // 只看 SYNC 帧
+        if (decoding.readVarUint(decoder) !== syncProtocol.messageYjsUpdate) continue
+        Y.applyUpdate(peerDoc, decoding.readVarUint8Array(decoder))
+      }
+      expect(peerDoc.getMap('nodes').size).toBe(300)
 
       provider.disconnect()
     } finally {

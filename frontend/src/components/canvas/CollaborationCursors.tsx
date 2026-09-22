@@ -1,5 +1,11 @@
 import type { AwarenessState } from '@/types'
 import { useAuthStore } from '@/store/useAuthStore'
+import { useUIStore } from '@/store/useUIStore'
+import {
+  getRightPanelOffset,
+  MINIMAP_MAX_FRAME_WIDTH_PX,
+  OVERLAY_GAP_PX,
+} from '@/utils/panelOffset'
 
 interface CollaborationCursorsProps {
   cursors: Map<number, AwarenessState>
@@ -14,7 +20,7 @@ export function CollaborationCursors({ cursors, zoom, panX, panY }: Collaboratio
   if (!cursors || cursors.size === 0) return null
 
   return (
-    <svg className="absolute inset-0 pointer-events-none">
+    <svg className="absolute inset-0 w-full h-full pointer-events-none">
       {Array.from(cursors.entries()).map(([userId, state]) => {
         // Skip current user
         if (currentUser && userId === currentUser.id) return null
@@ -67,7 +73,7 @@ export function RemoteSelection({ selections, nodes, zoom, panX, panY }: RemoteS
   if (!selections || selections.size === 0) return null
 
   return (
-    <svg className="absolute inset-0 pointer-events-none">
+    <svg className="absolute inset-0 w-full h-full pointer-events-none">
       {Array.from(selections.entries()).map(([userId, state]) => {
         // Skip current user
         if (currentUser && userId === currentUser.id) return null
@@ -115,10 +121,24 @@ interface UserAvatarsProps {
 }
 
 export function UserAvatars({ users }: UserAvatarsProps) {
+  // 覆盖层必须主动避让：右侧面板（节点池/AI 侧边栏，z-index 70）与小地图
+  // （右上角，z-index 60）都在本覆盖层（z-index 15）之上。默认
+  // nodePoolOpen/minimapVisible 均为 true，若不避让头像栏会被完全盖住。
+  const { nodePoolOpen, aiSidebarOpen, minimapVisible } = useUIStore()
+
   if (!users || users.length === 0) return null
 
+  const panelOffset = getRightPanelOffset(nodePoolOpen, aiSidebarOpen)
+  const rightOffset = minimapVisible
+    ? `calc(${panelOffset} + ${MINIMAP_MAX_FRAME_WIDTH_PX + OVERLAY_GAP_PX}px)`
+    : panelOffset
+
   return (
-    <div className="absolute top-4 right-4 flex flex-col gap-2" data-collab-avatars="true">
+    <div
+      className="absolute top-4 flex flex-col gap-2 transition-all duration-200"
+      style={{ right: rightOffset }}
+      data-collab-avatars="true"
+    >
       {users.map((user) => (
         <div
           key={user.id}

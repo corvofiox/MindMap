@@ -64,6 +64,11 @@ const APP_HEARTBEAT_INTERVAL_MS = 25000
 const MAX_RECONNECT_ATTEMPTS = 10
 const MAX_RECONNECT_DELAY_MS = 30000
 const RECONNECT_BASE_DELAY_MS = 2000
+// R1: 本地 doc 变更的发包合并窗口。服务端每连接 SYNC 限速 50 帧/秒，而拖动
+// 节点时 store 每个 mousemove 都会产生一次 doc 变更——逐帧直发会瞬间触发
+// 限速断连（close 1008）。把窗口内的多次变更合并成一帧（Y.mergeUpdates 无损）
+// 后发送，正常编辑速率降到 ~20 帧/秒，同时显著降低带宽。
+const SYNC_COALESCE_MS = 50
 
 /**
  * R1 加固：跨 provider 生命周期的"协作证据"记录（canvasId → 是否曾见过其他协作者）。
@@ -201,7 +206,16 @@ export class MindMapYjsProvider {
   private statusListeners = new Set<(connected: boolean) => void>()
 
   private pendingUpdates: Uint8Array[] = []
+  /** 合并窗口定时器：窗口内多次本地变更只发一帧 SYNC。 */
+  private syncFlushTimer: ReturnType<typeof setTimeout> | null = null
   private static readonly MAX_PENDING_UPDATE_BYTES = 1_000_000 // ~1MB
+
+  /**
+   * 服务端在本连接上报告过 rate limited（随后 close 1008）。限速是瞬时的
+   * （客户端发包过快），重连即可自愈；其他 1008 原因（鉴权/权限）是永久性
+   * 拒绝，不能重连。
+   */
+  private rateLimitedByServer = false
 
   /**
    * R1: 本 provider 会话内是否收到过其他客户端的编辑广播（UPDATE 消息）。
@@ -272,6 +286,7 @@ export class MindMapYjsProvider {
     this.isIntentionallyClosed = true
     this.clearReconnect()
     this.stopHeartbeat()
+    this.cancelSyncFlush()
     // Prevent any deferred awareness flush from firing after disconnect.
     if (this.awarenessThrottleTimer) {
       clearTimeout(this.awarenessThrottleTimer)
@@ -404,6 +419,10 @@ export class MindMapYjsProvider {
   // ---- Connection plumbing ----
 
   private openSocket() {
+    // A fresh attempt has no knowledge of the previous socket's server-side
+    // rate-limit report; only a report received on THIS connection may
+    // authorize reconnecting after a 1008 close.
+    this.rateLimitedByServer = false
     const token = this.options.tokenGetter ? this.options.tokenGetter() : this.options.token
     if (!token) {
       this.scheduleReconnect()
@@ -443,14 +462,26 @@ export class MindMapYjsProvider {
     ws.onclose = (event) => {
       this.statusListeners.forEach((fn) => fn(false))
       this.stopHeartbeat()
-      // Close code 1008 (Policy Violation) is a deterministic server rejection
-      // (e.g. "Not a collaborative project") — retrying can never succeed, so
-      // stop reconnect scheduling entirely instead of burning ~17 min of
-      // exponential backoff. Mirrors the kicked-message handling above.
+      this.cancelSyncFlush()
+      // Close code 1008 (Policy Violation) is normally a deterministic server
+      // rejection (e.g. "Not a collaborative project") — retrying can never
+      // succeed, so stop reconnect scheduling entirely instead of burning
+      // exponential backoff. Rate limiting is the exception: the server reports
+      // it before closing, and it is transient (the client sent too many SYNC
+      // frames in one second due to a burst of local edits) — reconnect so the
+      // session self-heals instead of silently dying until a manual reload.
       if (event.code === 1008) {
-        this.isIntentionallyClosed = true
-        this.clearReconnect()
-        return
+        // 两个独立信号任一成立即认定为限速：error 帧（结构化 code 或旧版文案）
+        // 与服务端 close(1008, 'rate limited') 的 reason。error 帧若因网络原因
+        // 未送达，reason 仍能兜住，避免退化成永久断连。
+        const rateLimited =
+          this.rateLimitedByServer || (event.reason || '').includes('rate limited')
+        this.rateLimitedByServer = false
+        if (!rateLimited) {
+          this.isIntentionallyClosed = true
+          this.clearReconnect()
+          return
+        }
       }
       if (!this.isIntentionallyClosed) {
         this.scheduleReconnect()
@@ -548,6 +579,22 @@ export class MindMapYjsProvider {
       case 'pong':
         // Application-layer heartbeat reply; no state to update.
         break
+      case 'error': {
+        // The server reports protocol errors (e.g. "rate limited") as a text
+        // frame right before closing the socket. Rate limiting is transient:
+        // record it so the 1008 close handler reconnects instead of treating
+        // the session as permanently rejected.
+        const errorCode = typeof message.code === 'string' ? message.code : undefined
+        const errorMessage =
+          typeof message.message === 'string' ? message.message : 'unknown server error'
+        logger.warn('[yjs-provider] server error', { code: errorCode, message: errorMessage })
+        // 结构化 code 优先判定；文案匹配仅作向后兼容——否则后端改一次文案，
+        // 限速 1008 就会静默退化成"永久拒绝"，协作整场断开。
+        if (errorCode === 'rate_limited' || errorMessage.includes('rate limited')) {
+          this.rateLimitedByServer = true
+        }
+        break
+      }
       default:
         break
     }
@@ -676,35 +723,51 @@ export class MindMapYjsProvider {
       // The server enforces this server-side, but blocking at the source
       // prevents the local Y.Doc from silently diverging from server state.
       if (this.options.role === 'viewer') return
-      // Forward every local-origin update to the server. Remote-origin updates
+      // Forward local-origin updates to the server. Remote-origin updates
       // (applied via readSyncMessage) have origin === REMOTE_ORIGIN and should
       // NOT be re-broadcast (the server already has them).
       if (origin === REMOTE_ORIGIN) return
-      if (!this.isConnected()) {
-        // Buffer local updates so they can be replayed after reconnect.
-        this.pendingUpdates.push(update)
-        // Enforce max queue size — compact all pending updates into a single
-        // efficient update when the byte limit is exceeded. Y.mergeUpdates()
-        // is lossless: the combined update is semantically equivalent to
-        // applying each update in order, but typically much smaller because
-        // overlapping changes are collapsed. This avoids the permanent data
-        // loss that would result from dropping entries.
-        const totalBytes = this.pendingUpdates.reduce((sum, u) => sum + u.byteLength, 0)
-        if (totalBytes > MindMapYjsProvider.MAX_PENDING_UPDATE_BYTES) {
-          const merged = Y.mergeUpdates(this.pendingUpdates)
-          logger.warn(
-            `[yjs-provider] compacted ${this.pendingUpdates.length} pending updates ` +
-              `(${totalBytes} bytes → ${merged.byteLength} bytes)`,
-          )
-          this.pendingUpdates = [merged]
-        }
-        return
+      // Buffer first: while disconnected the buffer is the offline replay queue;
+      // while connected it is the coalescing window (see SYNC_COALESCE_MS).
+      this.pendingUpdates.push(update)
+      this.enforcePendingUpdateBudget()
+      if (this.isConnected()) {
+        this.scheduleSyncFlush()
       }
-      const encoder = encoding.createEncoder()
-      encoding.writeVarUint(encoder, 0) // SYNC
-      syncProtocol.writeUpdate(encoder, update)
-      this.sendRaw(encoding.toUint8Array(encoder))
     })
+  }
+
+  /** Compact the outgoing buffer when it grows past the byte budget.
+   *  Y.mergeUpdates() is lossless: the combined update is semantically
+   *  equivalent to applying each update in order, but typically much smaller
+   *  because overlapping changes are collapsed. This avoids the permanent data
+   *  loss that would result from dropping entries. */
+  private enforcePendingUpdateBudget(): void {
+    const totalBytes = this.pendingUpdates.reduce((sum, u) => sum + u.byteLength, 0)
+    if (totalBytes <= MindMapYjsProvider.MAX_PENDING_UPDATE_BYTES) return
+    const merged = Y.mergeUpdates(this.pendingUpdates)
+    logger.warn(
+      `[yjs-provider] compacted ${this.pendingUpdates.length} pending updates ` +
+        `(${totalBytes} bytes → ${merged.byteLength} bytes)`,
+    )
+    this.pendingUpdates = [merged]
+  }
+
+  /** Schedule a coalesced flush of buffered doc updates. At most one timer is
+   *  pending; the flush re-checks connectivity and role. */
+  private scheduleSyncFlush(): void {
+    if (this.syncFlushTimer) return
+    this.syncFlushTimer = setTimeout(() => {
+      this.syncFlushTimer = null
+      this.flushPendingUpdates()
+    }, SYNC_COALESCE_MS)
+  }
+
+  private cancelSyncFlush(): void {
+    if (this.syncFlushTimer) {
+      clearTimeout(this.syncFlushTimer)
+      this.syncFlushTimer = null
+    }
   }
 
   private lastAwarenessSend = 0
@@ -788,6 +851,8 @@ export class MindMapYjsProvider {
    * also a no-op — the buffered updates are kept for the reconnect replay.
    */
   flushPendingUpdates(): void {
+    // An explicit flush supersedes any pending coalescing window.
+    this.cancelSyncFlush()
     if (this.pendingUpdates.length === 0) return
     if (!this.isConnected()) return
     if (this.options.role === 'viewer') {

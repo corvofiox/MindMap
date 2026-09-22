@@ -14,6 +14,8 @@ import {
   UserAvatars,
 } from '@/components/canvas/CollaborationCursors'
 import { useAuthStore } from '@/store/useAuthStore'
+import { useUIStore } from '@/store/useUIStore'
+import { MINIMAP_MAX_FRAME_WIDTH_PX, OVERLAY_GAP_PX } from '@/utils/panelOffset'
 import type { AwarenessState } from '@/types'
 
 const selfUser = {
@@ -37,6 +39,7 @@ const remoteState = (
 
 beforeEach(() => {
   useAuthStore.setState({ user: selfUser })
+  useUIStore.setState({ nodePoolOpen: true, aiSidebarOpen: false, minimapVisible: true })
 })
 
 afterEach(() => {
@@ -92,6 +95,23 @@ describe('CollaborationCursors', () => {
     )
     expect(container.firstChild).toBeNull()
   })
+
+  // 回归：<svg> 是替换元素,只有 absolute inset-0 时宽高会退回固有 300x150,
+  // 远端光标在小矩形之外被 SVG 默认 overflow:hidden 裁掉而不可见。
+  it('stretches the overlay svg to the full container so distant cursors are not clipped', () => {
+    const cursors = new Map<number, AwarenessState>([
+      [2, remoteState(2, 'Alice', '#f97316', { cursor: { x: 900, y: 700 } })],
+    ])
+    const { container } = render(
+      <CollaborationCursors cursors={cursors} zoom={1} panX={0} panY={0} />,
+    )
+    const svg = container.querySelector('svg')
+    expect(svg?.classList.contains('w-full')).toBe(true)
+    expect(svg?.classList.contains('h-full')).toBe(true)
+    expect(container.querySelector('[data-collab-cursor="2"]')?.getAttribute('transform')).toBe(
+      'translate(900, 700)',
+    )
+  })
 })
 
 describe('RemoteSelection', () => {
@@ -135,6 +155,19 @@ describe('RemoteSelection', () => {
     )
     expect(container.firstChild).toBeNull()
   })
+
+  // 回归：同 CollaborationCursors,未撑满容器的 svg 会裁掉远处的远端选区虚线框。
+  it('stretches the overlay svg to the full container so distant selection rects are not clipped', () => {
+    const selections = new Map<number, AwarenessState>([
+      [2, remoteState(2, 'Alice', '#f97316', { selection: ['node-2'] })],
+    ])
+    const { container } = render(
+      <RemoteSelection selections={selections} nodes={nodes} zoom={1} panX={0} panY={0} />,
+    )
+    const svg = container.querySelector('svg')
+    expect(svg?.classList.contains('w-full')).toBe(true)
+    expect(svg?.classList.contains('h-full')).toBe(true)
+  })
 })
 
 describe('UserAvatars', () => {
@@ -157,5 +190,37 @@ describe('UserAvatars', () => {
   it('renders nothing for an empty user list', () => {
     const { container } = render(<UserAvatars users={[]} />)
     expect(container.firstChild).toBeNull()
+  })
+
+  // 回归：右侧面板(node pool z70 / AI sidebar z70)与小地图(z60, 右上角)都比协作
+  // 覆盖层(z15)高，头像栏若不主动避让就会被盖住（默认两者都是开启的）。
+  const alice = [{ id: 2, name: 'Alice', color: '#f97316', avatar: null }]
+
+  it('avoids the right-side panels', () => {
+    useUIStore.setState({ nodePoolOpen: true, aiSidebarOpen: false, minimapVisible: false })
+    const first = render(<UserAvatars users={alice} />)
+    const withNodePool = first.container.querySelector('[data-collab-avatars="true"]') as HTMLElement
+    expect(withNodePool.style.right).toBe('18.25rem')
+    first.unmount()
+
+    useUIStore.setState({ nodePoolOpen: false, aiSidebarOpen: true, minimapVisible: false })
+    const second = render(<UserAvatars users={alice} />)
+    const withAiSidebar = second.container.querySelector('[data-collab-avatars="true"]') as HTMLElement
+    expect(withAiSidebar.style.right).toBe('20.5rem')
+  })
+
+  it('avoids the minimap in the canvas top-right corner', () => {
+    useUIStore.setState({ nodePoolOpen: true, aiSidebarOpen: false, minimapVisible: true })
+    const { container } = render(<UserAvatars users={alice} />)
+    const bar = container.querySelector('[data-collab-avatars="true"]') as HTMLElement
+    expect(bar.style.right).toContain('18.25rem')
+    expect(bar.style.right).toContain(`${MINIMAP_MAX_FRAME_WIDTH_PX + OVERLAY_GAP_PX}px`)
+  })
+
+  it('needs no offset when no panel or minimap is open', () => {
+    useUIStore.setState({ nodePoolOpen: false, aiSidebarOpen: false, minimapVisible: false })
+    const { container } = render(<UserAvatars users={alice} />)
+    const bar = container.querySelector('[data-collab-avatars="true"]') as HTMLElement
+    expect(bar.style.right).toBe('1rem')
   })
 })
