@@ -407,6 +407,164 @@ describe('MindMapYjsProvider', () => {
     }
   })
 
+  // 连接频率限速（Too many connection attempts）也是瞬时的：重连即可自愈。
+  // 它此前被归入"永久拒绝"，一旦触发就是无提示的永久掉线。
+  it('reconnects when the server reports a connection throttle (structured code)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const provider = createProvider()
+      provider.connect()
+      await vi.advanceTimersByTimeAsync(0)
+
+      const ws = MockWebSocket.last()
+      ws.receiveText(
+        JSON.stringify({
+          type: 'error',
+          code: 'connection_throttled',
+          message: 'Too many connection attempts. Please try again later.',
+        }),
+      )
+      const instancesAfterClose = MockWebSocket.instances.length
+      ws.simulateClose(1008, 'Too many connection attempts. Please try again later.')
+
+      await vi.advanceTimersByTimeAsync(2600)
+      expect(MockWebSocket.instances.length).toBeGreaterThan(instancesAfterClose)
+
+      provider.disconnect()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // 鉴权类 1008（token 过期/未就绪）同样必须重连：每次重连都会用 tokenGetter
+  // 取最新 token，否则刷新机制永远没机会生效。
+  it('reconnects when the server reports a retryable auth failure', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const provider = createProvider()
+      provider.connect()
+      await vi.advanceTimersByTimeAsync(0)
+
+      const ws = MockWebSocket.last()
+      ws.receiveText(JSON.stringify({ type: 'error', code: 'auth_retryable', message: 'Invalid token' }))
+      const instancesAfterClose = MockWebSocket.instances.length
+      ws.simulateClose(1008, 'Invalid token')
+
+      await vi.advanceTimersByTimeAsync(2600)
+      expect(MockWebSocket.instances.length).toBeGreaterThan(instancesAfterClose)
+
+      provider.disconnect()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // 没有 error 帧时，连接频率限速的 reason 也要能兜住建连（旧服务端）。
+  it('reconnects from the connection-throttle close reason alone', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const provider = createProvider()
+      provider.connect()
+      await vi.advanceTimersByTimeAsync(0)
+
+      const instancesAfterClose = MockWebSocket.instances.length
+      MockWebSocket.last().simulateClose(1008, 'Too many connection attempts. Please try again later.')
+
+      await vi.advanceTimersByTimeAsync(2600)
+      expect(MockWebSocket.instances.length).toBeGreaterThan(instancesAfterClose)
+
+      provider.disconnect()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // 真正永久的原因（画布不存在）必须**保持**不重连，别把退避烧在无望的重试上。
+  it('stops reconnecting for a permanent 1008 (canvas not found)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const provider = createProvider()
+      provider.connect()
+      await vi.advanceTimersByTimeAsync(0)
+
+      const instancesAfterClose = MockWebSocket.instances.length
+      MockWebSocket.last().simulateClose(1008, 'Canvas not found')
+
+      await vi.advanceTimersByTimeAsync(60000)
+      expect(MockWebSocket.instances.length).toBe(instancesAfterClose)
+      expect(provider.getConnectionState()).toBe('stopped')
+
+      provider.disconnect()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // 半开连接：断网/休眠后 readyState 仍是 OPEN、onclose 不触发，客户端会一直
+  // "以为自己在线"。心跳长期收不到 pong 时必须主动重连。
+  it('forces a reconnect when the heartbeat goes unanswered (half-open)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const provider = createProvider()
+      provider.connect()
+      await vi.advanceTimersByTimeAsync(0)
+      const instancesBefore = MockWebSocket.instances.length
+
+      // 一次 pong 都不回：心跳每 25s 一次，75s 时 idle 已超 60s 阈值
+      await vi.advanceTimersByTimeAsync(80000)
+
+      expect(MockWebSocket.instances.length).toBeGreaterThan(instancesBefore)
+
+      provider.disconnect()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // 反向保证：只要 pong 持续到达，就不能被判死（避免误杀健康连接）。
+  it('keeps the connection alive while pongs keep arriving', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const provider = createProvider()
+      provider.connect()
+      await vi.advanceTimersByTimeAsync(0)
+      const ws = MockWebSocket.last()
+      const instancesBefore = MockWebSocket.instances.length
+
+      for (let i = 0; i < 5; i++) {
+        await vi.advanceTimersByTimeAsync(20000)
+        ws.receiveText(JSON.stringify({ type: 'pong' }))
+      }
+
+      expect(MockWebSocket.instances.length).toBe(instancesBefore)
+
+      provider.disconnect()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // 状态三态供 UI 区分"正在重连"与"已停止"。
+  it('exposes connection state as connected / reconnecting / stopped', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const provider = createProvider()
+      expect(provider.getConnectionState()).toBe('reconnecting')
+
+      provider.connect()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(provider.getConnectionState()).toBe('connected')
+
+      MockWebSocket.last().simulateClose(1006)
+      expect(provider.getConnectionState()).toBe('reconnecting')
+
+      provider.disconnect()
+      expect(provider.getConnectionState()).toBe('stopped')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   // 固化原先"300 次连发"的端到端验证（原临时测试已删除，结论不能没有回归）。
   // 用虚拟时间驱动，结果确定且不拖慢测试套件。
   it('caps SYNC frames during a 300-edit burst and delivers every change', async () => {

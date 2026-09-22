@@ -11,6 +11,7 @@ import { CanvasToolbar } from '@/components/canvas/CanvasToolbar'
 import { CanvasGrid } from '@/components/canvas/CanvasGrid'
 import { CanvasMinimap } from '@/components/canvas/CanvasMinimap'
 import { CollaborationCursors, RemoteSelection, UserAvatars } from '@/components/canvas/CollaborationCursors'
+import { CollabConnectionBanner } from '@/components/canvas/CollabConnectionBanner'
 import { ZoomControls } from '@/components/canvas/ZoomControls'
 import { NodeItem } from '@/components/canvas/NodeItem'
 import { NodeContextMenu } from '@/components/canvas/NodeContextMenu'
@@ -23,6 +24,7 @@ import { RichTextToolbar } from '@/components/canvas/RichTextToolbar'
 import { ConnectionLine } from '@/components/canvas/ConnectionLine'
 import { CONNECTION_DEFAULTS, Z_INDEX } from '@/constants'
 import { generateId, colorToHex, hexToRgba, calculateSmartPortPosition, buildConnectionInfoMap, getPortOffsetVector, type PortDirection, type ConnectionInfo } from '@/utils/canvas'
+import { calculateOptimalBendPoint, findBendPointInsertIndex } from '@/utils/connectionBendPoints'
 import { saveToCache, loadFromCache } from '@/utils/nodeCache'
 import { logger } from '@/utils/logger'
 import { execFormatCommand } from '@/utils/richTextCommands'
@@ -32,7 +34,12 @@ import { SAVE_COMMAND_EVENT } from '@/components/ui/CommandPalette'
 import { loadCanvasNodesData, apiClient } from '@/services/api'
 import { ApiError } from '@/services/apiClient'
 import { collabService } from '@/services/collaboration'
-import { clearCollaborationEvidence, clearLocalDeletions, getLocalDeletions } from '@/services/yjsProvider'
+import {
+  clearCollaborationEvidence,
+  clearLocalDeletions,
+  getLocalDeletions,
+  type CollabConnectionState,
+} from '@/services/yjsProvider'
 import type { Node, Connection } from '@/types'
 
 const AUTO_SAVE_INTERVAL = 5000
@@ -176,93 +183,6 @@ function findNodeAtPoint(nodes: Map<string, Node>, x: number, y: number): Node |
     }
   }
   return null
-}
-
-// Helper function to calculate optimal bend point position
-function calculateOptimalBendPoint(
-  fromX: number, fromY: number,
-  toX: number, toY: number
-): { x: number; y: number } {
-  const dx = toX - fromX
-  const dy = toY - fromY
-
-  const distance = Math.sqrt(dx * dx + dy * dy)
-  if (distance < 100) {
-    return { x: (fromX + toX) / 2, y: fromY }
-  }
-
-  return { x: fromX + dx / 3, y: fromY }
-}
-
-// Helper function to calculate distance from point to line segment
-function pointToLineSegmentDistance(
-  px: number, py: number,
-  x1: number, y1: number,
-  x2: number, y2: number
-): number {
-  const A = px - x1
-  const B = py - y1
-  const C = x2 - x1
-  const D = y2 - y1
-
-  const dot = A * C + B * D
-  const lenSq = C * C + D * D
-
-  if (lenSq === 0) return Math.sqrt(A * A + B * B)
-
-  let param = -1
-  if (lenSq !== 0) param = dot / lenSq
-
-  let xx, yy
-  if (param < 0) {
-    xx = x1
-    yy = y1
-  } else if (param > 1) {
-    xx = x2
-    yy = y2
-  } else {
-    xx = x1 + param * C
-    yy = y1 + param * D
-  }
-
-  const dx = px - xx
-  const dy = py - yy
-
-  return Math.sqrt(dx * dx + dy * dy)
-}
-
-// Helper function to find the correct insert index for a new bend point
-function findBendPointInsertIndex(
-  clickX: number, clickY: number,
-  fromX: number, fromY: number,
-  toX: number, toY: number,
-  bendPoints: { x: number; y: number }[]
-): number {
-  if (bendPoints.length === 0) return 0
-
-  // Build all points including endpoints
-  const allPoints = [
-    { x: fromX, y: fromY },
-    ...bendPoints,
-    { x: toX, y: toY }
-  ]
-
-  // Find which line segment is closest to the click point
-  let minDistance = Infinity
-  let insertIndex = 0
-
-  for (let i = 0; i < allPoints.length - 1; i++) {
-    const p1 = allPoints[i]
-    const p2 = allPoints[i + 1]
-    const distance = pointToLineSegmentDistance(clickX, clickY, p1.x, p1.y, p2.x, p2.y)
-
-    if (distance < minDistance) {
-      minDistance = distance
-      insertIndex = i
-    }
-  }
-
-  return insertIndex
 }
 
 // Helper function to calculate the midpoint along a path
@@ -1107,6 +1027,11 @@ export function CanvasPage() {
   // E21: 协作连接状态状态化——渲染期不再直读 collabService.isConnected(),
   // 连接/断开时通过 provider 的 onStatusChange 事件驱动重渲染。
   const [isCollabConnected, setIsCollabConnected] = useState(false)
+  // 连接三态，用于给用户**常驻**提示（正在自动重连 / 已停止）。
+  // 初值取 connected 且只在 provider 存在时更新：首次进入画布时 provider 尚未
+  // 创建，若据此判定会把"还没连上"误显示成"正在重连"。
+  const [collabConnectionState, setCollabConnectionState] =
+    useState<CollabConnectionState>('connected')
 
   useEffect(() => {
     let disposed = false
@@ -1117,9 +1042,13 @@ export function CanvasPage() {
       const provider = getActiveYjsProvider(id ?? undefined)
       setIsCollabConnected(provider?.isConnected() ?? false)
       if (provider) {
+        setCollabConnectionState(provider.getConnectionState())
         unsub?.()
         unsub = provider.onStatusChange((connected) => {
-          if (!disposed) setIsCollabConnected(connected)
+          if (!disposed) {
+            setIsCollabConnected(connected)
+            setCollabConnectionState(provider.getConnectionState())
+          }
         })
       }
     }
@@ -4351,6 +4280,10 @@ export function CanvasPage() {
             onViewportChange={setPan}
           />
         )}
+
+        {/* 常驻协作连接状态提示：断线必须让用户立刻看见，否则用户会在不知情的
+            情况下继续编辑（静默断线）。连接正常时组件自身不渲染任何内容。 */}
+        {isCollaborative && <CollabConnectionBanner state={collabConnectionState} />}
 
         <div
           className="absolute"

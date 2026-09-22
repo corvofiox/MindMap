@@ -60,10 +60,50 @@ interface MindMapProviderOptions {
   userId?: number | null
 }
 
+/**
+ * 协作连接状态三态。UI 据此区分"正在重连"与"已停止"——只给 boolean 的话，
+ * 界面无法告诉用户"稍等会自愈"还是"必须手动处理"。
+ */
+export type CollabConnectionState = 'connected' | 'reconnecting' | 'stopped'
+
 const APP_HEARTBEAT_INTERVAL_MS = 25000
+/**
+ * 客户端判定"对端已死"的空闲上限。连续两轮心跳（2×25s）未收到 pong 即认为连接
+ * 已半开，主动重连 —— 服务端 120s 双通道超时虽也会兜底 terminate，但那之前客户端
+ * 一直以为自己在线（这正是"静默断线"）。
+ */
+const APP_HEARTBEAT_TIMEOUT_MS = 60000
+/**
+ * 强制关旧 socket 后等待 onclose 的宽限期。半开连接下 ws.close() 的关闭握手可能
+ * 发不出去、onclose 永不到来，超过该时间就直接排重连。
+ */
+const FORCE_RECONNECT_GRACE_MS = 2000
 const MAX_RECONNECT_ATTEMPTS = 10
 const MAX_RECONNECT_DELAY_MS = 30000
 const RECONNECT_BASE_DELAY_MS = 2000
+/**
+ * 可重试的 1008 close reason（**兜底**用；主依据是服务端 error 帧的结构化 code）。
+ * 1008 里有一部分是瞬时的，重连即可自愈：
+ *   - 限速：payload 限速 / 连接频率限速（同一出口 IP 建连过频）
+ *   - 鉴权：token 过期或尚未就绪 —— 每次重连都会用 tokenGetter 取最新 token
+ * 真正永久的原因（画布/项目不存在、非成员、私人项目、账号不存在）不在此列。
+ */
+/** 服务端 error 帧里表示"可重试"的结构化 code（与后端 rejectWithErrorCode 对应）。 */
+const RETRYABLE_ERROR_CODES = ['rate_limited', 'connection_throttled', 'auth_retryable']
+
+const RETRYABLE_1008_REASON_PATTERNS = [
+  'rate limited',
+  'too many connection attempts',
+  'invalid token',
+  'missing authentication',
+  'authentication required',
+]
+
+function isRetryablePolicyViolationReason(reason: string | undefined): boolean {
+  if (!reason) return false
+  const lower = reason.toLowerCase()
+  return RETRYABLE_1008_REASON_PATTERNS.some((pattern) => lower.includes(pattern))
+}
 // R1: 本地 doc 变更的发包合并窗口。服务端每连接 SYNC 限速 50 帧/秒，而拖动
 // 节点时 store 每个 mousemove 都会产生一次 doc 变更——逐帧直发会瞬间触发
 // 限速断连（close 1008）。把窗口内的多次变更合并成一帧（Y.mergeUpdates 无损）
@@ -197,6 +237,11 @@ export class MindMapYjsProvider {
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null
   private appHeartbeatTimer: ReturnType<typeof setInterval> | null = null
   private visibilityHandler: (() => void) | null = null
+  /**
+   * 最近一次收到应用层 pong（或握手完成）的时间戳，用于半开连接检测：
+   * 断网/休眠后 TCP 可能长时间不报错，readyState 仍是 OPEN、onclose 也不触发。
+   */
+  private lastPongAt = 0
 
   // Event subscribers
   private syncedListeners = new Set<() => void>()
@@ -211,11 +256,13 @@ export class MindMapYjsProvider {
   private static readonly MAX_PENDING_UPDATE_BYTES = 1_000_000 // ~1MB
 
   /**
-   * 服务端在本连接上报告过 rate limited（随后 close 1008）。限速是瞬时的
-   * （客户端发包过快），重连即可自愈；其他 1008 原因（鉴权/权限）是永久性
-   * 拒绝，不能重连。
+   * 服务端在本连接上报告过"可重试"的 error（随后 close 1008）：限速
+   * （payload 限速 / 连接频率限速）或鉴权类（token 过期、尚未就绪）。
+   * 这些都是瞬时的，重连即可自愈；鉴权类尤其依赖"每次重连重新取 token"
+   * 才有机会成功 —— 若当成永久拒绝，刷新机制永远没机会生效。
+   * 真正永久的原因（画布/项目不存在、非成员、私人项目等）服务端不发这个帧。
    */
-  private rateLimitedByServer = false
+  private retryableCloseReported = false
 
   /**
    * R1: 本 provider 会话内是否收到过其他客户端的编辑广播（UPDATE 消息）。
@@ -337,6 +384,18 @@ export class MindMapYjsProvider {
     return this.ws?.readyState === WebSocket.OPEN
   }
 
+  /**
+   * 连接状态三态，供 UI 显示：
+   * - `connected`：socket 处于 OPEN（半开连接也会短暂落在这里，心跳超时会很快纠正）
+   * - `reconnecting`：已断开且会继续尝试（含退避等待中）
+   * - `stopped`：主动 disconnect / 被踢 / 服务端永久拒绝，不会再重连
+   */
+  getConnectionState(): CollabConnectionState {
+    if (this.isConnected()) return 'connected'
+    if (this.isIntentionallyClosed) return 'stopped'
+    return 'reconnecting'
+  }
+
   getActiveUsers(): CanvasActiveUser[] {
     return this.activeUsers
   }
@@ -422,7 +481,7 @@ export class MindMapYjsProvider {
     // A fresh attempt has no knowledge of the previous socket's server-side
     // rate-limit report; only a report received on THIS connection may
     // authorize reconnecting after a 1008 close.
-    this.rateLimitedByServer = false
+    this.retryableCloseReported = false
     const token = this.options.tokenGetter ? this.options.tokenGetter() : this.options.token
     if (!token) {
       this.scheduleReconnect()
@@ -451,6 +510,8 @@ export class MindMapYjsProvider {
       // potentially missing remote changes that arrived while we were
       // disconnected.
       this.isSynced = false
+      // 以握手完成时刻作为半开检测基准：此刻尚未收到任何 pong。
+      this.lastPongAt = Date.now()
       this.startHeartbeat()
       this.statusListeners.forEach((fn) => fn(true))
       // Kick off sync: send STEP1 with our current state vector.
@@ -460,24 +521,24 @@ export class MindMapYjsProvider {
     ws.onmessage = (event) => this.handleMessage(event)
 
     ws.onclose = (event) => {
+      // 陈旧 socket 的迟到事件：forceReconnect 会先关旧 socket 再建新的，旧 socket
+      // 的 close 事件可能在之后才到；若照常处理会把新连接的状态打乱（多发一次
+      // status=false、多排一次重连）。只认当前 socket 的事件。
+      if (this.ws !== ws) return
       this.statusListeners.forEach((fn) => fn(false))
       this.stopHeartbeat()
       this.cancelSyncFlush()
-      // Close code 1008 (Policy Violation) is normally a deterministic server
-      // rejection (e.g. "Not a collaborative project") — retrying can never
-      // succeed, so stop reconnect scheduling entirely instead of burning
-      // exponential backoff. Rate limiting is the exception: the server reports
-      // it before closing, and it is transient (the client sent too many SYNC
-      // frames in one second due to a burst of local edits) — reconnect so the
-      // session self-heals instead of silently dying until a manual reload.
+      // Close code 1008（Policy Violation）分两类：
+      //   - 可恢复：限速（payload 限速 / 连接频率限速）与鉴权类（token 过期、尚未
+      //     就绪）。服务端会先发带结构化 code 的 error 帧，reason 文案作兜底
+      //     （error 帧可能没送达）。这类必须重连，否则协作会静默永久断开。
+      //   - 永久：画布/项目不存在、非成员、私人项目、账号不存在等 —— 重试不可能
+      //     成功，停止排重连，避免无意义地烧退避。
       if (event.code === 1008) {
-        // 两个独立信号任一成立即认定为限速：error 帧（结构化 code 或旧版文案）
-        // 与服务端 close(1008, 'rate limited') 的 reason。error 帧若因网络原因
-        // 未送达，reason 仍能兜住，避免退化成永久断连。
-        const rateLimited =
-          this.rateLimitedByServer || (event.reason || '').includes('rate limited')
-        this.rateLimitedByServer = false
-        if (!rateLimited) {
+        const retryable =
+          this.retryableCloseReported || isRetryablePolicyViolationReason(event.reason)
+        this.retryableCloseReported = false
+        if (!retryable) {
           this.isIntentionallyClosed = true
           this.clearReconnect()
           return
@@ -577,21 +638,24 @@ export class MindMapYjsProvider {
         this.kickedListeners.forEach((fn) => fn((message.reason as string) || 'removed'))
         break
       case 'pong':
-        // Application-layer heartbeat reply; no state to update.
+        // 应用层心跳回执：更新时间戳，供半开连接检测判断对端是否还活着。
+        this.lastPongAt = Date.now()
         break
       case 'error': {
-        // The server reports protocol errors (e.g. "rate limited") as a text
-        // frame right before closing the socket. Rate limiting is transient:
-        // record it so the 1008 close handler reconnects instead of treating
-        // the session as permanently rejected.
+        // 服务端在 close 之前用 text 帧报告协议错误。其中一部分是瞬时的
+        // （限速 / 鉴权），记录下来让 1008 分支重连，而不是当成永久拒绝。
         const errorCode = typeof message.code === 'string' ? message.code : undefined
         const errorMessage =
           typeof message.message === 'string' ? message.message : 'unknown server error'
         logger.warn('[yjs-provider] server error', { code: errorCode, message: errorMessage })
-        // 结构化 code 优先判定；文案匹配仅作向后兼容——否则后端改一次文案，
-        // 限速 1008 就会静默退化成"永久拒绝"，协作整场断开。
-        if (errorCode === 'rate_limited' || errorMessage.includes('rate limited')) {
-          this.rateLimitedByServer = true
+        // 结构化 code 是主依据（文案可改、code 不变）；文案匹配仅作向后兼容
+        // （旧服务端只发 message）——否则后端改一次措辞，这些可恢复的 1008
+        // 就会静默退化成"永久拒绝"，协作整场断开。
+        if (
+          (errorCode !== undefined && RETRYABLE_ERROR_CODES.includes(errorCode)) ||
+          isRetryablePolicyViolationReason(errorMessage)
+        ) {
+          this.retryableCloseReported = true
         }
         break
       }
@@ -951,14 +1015,60 @@ export class MindMapYjsProvider {
 
   private startHeartbeat() {
     this.stopHeartbeat()
-    this.appHeartbeatTimer = setInterval(() => this.sendAppPing(), APP_HEARTBEAT_INTERVAL_MS)
+    this.appHeartbeatTimer = setInterval(() => {
+      this.sendAppPing()
+      this.checkHeartbeatTimeout()
+    }, APP_HEARTBEAT_INTERVAL_MS)
     // Refresh on tab refocus: the OS may have paused timers during background.
     if (!this.visibilityHandler) {
       this.visibilityHandler = () => {
-        if (document.visibilityState === 'visible') this.sendAppPing()
+        if (document.visibilityState === 'visible') {
+          // 休眠/后台期间定时器被暂停，立刻判死会误杀健康连接 —— 恢复可见时重置
+          // 基准，相当于给一个心跳周期的宽限。
+          this.lastPongAt = Date.now()
+          this.sendAppPing()
+        }
       }
       document.addEventListener('visibilitychange', this.visibilityHandler)
     }
+  }
+
+  /**
+   * 半开连接检测。断网/休眠后 TCP 可能长时间不报错：ws.readyState 仍是 OPEN、
+   * onclose 也不触发，客户端于是"以为自己在线"—— 这正是静默断线。服务端 120s
+   * 双通道超时会 terminate 兜底，但窗口太长；这里用应用层心跳主动发现并重连。
+   */
+  private checkHeartbeatTimeout() {
+    if (!this.isConnected()) return
+    // 后台标签页/休眠期间定时器会被节流或暂停，不做判定（恢复可见时会重置基准）。
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+    const idle = Date.now() - this.lastPongAt
+    if (idle <= APP_HEARTBEAT_TIMEOUT_MS) return
+    logger.warn('[yjs-provider] heartbeat timeout, forcing reconnect', { idle })
+    this.forceReconnect()
+  }
+
+  /**
+   * 主动丢弃当前 socket 并重连。半开连接下 ws.close() 的关闭握手可能根本发不出去、
+   * onclose 永不到来，所以先 close()，宽限期后若仍指向同一个 socket 就直接排重连。
+   */
+  private forceReconnect() {
+    const ws = this.ws
+    if (!ws) {
+      this.scheduleReconnect()
+      return
+    }
+    try {
+      ws.close()
+    } catch {
+      // ignore
+    }
+    setTimeout(() => {
+      if (this.isIntentionallyClosed) return
+      if (this.ws !== ws) return // onclose 已处理并换过 socket
+      if (this.reconnectTimeout) return // 已经排好重连
+      this.scheduleReconnect()
+    }, FORCE_RECONNECT_GRACE_MS)
   }
 
   private stopHeartbeat() {

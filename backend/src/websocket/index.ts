@@ -263,6 +263,26 @@ function checkWsRateLimit(ip: string): boolean {
   return true
 }
 
+/**
+ * 以 1008 拒绝连接前，先发一个结构化 error 帧。
+ *
+ * 1008 里有一部分是**瞬时**的 —— 连接频率限速、token 过期/未就绪 —— 重连即可自愈
+ * （客户端每次重连都会用 tokenGetter 取最新 token，所以鉴权类也应当允许重试）。
+ * 若客户端只靠 close reason 文案匹配来区分，后端改一次措辞就会让它把这些当成
+ * 永久拒绝，协作整场静默断开（"rate limited" 已经踩过这个坑）。
+ *
+ * 不可恢复的拒绝（画布/项目不存在、非成员、私人项目、账号不存在等）**不调用**本函数，
+ * 只做普通 close —— 客户端应就此停止重连。
+ */
+function rejectWithErrorCode(ws: WebSocket, code: string, reason: string) {
+  try {
+    ws.send(JSON.stringify({ type: 'error', code, message: reason }))
+  } catch {
+    // 发送失败不能阻塞关闭流程
+  }
+  ws.close(1008, reason)
+}
+
 export function setupWebSocket(wss: WebSocketServer) {
   wss.on('connection', handleConnection)
 
@@ -535,7 +555,14 @@ async function handleConnection(ws: WebSocketWithUserData, req: any) {
   try {
   if (!checkWsRateLimit(clientIp)) {
     cleanupEarlyListeners()
-    ws.close(1008, 'Too many connection attempts. Please try again later.')
+    // 连接频率限速是瞬时的（同一出口 IP 短时间内建连过多），不是永久拒绝。
+    // 带 connection_throttled 让客户端重连（指数退避天然限流）；否则用户会在
+    // 毫无提示的情况下永久掉线 —— 这是"静默断线"的主要来源之一。
+    rejectWithErrorCode(
+      ws,
+      'connection_throttled',
+      'Too many connection attempts. Please try again later.'
+    )
     return
   }
 
@@ -574,9 +601,12 @@ async function handleConnection(ws: WebSocketWithUserData, req: any) {
   const authHeader = req.headers.authorization?.replace('Bearer ', '')
     || (req.headers['sec-websocket-protocol'] as string)
     || tokenParam
+  // 鉴权类 1008 也允许客户端重连：token 很可能只是过期或尚未刷新，而客户端每次
+  // 重连都会用 tokenGetter 取最新 token —— 若归为"永久拒绝"，刷新机制就永远没机会
+  // 生效，用户会在无提示的情况下永久掉线。重连由指数退避节流（上限 30s 一次）。
   if (!authHeader) {
     cleanupEarlyListeners()
-    ws.close(1008, 'Missing authentication')
+    rejectWithErrorCode(ws, 'auth_retryable', 'Missing authentication')
     return
   }
 
@@ -588,13 +618,13 @@ async function handleConnection(ws: WebSocketWithUserData, req: any) {
     userId = decoded.userId
   } catch {
     cleanupEarlyListeners()
-    ws.close(1008, 'Invalid token')
+    rejectWithErrorCode(ws, 'auth_retryable', 'Invalid token')
     return
   }
 
   if (!userId) {
     cleanupEarlyListeners()
-    ws.close(1008, 'Authentication required')
+    rejectWithErrorCode(ws, 'auth_retryable', 'Authentication required')
     return
   }
 
@@ -848,8 +878,7 @@ function handleMessage(ws: WebSocketWithUserData, room: CanvasRoom, data: Buffer
     while (window.length > 0 && window[0] < now - 1000) window.shift()
     if (window.length >= limit) {
       // 结构化 code 供客户端稳定判定（文案可改、code 不变）；message 保留给日志与旧客户端。
-      ws.send(JSON.stringify({ type: 'error', code: 'rate_limited', message: 'rate limited' }))
-      ws.close(1008, 'rate limited')
+      rejectWithErrorCode(ws, 'rate_limited', 'rate limited')
       return
     }
     window.push(now)

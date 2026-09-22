@@ -454,6 +454,122 @@ describe('yjsBinding', () => {
       expect((result[1] as any).id).toBe('bp2')
       binding.destroy()
     })
+
+    // 弯折点顺序保真：新增点必须落在它在本地的目标索引上，而不是被追加到末尾。
+    // 背景：对端渲染折线时完全按文档里的数组顺序连点，顺序一旦错位就会画出
+    // 折返（交叉）的路径 —— 而写点的人本地看是对的，所以表现为"只有别人看到交叉"。
+    it('inserts a new bend point at index 0 instead of appending it', () => {
+      const doc = new Y.Doc()
+      ensureRoot(doc)
+      const store = createMockStore()
+      const binding = bindYjsToStore(createMockProvider(doc), store as any)
+      const collections = ensureRoot(doc)
+
+      const base = {
+        id: 'c1', fromNodeId: 'a', toNodeId: 'b',
+        fromPort: 'right', toPort: 'left',
+        type: 'straight', style: 'solid', color: '#000', width: 2,
+        arrowType: 'none', direction: 'directed',
+      }
+      // 文档里已有一个靠后的点（bpLater）。
+      const seeded = { ...base, bendPoints: [{ id: 'bpLater', x: 400, y: 100 }] }
+      doc.transact(() => {
+        collections.connections.set('c1', entityToYMap(seeded))
+      }, LOCAL_ORIGIN)
+
+      // 本地在更靠前的位置插入新点（bpEarlier）——目标顺序是 [bpEarlier, bpLater]。
+      const nextState = {
+        ...base,
+        bendPoints: [{ id: 'bpEarlier', x: 200, y: 100 }, { id: 'bpLater', x: 400, y: 100 }],
+      }
+      binding.applyDiff(
+        { nodes: new Map(), groups: new Map(), domains: new Map(), connections: new Map([['c1', seeded as any]]) },
+        { nodes: new Map(), groups: new Map(), domains: new Map(), connections: new Map([['c1', nextState as any]]) },
+      )
+
+      const yArray = collections.connections.get('c1')!.get('bendPoints') as Y.Array<unknown>
+      const ids = yArray.toArray().map((p) => (p as { id: string }).id)
+      expect(ids).toEqual(['bpEarlier', 'bpLater'])
+      binding.destroy()
+    })
+
+    it('inserts a new bend point in the middle at its target index', () => {
+      const doc = new Y.Doc()
+      ensureRoot(doc)
+      const store = createMockStore()
+      const binding = bindYjsToStore(createMockProvider(doc), store as any)
+      const collections = ensureRoot(doc)
+
+      const base = {
+        id: 'c1', fromNodeId: 'a', toNodeId: 'b',
+        fromPort: 'right', toPort: 'left',
+        type: 'step', style: 'solid', color: '#000', width: 2,
+        arrowType: 'none', direction: 'directed',
+      }
+      const bpH = { id: 'bpH', x: 100, y: 50 }
+      const bpT = { id: 'bpT', x: 500, y: 400 }
+      const seeded = { ...base, bendPoints: [bpH, bpT] }
+      doc.transact(() => {
+        collections.connections.set('c1', entityToYMap(seeded))
+      }, LOCAL_ORIGIN)
+
+      const bpM = { id: 'bpM', x: 300, y: 200 }
+      const nextState = { ...base, bendPoints: [bpH, bpM, bpT] }
+      binding.applyDiff(
+        { nodes: new Map(), groups: new Map(), domains: new Map(), connections: new Map([['c1', seeded as any]]) },
+        { nodes: new Map(), groups: new Map(), domains: new Map(), connections: new Map([['c1', nextState as any]]) },
+      )
+
+      const yArray = collections.connections.get('c1')!.get('bendPoints') as Y.Array<unknown>
+      const ids = yArray.toArray().map((p) => (p as { id: string }).id)
+      expect(ids).toEqual(['bpH', 'bpM', 'bpT'])
+      binding.destroy()
+    })
+
+    // 用户可见性质：作者本地顺序 == 对端文档顺序。对端就是按这个顺序连点的。
+    it('keeps the same bend point order on peers after a mid-line insertion', () => {
+      const docA = new Y.Doc()
+      ensureRoot(docA)
+      // 对端不预先 ensureRoot：否则它会用本地 clientID 抢先建出一个 root map，
+      // 与 A 发来的 root 冲突（Yjs 按 clientID 裁决），约一半概率对端拿到自己的
+      // 空 root，接收方就看不到 A 的实体。真实 provider 用 getExistingRoot 正是
+      // 为了避开这一点 —— 先收到状态、再读 root。
+      const docB = new Y.Doc()
+
+      const base = {
+        id: 'c1', fromNodeId: 'a', toNodeId: 'b',
+        fromPort: 'right', toPort: 'left',
+        type: 'straight', style: 'solid', color: '#000', width: 2,
+        arrowType: 'none', direction: 'directed',
+      }
+      const bpLater = { id: 'bpLater', x: 400, y: 100 }
+      const seeded = { ...base, bendPoints: [bpLater] }
+      docA.transact(() => {
+        ensureRoot(docA).connections.set('c1', entityToYMap(seeded))
+      }, LOCAL_ORIGIN)
+      // 对端先拿到"只有一个点"的状态。
+      Y.applyUpdate(docB, Y.encodeStateAsUpdate(docA))
+
+      const storeA = createMockStore()
+      const bindingA = bindYjsToStore(createMockProvider(docA), storeA as any)
+
+      const bpEarlier = { id: 'bpEarlier', x: 200, y: 100 }
+      const nextState = { ...base, bendPoints: [bpEarlier, bpLater] }
+      bindingA.applyDiff(
+        { nodes: new Map(), groups: new Map(), domains: new Map(), connections: new Map([['c1', seeded as any]]) },
+        { nodes: new Map(), groups: new Map(), domains: new Map(), connections: new Map([['c1', nextState as any]]) },
+      )
+
+      Y.applyUpdate(docB, Y.encodeStateAsUpdate(docA))
+
+      const orderOn = (doc: Y.Doc) => {
+        const arr = ensureRoot(doc).connections.get('c1')!.get('bendPoints') as Y.Array<unknown>
+        return arr.toArray().map((p) => (p as { id: string }).id)
+      }
+      expect(orderOn(docA)).toEqual(['bpEarlier', 'bpLater'])
+      expect(orderOn(docB)).toEqual(orderOn(docA))
+      bindingA.destroy()
+    })
   })
 
   describe('isApplyingRemoteChanges guard', () => {

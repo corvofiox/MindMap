@@ -137,6 +137,17 @@ TypeScript ESM + `moduleResolution: "bundler"` 强制执行此约定。
 - 实时协作基于 **Yjs CRDT**（自研 provider 复用现有 wsServer 的鉴权/房间/心跳/踢人基础设施）
 - 数据流：客户端 `Y.Doc` update → 服务端 `Y.applyUpdate` → 广播给房间其他客户端；撤销重做保留 Zustand `ownCommands`（方案 B）
 
+### 同步对象数组时顺序必须保真（顺序即语义）
+`connection.bendPoints` 这类**对象数组**在 Yjs 里是 `Y.Array`，绑定层
+（`frontend/src/services/yjsBinding.ts` → `diffObjectArrayById`）按 `id` 做增量
+diff。踩过的坑：新增项曾被一律追加到数组末尾，于是「本地在更靠前的位置插入一个
+弯折点」时，共享文档里的顺序与本地不同 —— 而对端渲染折线是**完全按文档数组顺序
+连点**的，净效果就是"写点的人本地看着是对的，别人看到一条折返/交叉的线"。
+规则：diff 完必须让文档顺序与本地目标顺序**逐位一致**（新项按目标索引插入、
+位置变了的项原地移动）；渲染侧**不要**靠排序去"纠正"顺序 —— 用户可能故意画
+折返的折线。插入索引的计算在 `frontend/src/utils/connectionBendPoints.ts`，
+顺序保真的回归测试在 `frontend/src/test/yjsBinding.test.ts`。
+
 ### CSRF 保护
 - `/api/csrf-token` 是公开端点，返回 CSRF token
 - `/api/auth/*` 路由免 CSRF（登录/注册需要先获取 token）

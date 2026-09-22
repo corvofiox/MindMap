@@ -1118,26 +1118,35 @@ function diffObjectArrayById(arr: Y.Array<unknown>, current: unknown[], target: 
     }
   }
 
-  const updatedArray = arr.toArray()
-  const existingIds = new Set<string>()
-  for (const item of updatedArray) {
-    if (item !== null && typeof item === 'object' && 'id' in item) {
-      existingIds.add((item as { id: string }).id)
-    }
-  }
-  const toAdd: unknown[] = []
-  for (const item of target) {
+  // 3) 顺序保真：让文档顺序与本地目标顺序逐位一致。
+  //
+  // 这里曾经把新增项一律 `arr.insert(arr.length, toAdd)`（追加到末尾）。对
+  // bendPoints 这类"顺序即几何"的数组，那是错的：本地在更靠前的位置插入一个
+  // 弯折点时，文档里的顺序与本地不同，而对端渲染折线是完全按文档顺序连点的
+  // —— 于是对端画出折返（交叉）的路径，写点的人本地却看是对的（"只有别人看到
+  // 交叉"）。改为按目标索引插入、位置变了的项原地移动。
+  for (let i = 0; i < target.length; i++) {
+    const item = target[i]
     const obj = item as { id?: string } | null
-    if (obj && typeof obj === 'object' && obj.id) {
-      if (!existingIds.has(obj.id)) {
-        toAdd.push(item)
-      }
-    } else {
-      toAdd.push(item)
+    const id = obj && typeof obj === 'object' && obj.id ? obj.id : null
+    const snapshot = arr.toArray()
+
+    if (id === null) {
+      // 无 id 的元素无法按 id 定位，只保证不重复插入（bendPoints/nodeIds 不会走到这）。
+      if (!snapshot.includes(item)) arr.insert(Math.min(i, arr.length), [item])
+      continue
     }
-  }
-  if (toAdd.length > 0) {
-    arr.insert(arr.length, toAdd)
+
+    const at = snapshot.findIndex(
+      (x) => x !== null && typeof x === 'object' && (x as { id?: string }).id === id,
+    )
+    if (at === -1) {
+      arr.insert(Math.min(i, arr.length), [item])
+    } else if (at !== i) {
+      const [moved] = snapshot.slice(at, at + 1)
+      arr.delete(at, 1)
+      arr.insert(i, [moved])
+    }
   }
 }
 
