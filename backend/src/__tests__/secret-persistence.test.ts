@@ -42,6 +42,24 @@ function writeSecrets(content: string) {
   fs.writeFileSync(secretsPath, content)
 }
 
+/**
+ * Windows/NTFS 不表达 POSIX 权限位：Node 的 chmod 只能映射到"只读"这一个属性，
+ * 对 0o600 这种带写位的模式完全不生效——实测 `chmodSync(f, 0o600)` 之后
+ * `statSync(f).mode & 0o777` 仍是 0o666，`chmodSync(f, 0o400)` 才会变成 0o444。
+ * 因此「文件是 0600」这个断言只在 POSIX 平台可表达；Windows 上 .secrets 的保护
+ * 由所在目录的 NTFS ACL 承担，而不是文件模式位。
+ */
+const canExpressPosixMode = process.platform !== 'win32'
+
+/** 断言密钥文件权限为 0600；Windows 上退化为可验证的最小不变量（文件必须可写，否则密钥轮换会失败）。 */
+function expectSecretFileMode600(filePath: string) {
+  if (!canExpressPosixMode) {
+    expect(fs.statSync(filePath).mode & 0o200).not.toBe(0)
+    return
+  }
+  expect(fs.statSync(filePath).mode & 0o777).toBe(0o600)
+}
+
 describe('isPlaceholderSecret', () => {
   it('检测各类占位符形态', () => {
     expect(isPlaceholderSecret('')).toBe(true)
@@ -64,8 +82,8 @@ describe('密钥持久化 resolveSecret / resolveSecrets', () => {
     // .env 与 .secrets 都写入同一值
     expect(fs.readFileSync(envPath, 'utf-8')).toContain(`JWT_SECRET=${r.value}`)
     expect(readSecretsFile(secretsPath)[JWT]).toBe(r.value)
-    // 权限 0600
-    expect(fs.statSync(secretsPath).mode & 0o777).toBe(0o600)
+    // 权限 0600（POSIX 可表达；Windows 见 expectSecretFileMode600 注释）
+    expectSecretFileMode600(secretsPath)
   })
 
   it('场景2: .secrets 有值 → 用之且不重新生成,并写回 .env', () => {
@@ -215,9 +233,12 @@ describe('密钥持久化 resolveSecret / resolveSecrets', () => {
     writeSecrets(`${JWT}=old\n`)
     fs.chmodSync(secretsPath, 0o644)
     writeSecretsValue(secretsPath, JWT, 'new-value')
-    expect(fs.statSync(secretsPath).mode & 0o777).toBe(0o600)
+    // 原子写两条断言排在模式位断言之前：模式位断言在 Windows 上不可表达，
+    // 若排在前面会让这两条断言永远执行不到。
     expect(fs.readFileSync(secretsPath, 'utf-8')).toContain(`${JWT}=new-value`)
     expect(fs.existsSync(`${secretsPath}.tmp`)).toBe(false)
+    // 权限 0600（POSIX 可表达；Windows 见 expectSecretFileMode600 注释）
+    expectSecretFileMode600(secretsPath)
   })
 
   it('m6-截断恢复: .secrets 缺键时从 .env 迁移/生成恢复,不影响已有键', () => {

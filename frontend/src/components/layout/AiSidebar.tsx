@@ -792,7 +792,6 @@ export function AiSidebar({ open }: AiSidebarProps) {
         )
       )
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentProvider, config, isConnected])
 
   const handleSend = async () => {
@@ -897,7 +896,6 @@ export function AiSidebar({ open }: AiSidebarProps) {
     const currentUserMessage = buildUserMessage(userMessage.content, userMessage.attachments)
 
     await runAssistantTurn(messageHistory, currentUserMessage)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runAssistantTurn])
 
   const handleClear = async () => {

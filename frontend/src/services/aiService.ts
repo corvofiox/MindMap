@@ -452,17 +452,14 @@ export async function sendStreamChatMessage(
   const useStrict = providerId === 'deepseek'
   const tools = enableTools ? getToolsForAI(useStrict) : []
 
-  let urlPath: string
-  let body: Record<string, unknown>
-
   // OpenAI 兼容格式
   // DeepSeek strict 模式需要使用 Beta 端点
   let effectiveUrlPath = provider.chatEndpoint
   if (providerId === 'deepseek' && useStrict) {
     effectiveUrlPath = '/beta' + provider.chatEndpoint
   }
-  urlPath = effectiveUrlPath
-  body = {
+  const urlPath: string = effectiveUrlPath
+  const body: Record<string, unknown> = {
     model: config.model,
     messages: messages,
     stream: true,

@@ -1,48 +1,70 @@
-# IDE and editor files
+# ============================================================
+# MindMap .gitignore
+#
+# 只放「生成物 / 依赖 / 本机状态」；源码与文档模板不写进这里。
+# 新增或修改规则后，务必用 `git check-ignore -v <路径>` 验证是否真的命中，
+# 不要凭语法猜——本项目曾出现 `com1-com9` 这种"看起来在防、其实是字面文件名"的规则。
+# ============================================================
+
+# ---- 依赖 ----
+node_modules/
+
+# ---- 构建产物 ----
+# dist/ 无前导斜杠，递归覆盖 backend/ frontend/ shared/ 三处
+dist/
+*.tsbuildinfo
+
+# ---- 测试与覆盖率 ----
+coverage/
+*.lcov
+
+# ---- 运行时数据：数据库 / 日志 / 上传 / 密钥 ----
+# data/ 与 logs/ 同样递归匹配 backend/ 下的同名目录
+# （backend/data/mindmap.db 及 mindmap.db.backup.* 都被 data/ 覆盖）
+data/
+logs/
+uploads/
+*.log
+.secrets
+
+# ---- 环境变量 ----
+# 默认忽略全部 .env*，只放行模板与「有意跟踪且仅含占位值」的开发文件。
+# .env.development 已入库，其 SECRET 字段经项目自身 isPlaceholderSecret() 判定为占位符；
+# 若将来往其中填真实密钥，除改本文件外还必须 `git rm --cached` 才能解除跟踪。
+.env
+.env.*
+!.env.example
+!backend/.env.development
+
+# ---- 报告类生成物 ----
+# 流水线 / agent 生成的 markdown 报告不入库；项目文档只保留 README 与 AGENTS。
+# AGENTS.md 用的是**无斜杠**模式，递归匹配任意层级，
+# 所以无需（也不应）按路径逐个 `!backend/src/AGENTS.md` 放行——每加一层就要改一次，极易漏。
+*.md
+!README.md
+!AGENTS.md
+
+# ---- 缓存与调试残留 ----
+.cache/
+.eslintcache
+*.heapsnapshot
+*.cpuprofile
+*.he
+
+# ---- 崩溃残留（node / vitest）----
+core
+core.*
+
+# ---- 编辑器与 IDE ----
 .claude/
 .trae/
 .vscode/
 .idea/
-# Ignore generated markdown, but track key project documentation
-*.md
-!README.md
-!AGENTS.md
-!backend/src/AGENTS.md
-!backend/src/database/AGENTS.md
-!frontend/src/AGENTS.md
-
 *.swp
 *.swo
 *~
 
-# Dependency directories
-node_modules/
-backend/node_modules/
-frontend/node_modules/
-
-# Build output
-backend/dist/
-frontend/dist/
-shared/dist/
-
-# Test coverage reports
-coverage/
-frontend/coverage/
-backend/coverage/
-
-# Environment variables
-backend/.env
-frontend/.env
-
-# Database files
-data/
-backend/data/
-
-# Logs
-logs/
-backend/logs/
-
-# OS generated files
+# ---- 操作系统杂项 ----
 .DS_Store
 .DS_Store?
 ._*
@@ -51,24 +73,13 @@ backend/logs/
 ehthumbs.db
 Thumbs.db
 
-# Windows device files
+# ---- Windows 保留设备名 ----
+# gitignore 不支持 "com1-com9" 这类区间写法（会被当成字面文件名，等于不生效），
+# 字符区间必须写成 [1-9]。CLOCK$ 的匹配依赖 core.ignorecase（本仓库为 true）。
 nul
 con
 prn
 aux
-clock$
-com1-com9
-lpt1-lpt9
-
-# Debug and profiling files
-*.heapsnapshot
-*.he
-*.cpuprofile
-*.log
-# Core dumps (node/vitest crash remnants)
-core
-core.*
-frontend/core
-
-# Pipeline working dir
-.cache/
+CLOCK$
+com[1-9]
+lpt[1-9]

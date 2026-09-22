@@ -1,41 +1,53 @@
-# Node.js dependencies
-node_modules/
+# ============================================================
+# MindMap .dockerignore —— 决定 docker build 的构建上下文
+#
+# 判据只有一条：Dockerfile 的 builder 阶段需要什么。
+# 该阶段的真实动作（见 Dockerfile）：
+#   COPY package.json package-lock.json start.js ./
+#   COPY scripts ./scripts
+#   COPY shared|backend|frontend ./…
+#   RUN npm install --workspaces --include=dev
+#   RUN cd shared && npm run build && cd ../backend && npm run build && cd ../frontend && npm run build
+#
+# 所以：scripts/ 、start.js 、各 package.json 、tsconfig*.json 、
+# vite.config.ts 、postcss.config.js 、tailwind.config.js 都是**构建必需**，不能排除。
+# ============================================================
 
-# Build outputs
+# ---- 版本库元数据（历史庞大、无构建用途）----
+.git/
+.gitignore
+.gitattributes
+
+# ---- 依赖与构建产物（容器内重新安装、重新构建）----
+node_modules/
 dist/
 build/
 *.tsbuildinfo
-
-# Environment files
-.env
-.env.local
-.env.*.local
-
-# Logs
-*.log
-logs/
-
-# Database files
-*.db
-*.sqlite
-
-# File uploads
-uploads/
-
-# IDE
-.vscode/
-.idea/
-.claude/
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Package manager (keep package-lock.json for build consistency)
 yarn.lock
 pnpm-lock.yaml
 
-# Test files and configurations
+# ---- 运行时数据：数据库 / 日志 / 上传 / 密钥 ----
+data/
+logs/
+uploads/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+.secrets
+
+# ---- 环境变量 ----
+# 排除真实 .env，但 `!backend/.env.example` 是**必需**的：
+# Dockerfile 最终阶段会 `COPY --from=builder /app/backend/.env.example`，
+# 少这一行镜像构建直接失败。
+.env
+.env.local
+.env.*.local
+!backend/.env.example
+!frontend/.env.example
+
+# ---- 测试与开发工具（构建不需要）----
 **/__tests__/
 **/test/
 **/*.test.ts
@@ -43,29 +55,37 @@ pnpm-lock.yaml
 **/*.test.js
 **/*.test.jsx
 vitest.config.ts
-
-# Development tools and configurations
 .eslintrc.json
 .prettierrc.json
-postcss.config.js
-tailwind.config.js
 
-# Documentation (keep README.md and LICENSE.md)
+# ---- 前端样式构建所需，禁止排除 ----
+# 前端是 tailwindcss v3（index.css 里是 @tailwind base/components/utilities），
+# 由 frontend/postcss.config.js 挂 tailwindcss 插件。
+# 一旦把这两个文件排出上下文，Tailwind 会以空 content 运行：
+# 构建"成功"，但产物里没有任何工具类，线上 UI 静默失样式。
+# 它们也不会进最终镜像——最终阶段只 COPY dist/ 与各 package.json。
+# （历史教训：此处曾误排 postcss.config.js / tailwind.config.js）
+#
+# postcss.config.js   ← 不要加回
+# tailwind.config.js  ← 不要加回
+
+# ---- 文档：只保留 README ----
 *.md
 !README.md
-!LICENSE.md
 
-# Temporary files
+# ---- IDE / OS / 临时文件 ----
+.vscode/
+.idea/
+.claude/
+.DS_Store
+Thumbs.db
 *.tmp
 *.temp
 .tmp/
 .temp/
 
-# Cache directories
+# ---- 缓存与覆盖率 ----
 .cache/
 .eslintcache
-
-# Coverage reports
 coverage/
 *.lcov
-backend/data/
