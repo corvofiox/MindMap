@@ -101,6 +101,28 @@ Fabric.js 作为 npm 依赖打包进 Vite，通过 `import { fabric } from 'fabr
 ### 数据库：better-sqlite3 文件数据库
 使用 better-sqlite3（原生 SQLite 绑定），数据直接写入 `backend/data/mindmap.db`，默认启用 WAL（Write-Ahead Logging）和外键约束。写入即时落盘，进程重启或异常退出后数据仍然保留。
 
+### better-sqlite3 的事务必须写成同步形式
+`db.transaction()` 在 better-sqlite3 driver 下是**同步**的。传 async 回调会抛
+`Transaction function cannot return a promise`（被 errorHandler 转成 500「服务器内部错误」），
+而且回调里的语句会在事务被回滚**之后**才落库 —— 表现为**接口报错、数据却已写入**，
+既无原子性又误导调用方。
+
+```typescript
+// 正确：同步回调 + .run()（写）/ .all()（读）
+db.transaction((tx) => {
+  tx.update(projectInvitations).set({ status: 'accepted' }).where(...).run()
+  const rows = tx.select().from(projects).where(...).all()
+})
+
+// 错误：async 回调 —— 会抛错且没有事务保护
+await db.transaction(async (tx) => {
+  await tx.insert(projectMembers).values({ ... })
+})
+```
+
+`backend/src/__tests__/collaboration-accept.integration.test.ts` 末尾有一条源码守卫测试，
+会扫描 `backend/src` 并让这类写法直接失败 —— 别再写 async 回调。
+
 ### ESM 导入必须加 .js 后缀
 后端所有相对导入必须在路径末尾加 `.js`：
 ```typescript

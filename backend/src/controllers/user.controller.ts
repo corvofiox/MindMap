@@ -187,48 +187,54 @@ userRouter.delete('/account', authenticate, asyncHandler(async (req: AuthRequest
   const userId = req.user!.id
 
   // B9: 多步删除包在事务里——中途失败整体回滚,不留"组删了项目没删"
-  // 之类的半删状态。closeRoom/removeCanvasState 是内存态清理,留在事务外
-  // 循环里执行（幂等,失败也不影响 DB 一致性;事务回滚后下次加载会重读 DB）。
-  await db.transaction(async (tx) => {
+  // 之类的半删状态。closeRoom/removeCanvasState 是内存态清理（幂等,失败也不
+  // 影响 DB 一致性;事务回滚后下次加载会重读 DB）。
+  //
+  // 注意：drizzle-orm 0.30 的 better-sqlite3 driver 只支持**同步**事务回调。
+  // 传 async 回调会抛 "Transaction function cannot return a promise"，并且语句
+  // 会在事务被回滚之后才执行 —— 既报错又没有原子性。故此处一律同步写法：
+  // 读用 .all()，写用 .run()，回调本身不加 async。
+  db.transaction((tx) => {
     // Handle groups owned by the user (groups.owner_id has no cascade). Detach
     // associated projects first, then delete the groups.
-    const ownedGroups = await tx.select().from(groups).where(eq(groups.ownerId, userId))
+    const ownedGroups = tx.select().from(groups).where(eq(groups.ownerId, userId)).all()
     const ownedGroupIds = ownedGroups.map((group) => group.id)
     if (ownedGroupIds.length > 0) {
       for (const groupId of ownedGroupIds) {
-        await tx.update(projects).set({ groupId: null }).where(eq(projects.groupId, groupId))
+        tx.update(projects).set({ groupId: null }).where(eq(projects.groupId, groupId)).run()
       }
-      await tx.delete(groups).where(eq(groups.ownerId, userId))
+      tx.delete(groups).where(eq(groups.ownerId, userId)).run()
     }
 
     // Delete owned projects. Schema-level CASCADE handles members, invitations,
     // files, ai_conversations, and canvas_recycle_bin; we still need to close
     // WebSocket rooms and remove in-memory Yjs state for canvases.
-    const ownedProjects = await tx.select().from(projects).where(eq(projects.ownerId, userId))
+    const ownedProjects = tx.select().from(projects).where(eq(projects.ownerId, userId)).all()
 
     for (const project of ownedProjects) {
-      const projectCanvases = await tx.select().from(canvases).where(eq(canvases.projectId, project.id))
+      const projectCanvases = tx.select().from(canvases).where(eq(canvases.projectId, project.id)).all()
       for (const canvas of projectCanvases) {
         closeRoom(canvas.id, 'project-deleted')
       }
 
       const canvasIds = projectCanvases.map((canvas) => canvas.id)
       if (canvasIds.length > 0) {
-        await tx.delete(canvases).where(inArray(canvases.id, canvasIds))
+        tx.delete(canvases).where(inArray(canvases.id, canvasIds)).run()
         for (const canvasId of canvasIds) {
           removeCanvasState(canvasId)
         }
       }
 
-      const rootFolders = await tx
+      const rootFolders = tx
         .select()
         .from(folders)
         .where(and(eq(folders.projectId, project.id), isNull(folders.parentId)))
+        .all()
       for (const folder of rootFolders) {
-        await tx.delete(folders).where(eq(folders.id, folder.id))
+        tx.delete(folders).where(eq(folders.id, folder.id)).run()
       }
 
-      await tx.delete(projects).where(eq(projects.id, project.id))
+      tx.delete(projects).where(eq(projects.id, project.id)).run()
     }
 
     // Schema-level CASCADE now handles the rest:
@@ -238,7 +244,7 @@ userRouter.delete('/account', authenticate, asyncHandler(async (req: AuthRequest
     // - files
     // - canvas_recycle_bin (deleted_by CASCADE)
     // - ai_conversations (user_id CASCADE)
-    await tx.delete(users).where(eq(users.id, userId))
+    tx.delete(users).where(eq(users.id, userId)).run()
   })
 
   res.json({

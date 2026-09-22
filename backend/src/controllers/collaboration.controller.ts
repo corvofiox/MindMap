@@ -341,20 +341,27 @@ collaborationRouter.post('/invitations/:id/accept', authenticate, asyncHandler(a
   const invitationProjectId = getProperty<number>(invitation, 'project_id', 'projectId')
   const invitationRole = getProperty<string>(invitation, 'role') || 'viewer'
 
-  await db.transaction(async (tx) => {
-    await tx
-      .update(projectInvitations)
+  // drizzle-orm 0.30 的 better-sqlite3 driver 只支持**同步**事务回调。
+  // 写成 `transaction(async (tx) => { await tx... })` 会抛
+  // "Transaction function cannot return a promise"（→ 500 服务器内部错误），
+  // 而且回调里的语句会在事务被回滚之后才落库 —— 接口报错、数据却已写入。
+  // 必须用同步回调 + .run()。
+  db.transaction((tx) => {
+    tx.update(projectInvitations)
       .set({
         status: 'accepted',
         respondedAt: Math.floor(Date.now() / 1000),
       })
       .where(eq(projectInvitations.id, invitationId))
+      .run()
 
-    await tx.insert(projectMembers).values({
-      projectId: invitationProjectId,
-      userId: req.user!.id,
-      role: invitationRole,
-    })
+    tx.insert(projectMembers)
+      .values({
+        projectId: invitationProjectId,
+        userId: req.user!.id,
+        role: invitationRole,
+      })
+      .run()
   })
 
   res.json({
