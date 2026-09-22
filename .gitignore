@@ -44,6 +44,11 @@ uploads/
 !README.md
 !AGENTS.md
 
+# 流水线生成的审查报告（json 版，与上面 *.md 同理不入库）
+# 例：yjs-migration-review.json、yjs-collaboration-review-round2.json
+# 历史产物仍留在本地磁盘与 git 历史里；需要重新纳入跟踪时用 `git add -f <file>`
+*-review*.json
+
 # ---- 缓存与调试残留 ----
 .cache/
 .eslintcache
