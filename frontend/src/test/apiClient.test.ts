@@ -1,537 +1,397 @@
-/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars */
-import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
+// apiClient 真实行为测试：全部断言打在 frontend/src/services/apiClient.ts 上。
+// 只 mock 真正的边界（fetch / document.cookie），不重新实现被测逻辑。
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import {
+  ApiClient,
+  ApiError,
+  ERROR_MESSAGES,
+  getErrorMessageByStatus,
+} from '../services/apiClient'
 
-describe('API Client Tests', () => {
-  describe('API Configuration', () => {
-    it('should use relative path for API_BASE_URL', () => {
-      const API_BASE_URL = ''
+type FetchHandler = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
 
-      expect(API_BASE_URL).toBe('')
-    })
+function installFetch(handler: FetchHandler) {
+  const mock = vi.fn<FetchHandler>(handler)
+  vi.stubGlobal('fetch', mock)
+  return mock
+}
 
-    it('should define error messages', () => {
-      const ERROR_MESSAGES = {
-        NETWORK_ERROR: '网络连接失败，请检查您的网络设置',
-        SERVER_ERROR: '服务器内部错误，请稍后重试',
-        UNAUTHORIZED: '未授权访问，请重新登录',
-        FORBIDDEN: '没有权限执行此操作',
-        NOT_FOUND: '请求的资源不存在',
-        BAD_REQUEST: '请求参数错误',
-        UNKNOWN_ERROR: '发生未知错误，请稍后重试',
-      }
-
-      expect(ERROR_MESSAGES.NETWORK_ERROR).toBeDefined()
-      expect(ERROR_MESSAGES.SERVER_ERROR).toBeDefined()
-      expect(ERROR_MESSAGES.UNAUTHORIZED).toBeDefined()
-      expect(ERROR_MESSAGES.FORBIDDEN).toBeDefined()
-    })
+function jsonResponse(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json' },
   })
+}
 
-  describe('Error Message Mapping', () => {
-    const getErrorMessageByStatus = (status: number, defaultMessage: string): string => {
-      switch (status) {
-        case 400:
-          return '请求参数错误'
-        case 401:
-          return '未授权访问，请重新登录'
-        case 403:
-          return '没有权限执行此操作'
-        case 404:
-          return '请求的资源不存在'
-        case 500:
-        case 501:
-        case 502:
-        case 503:
-        case 504:
-          return '服务器内部错误，请稍后重试'
-        default:
-          return defaultMessage
-      }
+function textResponse(status: number, body: string): Response {
+  return new Response(body, {
+    status,
+    headers: { 'content-type': 'text/plain' },
+  })
+}
+
+function requestHeaders(init: RequestInit | undefined): Record<string, string> {
+  return (init?.headers ?? {}) as Record<string, string>
+}
+
+function clearCookies(): void {
+  for (const cookie of document.cookie.split(';')) {
+    const name = cookie.split('=')[0].trim()
+    if (name) {
+      document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/`
     }
+  }
+}
 
-    it('should return correct message for 400', () => {
-      expect(getErrorMessageByStatus(400, 'default')).toBe('请求参数错误')
+describe('apiClient', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    clearCookies()
+    // 默认给一个有效 CSRF cookie，使非 GET 请求不触发额外的 /api/csrf-token 请求，
+    // 让每个用例的 fetch 调用序列保持可预测。
+    document.cookie = 'x-csrf-token=test; path=/'
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+    clearCookies()
+  })
+
+  describe('getErrorMessageByStatus', () => {
+    it('把常见状态码映射为固定中文文案', () => {
+      expect(getErrorMessageByStatus(400, '请求失败')).toBe('请求参数错误')
+      expect(getErrorMessageByStatus(401, '请求失败')).toBe('未授权访问，请重新登录')
+      expect(getErrorMessageByStatus(403, '请求失败')).toBe('没有权限执行此操作')
+      expect(getErrorMessageByStatus(404, '请求的资源不存在'))
+        .toBe(ERROR_MESSAGES.NOT_FOUND)
+      expect(getErrorMessageByStatus(500, '请求失败')).toBe('服务器内部错误，请稍后重试')
     })
 
-    it('should return correct message for 401', () => {
-      expect(getErrorMessageByStatus(401, 'default')).toBe('未授权访问，请重新登录')
+    it('501/502/503/504 与 500 同属服务器错误', () => {
+      for (const status of [501, 502, 503, 504]) {
+        expect(getErrorMessageByStatus(status, '请求失败')).toBe('服务器内部错误，请稍后重试')
+      }
     })
 
-    it('should return correct message for 403', () => {
-      expect(getErrorMessageByStatus(403, 'default')).toBe('没有权限执行此操作')
-    })
-
-    it('should return correct message for 404', () => {
-      expect(getErrorMessageByStatus(404, 'default')).toBe('请求的资源不存在')
-    })
-
-    it('should return correct message for 500', () => {
-      expect(getErrorMessageByStatus(500, 'default')).toBe('服务器内部错误，请稍后重试')
-    })
-
-    it('should return default message for unknown status', () => {
-      expect(getErrorMessageByStatus(418, 'default')).toBe('default')
+    it('未映射的状态码原样返回 defaultMessage', () => {
+      expect(getErrorMessageByStatus(418, '我是茶壶')).toBe('我是茶壶')
+      expect(getErrorMessageByStatus(200, '兜底')).toBe('兜底')
     })
   })
 
-  describe('CSRF Token Handling', () => {
-    it('should extract CSRF token from cookie', () => {
-      const getCsrfToken = (): string | null => {
-        const cookies = 'x-csrf-token=test-token; other-cookie=value'.split(';')
-        for (const cookie of cookies) {
-          const [name, value] = cookie.trim().split('=')
-          if (name === 'x-csrf-token') {
-            return decodeURIComponent(value)
-          }
-        }
-        return null
-      }
+  describe('请求头构造', () => {
+    it('getAuthHeaders 同时带上 Bearer token、cookie 里的 CSRF token 与 JSON Content-Type', () => {
+      document.cookie = 'x-csrf-token=abc%20def; path=/'
+      const client = new ApiClient()
+      client.setToken('jwt-1')
 
-      expect(getCsrfToken()).toBe('test-token')
-    })
+      const headers = client.getAuthHeaders() as Record<string, string>
 
-    it('should return null when CSRF token not found', () => {
-      const getCsrfToken = (): string | null => {
-        const cookies = 'other-cookie=value'.split(';')
-        for (const cookie of cookies) {
-          const [name] = cookie.trim().split('=')
-          if (name === 'x-csrf-token') {
-            return 'found'
-          }
-        }
-        return null
-      }
-
-      expect(getCsrfToken()).toBeNull()
-    })
-
-    it('should decode CSRF token', () => {
-      const encodedToken = 'test%20token'
-      const decodedToken = decodeURIComponent(encodedToken)
-
-      expect(decodedToken).toBe('test token')
-    })
-  })
-
-  describe('Token Management', () => {
-    it('should store token in localStorage', () => {
-      const token = 'test-token'
-
-      localStorage.setItem('mindmap_token', token)
-
-      expect(localStorage.getItem('mindmap_token')).toBe(token)
-    })
-
-    it('should retrieve token from localStorage', () => {
-      const token = 'test-token'
-
-      localStorage.setItem('mindmap_token', token)
-      const retrieved = localStorage.getItem('mindmap_token')
-
-      expect(retrieved).toBe(token)
-    })
-
-    it('should remove token from localStorage', () => {
-      const token = 'test-token'
-
-      localStorage.setItem('mindmap_token', token)
-      localStorage.removeItem('mindmap_token')
-
-      expect(localStorage.getItem('mindmap_token')).toBeNull()
-    })
-
-    it('should handle missing token gracefully', () => {
-      localStorage.clear()
-
-      const token = localStorage.getItem('mindmap_token')
-
-      expect(token).toBeNull()
-    })
-
-    it('should verify localStorage mock is working', () => {
-      localStorage.setItem('test_key', 'test_value')
-      expect(localStorage.getItem('test_key')).toBe('test_value')
-      localStorage.removeItem('test_key')
-      expect(localStorage.getItem('test_key')).toBeNull()
-      localStorage.clear()
-      expect(localStorage.store).toEqual({})
-    })
-  })
-
-  describe('Request Headers', () => {
-    it('should build headers with authorization', () => {
-      const buildHeaders = (token: string | null) => {
-        const headers: Record<string, string> = {}
-
-        if (token) {
-          headers['Authorization'] = `Bearer ${token}`
-        }
-
-        return headers
-      }
-
-      const headers = buildHeaders('test-token')
-
-      expect(headers['Authorization']).toBe('Bearer test-token')
-    })
-
-    it('should build headers with CSRF token', () => {
-      const buildHeaders = (csrfToken: string | null) => {
-        const headers: Record<string, string> = {}
-
-        if (csrfToken) {
-          headers['x-csrf-token'] = csrfToken
-        }
-
-        return headers
-      }
-
-      const headers = buildHeaders('csrf-token')
-
-      expect(headers['x-csrf-token']).toBe('csrf-token')
-    })
-
-    it('should build headers with content type for JSON', () => {
-      const buildHeaders = (contentType?: string) => {
-        const headers: Record<string, string> = {}
-
-        if (contentType && contentType !== 'multipart/form-data') {
-          headers['Content-Type'] = contentType
-        }
-
-        return headers
-      }
-
-      const headers = buildHeaders('application/json')
-
+      expect(headers['Authorization']).toBe('Bearer jwt-1')
+      // cookie 值经 decodeURIComponent 解码
+      expect(headers['x-csrf-token']).toBe('abc def')
       expect(headers['Content-Type']).toBe('application/json')
     })
 
-    it('should not set content type for FormData', () => {
-      const buildHeaders = (contentType?: string) => {
-        const headers: Record<string, string> = {}
+    it('没有 token / 没有 cookie 时不写对应请求头', () => {
+      clearCookies()
+      const headers = new ApiClient().getAuthHeaders() as Record<string, string>
 
-        if (contentType && contentType !== 'multipart/form-data') {
-          headers['Content-Type'] = contentType
-        }
+      expect(headers['Authorization']).toBeUndefined()
+      expect(headers['x-csrf-token']).toBeUndefined()
+    })
 
-        return headers
-      }
-
-      const headers = buildHeaders('multipart/form-data')
+    it('multipart/form-data 不设置 Content-Type（交给浏览器补 boundary）', () => {
+      const headers = new ApiClient().getAuthHeaders('multipart/form-data') as Record<string, string>
 
       expect(headers['Content-Type']).toBeUndefined()
     })
-  })
 
-  describe('Response Parsing', () => {
-    it('should parse JSON response', async () => {
-      const mockResponse = {
-        ok: true,
-        headers: new Headers({ 'content-type': 'application/json' }),
-        json: async () => ({ success: true, data: 'test' }),
-      }
+    it('实际请求使用构造出的请求头', async () => {
+      document.cookie = 'x-csrf-token=csrf-live; path=/'
+      const mock = installFetch(async () => jsonResponse(200, { success: true, data: 1 }))
 
-      const parseResponse = async <T>(response: Response): Promise<T> => {
-        const contentType = response.headers.get('content-type')
-        if (contentType && contentType.includes('application/json')) {
-          return await response.json()
-        }
-        throw new Error('Not JSON')
-      }
+      const client = new ApiClient()
+      client.setToken('jwt-2')
+      await client.get('/api/things')
 
-      const result = await parseResponse<{ success: boolean; data: string }>(mockResponse as unknown as Response)
-
-      expect(result.success).toBe(true)
-      expect(result.data).toBe('test')
-    })
-
-    it('should handle non-JSON response', async () => {
-      const mockResponse = {
-        ok: true,
-        headers: new Headers({ 'content-type': 'text/plain' }),
-        text: async () => 'Plain text response',
-      }
-
-      const parseResponse = async (response: Response): Promise<string> => {
-        const contentType = response.headers.get('content-type')
-        if (contentType && contentType.includes('application/json')) {
-          return await response.json()
-        }
-        return await response.text()
-      }
-
-      const result = await parseResponse(mockResponse as unknown as Response)
-
-      expect(result).toBe('Plain text response')
-    })
-
-    it('should check success field in response', () => {
-      const checkSuccess = (data: { success: boolean; data?: unknown }) => {
-        return 'success' in data && data.success
-      }
-
-      expect(checkSuccess({ success: true })).toBe(true)
-      expect(checkSuccess({ success: false })).toBe(false)
+      const headers = requestHeaders(mock.mock.calls[0][1])
+      expect(headers['Authorization']).toBe('Bearer jwt-2')
+      expect(headers['x-csrf-token']).toBe('csrf-live')
     })
   })
 
-  describe('Error Handling', () => {
-    it('should handle network errors', () => {
-      const error = new TypeError('Failed to fetch')
+  describe('token 管理', () => {
+    it('setToken 写入 localStorage，setToken(null) 清除', () => {
+      const client = new ApiClient()
 
-      const isNetworkError = error instanceof TypeError && error.message.includes('Failed to fetch')
+      client.setToken('token-a')
+      expect(client.getToken()).toBe('token-a')
+      expect(localStorage.getItem('mindmap_token')).toBe('token-a')
 
-      expect(isNetworkError).toBe(true)
+      client.setToken(null)
+      expect(client.getToken()).toBeNull()
+      expect(localStorage.getItem('mindmap_token')).toBeNull()
     })
 
-    it('should handle error messages', () => {
-      const handleError = (error: unknown, defaultMessage: string): string => {
-        if (error instanceof Error) {
-          return error.message
-        }
-        return defaultMessage
-      }
+    it('构造时从 localStorage 恢复已有 token', () => {
+      localStorage.setItem('mindmap_token', 'persisted-token')
 
-      expect(handleError(new Error('Test error'), 'default')).toBe('Test error')
-      expect(handleError(null, 'default')).toBe('default')
-      expect(handleError('string error', 'default')).toBe('default')
-    })
-
-    it('should handle HTTP status errors', () => {
-      const handleStatusError = (status: number) => {
-        switch (status) {
-          case 400:
-            return '请求参数错误'
-          case 401:
-            return '未授权访问，请重新登录'
-          case 403:
-            return '没有权限执行此操作'
-          case 404:
-            return '请求的资源不存在'
-          case 500:
-            return '服务器内部错误，请稍后重试'
-          default:
-            return '请求失败'
-        }
-      }
-
-      expect(handleStatusError(400)).toBe('请求参数错误')
-      expect(handleStatusError(401)).toBe('未授权访问，请重新登录')
-      expect(handleStatusError(500)).toBe('服务器内部错误，请稍后重试')
+      expect(new ApiClient().getToken()).toBe('persisted-token')
     })
   })
 
-  describe('Query String Building', () => {
-    it('should build query string from params', () => {
-      const buildQueryString = (params?: Record<string, any>): string => {
-        if (!params) return ''
-        return '?' + new URLSearchParams(params as Record<string, string>).toString()
-      }
+  describe('查询字符串', () => {
+    it('GET 把 params 序列化进 URL', async () => {
+      const mock = installFetch(async () => jsonResponse(200, { success: true, data: [] }))
 
-      const queryString = buildQueryString({ page: '1', limit: '10' })
+      await new ApiClient().get('/api/items', { page: '1', limit: '10' })
 
-      expect(queryString).toBe('?page=1&limit=10')
+      expect(String(mock.mock.calls[0][0])).toBe('/api/items?page=1&limit=10')
     })
 
-    it('should return empty string for undefined params', () => {
-      const buildQueryString = (params?: Record<string, any>): string => {
-        if (!params) return ''
-        return '?' + new URLSearchParams(params as Record<string, string>).toString()
-      }
+    it('GET 未传 params 时不追加问号', async () => {
+      const mock = installFetch(async () => jsonResponse(200, { success: true, data: [] }))
 
-      expect(buildQueryString(undefined)).toBe('')
+      await new ApiClient().get('/api/items')
+
+      expect(String(mock.mock.calls[0][0])).toBe('/api/items')
     })
   })
 
-  describe('Request Methods', () => {
-    it('should support GET requests', () => {
-      const makeGetRequest = (endpoint: string) => {
-        return {
-          method: 'GET',
-          endpoint,
-        }
-      }
+  describe('响应信封解包', () => {
+    it('success:true 时只返回 data 字段', async () => {
+      installFetch(async () => jsonResponse(200, { success: true, data: { id: 7 } }))
 
-      const request = makeGetRequest('/api/users')
-
-      expect(request).toHaveProperty('method', 'GET')
+      await expect(new ApiClient().get('/api/x')).resolves.toEqual({ id: 7 })
     })
 
-    it('should support POST requests with JSON body', () => {
-      const makePostRequest = (endpoint: string, data?: any) => {
-        return {
-          method: 'POST',
-          endpoint,
-          body: data ? JSON.stringify(data) : undefined,
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        }
-      }
+    it('HTTP 200 但 success:false 时抛出服务端 error 文案', async () => {
+      installFetch(async () => jsonResponse(200, { success: false, error: '画布已被删除' }))
 
-      const request = makePostRequest('/api/auth/login', { email: 'test@example.com' })
-
-      expect(request.method).toBe('POST')
-      expect(request.body).toBe('{"email":"test@example.com"}')
+      await expect(new ApiClient().get('/api/x')).rejects.toThrow('画布已被删除')
     })
 
-    it('should support PUT requests', () => {
-      const makePutRequest = (endpoint: string, data?: any) => {
-        return {
-          method: 'PUT',
-          endpoint,
-          body: data ? JSON.stringify(data) : undefined,
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        }
-      }
+    it('响应体为字面量 null 时解析为 undefined 而不是抛 TypeError', async () => {
+      installFetch(async () => jsonResponse(200, null))
 
-      const request = makePutRequest('/api/users/profile', { nickname: 'New Name' })
-
-      expect(request.method).toBe('PUT')
-      expect(request.body).toBe('{"nickname":"New Name"}')
+      await expect(new ApiClient().get('/api/x')).resolves.toBeUndefined()
     })
 
-    it('should support DELETE requests', () => {
-      const makeDeleteRequest = (endpoint: string, data?: any) => {
-        return {
-          method: 'DELETE',
-          endpoint,
-          body: data ? JSON.stringify(data) : undefined,
-        }
-      }
+    it('POST 把 body 序列化为 JSON 并带上 Content-Type', async () => {
+      const mock = installFetch(async () => jsonResponse(200, { success: true, data: 1 }))
 
-      const request = makeDeleteRequest('/api/projects/1')
+      await new ApiClient().post('/api/things', { name: 'a' })
 
-      expect(request.method).toBe('DELETE')
+      const init = mock.mock.calls[0][1]
+      expect(init?.method).toBe('POST')
+      expect(init?.body).toBe('{"name":"a"}')
+      expect(requestHeaders(init)['Content-Type']).toBe('application/json')
     })
 
-    it('should handle FormData for file uploads', () => {
-      const handleFormData = (data: FormData) => {
-        return {
-          body: data,
-          isFormData: true,
-        }
-      }
-
+    it('FormData body 不手动设置 Content-Type', async () => {
+      const mock = installFetch(async () => jsonResponse(200, { success: true, data: 1 }))
       const formData = new FormData()
-      formData.append('file', new Blob(['test'], { type: 'image/png' }))
+      formData.append('file', new Blob(['x'], { type: 'text/plain' }))
 
-      const result = handleFormData(formData)
+      await new ApiClient().post('/api/upload', formData)
 
-      expect(result.isFormData).toBe(true)
-      expect(result.body).toBe(formData)
+      expect(requestHeaders(mock.mock.calls[0][1])['Content-Type']).toBeUndefined()
     })
   })
 
-  describe('Retry Logic', () => {
-    it('should retry on CSRF error', async () => {
-      const retryWithNewCsrfToken = async <T>(
-        endpoint: string,
-        options: RequestInit
-      ): Promise<T> => {
-        try {
-          return {} as T
-        } catch {
-          return {} as T
-        }
-      }
+  describe('错误映射', () => {
+    it('404 且响应体没有 error 字段时回退到状态码文案', async () => {
+      installFetch(async () => jsonResponse(404, { success: false }))
 
-      const result = await retryWithNewCsrfToken('/api/test', { method: 'POST' })
+      const error = await new ApiClient().get('/api/x').catch((e: unknown) => e)
 
-      expect(result).toBeDefined()
+      expect(error).toBeInstanceOf(ApiError)
+      expect((error as ApiError).status).toBe(404)
+      expect((error as ApiError).message).toBe('请求的资源不存在')
     })
 
-    it('should clear invalid CSRF token', () => {
-      const clearCsrfToken = () => {
-        document.cookie = 'x-csrf-token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;'
-      }
+    it('服务端给了 error 字段时优先使用服务端文案', async () => {
+      installFetch(async () => jsonResponse(400, { success: false, error: '邮箱已被注册' }))
 
-      expect(() => clearCsrfToken()).not.toThrow()
+      await expect(new ApiClient().post('/api/auth/register', {})).rejects.toThrow('邮箱已被注册')
     })
-  })
 
-  describe('409 版本冲突响应解析', () => {
-    it('serverVersion 应位于 error.data.data（嵌套）而非 error.data 顶层', () => {
-      // ApiError 模拟生产代码中的实现
-      class ApiError extends Error {
-        status: number
-        data: Record<string, unknown> | null
-        constructor(message: string, status: number, data: Record<string, unknown> | null = null) {
-          super(message)
-          this.name = 'ApiError'
-          this.status = status
-          this.data = data
-        }
-      }
+    it('非 JSON 错误响应回退到状态码文案', async () => {
+      installFetch(async () => textResponse(500, 'Internal Server Error'))
 
-      // 后端 409 响应体: { success: false, error: "...", data: { serverVersion: 42 } }
-      const responseBody = {
+      const error = await new ApiClient().get('/api/x').catch((e: unknown) => e)
+
+      expect((error as ApiError).status).toBe(500)
+      expect((error as ApiError).message).toBe('服务器内部错误，请稍后重试')
+    })
+
+    it('fetch 抛 TypeError(Failed to fetch) 时映射为网络错误文案', async () => {
+      installFetch(async () => {
+        throw new TypeError('Failed to fetch')
+      })
+
+      await expect(new ApiClient().get('/api/x')).rejects.toThrow(ERROR_MESSAGES.NETWORK_ERROR)
+    })
+
+    it('409 冲突：ApiError 保留完整响应体，serverVersion 位于 data.data 内', async () => {
+      const body = {
         success: false,
         error: '版本冲突：画布数据已被其他用户更新，请刷新后重试',
         data: { serverVersion: 42, clientVersion: 5 },
       }
+      installFetch(async () => jsonResponse(409, body))
 
-      const error = new ApiError(responseBody.error, 409, responseBody)
+      const error = (await new ApiClient()
+        .put('/api/canvases/1', {})
+        .catch((e: unknown) => e)) as ApiError
 
-      // 旧代码（bug）: error.data?.serverVersion → undefined
-      // 因为 error.data = 整个响应体, serverVersion 在 data.data 里
-      expect(error.data?.serverVersion).toBeUndefined()
-      expect(typeof error.data?.serverVersion === 'number').toBe(false)
-
-      // 新代码（修复）: error.data?.data?.serverVersion → 42
-      const nested = error.data?.data as { serverVersion?: number } | undefined
+      expect(error).toBeInstanceOf(ApiError)
+      expect(error.status).toBe(409)
+      expect(error.message).toBe(body.error)
+      // 完整响应体被保留；serverVersion 嵌在 data.data 里，而不是 data 顶层
+      expect(error.data).toEqual(body)
+      const nested = (error.data as { data?: { serverVersion?: number } }).data
       expect(nested?.serverVersion).toBe(42)
-      expect(typeof nested?.serverVersion).toBe('number')
     })
   })
 
-  describe('API Response Types', () => {
-    it('should define ApiResponse type', () => {
-      type ApiResponse<T> = {
-        success: boolean
-        data?: T
-        error?: string
-      }
+  describe('CSRF 403 自愈', () => {
+    it('403 + CSRF 错误：清除旧 cookie、重新获取 token 并只重试一次', async () => {
+      document.cookie = 'x-csrf-token=stale; path=/'
+      const calls: Array<{ url: string; method: string; csrf: string | null }> = []
+      let postCount = 0
 
-      const response: ApiResponse<{ id: number }> = {
-        success: true,
-        data: { id: 1 },
-      }
+      const mock = installFetch(async (input, init) => {
+        const url = String(input)
+        const method = (init?.method ?? 'GET').toUpperCase()
+        calls.push({ url, method, csrf: requestHeaders(init)['x-csrf-token'] ?? null })
 
-      expect(response.success).toBe(true)
-      expect(response.data?.id).toBe(1)
+        if (url.includes('/api/csrf-token')) {
+          // 真实服务端通过 Set-Cookie 下发新 token；jsdom 不会自动写 cookie，这里手动模拟
+          document.cookie = 'x-csrf-token=fresh; path=/'
+          return jsonResponse(200, { success: true, token: 'fresh' })
+        }
+
+        postCount += 1
+        if (postCount === 1) {
+          return jsonResponse(403, { success: false, error: 'CSRF token mismatch' })
+        }
+        return jsonResponse(200, { success: true, data: { ok: true } })
+      })
+
+      await expect(new ApiClient().post('/api/things', { a: 1 })).resolves.toEqual({ ok: true })
+
+      // 原始 POST 一次 + 重试一次，共两次；不会无限递归
+      expect(postCount).toBe(2)
+      expect(mock).toHaveBeenCalledTimes(3)
+      expect(calls[1].url).toBe('/api/csrf-token')
+      expect(calls[1].method).toBe('GET')
+      // 重试的请求带上了新 cookie 中的 token
+      expect(calls[2].url).toBe('/api/things')
+      expect(calls[2].csrf).toBe('fresh')
     })
 
-    it('should define AuthResponse type', () => {
-      type AuthResponse = {
-        user: {
-          id: number
-          email: string
-          nickname: string | null
-          avatar: string | null
-          created_at: string
-          updated_at: string
+    it('重试后仍是 CSRF 403 时不再递归，直接抛出 ApiError', async () => {
+      document.cookie = 'x-csrf-token=stale; path=/'
+      let postCount = 0
+
+      installFetch(async (input) => {
+        if (String(input).includes('/api/csrf-token')) {
+          document.cookie = 'x-csrf-token=still-bad; path=/'
+          return jsonResponse(200, { success: true, token: 'still-bad' })
         }
-        token: string
-      }
+        postCount += 1
+        return jsonResponse(403, { success: false, error: 'CSRF token invalid' })
+      })
 
-      const response: AuthResponse = {
-        user: {
-          id: 1,
-          email: 'test@example.com',
-          nickname: 'Test User',
-          avatar: null,
-          created_at: '2024-01-01T00:00:00.000Z',
-          updated_at: '2024-01-01T00:00:00.000Z',
-        },
-        token: 'test-token',
-      }
+      const error = (await new ApiClient()
+        .post('/api/things', { a: 1 })
+        .catch((e: unknown) => e)) as ApiError
 
-      expect(response.user.id).toBe(1)
-      expect(response.token).toBe('test-token')
+      expect(error).toBeInstanceOf(ApiError)
+      expect(error.status).toBe(403)
+      expect(postCount).toBe(2)
+    })
+
+    it('403 但错误信息与 CSRF 无关时不触发重试', async () => {
+      document.cookie = 'x-csrf-token=ok; path=/'
+      let postCount = 0
+
+      installFetch(async () => {
+        postCount += 1
+        return jsonResponse(403, { success: false, error: '没有权限执行此操作' })
+      })
+
+      const error = (await new ApiClient()
+        .post('/api/things', { a: 1 })
+        .catch((e: unknown) => e)) as ApiError
+
+      expect(error).toBeInstanceOf(ApiError)
+      expect(error.message).toBe('没有权限执行此操作')
+      expect(postCount).toBe(1)
+    })
+  })
+
+  describe('CSRF token 获取', () => {
+    it('getCsrfTokenFromServer 解包 { success, token } 信封', async () => {
+      installFetch(async () => jsonResponse(200, { success: true, token: 'csrf-1' }))
+
+      await expect(new ApiClient().getCsrfTokenFromServer()).resolves.toEqual({ token: 'csrf-1' })
+    })
+
+    it('响应缺少 token 字段时抛错', async () => {
+      installFetch(async () => jsonResponse(200, { success: true }))
+
+      await expect(new ApiClient().getCsrfTokenFromServer())
+        .rejects.toThrow('Failed to get CSRF token')
+    })
+
+    it('ensureCsrfToken 仅在 cookie 缺失时请求 /api/csrf-token', async () => {
+      clearCookies()
+      const mock = installFetch(async () => jsonResponse(200, { success: true, token: 'fresh' }))
+
+      await new ApiClient().ensureCsrfToken()
+
+      expect(mock).toHaveBeenCalledTimes(1)
+      expect(String(mock.mock.calls[0][0])).toBe('/api/csrf-token')
+    })
+
+    it('ensureCsrfToken 已有 cookie 时不发请求', async () => {
+      const mock = installFetch(async () => jsonResponse(200, { success: true, token: 'x' }))
+
+      await new ApiClient().ensureCsrfToken()
+
+      expect(mock).not.toHaveBeenCalled()
+    })
+
+    it('非 GET 请求在缺少 CSRF cookie 时会自动先取 token', async () => {
+      clearCookies()
+      const urls: string[] = []
+
+      installFetch(async (input) => {
+        const url = String(input)
+        urls.push(url)
+        if (url.includes('/api/csrf-token')) {
+          document.cookie = 'x-csrf-token=auto; path=/'
+          return jsonResponse(200, { success: true, token: 'auto' })
+        }
+        return jsonResponse(200, { success: true, data: 'done' })
+      })
+
+      await expect(new ApiClient().post('/api/things', { a: 1 })).resolves.toBe('done')
+      expect(urls).toEqual(['/api/csrf-token', '/api/things'])
+    })
+
+    it('GET 请求不会为了 CSRF 额外发一次请求', async () => {
+      clearCookies()
+      const mock = installFetch(async () => jsonResponse(200, { success: true, data: [] }))
+
+      await new ApiClient().get('/api/items')
+
+      expect(mock).toHaveBeenCalledTimes(1)
+      expect(String(mock.mock.calls[0][0])).toBe('/api/items')
     })
   })
 })

@@ -121,17 +121,17 @@ interface UserAvatarsProps {
 }
 
 export function UserAvatars({ users }: UserAvatarsProps) {
-  // 覆盖层必须主动避让：右侧面板（节点池/AI 侧边栏，z-index 70）与小地图
+  // 覆盖层必须主动避让：右侧面板（节点池，z-index 70）与小地图
   // （右上角，z-index 60）都在本覆盖层（z-index 15）之上。默认
   // nodePoolOpen/minimapVisible 均为 true，若不避让头像栏会被完全盖住。
-  const { nodePoolOpen, aiSidebarOpen, minimapVisible, minimapFrame } = useUIStore()
+  const { nodePoolOpen, minimapVisible, minimapFrame } = useUIStore()
 
   if (!users || users.length === 0) return null
 
   // 横向只避让右侧面板（即与小地图右对齐，不再额外让出小地图宽度）；
   // 纵向在小地图可见时贴到它**正下方**，起点取自 store 上报的实际外框占位 ——
   // 用上限常量会让小地图偏小时头像被推得很远。
-  const panelOffset = getRightPanelOffset(nodePoolOpen, aiSidebarOpen)
+  const panelOffset = getRightPanelOffset(nodePoolOpen)
   const topOffset = minimapVisible
     ? minimapFrame.top + minimapFrame.height + OVERLAY_GAP_PX
     : MINIMAP_TOP_PX

@@ -21,8 +21,8 @@ import { canvasRouter } from './controllers/canvas.controller.js'
 import { logRouter } from './controllers/log.routes.js'
 import { uploadRouter } from './controllers/upload.controller.js'
 import { collaborationRouter } from './controllers/collaboration.controller.js'
-import { aiRouter } from './controllers/ai.controller.js'
-import { aiProxyRouter } from './controllers/ai-proxy.controller.js'
+import { tokenRouter } from './controllers/token.controller.js'
+import { mcpRouter } from './mcp/http.js'
 import { apiLimiter } from './middleware/rateLimit.middleware.js'
 import { csrfProtectionMiddleware, getCsrfTokenRoute } from './middleware/csrf.middleware.js'
 import { setupWebSocket } from './websocket/index.js'
@@ -103,13 +103,14 @@ app.use('/api/canvases', apiLimiter(), csrfProtectionMiddleware, canvasRouter)
 // 裸挂载，限速永远不会生效（曾发生）。
 app.use('/api/upload', apiLimiter(), csrfProtectionMiddleware, uploadRouter)
 app.use('/api/collaboration', apiLimiter(), csrfProtectionMiddleware, collaborationRouter)
-// CSRF-FIX1: 合并为单挂载——原双重挂载导致 POST /api/ai/conversation/* 二次校验失败:
-// 第一挂载校验时 req.user 不存在（csrf-csrf 会话标识=req.ip）通过后，aiProxyRouter 内
-// authenticate 设置了 req.user；落到第二挂载再校验时会话标识变为 req.user.id → HMAC
-// 不匹配 → 403 invalid csrf token。合并后 csrfProtectionMiddleware 在 authenticate 之前
-// 只执行一次；aiRouter 内部自身的 router.use(authenticate) 仍会执行（幂等），
-// CSRF 对全部 /api/ai 请求（含 /chat）的覆盖不变。
-app.use('/api/ai', apiLimiter(), csrfProtectionMiddleware, aiProxyRouter, aiRouter)
+// Personal access tokens for external agents. Browser-driven (JWT + CSRF), unlike
+// /mcp which authenticates with the token itself.
+app.use('/api/tokens', apiLimiter(), csrfProtectionMiddleware, tokenRouter)
+// MCP endpoint for external agents. Deliberately NOT behind csrfProtectionMiddleware:
+// the credential is an explicit Authorization header (a cross-site form cannot set
+// one), so CSRF does not apply, and requiring a token here would force agents to
+// scrape a browser session. Authentication is the PAT check inside the router.
+app.use('/mcp', apiLimiter(), mcpRouter)
 // A1: /api/logs 同样受全局限速保护（日志写入/读取/清空均可被滥用）
 // B13: 与其余受保护路由一致补挂 CSRF——前端 debugLogger.saveToServer 已
 // 携带 x-csrf-token 头（GET 读取被 doubleCsrf ignoredMethods 豁免）。

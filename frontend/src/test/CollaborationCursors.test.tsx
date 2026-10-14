@@ -43,7 +43,7 @@ const remoteState = (
 
 beforeEach(() => {
   useAuthStore.setState({ user: selfUser })
-  useUIStore.setState({ nodePoolOpen: true, aiSidebarOpen: false, minimapVisible: true })
+  useUIStore.setState({ nodePoolOpen: true, minimapVisible: true })
 })
 
 afterEach(() => {
@@ -196,21 +196,15 @@ describe('UserAvatars', () => {
     expect(container.firstChild).toBeNull()
   })
 
-  // 回归：右侧面板(node pool z70 / AI sidebar z70)与小地图(z60, 右上角)都比协作
+  // 回归：右侧面板(node pool z70)与小地图(z60, 右上角)都比协作
   // 覆盖层(z15)高，头像栏若不主动避让就会被盖住（默认两者都是开启的）。
   const alice = [{ id: 2, name: 'Alice', color: '#f97316', avatar: null }]
 
-  it('avoids the right-side panels', () => {
-    useUIStore.setState({ nodePoolOpen: true, aiSidebarOpen: false, minimapVisible: false })
-    const first = render(<UserAvatars users={alice} />)
-    const withNodePool = first.container.querySelector('[data-collab-avatars="true"]') as HTMLElement
+  it('avoids the node pool panel', () => {
+    useUIStore.setState({ nodePoolOpen: true, minimapVisible: false })
+    const { container } = render(<UserAvatars users={alice} />)
+    const withNodePool = container.querySelector('[data-collab-avatars="true"]') as HTMLElement
     expect(withNodePool.style.right).toBe('18.25rem')
-    first.unmount()
-
-    useUIStore.setState({ nodePoolOpen: false, aiSidebarOpen: true, minimapVisible: false })
-    const second = render(<UserAvatars users={alice} />)
-    const withAiSidebar = second.container.querySelector('[data-collab-avatars="true"]') as HTMLElement
-    expect(withAiSidebar.style.right).toBe('20.5rem')
   })
 
   // 变更（2026-09-23）：头像栏原在小地图**左侧**，横向偏移按"小地图最大宽度"预留；
@@ -219,7 +213,6 @@ describe('UserAvatars', () => {
   it('sits directly below the minimap, using its reported frame height', () => {
     useUIStore.setState({
       nodePoolOpen: true,
-      aiSidebarOpen: false,
       minimapVisible: true,
       minimapFrame: { top: MINIMAP_TOP_PX, height: 120 },
     })
@@ -234,7 +227,6 @@ describe('UserAvatars', () => {
   it('falls back to the store default frame before the minimap reports its size', () => {
     useUIStore.setState({
       nodePoolOpen: false,
-      aiSidebarOpen: false,
       minimapVisible: true,
       minimapFrame: { top: MINIMAP_TOP_PX, height: MINIMAP_MAX_FRAME_HEIGHT_PX },
     })
@@ -246,7 +238,7 @@ describe('UserAvatars', () => {
   })
 
   it('needs no offset when no panel or minimap is open', () => {
-    useUIStore.setState({ nodePoolOpen: false, aiSidebarOpen: false, minimapVisible: false })
+    useUIStore.setState({ nodePoolOpen: false, minimapVisible: false })
     const { container } = render(<UserAvatars users={alice} />)
     const bar = container.querySelector('[data-collab-avatars="true"]') as HTMLElement
     expect(bar.style.right).toBe('1rem')

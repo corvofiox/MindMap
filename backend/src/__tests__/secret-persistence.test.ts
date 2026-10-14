@@ -16,7 +16,6 @@ import {
 
 const JWT = 'JWT_SECRET'
 const CSRF = 'CSRF_SECRET'
-const AI = 'AI_KEY_SECRET'
 
 let tmpDir: string
 let envPath: string
@@ -87,7 +86,7 @@ describe('密钥持久化 resolveSecret / resolveSecrets', () => {
   })
 
   it('场景2: .secrets 有值 → 用之且不重新生成,并写回 .env', () => {
-    writeSecrets(`${JWT}=persisted-secret-42\n${CSRF}=persisted-csrf-42\n${AI}=persisted-ai-42\n`)
+    writeSecrets(`${JWT}=persisted-secret-42\n${CSRF}=persisted-csrf-42\n`)
     writeEnv(`${JWT}=your-secret-key-change-me-in-production\n`)
     const r = resolveSecret(JWT, { envPath, secretsPath, env: {} })
     expect(r.source).toBe('secrets')
@@ -138,7 +137,7 @@ describe('密钥持久化 resolveSecret / resolveSecrets', () => {
     expect(second.every(x => x.source === 'secrets')).toBe(true)
   })
 
-  it('resolveSecrets 同时处理三个密钥,.secrets 仅含三键且 .env/.secrets 一致', () => {
+  it('resolveSecrets 同时处理全部密钥,.secrets 键集与 SECRET_KEYS 一致且 .env/.secrets 同值', () => {
     const results = resolveSecrets({ envPath, secretsPath, env: {} })
     expect(results.map(r => r.key)).toEqual(SECRET_KEYS)
     expect(results.every(r => r.source === 'generated')).toBe(true)
@@ -150,9 +149,9 @@ describe('密钥持久化 resolveSecret / resolveSecrets', () => {
     }
   })
 
-  it('canGenerate=false 且无来源 → 不生成,返回 none(生产非 Docker 缺 AI_KEY_SECRET 场景)', () => {
-    writeEnv(`${JWT}=valid-jwt\n${CSRF}=valid-csrf\n`)
-    const r = resolveSecret(AI, { envPath, secretsPath, env: {}, canGenerate: false })
+  it('canGenerate=false 且无来源 → 不生成,返回 none(生产非 Docker 缺密钥场景)', () => {
+    // 无 .env、无 .secrets，且禁止生成 → 必须诚实返回 none，而不是静默生成弱密钥。
+    const r = resolveSecret(JWT, { envPath, secretsPath, env: {}, canGenerate: false })
     expect(r.source).toBe('none')
     expect(r.value).toBeUndefined()
     expect(fs.existsSync(secretsPath)).toBe(false)
@@ -203,11 +202,11 @@ describe('密钥持久化 resolveSecret / resolveSecrets', () => {
     expect(fs.readFileSync(envPath, 'utf-8')).toContain(`${JWT}=recovered-secret`)
   })
 
-  it('AI_KEY_SECRET 缺失且 canGenerate=true(容器/开发) → 生成并持久化', () => {
-    writeEnv(`${JWT}=valid-jwt\n${CSRF}=valid-csrf\n`)
-    const r = resolveSecret(AI, { envPath, secretsPath, env: {} })
+  it('CSRF_SECRET 缺失且 canGenerate=true(容器/开发) → 生成并持久化', () => {
+    writeEnv(`${JWT}=valid-jwt\n`)
+    const r = resolveSecret(CSRF, { envPath, secretsPath, env: {} })
     expect(r.source).toBe('generated')
-    expect(readSecretsFile(secretsPath)[AI]).toBe(r.value)
+    expect(readSecretsFile(secretsPath)[CSRF]).toBe(r.value)
   })
 
   it('M1冲突: .secrets 与 .env 值不同 → .secrets 权威,返回 conflictWithEnvFile=true 且覆盖 .env', () => {
@@ -242,21 +241,19 @@ describe('密钥持久化 resolveSecret / resolveSecrets', () => {
   })
 
   it('m6-截断恢复: .secrets 缺键时从 .env 迁移/生成恢复,不影响已有键', () => {
-    // .secrets 只含 JWT(模拟崩溃截断后仅剩一行),CSRF/AI 缺失
+    // .secrets 只含 JWT(模拟崩溃截断后仅剩一行),CSRF 缺失
     writeSecrets(`${JWT}=survived-jwt\n`)
     writeEnv(`${JWT}=your-secret-key-change-me-in-production\n${CSRF}=valid-csrf-value\n`)
     const results = resolveSecrets({ envPath, secretsPath, env: {} })
     const byKey = Object.fromEntries(results.map(r => [r.key, r]))
     expect(byKey[JWT].source).toBe('secrets')
     expect(byKey[JWT].value).toBe('survived-jwt')
-    // CSRF 从 .env 恢复并迁移(③ envfile),AI 生成(④ generated)
+    // CSRF 从 .env 恢复并迁移(③ envfile)
     expect(byKey[CSRF].source).toBe('envfile')
     expect(byKey[CSRF].value).toBe('valid-csrf-value')
-    expect(byKey[AI].source).toBe('generated')
-    // 重写后三键都在 .secrets 且 JWT 值不变
+    // 重写后两键都在 .secrets 且 JWT 值不变
     const secrets = readSecretsFile(secretsPath)
     expect(secrets[JWT]).toBe('survived-jwt')
     expect(secrets[CSRF]).toBe('valid-csrf-value')
-    expect(secrets[AI]).toBe(byKey[AI].value)
   })
 })

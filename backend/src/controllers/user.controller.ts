@@ -207,7 +207,7 @@ userRouter.delete('/account', authenticate, asyncHandler(async (req: AuthRequest
     }
 
     // Delete owned projects. Schema-level CASCADE handles members, invitations,
-    // files, ai_conversations, and canvas_recycle_bin; we still need to close
+    // files, and canvas_recycle_bin; we still need to close
     // WebSocket rooms and remove in-memory Yjs state for canvases.
     const ownedProjects = tx.select().from(projects).where(eq(projects.ownerId, userId)).all()
 
@@ -243,7 +243,7 @@ userRouter.delete('/account', authenticate, asyncHandler(async (req: AuthRequest
     // - node_pool_folders
     // - files
     // - canvas_recycle_bin (deleted_by CASCADE)
-    // - ai_conversations (user_id CASCADE)
+    // - personal_access_tokens (user_id CASCADE)
     tx.delete(users).where(eq(users.id, userId)).run()
   })
 

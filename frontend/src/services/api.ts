@@ -285,61 +285,9 @@ export async function deleteNodePoolFolder(id: number): Promise<void> {
   return await apiClient.delete<void>(API_ENDPOINTS.NODE_POOL_FOLDER_BY_ID(id))
 }
 
-// AI Conversation API
-interface ConversationMessage {
-  id: string
-  role: 'user' | 'assistant' | 'divider'
-  content: string
-  timestamp: number
-  reasoningContent?: string
-  hasToolCalls?: boolean
-  toolExchangeMessages?: Array<Record<string, unknown>>
-  isInterrupted?: boolean
-}
-
-interface ConversationData {
-  messages: ConversationMessage[]
-  contextDividerIndex: number
-}
-
-export async function getAIConversation(canvasId: number): Promise<ConversationData> {
-  return await apiClient.get<ConversationData>(`/api/ai/conversation/${canvasId}`)
-}
-
-export async function saveAIConversation(canvasId: number, data: ConversationData): Promise<void> {
-  await apiClient.post<void>(`/api/ai/conversation/${canvasId}`, data)
-}
-
-export async function deleteAIConversation(canvasId: number): Promise<void> {
-  await apiClient.delete<void>(`/api/ai/conversation/${canvasId}`)
-}
-
-// AI Provider Key API（密钥加密存储在服务端）
-export interface AIProviderStatus {
-  providerId: string
-  configured: boolean
-  baseUrl?: string
-}
-
-export async function getAIProviders(): Promise<AIProviderStatus[]> {
-  return await apiClient.get<AIProviderStatus[]>('/api/ai/providers')
-}
-
-export async function saveAIProviderKey(
-  providerId: string,
-  apiKey: string,
-  baseUrl?: string
-): Promise<{ providerId: string; configured: boolean }> {
-  return await apiClient.post<{ providerId: string; configured: boolean }>('/api/ai/providers', {
-    providerId,
-    apiKey,
-    baseUrl: baseUrl || undefined,
-  })
-}
-
-export async function deleteAIProviderKey(providerId: string): Promise<void> {
-  await apiClient.delete<void>(`/api/ai/providers/${providerId}`)
-}
+// AI Conversation / Provider API has been removed along with the built-in AI
+// assistant. External agents now drive canvases over MCP (/mcp) using a personal
+// access token — see services/personalAccessTokens.ts.
 
 // User Settings API
 export async function getNodeDefaults(): Promise<NodeDefaults> {

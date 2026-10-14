@@ -35,7 +35,6 @@ const renderMinimap = (overrides: Partial<Parameters<typeof CanvasMinimap>[0]> =
     containerWidth: 1200,
     containerHeight: 800,
     nodePoolOpen: false,
-    aiSidebarOpen: false,
     secondaryToolbarOpen: false,
     onViewportChange: vi.fn(),
     ...overrides,

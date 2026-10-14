@@ -6,7 +6,7 @@ import { getRightPanelOffset } from '@/utils/panelOffset'
 
 export function ZoomControls() {
   const { zoom, setZoom } = useCanvasStore()
-  const { nodePoolOpen, aiSidebarOpen, zoomStep } = useUIStore()
+  const { nodePoolOpen, zoomStep } = useUIStore()
 
   const handleZoomIn = () => {
     setZoom(Math.min(zoom + zoomStep, CANVAS_DEFAULTS.MAX_ZOOM))
@@ -21,8 +21,8 @@ export function ZoomControls() {
     setZoom(CANVAS_DEFAULTS.DEFAULT_ZOOM)
   }
 
-  // 计算右侧位置（避开节点池面板 / AI 侧边栏）
-  const rightPosition = getRightPanelOffset(nodePoolOpen, aiSidebarOpen)
+  // 计算右侧位置（避开节点池面板）
+  const rightPosition = getRightPanelOffset(nodePoolOpen)
 
   return (
     <div

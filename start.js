@@ -197,12 +197,13 @@ async function setupEnvironmentFiles() {
       updateEnvFile(backendTargetPath, 'ALLOWED_ORIGINS', process.env.ALLOWED_ORIGINS);
     }
 
-    // B2(根治):JWT_SECRET / CSRF_SECRET / AI_KEY_SECRET 统一走密钥持久化——
+    // B2(根治):JWT_SECRET / CSRF_SECRET 统一走密钥持久化——
     // 从数据卷文件 backend/data/.secrets 恢复(容器重建不轮换密钥),避免重建后
-    // JWT 会话失效 / CSRF token 失效 / AI 密钥 AES-256-GCM 解密失败。
+    // JWT 会话失效 / CSRF token 失效。
     // 优先级: process.env 注入 > .secrets > .env 已有值(迁移到 .secrets) > 生成随机(双写)。
     // canGenerate=shouldGenerateSecrets: 生产非 Docker 且 .env 有效时不凭空生成
-    // (缺失 AI_KEY_SECRET 时后端回退 JWT_SECRET 派生,生成反而破坏已存 AI 密钥解密)。
+    // (宁可报缺密钥,也不静默轮换掉正在使用的密钥)。
+    // (AI_KEY_SECRET 随 AI 助手功能一并移除,不再解析。)
     const secretsFilePath = getSecretsFilePath(path.join(__dirname, 'backend'));
     const secretResults = resolveSecrets({
       envPath: backendTargetPath,

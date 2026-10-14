@@ -150,24 +150,21 @@ export const files = sqliteTable('files', {
   createdAt: integer('created_at').default(sql`strftime('%s', 'now')`),
 })
 
-// AI Provider Keys - 服务端加密存储的 AI 服务密钥（AES-256-GCM）
-export const aiProviderKeys = sqliteTable('ai_provider_keys', {
+// Personal Access Tokens - 供外部 agent 通过 MCP 接入的长期凭证。
+// 只存哈希，明文仅在创建时返回一次。
+export const personalAccessTokens = sqliteTable('personal_access_tokens', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
-  providerId: text('provider_id').notNull(),
-  apiKeyEncrypted: text('api_key_encrypted').notNull(), // AES-256-GCM 加密后的 API 密钥
-  baseUrl: text('base_url'), // 自定义 base URL（可选）
-  updatedAt: integer('updated_at').default(sql`strftime('%s', 'now')`),
-})
-
-// AI Chat Conversations - 画布级别的AI对话历史
-export const aiConversations = sqliteTable('ai_conversations', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  canvasId: integer('canvas_id').notNull().references(() => canvases.id, { onDelete: 'cascade' }),
-  userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
-  messages: text('messages').notNull(), // JSON string of messages array
-  contextDividerIndex: integer('context_divider_index').notNull().default(-1),
-  updatedAt: integer('updated_at').default(sql`strftime('%s', 'now')`),
+  name: text('name').notNull(),
+  // SHA-256 of the plaintext token. Tokens are high-entropy random values, so a
+  // fast hash is appropriate (unlike passwords, which need a slow KDF).
+  tokenHash: text('token_hash').notNull().unique(),
+  // First characters of the token, shown in the UI so a user can tell tokens apart.
+  tokenPrefix: text('token_prefix').notNull(),
+  lastUsedAt: integer('last_used_at'),
+  expiresAt: integer('expires_at'),
+  createdAt: integer('created_at').default(sql`strftime('%s', 'now')`),
+  revokedAt: integer('revoked_at'),
 })
 
 // Type exports
@@ -189,7 +186,5 @@ export type NodePoolFolder = typeof nodePoolFolders.$inferSelect
 export type NewNodePoolFolder = typeof nodePoolFolders.$inferInsert
 export type File = typeof files.$inferSelect
 export type NewFile = typeof files.$inferInsert
-export type AIConversation = typeof aiConversations.$inferSelect
-export type NewAIConversation = typeof aiConversations.$inferInsert
-export type AIProviderKey = typeof aiProviderKeys.$inferSelect
-export type NewAIProviderKey = typeof aiProviderKeys.$inferInsert
+export type PersonalAccessToken = typeof personalAccessTokens.$inferSelect
+export type NewPersonalAccessToken = typeof personalAccessTokens.$inferInsert

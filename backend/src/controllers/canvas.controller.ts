@@ -667,7 +667,7 @@ canvasRouter.delete('/:id', authenticate, asyncHandler(async (req: AuthRequest, 
     // updates to a canvas that is about to be deleted.
     closeRoom(canvasId, 'canvas-deleted')
 
-    // Schema-level CASCADE handles ai_conversations and canvas_recycle_bin.
+    // Schema-level CASCADE handles canvas_recycle_bin.
     await db.delete(canvases).where(eq(canvases.id, canvasId))
     postSaveMutexes.delete(canvasId)
     removeCanvasState(canvasId)
@@ -1046,7 +1046,7 @@ canvasRouter.delete(
     })
 
     // Close rooms and delete all canvases in the folder subtree. Schema-level
-    // CASCADE handles ai_conversations and canvas_recycle_bin; folders.parent_id
+    // CASCADE handles canvas_recycle_bin; folders.parent_id
     // CASCADE handles subfolders when the root folder is deleted.
     if (folderIdsToDelete.length > 0) {
       const canvasesToDelete = await db.query.canvases.findMany({

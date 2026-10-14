@@ -243,7 +243,7 @@ projectRouter.delete('/:id', authenticate, asyncHandler(async (req: AuthRequest,
     closeRoom(canvas.id, 'project-deleted')
   }
 
-  // Schema-level CASCADE handles ai_conversations, canvas_recycle_bin,
+  // Schema-level CASCADE handles canvas_recycle_bin,
   // project_members, project_invitations, and files when the project is deleted.
   // Delete canvases first so removeCanvasState runs and the in-memory Yjs docs
   // are cleaned up.

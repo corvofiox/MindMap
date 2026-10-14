@@ -25,7 +25,6 @@ interface CanvasMinimapProps {
   containerWidth: number
   containerHeight: number
   nodePoolOpen: boolean
-  aiSidebarOpen: boolean
   secondaryToolbarOpen: boolean
   onViewportChange: (panX: number, panY: number) => void
 }
@@ -48,7 +47,6 @@ export function CanvasMinimap({
   containerWidth,
   containerHeight,
   nodePoolOpen,
-  aiSidebarOpen,
   secondaryToolbarOpen,
   onViewportChange,
 }: CanvasMinimapProps) {
@@ -389,7 +387,7 @@ export function CanvasMinimap({
     }
 
     // 计算右侧侧边栏占用的宽度（以像素为单位）
-    const sidebarWidth = aiSidebarOpen ? 320 : nodePoolOpen ? 288 : 0
+    const sidebarWidth = nodePoolOpen ? 288 : 0
     // 将侧边栏宽度转换为画布坐标系的宽度
     const sidebarCanvasWidth = sidebarWidth / zoom
 
@@ -427,7 +425,7 @@ export function CanvasMinimap({
     // Draw viewport semi-transparent fill
     ctx.fillStyle = 'rgba(59, 130, 246, 0.15)'
     ctx.fillRect(vpX, vpY, vpW, vpH)
-  }, [nodes, groups, domains, connections, contentBounds, minimapSize, panX, panY, zoom, containerWidth, containerHeight, nodePoolOpen, aiSidebarOpen, drawConnection])
+  }, [nodes, groups, domains, connections, contentBounds, minimapSize, panX, panY, zoom, containerWidth, containerHeight, nodePoolOpen, drawConnection])
 
   // Handle mouse events for dragging viewport
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -510,7 +508,7 @@ export function CanvasMinimap({
     const canvasY = (y - offsetY) / newScale + contentBounds.y
 
     // 计算右侧侧边栏占用的宽度（与绘制视口矩形时保持一致）
-    const sidebarWidth = aiSidebarOpen ? 320 : nodePoolOpen ? 288 : 0
+    const sidebarWidth = nodePoolOpen ? 288 : 0
     const effectiveWidth = containerWidth - sidebarWidth
 
     // Center the viewport on the clicked position
@@ -521,8 +519,8 @@ export function CanvasMinimap({
     onViewportChange(newPanX, newPanY)
   }
 
-  // 计算右侧偏移量（避开节点池面板 / AI 侧边栏）
-  const rightOffset = getRightPanelOffset(nodePoolOpen, aiSidebarOpen)
+  // 计算右侧偏移量（避开节点池面板）
+  const rightOffset = getRightPanelOffset(nodePoolOpen)
 
   // 小地图外框的实际占位（距顶距离 + 总高度），上报给 store。
   // 协作头像栏据此贴在小地图正下方；必须用实际值而非上限常量 —— 小地图尺寸随

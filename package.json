@@ -41,7 +41,10 @@
     "test:backend": "cd backend && npm run test",
     "test:run": "npm run test:frontend:run && npm run test:backend:run",
     "test:frontend:run": "cd frontend && npm run test:run",
-    "test:backend:run": "cd backend && npm run test:run"
+    "test:backend:run": "cd backend && npm run test:run",
+    "mcp:stdio": "cd backend && npm run mcp:stdio",
+    "smoke:mcp": "node scripts/mcp-e2e-smoke.mjs",
+    "smoke:mcp:stdio": "node scripts/mcp-stdio-smoke.mjs"
   },
   "devDependencies": {
     "concurrently": "^8.2.2",

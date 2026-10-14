@@ -30,10 +30,10 @@ interface CollaborativeSwitchState {
 export function ProjectsPage() {
   const navigate = useNavigate()
   const { projects, getFilteredProjects, loadProjects, createProject, deleteProject, updateProject, setCurrentProject, restoreCurrentProject, isLoading, loadingMessage, setProjectFilters } = useProjectsStore()
-  const { addToast, nodePoolOpen, aiSidebarOpen } = useUIStore()
+  const { addToast, nodePoolOpen } = useUIStore()
   const { user } = useAuthStore()
 
-  const rightOffset = aiSidebarOpen ? '20.5rem' : nodePoolOpen ? '18.25rem' : '0'
+  const rightOffset = nodePoolOpen ? '18.25rem' : '0'
 
   // 使用筛选后的项目列表
   const filteredProjects = getFilteredProjects()

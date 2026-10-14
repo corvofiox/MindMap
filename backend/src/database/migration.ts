@@ -272,45 +272,28 @@ export async function runMigrations(sqlite: Database.Database) {
       log('project_invitations table created successfully')
     }
 
-    // Create ai_provider_keys table if it doesn't exist
-    // 服务端加密存储 AI 服务密钥，避免密钥进入浏览器/前端存储
-    if (!tableExists(sqlite, 'ai_provider_keys')) {
-      log('Creating ai_provider_keys table')
+    // Create personal_access_tokens table if it doesn't exist.
+    // 外部 agent 通过 MCP 接入画布所用的长期凭证（只存 SHA-256 哈希）。
+    if (!tableExists(sqlite, 'personal_access_tokens')) {
+      log('Creating personal_access_tokens table')
       sqlite.exec(`
-        CREATE TABLE ai_provider_keys (
+        CREATE TABLE personal_access_tokens (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-          provider_id TEXT NOT NULL,
-          api_key_encrypted TEXT NOT NULL,
-          base_url TEXT,
-          updated_at INTEGER DEFAULT (strftime('%s', 'now'))
+          name TEXT NOT NULL,
+          token_hash TEXT NOT NULL UNIQUE,
+          token_prefix TEXT NOT NULL,
+          last_used_at INTEGER,
+          expires_at INTEGER,
+          created_at INTEGER DEFAULT (strftime('%s', 'now')),
+          revoked_at INTEGER
         )
       `)
-      // Create unique index for user_id and provider_id
+      // 鉴权查询按 token_hash 命中，唯一约束已建索引；user_id 另建索引供列表查询。
       sqlite.exec(`
-        CREATE UNIQUE INDEX ai_provider_keys_user_provider_idx ON ai_provider_keys (user_id, provider_id)
+        CREATE INDEX personal_access_tokens_user_idx ON personal_access_tokens (user_id)
       `)
-      log('ai_provider_keys table created successfully')
-    }
-
-    // Create ai_conversations table if it doesn't exist
-    if (!tableExists(sqlite, 'ai_conversations')) {
-      log('Creating ai_conversations table')
-      sqlite.exec(`
-        CREATE TABLE ai_conversations (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          canvas_id INTEGER NOT NULL REFERENCES canvases(id) ON DELETE CASCADE,
-          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-          messages TEXT NOT NULL,
-          context_divider_index INTEGER NOT NULL DEFAULT -1,
-          updated_at INTEGER DEFAULT (strftime('%s', 'now'))
-        )
-      `)
-      // Create unique index for canvas_id and user_id
-      sqlite.exec(`
-        CREATE UNIQUE INDEX ai_conversations_canvas_user_idx ON ai_conversations (canvas_id, user_id)
-      `)
-      log('ai_conversations table created successfully')
+      log('personal_access_tokens table created successfully')
     }
 
     // Migrate node_cards and node_pool_folders from project_id to user_id
@@ -429,9 +412,16 @@ export async function runMigrations(sqlite: Database.Database) {
     // Migrate foreign key constraints to include ON DELETE CASCADE / SET NULL.
     // Databases created before this migration use NO ACTION, which caused
     // FOREIGN KEY constraint failures when deleting canvases/projects/users.
+    //
+    // Gate sentinel: this used to test for `ai_conversations`, but that table has
+    // since been dropped (the AI assistant was removed), so the condition would
+    // never hold and the cascade migration below would be skipped forever on every
+    // existing database — including for all the other tables it fixes. It now
+    // tests `project_members`, which this migration rewrites and which the new
+    // schema still creates, so the gate stays meaningful.
     if (
-      tableExists(sqlite, 'ai_conversations') &&
-      !hasForeignKeyAction(sqlite, 'ai_conversations', 'canvas_id', 'CASCADE')
+      tableExists(sqlite, 'project_members') &&
+      !hasForeignKeyAction(sqlite, 'project_members', 'project_id', 'CASCADE')
     ) {
       log('Migrating foreign key constraints to support cascade deletes')
       const fkBackup = sqlite.pragma('foreign_keys') as 0 | 1
@@ -585,24 +575,10 @@ export async function runMigrations(sqlite: Database.Database) {
         sqlite.exec(`DROP TABLE files`)
         sqlite.exec(`ALTER TABLE files_new RENAME TO files`)
 
-        // ai_conversations: canvas_id/user_id ON DELETE CASCADE
-        sqlite.exec(`DROP INDEX IF EXISTS ai_conversations_canvas_user_idx`)
-        sqlite.exec(`
-          CREATE TABLE ai_conversations_new (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            canvas_id INTEGER NOT NULL REFERENCES canvases(id) ON DELETE CASCADE,
-            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            messages TEXT NOT NULL,
-            context_divider_index INTEGER NOT NULL DEFAULT -1,
-            updated_at INTEGER DEFAULT (strftime('%s', 'now'))
-          )
-        `)
-        sqlite.exec(`INSERT INTO ai_conversations_new SELECT * FROM ai_conversations`)
-        sqlite.exec(`DROP TABLE ai_conversations`)
-        sqlite.exec(`ALTER TABLE ai_conversations_new RENAME TO ai_conversations`)
-        sqlite.exec(`
-          CREATE UNIQUE INDEX ai_conversations_canvas_user_idx ON ai_conversations (canvas_id, user_id)
-        `)
+        // (ai_conversations was rewritten here for cascade deletes. The AI
+        // assistant feature — and that table — has been removed, so the block is
+        // gone. Dropping the table itself is handled by the one-time cleanup
+        // below, which runs after this migration.)
 
         sqlite.exec('COMMIT')
         log('Foreign key cascade migration completed')
@@ -617,6 +593,30 @@ export async function runMigrations(sqlite: Database.Database) {
         if (fkBackup) {
           sqlite.pragma('foreign_keys = ON')
         }
+      }
+    }
+
+    // One-time cleanup: drop the tables belonging to the removed AI assistant.
+    //
+    // The feature (sidebar assistant, server-side LLM proxy, encrypted provider
+    // keys, per-canvas chat history) has been removed in favour of the MCP server,
+    // so these tables are dead weight — and ai_provider_keys holds encrypted API
+    // keys that should not linger once nothing can decrypt or use them.
+    //
+    // Deliberately NOT guarded by a "migration already ran" marker: the DROP is
+    // idempotent (IF EXISTS), so re-running it is harmless and needs no bookkeeping.
+    // Note this is destructive and irreversible — the chat history and any stored
+    // provider keys are gone after the first startup on this version.
+    for (const legacyAiTable of ['ai_conversations', 'ai_provider_keys']) {
+      if (tableExists(sqlite, legacyAiTable)) {
+        log(`Dropping removed AI table: ${legacyAiTable}`)
+        // Drop its indexes first: SQLite keeps indexes tied to a dropped table's
+        // name out of the way, but an explicit drop avoids orphaned-index warnings
+        // and matches how the cascade migration above cleans up.
+        sqlite.exec(`DROP INDEX IF EXISTS ai_conversations_canvas_user_idx`)
+        sqlite.exec(`DROP INDEX IF EXISTS ai_provider_keys_user_provider_idx`)
+        sqlite.exec(`DROP TABLE IF EXISTS ${legacyAiTable}`)
+        log(`${legacyAiTable} dropped`)
       }
     }
 

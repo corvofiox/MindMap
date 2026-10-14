@@ -1,13 +1,14 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { X, User, Key, Trash2, Camera, Loader2 } from 'lucide-react'
+import { X, User, Key, Trash2, Camera, Loader2, KeyRound } from 'lucide-react'
 import { useUIStore } from '@/store/useUIStore'
 import { useAuthStore } from '@/store/useAuthStore'
 import { changePassword, deleteAccount, uploadImage } from '@/services/api'
+import { AccessTokensPanel } from './AccessTokensPanel'
 import { Z_INDEX } from '@/constants'
 
 interface Tab {
-  id: 'profile' | 'security' | 'danger'
+  id: 'profile' | 'security' | 'tokens' | 'danger'
   label: string
   icon: React.ElementType
 }
@@ -15,6 +16,7 @@ interface Tab {
 const tabs: Tab[] = [
   { id: 'profile', label: '个人资料', icon: User },
   { id: 'security', label: '安全设置', icon: Key },
+  { id: 'tokens', label: '访问令牌', icon: KeyRound },
   { id: 'danger', label: '危险区域', icon: Trash2 },
 ]
 
@@ -393,6 +395,8 @@ export function AccountSettingsDialog() {
                 </div>
               </div>
             )}
+
+            {activeTab === 'tokens' && <AccessTokensPanel />}
 
             {activeTab === 'danger' && (
               <div className="space-y-6">

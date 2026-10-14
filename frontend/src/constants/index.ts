@@ -18,6 +18,10 @@ export const API_ENDPOINTS = {
   USER_SEARCH: '/api/users/search',
   UPLOAD: '/api/upload',
 
+  // Personal access tokens（外部 agent 通过 MCP 接入用的长期凭证）
+  TOKENS: '/api/tokens',
+  TOKENS_BY_ID: (id: number) => `/api/tokens/${id}`,
+
   // Projects
   PROJECTS: '/api/projects',
   PROJECT_BY_ID: (id: number) => `/api/projects/${id}`,
@@ -155,4 +159,3 @@ export const TIMEOUTS = {
 } as const
 
 export * from './zIndex'
-export * from './aiPrompts'

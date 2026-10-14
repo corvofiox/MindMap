@@ -212,12 +212,10 @@ export const useAuthStore = create<AuthState>()(
               import('@/store/useProjectsStore'),
               import('@/store/useCanvasStore'),
               import('@/features/node-pool/stores/useNodePoolStore'),
-              import('@/store/useAIStore'),
-            ]).then(([projectsModule, canvasModule, nodePoolModule, aiModule]) => {
+            ]).then(([projectsModule, canvasModule, nodePoolModule]) => {
               projectsModule.useProjectsStore.getState().reset()
               canvasModule.useCanvasStore.getState().clearCanvas()
               nodePoolModule.useNodePoolStore.getState().reset()
-              aiModule.useAIStore.getState().resetConfig()
             }).catch(err => {
               logger.error('Failed to reset memory stores on logout', err)
             })

@@ -1,15 +1,18 @@
 // scripts/secret-persistence.js
 //
-// 密钥持久化模块:JWT_SECRET / CSRF_SECRET / AI_KEY_SECRET 的统一解析逻辑。
+// 密钥持久化模块:JWT_SECRET / CSRF_SECRET 的统一解析逻辑。
 //
 // 背景(B2 根治方案):Docker 容器内 backend/.env 不在持久卷上,start.js 每次
 // 启动若重新生成随机密钥,容器重建会导致 ① 已登录用户 JWT 会话全部失效
-// ② CSRF token 失效 ③ 数据库已存 AI 服务商密钥(AES-256-GCM,加密密钥=
-// AI_KEY_SECRET)解密失败,用户必须重新输入所有 AI 密钥。
+// ② CSRF token 失效。
+//
+// (AI_KEY_SECRET 曾用于加密存储 AI 服务商密钥;该功能已移除,不再需要第三个
+// 密钥。旧 .secrets 文件里残留的 AI_KEY_SECRET 行会被 readSecretsFile 忽略,
+// 无需手工清理。)
 //
 // 根治方案:密钥持久化到 backend/data/.secrets(与 mindmap.db 同目录,Docker
 // 部署中该目录是持久卷挂载点 /app/backend/data),容器重建后从该文件恢复,
-// 密钥不再轮换。文件格式为 key=value 行,仅含三个密钥,权限 0600。
+// 密钥不再轮换。文件格式为 key=value 行,仅含上述密钥,权限 0600。
 //
 // 单密钥取值优先级:
 //   ① process.env 注入(compose/环境显式注入,最高优先;仅更新 .env,不写入
@@ -24,8 +27,8 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
-// 需要持久化的密钥集合(.secrets 文件仅包含这三个键)
-export const SECRET_KEYS = ['JWT_SECRET', 'CSRF_SECRET', 'AI_KEY_SECRET'];
+// 需要持久化的密钥集合(.secrets 文件仅包含这些键)
+export const SECRET_KEYS = ['JWT_SECRET', 'CSRF_SECRET'];
 
 // 持久化文件名(位于 backend/data/ 下,与 mindmap.db 同目录)
 export const SECRETS_FILE_NAME = '.secrets';
@@ -129,8 +132,8 @@ export function writeSecretsValue(secretsPath, key, value) {
 //   secretsPath - backend/data/.secrets 路径
 //   env         - 环境变量来源(默认 process.env,测试可注入)
 //   canGenerate - 是否允许生成随机密钥。生产非 Docker 且 .env 有效时为 false,
-//                 保持与旧行为一致:不凭空生成新密钥(缺失 AI_KEY_SECRET 时
-//                 后端回退 JWT_SECRET 派生,生成反而会破坏已存 AI 密钥解密)。
+//                 保持与旧行为一致:不凭空生成新密钥(缺密钥时宁可报错,
+//                 也不静默轮换掉正在使用的密钥)。
 //   generate    - 随机密钥生成函数(测试可注入)
 // 返回 { value, source, conflictWithEnvFile? },source ∈ 'env' | 'secrets' | 'envfile' | 'generated' | 'none';
 // source='secrets' 且 .env 存在不同非占位符值时,conflictWithEnvFile=true(.secrets 为权威,压过 .env)
@@ -172,7 +175,7 @@ export function resolveSecret(key, { envPath, secretsPath, env = process.env, ca
   return { value: undefined, source: 'none' };
 }
 
-// 批量解析三个密钥(JWT_SECRET / CSRF_SECRET / AI_KEY_SECRET)
+// 批量解析密钥(JWT_SECRET / CSRF_SECRET)
 export function resolveSecrets(options) {
   return SECRET_KEYS.map(key => ({
     key,

@@ -1,7 +1,7 @@
 /**
  * 画布右侧悬浮覆盖层（缩放控件 / 小地图 / 在线头像）的避让布局工具。
  *
- * 背景：节点池面板与 AI 侧边栏是 `fixed right-0` 覆盖层（各 288px / 320px 宽），
+ * 背景：节点池面板是 `fixed right-0` 覆盖层（288px 宽），
  * 小地图固定在画布区域右上角（最短边恒为内容上限，最长边随内容宽高比在
  * MINIMAP_MAX_CONTENT_* 之间变化），协作头像栏则位于小地图**正下方**。
  * 画布内的悬浮覆盖层若不主动避让，会被这些面板/小地图覆盖而不可见。
@@ -12,9 +12,8 @@
  * 而不是这里的 MAX 常量 —— 否则小地图偏小时，头像会被推得很远。
  */
 
-/** 右侧面板（节点池 / AI 侧边栏）打开时，覆盖层需要让出的 right 值。 */
-export function getRightPanelOffset(nodePoolOpen: boolean, aiSidebarOpen: boolean): string {
-  if (aiSidebarOpen) return '20.5rem' // 320px + 16px margin
+/** 右侧面板（节点池）打开时，覆盖层需要让出的 right 值。 */
+export function getRightPanelOffset(nodePoolOpen: boolean): string {
   if (nodePoolOpen) return '18.25rem' // 288px + 16px margin
   return '1rem' // right-4 = 16px
 }

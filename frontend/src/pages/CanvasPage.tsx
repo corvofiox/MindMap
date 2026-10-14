@@ -828,7 +828,6 @@ export function CanvasPage() {
   const currentTool = useUIStore((s) => s.currentTool)
   const dragMode = useUIStore((s) => s.dragMode)
   const nodePoolOpen = useUIStore((s) => s.nodePoolOpen)
-  const aiSidebarOpen = useUIStore((s) => s.aiSidebarOpen)
   const stylePanelOpen = useUIStore((s) => s.stylePanelOpen)
   const sidebarOpen = useUIStore((s) => s.sidebarOpen)
   const minimapVisible = useUIStore((s) => s.minimapVisible)
@@ -2056,7 +2055,7 @@ export function CanvasPage() {
     }
 
     requestAnimationFrame(measure)
-  }, [nodePoolOpen, aiSidebarOpen, sidebarOpen])
+  }, [nodePoolOpen, sidebarOpen])
 
   // Handle keyboard shortcuts
   useEffect(() => {
@@ -4275,7 +4274,6 @@ export function CanvasPage() {
             containerWidth={containerSize.width}
             containerHeight={containerSize.height}
             nodePoolOpen={nodePoolOpen}
-            aiSidebarOpen={aiSidebarOpen}
             secondaryToolbarOpen={currentTool === 'connection'}
             onViewportChange={setPan}
           />
