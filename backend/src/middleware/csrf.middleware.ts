@@ -35,8 +35,13 @@ const { doubleCsrfProtection, generateCsrfToken } = doubleCsrf({
     // 反而不可用；HTTPS 部署需显式设置 CSRF_COOKIE_SECURE=true 开启。
     secure: process.env.CSRF_COOKIE_SECURE === 'true',
     sameSite: 'strict',
+    // httpOnly 必须为 false：双重提交模式要求前端 JS 读取该 cookie 并回传到
+    // x-csrf-token 请求头，HttpOnly 会让前端永远拿不到 token。
     httpOnly: false,
-    maxAge: 604800
+    // Express 的 res.cookie maxAge 单位是毫秒。此前的 604800 被当成毫秒解释，
+    // cookie 实际只活 ~10 分钟（604.8s），导致每个周期出现一次 403 + 前端
+    // CSRF 自愈重取。7 天 = 604800 * 1000 ms。
+    maxAge: 604800 * 1000,
   },
   size: 64,
   ignoredMethods: ['GET', 'HEAD', 'OPTIONS']

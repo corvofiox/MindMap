@@ -69,12 +69,44 @@ export function sanitizeHTML(html: string): string {
 
       // Remove disallowed tags
       if (!ALLOWED_TAGS.has(element.tagName.toLowerCase())) {
-        // Replace element with its children
+        // Replace element with its children.
+        // Guard the re-parent: a previous sanitization pass on a nested
+        // disallowed tag may already have hoisted this element's siblings, so
+        // `element.parentNode` can be null or no longer contain `element`.
+        // Throwing here used to bubble into safeHTML's fallback, which stripped
+        // ALL tags (including legitimate allowed ones like <b>) — the mixed
+        // input "<b>标题</b><script>…</script>" lost its formatting entirely.
         const parent = element.parentNode
-        while (element.firstChild) {
-          parent?.insertBefore(element.firstChild, element)
-        }
-        parent?.removeChild(element)
+        if (!parent) return
+        // Detach, SANITIZE each child (nodes work fine detached), then move the
+        // sanitized results back in ONE fragment insert. Two holes closed here:
+        //
+        // 1. mXSS — the outer loop iterates a childNodes snapshot taken before
+        //    this unwrap, so hoisted subtrees used to escape sanitization
+        //    entirely; "<math><mtext><mglyph><style><img onerror=…>" rode that
+        //    hole and shipped a raw <style> body (img markup as CDATA) to the
+        //    output. Every hoisted child is now re-visited by sanitizeNode.
+        //
+        // 2. O(n²) — hoisting one child at a time with `element` as the insert
+        //    reference made each insert walk a growing sibling list
+        //    (40k disallowed tags ≈ 150 s of CPU; a user-controlled input, so a
+        //    theoretical DoS). One fragment insert is linear.
+        const children = Array.from(element.childNodes)
+        const fragment = document.createDocumentFragment()
+        children.forEach(child => {
+          fragment.appendChild(child)
+        })
+        children.forEach(child => {
+          sanitizeNode(child)
+        })
+        parent.insertBefore(fragment, element)
+        // element 必然仍是 parent 的子节点：上面只摘走了它的 children（挂到
+        // fragment），element 本身从未被 detach，sanitizeNode 只会递归进
+        // fragment 里的 child，不会触及 element。此前这里有一个
+        // `if (element.parentNode === parent)` 守卫——恒真、不可达 false 分支
+        // （R1 变异审计），故改为无条件移除，并由
+        // sanitizeHTML.test.ts 的「不残留空壳」测试锁定行为。
+        parent.removeChild(element)
         return
       }
 
@@ -100,14 +132,17 @@ export function sanitizeHTML(html: string): string {
       })
     }
 
-    // Process children recursively
+    // Process children recursively. Iterate a SNAPSHOT: sanitizeNode may detach
+    // or hoist children, which would mutate the live childNodes list mid-loop.
     const childNodes = Array.from(node.childNodes)
     childNodes.forEach(child => {
       sanitizeNode(child)
-      // Check if child was removed during sanitization
-      if (!child.parentNode) {
-        node.removeChild(child)
-      }
+      // NOTE: do NOT removeChild here. A child that sanitizeNode detached (e.g. a
+      // disallowed <script> whose children were hoisted) already has parentNode
+      // === null, and removeChild on a detached node THROWS NotFoundError — which
+      // used to bubble into safeHTML's strip-all fallback, destroying legitimate
+      // formatting: "<b>标题</b><script>…</script>" lost its <b> entirely.
+      // Detached/hoisted children are already out of this node's child list.
     })
   }
 
@@ -141,7 +176,13 @@ function sanitizeStyle(style: string): string {
       // Check if property is allowed
       if (!ALLOWED_STYLES.has(propName)) return false
 
-      // Check value for dangerous patterns
+      // Check value for dangerous patterns.
+      // Test a WHITESPACE-STRIPPED copy: CSS treats newlines as ordinary
+      // whitespace, so "url(java\nscript:alert(1))" reassembles to
+      // "javascript:alert(1)" in the browser while the raw value slips past a
+      // literal /javascript:/i test. The declared value keeps its original
+      // spacing; only the security check sees the collapsed form.
+      const collapsedValue = propValue.replace(/\s+/g, '')
       const dangerousPatterns = [
         /expression\s*\(/i,
         /javascript:/i,
@@ -151,7 +192,7 @@ function sanitizeStyle(style: string): string {
         /binding\s*:/i,
       ]
 
-      return !dangerousPatterns.some(pattern => pattern.test(propValue))
+      return !dangerousPatterns.some(pattern => pattern.test(collapsedValue))
     })
     .join('; ')
 }
