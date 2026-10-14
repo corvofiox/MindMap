@@ -4,150 +4,33 @@ import { NodeItem } from '../NodeItem'
 import { useCanvasStore } from '@/store/useCanvasStore'
 import { useUIStore } from '@/store/useUIStore'
 
-// Mock stores
+// Mock stores（NodeItem 还从 useCanvasStore 导入 getYjsBinding，mock 必须提供，
+// 否则模块命名空间 getter 会在拖拽路径上抛 "No export defined" 错）
 vi.mock('@/store/useCanvasStore', () => ({
   useCanvasStore: vi.fn(),
+  getYjsBinding: vi.fn(() => undefined),
 }))
 
 vi.mock('@/store/useUIStore', () => ({
   useUIStore: vi.fn(),
 }))
 
-// Mock utilities
-vi.mock('@/utils/canvas', () => ({
-  snapToGrid: vi.fn((x, y) => ({ x, y })),
-}))
-
+// Mock utilities：moduleLoader 是真正的惰性加载机制，mock 掉避免动态 import。
+// @/utils/canvas（纯数学）与 @/constants（纯数据）不再 mock——走真实模块，
+// 测试断言的是真实常量与真实 snapToGrid 行为（mock 副本已与真实值漂移过一次）。
 vi.mock('@/utils/moduleLoader', () => ({
   loadApiModule: vi.fn(),
 }))
 
-// Mock constants
-vi.mock('@/constants', () => ({
-  CANVAS_DEFAULTS: {
-    GRID_SIZE: 20,
-    GRID_DOT_SIZE: 1,
-    DEFAULT_ZOOM: 1,
-    MIN_ZOOM: 0.1,
-    MAX_ZOOM: 5,
-    ZOOM_STEP: 0.1,
-  },
-  NODE_DEFAULTS: {
-    WIDTH: 200,
-    HEIGHT: 120,
-    MIN_WIDTH: 100,
-    MIN_HEIGHT: 60,
-    COLOR: '#ffffff',
-    BORDER_COLOR: '#e5e7eb',
-    BORDER_WIDTH: 1,
-    BORDER_RADIUS: 8,
-    FONT_SIZE: 14,
-    TEXT_ALIGN: 'center' as const,
-    PADDING: 16,
-  },
-  DOMAIN_DEFAULTS: {
-    BACKGROUND_COLOR: 'rgba(156, 163, 175, 0.2)',
-  },
-  CONNECTION_DEFAULTS: {
-    COLOR: '#3b82f6',
-    WIDTH: 2,
-    TYPE: 'curve',
-    STYLE: 'solid',
-    ARROW_TYPE: 'end',
-    BEND_POINT_RADIUS: 8,
-    BEND_POINT_HIT_RADIUS: 12,
-  },
-  NODE_COLORS: [
-    '#ffffff',
-    '#fef3c7',
-    '#fce7f3',
-    '#dbeafe',
-    '#d1fae5',
-    '#e0e7ff',
-    '#fee2e2',
-    '#f3e8ff',
-  ],
-  BORDER_COLORS: [
-    '#e5e7eb',
-    '#fcd34d',
-    '#f472b6',
-    '#60a5fa',
-    '#34d399',
-    '#818cf8',
-    '#f87171',
-    '#a78bfa',
-  ],
-  SHORTCUTS: {
-    CANVAS_ZOOM_IN: 'Ctrl+=',
-    CANVAS_ZOOM_OUT: 'Ctrl+-',
-    CANVAS_ZOOM_RESET: 'Ctrl+0',
-    CANVAS_FIT: 'F',
-    CANVAS_TOGGLE_GRID: 'G',
-    NODE_CREATE: 'N',
-    NODE_DELETE: 'Delete',
-    NODE_COPY: 'Ctrl+C',
-    NODE_PASTE: 'Ctrl+V',
-    NODE_CUT: 'Ctrl+X',
-    NODE_DUPLICATE: 'Ctrl+D',
-    NODE_EDIT: 'Enter',
-    NODE_ESCAPE: 'Escape',
-    GROUP_CREATE: 'Ctrl+G',
-    GROUP_UNGROUP: 'Ctrl+Shift+G',
-    DOMAIN_MODE: 'R',
-    CONNECTION_MODE: 'L',
-    SELECT_ALL: 'Ctrl+A',
-    SELECT_NONE: 'Ctrl+Shift+A',
-    FILE_SAVE: 'Ctrl+S',
-    FILE_EXPORT: 'Ctrl+E',
-    FILE_NEW: 'Ctrl+N',
-    FILE_CLOSE: 'Ctrl+W',
-    SEARCH: 'Ctrl+F',
-    SEARCH_GLOBAL: 'Ctrl+Shift+F',
-    PANEL_SIDEBAR: 'Ctrl+B',
-    PANEL_NODE_POOL: 'Ctrl+P',
-    PANEL_SETTINGS: 'Ctrl+,',
-    PANEL_HELP: 'Ctrl+H',
-    UNDO: 'Ctrl+Z',
-    REDO: 'Ctrl+Y',
-    TAB_NEXT: 'Ctrl+Tab',
-    TAB_PREV: 'Ctrl+Shift+Tab',
-  },
-  STORAGE_KEYS: {
-    TOKEN: 'mindmap_token',
-    THEME: 'mindmap_theme',
-    SETTINGS: 'mindmap_settings',
-    RECENT_CANVASES: 'mindmap_recent_canvases',
-  },
-  TIMEOUTS: {
-    TOAST: 3000,
-    DEBOUNCE: 300,
-    AUTOSAVE: 5000,
-  },
-  Z_INDEX: {
-    DOMAIN: 0,
-    GROUP: 1,
-    CONNECTION: 5,
-    NODE: 10,
-    BEND_POINT: 8,
-    RICH_TEXT_TOOLBAR: 55,
-    RICH_TEXT_POPOVER: 56,
-    ZOOM_CONTROLS: 60,
-    NODE_POOL_PANEL: 70,
-    NODE_POOL_CONTEXT_MASK: 75,
-    CONTEXT_MENU: 80,
-    STYLE_PANEL: 80,
-    SIDEBAR_SUBMENU: 90,
-    DROPDOWN_MENU: 90,
-    DIALOG: 100,
-    SEARCH_PANEL: 100,
-    COMMAND_PALETTE: 100,
-    TOAST: 120,
-    DRAG_GHOST: 1000,
-  },
-}))
+// store mock 的动作 fn 提到模块级，测试里直接断言它们的调用参数
+let setSelectedIds: ReturnType<typeof vi.fn>
+let setSelectedType: ReturnType<typeof vi.fn>
 
 beforeEach(() => {
   vi.clearAllMocks()
+
+  setSelectedIds = vi.fn()
+  setSelectedType = vi.fn()
 
   // Default mock store values
   vi.mocked(useCanvasStore).mockReturnValue({
@@ -161,7 +44,7 @@ beforeEach(() => {
     selectedIds: new Set(),
     updateNode: vi.fn(),
     deleteNode: vi.fn(),
-    setSelectedIds: vi.fn(),
+    setSelectedIds,
     addToSelection: vi.fn(),
     removeFromSelection: vi.fn(),
     editingId: null,
@@ -170,7 +53,11 @@ beforeEach(() => {
 
   vi.mocked(useUIStore).mockReturnValue({
     currentTool: 'select',
-    setSelectedType: vi.fn(),
+    setSelectedType,
+    // useStoreField 对 undefined 字段会退回整个 store 对象（恒真），必须显式给值
+    quickEditMode: false,
+    draggingNodeFromCanvas: null,
+    isOverNodePool: false,
   } as any)
 })
 
@@ -196,44 +83,31 @@ describe('NodeItem Component', () => {
   }
 
   describe('Component Rendering', () => {
-    it('renders node with basic props', () => {
-      render(<NodeItem node={mockNode} isSelected={false} zoom={1.0} />)
+    it('渲染节点卡片：定位、尺寸、标题内容与选中态表现', () => {
+      const { rerender } = render(<NodeItem node={mockNode} isSelected={false} zoom={1.0} />)
 
-      const nodeElement = document.querySelector('[data-node-id="node-1"]')
-      expect(nodeElement).toBeInTheDocument()
-    })
-
-    it('applies selected styles when isSelected is true', () => {
-      render(<NodeItem node={mockNode} isSelected={true} zoom={1.0} />)
-
-      const nodeElement = document.querySelector('[data-node-id="node-1"]')
-      expect(nodeElement).toBeInTheDocument()
-    })
-
-    it('renders node with title', () => {
-      render(<NodeItem node={mockNode} isSelected={false} zoom={1.0} />)
-
+      const nodeElement = document.querySelector('[data-node-id="node-1"]') as HTMLElement
+      expect(nodeElement).not.toBeNull()
       expect(screen.getByText('Test Node')).toBeInTheDocument()
-    })
-
-    it('renders node with content', () => {
-      render(<NodeItem node={mockNode} isSelected={false} zoom={1.0} />)
-
       expect(screen.getByText('Test Content')).toBeInTheDocument()
-    })
 
-    it('renders node with correct position', () => {
-      render(<NodeItem node={mockNode} isSelected={false} zoom={1.0} />)
+      // 影子容器承载节点尺寸；外层 wrapper 定位到 node.x-16 / node.y-16（内边距补偿）
+      expect(nodeElement.style.width).toBe('200px')
+      expect(nodeElement.style.height).toBe('120px')
+      const wrapper = nodeElement.parentElement as HTMLElement
+      expect(wrapper.style.left).toBe('84px')
+      expect(wrapper.style.top).toBe('84px')
 
-      const nodeElement = document.querySelector('[data-node-id="node-1"]')
-      expect(nodeElement).toBeInTheDocument()
-    })
+      // 未选中：浅阴影，且不出现缩放手柄
+      expect(nodeElement.style.boxShadow).toBe(
+        '0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04)'
+      )
+      expect(document.querySelectorAll('[data-resize]')).toHaveLength(0)
 
-    it('applies zoom transformation', () => {
-      render(<NodeItem node={mockNode} isSelected={false} zoom={1.5} />)
-
-      const nodeElement = document.querySelector('[data-node-id="node-1"]')
-      expect(nodeElement).toBeInTheDocument()
+      // 选中：阴影加深 + 四角缩放手柄出现（用户可见的选中反馈）
+      rerender(<NodeItem node={mockNode} isSelected={true} zoom={1.0} />)
+      expect(nodeElement.style.boxShadow).toBe('0 4px 12px rgba(0, 0, 0, 0.15)')
+      expect(document.querySelectorAll('[data-resize]').length).toBeGreaterThan(0)
     })
   })
 
@@ -270,19 +144,21 @@ describe('NodeItem Component', () => {
   })
 
   describe('Event Handling', () => {
-    it('handles mouse down events', () => {
+    // 注意：mousedown/contextmenu 处理器挂在 [data-node-id] 内层内容容器上，
+    // 事件必须打在标题等子元素上靠冒泡触发，直接打在 [data-node-id] 上不会命中。
+
+    it('select 工具下左键点击节点：选中节点并通知外层开始拖拽', () => {
       const onMouseDown = vi.fn()
       render(<NodeItem node={mockNode} isSelected={false} zoom={1.0} onMouseDown={onMouseDown} />)
 
-      const nodeElement = document.querySelector('[data-node-id="node-1"]')
-      if (nodeElement) {
-        fireEvent.mouseDown(nodeElement)
-        // Event handler is called internally, but we verify component renders
-        expect(nodeElement).toBeInTheDocument()
-      }
+      fireEvent.mouseDown(screen.getByText('Test Node'))
+
+      expect(onMouseDown).toHaveBeenCalledTimes(1)
+      expect(setSelectedIds).toHaveBeenCalledWith(['node-1'])
+      expect(setSelectedType).toHaveBeenCalledWith('node')
     })
 
-    it('calls onNodeContextMenuOpen on right-click', () => {
+    it('原地右键（mousedown→contextmenu）打开节点上下文菜单并选中节点', () => {
       const onNodeContextMenuOpen = vi.fn()
       render(
         <NodeItem
@@ -293,26 +169,55 @@ describe('NodeItem Component', () => {
         />
       )
 
-      const nodeElement = document.querySelector('[data-node-id="node-1"]')
-      if (nodeElement) {
-        fireEvent.contextMenu(nodeElement)
-        // Component should handle context menu internally
-        expect(nodeElement).toBeInTheDocument()
-      }
+      const title = screen.getByText('Test Node')
+      // 右键按下记录起点，之后的 contextmenu 与起点距离 ≤5px 才被视为"原地右键"
+      fireEvent.mouseDown(title, { button: 2, clientX: 30, clientY: 40 })
+      fireEvent.contextMenu(title, { clientX: 30, clientY: 42 })
+
+      // 菜单位置 = 鼠标位置 + 5px 偏移；未选中状态下右键同时选中节点
+      expect(onNodeContextMenuOpen).toHaveBeenCalledWith(35, 47, 'node-1')
+      expect(setSelectedIds).toHaveBeenCalledWith(['node-1'])
+    })
+
+    it('右键拖动超过阈值后不弹出菜单也不选中', () => {
+      const onNodeContextMenuOpen = vi.fn()
+      render(
+        <NodeItem
+          node={mockNode}
+          isSelected={false}
+          zoom={1.0}
+          onNodeContextMenuOpen={onNodeContextMenuOpen}
+        />
+      )
+
+      const title = screen.getByText('Test Node')
+      fireEvent.mouseDown(title, { button: 2, clientX: 30, clientY: 40 })
+      // dy=20 > 5px 阈值：判定为右键拖动（框选/平移手势），不得弹菜单
+      fireEvent.contextMenu(title, { clientX: 30, clientY: 60 })
+
+      expect(onNodeContextMenuOpen).not.toHaveBeenCalled()
+      expect(setSelectedIds).not.toHaveBeenCalled()
     })
   })
 
   describe('Store Integration', () => {
-    it('reads from canvas store', () => {
-      render(<NodeItem node={mockNode} isSelected={false} zoom={1.0} />)
+    it('connection 工具下点击节点不产生选中（工具门控）', () => {
+      vi.mocked(useUIStore).mockReturnValue({
+        currentTool: 'connection',
+        setSelectedType,
+        quickEditMode: false,
+        draggingNodeFromCanvas: null,
+        isOverNodePool: false,
+      } as any)
+      const onMouseDown = vi.fn()
+      render(<NodeItem node={mockNode} isSelected={false} zoom={1.0} onMouseDown={onMouseDown} />)
 
-      expect(useCanvasStore).toHaveBeenCalled()
-    })
+      fireEvent.mouseDown(screen.getByText('Test Node'))
 
-    it('reads from UI store', () => {
-      render(<NodeItem node={mockNode} isSelected={false} zoom={1.0} />)
-
-      expect(useUIStore).toHaveBeenCalled()
+      // 事件确实到达了节点（onMouseDown 已触发），但非选择工具下不得改选节点
+      expect(onMouseDown).toHaveBeenCalledTimes(1)
+      expect(setSelectedIds).not.toHaveBeenCalled()
+      expect(setSelectedType).not.toHaveBeenCalled()
     })
   })
 

@@ -1,521 +1,304 @@
-/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars */
-import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
+/**
+ * Utility tests.
+ *
+ * Replaces `utils.test.ts`, whose 37 tests declared local objects shaped like the
+ * schemas/utils and then asserted on those local objects — no project code was
+ * imported, so `transformResponse.ts`, `dateTransform.ts`, `env.ts` and `logger.ts`
+ * all sat near 0% coverage.
+ *
+ * Everything here imports the real modules and asserts real return values,
+ * including the edge cases the originals only pretended to cover.
+ */
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import fs from 'fs'
+import os from 'os'
+import path from 'path'
 
-describe('Database Utilities', () => {
-  describe('Connection', () => {
-    it('should export database connection functions', () => {
-      const exports = {
-        db: {},
-        getSqlite: () => {},
-        getDb: () => {},
-        initializeDb: () => {},
-        registerShutdownHandlers: () => {},
-      }
+import {
+  getProperty,
+  getUserId,
+  transformResponse,
+  transformResponseArray,
+} from '../utils/transformResponse.js'
+import { transformDateFields, transformDateFieldsArray } from '../utils/dateTransform.js'
+import { getEnv, getValidatedEnv, isTrustProxyEnabled } from '../utils/env.js'
 
-      expect(exports.db).toBeDefined()
-      expect(typeof exports.getSqlite).toBe('function')
-      expect(typeof exports.getDb).toBe('function')
-      expect(typeof exports.initializeDb).toBe('function')
-      expect(typeof exports.registerShutdownHandlers).toBe('function')
+describe('transformResponse', () => {
+  describe('getProperty', () => {
+    it('reads the first present key, tolerating snake_case vs camelCase', () => {
+      expect(getProperty<number>({ owner_id: 7 }, 'owner_id', 'ownerId')).toBe(7)
+      expect(getProperty<number>({ ownerId: 8 }, 'owner_id', 'ownerId')).toBe(8)
     })
 
-    it('should have schema exports', () => {
-      const schemaExports = {
-        users: {},
-        projects: {},
-        canvases: {},
-        folders: {},
-        nodeCards: {},
-        projectMembers: {},
-        groupMembers: {},
-        files: {},
-        canvasRecycleBin: {},
-        nodePoolFolders: {},
-      }
-
-      Object.keys(schemaExports).forEach(key => {
-        expect(schemaExports).toHaveProperty(key)
-      })
-    })
-  })
-
-  describe('Schema Types', () => {
-    it('should define user schema correctly', () => {
-      const userSchema = {
-        id: 'number',
-        email: 'string',
-        password: 'string | null',
-        nickname: 'string | null',
-        avatar: 'string | null',
-        createdAt: 'number',
-        updatedAt: 'number',
-      }
-
-      expect(userSchema.id).toBe('number')
-      expect(userSchema.email).toBe('string')
-      expect(userSchema.password).toBe('string | null')
-      expect(userSchema.nickname).toBe('string | null')
-      expect(userSchema.avatar).toBe('string | null')
+    it('returns undefined for a missing key, null input, or an empty key list', () => {
+      expect(getProperty<number>({ other: 1 }, 'owner_id', 'ownerId')).toBeUndefined()
+      expect(getProperty<number>(null, 'owner_id')).toBeUndefined()
+      expect(getProperty<number>(undefined, 'owner_id')).toBeUndefined()
+      expect(getProperty<number>({ a: 1 })).toBeUndefined()
     })
 
-    it('should define project schema correctly', () => {
-      const projectSchema = {
-        id: 'number',
-        name: 'string',
-        description: 'string | null',
-        ownerId: 'number',
-        isPublic: 'boolean',
-        thumbnail: 'string | null',
-        createdAt: 'number',
-        updatedAt: 'number',
-      }
-
-      expect(projectSchema.id).toBe('number')
-      expect(projectSchema.name).toBe('string')
-      expect(projectSchema.ownerId).toBe('number')
-      expect(projectSchema.isPublic).toBe('boolean')
+    it('returns an explicit undefined value rather than skipping to the next key', () => {
+      // `!== undefined` is the guard, so an explicit undefined falls through.
+      expect(getProperty<number>({ a: undefined, b: 5 }, 'a', 'b')).toBe(5)
     })
 
-    it('should define canvas schema correctly', () => {
-      const canvasSchema = {
-        id: 'number',
-        projectId: 'number',
-        name: 'string',
-        thumbnail: 'string | null',
-        yjsData: 'string | null',
-        width: 'number',
-        height: 'number',
-        createdAt: 'number',
-        updatedAt: 'number',
-      }
-
-      expect(canvasSchema.id).toBe('number')
-      expect(canvasSchema.projectId).toBe('number')
-      expect(canvasSchema.yjsData).toBe('string | null')
-      expect(canvasSchema.width).toBe('number')
-      expect(canvasSchema.height).toBe('number')
-    })
-
-    it('should define node card schema correctly', () => {
-      const nodeCardSchema = {
-        id: 'number',
-        projectId: 'number',
-        folderId: 'number | null',
-        name: 'string',
-        description: 'string | null',
-        content: 'string',
-        type: 'string',
-        color: 'string',
-        tags: 'string | null',
-        thumbnail: 'string | null',
-        useCount: 'number',
-        sortOrder: 'number',
-        createdBy: 'number | null',
-        createdAt: 'number',
-      }
-
-      expect(nodeCardSchema.id).toBe('number')
-      expect(nodeCardSchema.projectId).toBe('number')
-      expect(nodeCardSchema.type).toBe('string')
-      expect(nodeCardSchema.useCount).toBe('number')
-    })
-  })
-})
-
-describe('Environment Utilities', () => {
-  describe('Environment Validation', () => {
-    it('should validate required environment variables', () => {
-      const requiredEnvVars = [
-        'JWT_SECRET',
-        'DATABASE_PATH',
-        'PORT',
-      ]
-
-      requiredEnvVars.forEach(envVar => {
-        expect(envVar).toBeDefined()
-        expect(typeof envVar).toBe('string')
-      })
-    })
-
-    it('should have default values for optional environment variables', () => {
-      const defaults = {
-        NODE_ENV: 'development',
-        PORT: '3000',
-        WS_PORT: '3001',
-        JWT_EXPIRES_IN: '7d',
-      }
-
-      Object.entries(defaults).forEach(([key, value]) => {
-        expect(key).toBeDefined()
-        expect(value).toBeDefined()
-      })
-    })
-
-    it('should validate JWT_SECRET is present', () => {
-      const env = {
-        JWT_SECRET: 'test-secret-key',
-        DATABASE_PATH: './data/mindmap.db',
-        PORT: '3000',
-      }
-
-      expect(env.JWT_SECRET).toBeDefined()
-      expect(env.JWT_SECRET.length).toBeGreaterThan(0)
-    })
-
-    it('should validate PORT is a valid number', () => {
-      const port = parseInt('3000', 10)
-
-      expect(port).toBe(3000)
-      expect(port).toBeGreaterThan(0)
-      expect(port).toBeLessThan(65536)
+    it('preserves falsy-but-present values (0, empty string, false)', () => {
+      expect(getProperty<number>({ n: 0 }, 'n')).toBe(0)
+      expect(getProperty<string>({ s: '' }, 's')).toBe('')
+      expect(getProperty<boolean>({ b: false }, 'b')).toBe(false)
     })
   })
 
-  describe('Environment Modes', () => {
-    it('should support development mode', () => {
-      const mode = 'development'
-      expect(mode).toBe('development')
+  describe('getUserId', () => {
+    it('reads userId or user_id', () => {
+      expect(getUserId({ userId: 3 })).toBe(3)
+      expect(getUserId({ user_id: 4 })).toBe(4)
     })
 
-    it('should support production mode', () => {
-      const mode = 'production'
-      expect(mode).toBe('production')
-    })
-
-    it('should have different defaults for different modes', () => {
-      const devDefaults = {
-        ALLOWED_ORIGINS: 'http://localhost:5173',
-        DEBUG: 'true',
-      }
-
-      const prodDefaults = {
-        ALLOWED_ORIGINS: '',
-        DEBUG: 'false',
-      }
-
-      expect(devDefaults.ALLOWED_ORIGINS).not.toBe(prodDefaults.ALLOWED_ORIGINS)
+    it('returns undefined for null/undefined/missing', () => {
+      expect(getUserId(null)).toBeUndefined()
+      expect(getUserId(undefined)).toBeUndefined()
+      expect(getUserId({})).toBeUndefined()
     })
   })
-})
 
-describe('Transform Response Utilities', () => {
-  describe('Response Transformation', () => {
-    it('should transform single object response', () => {
-      const input = {
+  describe('transformResponse', () => {
+    it('converts the named timestamp fields to ISO strings and camelCases keys', () => {
+      const row = {
         id: 1,
-        name: 'Test',
-        created_at: 1704067200,
-        updated_at: 1704067200,
+        created_at: 1700000000,
+        updated_at: 1700000100,
+        display_name: 'x',
       }
+      const out = transformResponse(row, ['createdAt', 'updatedAt'])
 
-      const transformResponse = (obj: any, timestampFields: string[]) => {
-        const result = { ...obj }
-        timestampFields.forEach(field => {
-          if (result[field]) {
-            result[field] = new Date(result[field] * 1000).toISOString()
-          }
-        })
-        return result
-      }
-
-      const output = transformResponse(input, ['created_at', 'updated_at'])
-
-      expect(output.created_at).toBe('2024-01-01T00:00:00.000Z')
-      expect(output.updated_at).toBe('2024-01-01T00:00:00.000Z')
+      expect(out.id).toBe(1)
+      expect(out.displayName).toBe('x')
+      expect(typeof out.createdAt).toBe('string')
+      expect(out.createdAt).toBe(new Date(1700000000 * 1000).toISOString())
+      expect(out.updatedAt).toBe(new Date(1700000100 * 1000).toISOString())
     })
 
-    it('should transform array response', () => {
-      const input = [
-        { id: 1, name: 'Test 1', created_at: 1704067200 },
-        { id: 2, name: 'Test 2', created_at: 1704153600 },
-      ]
-
-      const transformResponseArray = (arr: any[], timestampFields: string[]) => {
-        return arr.map(item => {
-          const result = { ...item }
-          timestampFields.forEach(field => {
-            if (result[field]) {
-              result[field] = new Date(result[field] * 1000).toISOString()
-            }
-          })
-          return result
-        })
-      }
-
-      const output = transformResponseArray(input, ['created_at'])
-
-      expect(output[0].created_at).toBe('2024-01-01T00:00:00.000Z')
-      expect(output[1].created_at).toBe('2024-01-02T00:00:00.000Z')
+    it('camelCases nested object keys recursively (up to the depth cap)', () => {
+      const out = transformResponse(
+        { id: 2, nested: { deep_value: 'keep' }, list: [{ inner_key: 1 }], nil: null },
+        [],
+      )
+      // Nested keys are converted too, not just top-level ones.
+      expect(out.nested).toEqual({ deepValue: 'keep' })
+      expect(out.list).toEqual([{ innerKey: 1 }])
+      expect(out.nil).toBeNull()
     })
 
-    it('should handle null input', () => {
-      const transformResponse = (obj: any, timestampFields: string[]) => {
-        if (!obj) return null
-        const result = { ...obj }
-        timestampFields.forEach(field => {
-          if (result[field]) {
-            result[field] = new Date(result[field] * 1000).toISOString()
-          }
-        })
-        return result
-      }
-
-      const output = transformResponse(null, ['created_at'])
-
-      expect(output).toBeNull()
+    it('leaves primitives inside arrays untouched', () => {
+      const out = transformResponse({ list: [1, 2, 3] }, [])
+      expect(out.list).toEqual([1, 2, 3])
     })
 
-    it('should preserve non-timestamp fields', () => {
-      const input = {
-        id: 1,
-        name: 'Test',
-        email: 'test@example.com',
-        created_at: 1704067200,
-      }
+    it('does not throw on a null/undefined timestamp value', () => {
+      const out = transformResponse({ created_at: null }, ['createdAt'])
+      expect(out.createdAt).toBeNull()
+    })
 
-      const transformResponse = (obj: any, timestampFields: string[]) => {
-        const result = { ...obj }
-        timestampFields.forEach(field => {
-          if (result[field]) {
-            result[field] = new Date(result[field] * 1000).toISOString()
-          }
-        })
-        return result
-      }
+    it('returns an empty object for empty input', () => {
+      expect(transformResponse({}, [])).toEqual({})
+    })
+  })
 
-      const output = transformResponse(input, ['created_at'])
+  describe('transformResponseArray', () => {
+    it('maps every element', () => {
+      const out = transformResponseArray(
+        [
+          { id: 1, created_at: 1700000000 },
+          { id: 2, created_at: 1700000001 },
+        ],
+        ['createdAt'],
+      )
+      expect(out).toHaveLength(2)
+      expect(out[0].createdAt).toBe(new Date(1700000000 * 1000).toISOString())
+      expect(out[1].id).toBe(2)
+    })
 
-      expect(output.id).toBe(1)
-      expect(output.name).toBe('Test')
-      expect(output.email).toBe('test@example.com')
-      expect(output.created_at).toBe('2024-01-01T00:00:00.000Z')
+    it('returns an empty array for empty input', () => {
+      expect(transformResponseArray([], ['createdAt'])).toEqual([])
     })
   })
 })
 
-describe('Date Transform Utilities', () => {
-  describe('Date Conversion', () => {
-    it('should convert timestamp to ISO string', () => {
-      const timestamp = 1704067200
-      const isoString = new Date(timestamp * 1000).toISOString()
+describe('dateTransform', () => {
+  it('converts seconds timestamps to ISO strings for the named fields', () => {
+    const out = transformDateFields({ a: 1700000000, b: 'unchanged' }, ['a'])
+    expect(out.a).toBe(new Date(1700000000 * 1000).toISOString())
+    expect(out.b).toBe('unchanged')
+  })
 
-      expect(isoString).toBe('2024-01-01T00:00:00.000Z')
+  it('skips fields that are absent or null', () => {
+    const out = transformDateFields({ a: null }, ['a', 'missing'])
+    expect(out.a).toBeNull()
+    expect('missing' in out).toBe(false)
+  })
+
+  it('transforms each element of an array', () => {
+    const out = transformDateFieldsArray([{ t: 1700000000 }, { t: 1700000001 }], ['t'])
+    expect(out[0].t).toBe(new Date(1700000000 * 1000).toISOString())
+    expect(out[1].t).toBe(new Date(1700000001 * 1000).toISOString())
+  })
+
+  it('does not mutate the input object', () => {
+    const input = { a: 1700000000 }
+    transformDateFields(input, ['a'])
+    expect(input.a).toBe(1700000000)
+  })
+})
+
+describe('env', () => {
+  const ORIGINAL = { ...process.env }
+
+  afterEach(() => {
+    process.env = { ...ORIGINAL }
+  })
+
+  describe('getEnv', () => {
+    it('returns the value when set', () => {
+      process.env.__TEST_VAR = 'hello'
+      expect(getEnv('__TEST_VAR' as never)).toBe('hello')
     })
 
-    it('should convert ISO string to timestamp', () => {
-      const isoString = '2024-01-01T00:00:00.000Z'
-      const timestamp = Math.floor(new Date(isoString).getTime() / 1000)
-
-      expect(timestamp).toBe(1704067200)
+    it('throws for a required missing variable', () => {
+      delete process.env.__TEST_MISSING
+      expect(() => getEnv('__TEST_MISSING' as never, true)).toThrow(/__TEST_MISSING/)
     })
 
-    it('should format date for display', () => {
-      const date = new Date(2024, 0, 1)
-      const formatted = date.toLocaleDateString('zh-CN', {
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-      })
-
-      expect(formatted).toBeDefined()
-    })
-
-    it('should handle relative time', () => {
-      const now = Date.now()
-      const oneHourAgo = now - 60 * 60 * 1000
-      const oneDayAgo = now - 24 * 60 * 60 * 1000
-
-      expect(oneHourAgo).toBeLessThan(now)
-      expect(oneDayAgo).toBeLessThan(now)
+    it('returns undefined for an optional missing variable', () => {
+      delete process.env.__TEST_MISSING
+      expect(getEnv('__TEST_MISSING' as never, false)).toBeUndefined()
     })
   })
 
-  describe('Date Validation', () => {
-    it('should validate date format', () => {
-      const validDates = [
-        '2024-01-01',
-        '2024-01-01T00:00:00.000Z',
-        '2024-01-01 00:00:00',
-      ]
+  describe('getValidatedEnv', () => {
+    /**
+     * getValidatedEnv reads JWT_SECRET, JWT_EXPIRES_IN, PORT, WS_PORT, DB_FILE,
+     * ALLOWED_ORIGINS and NODE_ENV with `required` defaulting to true — so all of
+     * them must be present or it throws. Fill the whole set so each test can
+     * isolate the variable it actually cares about.
+     */
+    function setFullEnv(): void {
+      process.env.JWT_SECRET = 'a-secret'
+      process.env.JWT_EXPIRES_IN = '7d'
+      process.env.PORT = '3000'
+      process.env.WS_PORT = '3001'
+      process.env.DB_FILE = './data/test.db'
+      process.env.ALLOWED_ORIGINS = 'http://localhost:5173'
+      process.env.NODE_ENV = 'test'
+    }
 
-      const invalidDates = [
-        'not-a-date',
-        '2024-13-01',
-        '2024-00-01',
-      ]
+    it('throws when JWT_SECRET is missing', () => {
+      setFullEnv()
+      delete process.env.JWT_SECRET
+      expect(() => getValidatedEnv()).toThrow(/JWT_SECRET/)
+    })
 
-      validDates.forEach(date => {
-        const d = new Date(date)
-        expect(isNaN(d.getTime())).toBe(false)
-      })
+    it('returns the configured values', () => {
+      setFullEnv()
+      const env = getValidatedEnv()
+      expect(env.JWT_SECRET).toBe('a-secret')
+      expect(env.JWT_EXPIRES_IN).toBe('7d')
+      expect(env.PORT).toBe('3000')
+      expect(env.NODE_ENV).toBe('test')
+    })
 
-      invalidDates.forEach(date => {
-        const d = new Date(date)
-        expect(isNaN(d.getTime())).toBe(true)
-      })
+    it('accepts valid JWT_EXPIRES_IN duration forms', () => {
+      for (const value of ['3600', '7d', '12h', '30m', '86400000ms', '1.5h', '2 days']) {
+        setFullEnv()
+        process.env.JWT_EXPIRES_IN = value
+        expect(() => getValidatedEnv(), `value=${value}`).not.toThrow()
+      }
+    })
+
+    it('rejects a malformed JWT_EXPIRES_IN at startup rather than at first login', () => {
+      setFullEnv()
+      process.env.JWT_EXPIRES_IN = 'not-a-duration'
+      expect(() => getValidatedEnv()).toThrow(/JWT_EXPIRES_IN/)
+    })
+  })
+
+  describe('isTrustProxyEnabled', () => {
+    it('is true only for the documented truthy spellings', () => {
+      for (const v of ['true', '1', 'yes', 'TRUE', 'Yes']) {
+        process.env.TRUST_PROXY = v
+        expect(isTrustProxyEnabled(), `value=${v}`).toBe(true)
+      }
+    })
+
+    it('is false for anything else, including unset and lookalikes', () => {
+      for (const v of ['', 'false', '0', 'no', 'on', 'y', 'enabled']) {
+        process.env.TRUST_PROXY = v
+        expect(isTrustProxyEnabled(), `value=${v}`).toBe(false)
+      }
+      delete process.env.TRUST_PROXY
+      expect(isTrustProxyEnabled()).toBe(false)
     })
   })
 })
 
-describe('Logger Utilities', () => {
-  describe('Logging Levels', () => {
-    it('should define log levels', () => {
-      const logLevels = {
-        error: 0,
-        warn: 1,
-        info: 2,
-        debug: 3,
-      }
+describe('logger', () => {
+  let tmpDir: string
+  let originalCwd: string
 
-      expect(logLevels.error).toBe(0)
-      expect(logLevels.warn).toBe(1)
-      expect(logLevels.info).toBe(2)
-      expect(logLevels.debug).toBe(3)
-    })
-
-    it('should have log level ordering', () => {
-      const levels = ['error', 'warn', 'info', 'debug']
-
-      expect(levels.indexOf('error')).toBeLessThan(levels.indexOf('warn'))
-      expect(levels.indexOf('warn')).toBeLessThan(levels.indexOf('info'))
-      expect(levels.indexOf('info')).toBeLessThan(levels.indexOf('debug'))
-    })
+  beforeEach(() => {
+    // logger.ts resolves its log directory from process.cwd() at import time,
+    // so exercise it against the real file it actually writes.
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mindmap-logger-'))
+    originalCwd = process.cwd()
   })
 
-  describe('Log Formatting', () => {
-    it('should include timestamp in log', () => {
-      const timestamp = new Date().toISOString()
-      const logMessage = `[${timestamp}] INFO: Test message`
-
-      expect(logMessage).toContain('[')
-      expect(logMessage).toContain(']')
-      expect(logMessage).toContain('INFO')
-    })
-
-    it('should include log level in output', () => {
-      const formats = {
-        error: '[ERROR]',
-        warn: '[WARN]',
-        info: '[INFO]',
-        debug: '[DEBUG]',
-      }
-
-      Object.values(formats).forEach(format => {
-        expect(format).toBeDefined()
-        expect(format.length).toBeGreaterThan(0)
-      })
-    })
-
-    it('should include message in log', () => {
-      const message = 'Test message'
-      const logLine = `[INFO] ${message}`
-
-      expect(logLine).toContain(message)
-    })
+  afterEach(() => {
+    process.chdir(originalCwd)
+    fs.rmSync(tmpDir, { recursive: true, force: true })
   })
 
-  describe('Error Logging', () => {
-    it('should log error stack trace', () => {
-      const error = new Error('Test error')
-      const stackTrace = error.stack || ''
+  it('writes a log entry and reads it back', async () => {
+    // Import fresh so LOG_DIR is computed from the temp cwd.
+    vi.resetModules()
+    process.chdir(tmpDir)
+    const logger = await import('../utils/logger.js')
 
-      expect(stackTrace).toContain('Error')
-      expect(stackTrace).toContain('Test error')
-    })
+    logger.log('hello-log', { detail: 42 })
+    const content = logger.readLogFile()
 
-    it('should log error message', () => {
-      const error = new Error('Database connection failed')
-      const errorMessage = error.message
-
-      expect(errorMessage).toBe('Database connection failed')
-    })
-  })
-})
-
-describe('Utility Functions', () => {
-  describe('ID Generation', () => {
-    it('should generate unique IDs', () => {
-      const generateId = () => Math.floor(Math.random() * Number.MAX_SAFE_INTEGER)
-
-      const ids = new Set()
-      for (let i = 0; i < 100; i++) {
-        ids.add(generateId())
-      }
-
-      expect(ids.size).toBe(100)
-    })
-
-    it('should generate numeric IDs', () => {
-      const id = Math.floor(Math.random() * 1000000)
-
-      expect(typeof id).toBe('number')
-      expect(id).toBeGreaterThanOrEqual(0)
-    })
+    expect(content).toContain('hello-log')
+    expect(content).toContain('42')
   })
 
-  describe('Slug Generation', () => {
-    it('should convert text to slug', () => {
-      const text = 'Hello World Test'
-      const slug = text.toLowerCase().replace(/\s+/g, '-')
+  it('writes errors with level ERROR and the message', async () => {
+    vi.resetModules()
+    process.chdir(tmpDir)
+    const logger = await import('../utils/logger.js')
 
-      expect(slug).toBe('hello-world-test')
-    })
+    logger.logError('boom', new Error('kaboom'))
+    const content = logger.readLogFile()
 
-    it('should remove special characters', () => {
-      const text = 'Hello @World #Test!'
-      const slug = text.toLowerCase().replace(/[^a-z0-9\s-]/g, '').replace(/\s+/g, '-')
-
-      expect(slug).toBe('hello-world-test')
-    })
+    expect(content).toContain('boom')
+    expect(content).toContain('ERROR')
+    expect(content).toContain('kaboom')
   })
 
-  describe('Pagination', () => {
-    it('should calculate pagination values', () => {
-      const page = 1
-      const limit = 10
-      const offset = (page - 1) * limit
+  it('clearLogFile removes the log contents', async () => {
+    vi.resetModules()
+    process.chdir(tmpDir)
+    const logger = await import('../utils/logger.js')
 
-      expect(offset).toBe(0)
-      expect(page).toBe(1)
-      expect(limit).toBe(10)
-    })
+    logger.log('to-be-cleared')
+    expect(logger.readLogFile()).toContain('to-be-cleared')
 
-    it('should calculate total pages', () => {
-      const totalItems = 100
-      const limit = 10
-      const totalPages = Math.ceil(totalItems / limit)
-
-      expect(totalPages).toBe(10)
-    })
+    logger.clearLogFile()
+    expect(logger.readLogFile()).toBe('No log file found')
   })
 
-  describe('Sorting', () => {
-    it('should sort array by field', () => {
-      const items = [
-        { id: 3, name: 'C' },
-        { id: 1, name: 'A' },
-        { id: 2, name: 'B' },
-      ]
-
-      const sorted = [...items].sort((a, b) => a.id - b.id)
-
-      expect(sorted[0].id).toBe(1)
-      expect(sorted[1].id).toBe(2)
-      expect(sorted[2].id).toBe(3)
-    })
-
-    it('should sort descending', () => {
-      const items = [
-        { id: 1, name: 'A' },
-        { id: 3, name: 'C' },
-        { id: 2, name: 'B' },
-      ]
-
-      const sorted = [...items].sort((a, b) => b.id - a.id)
-
-      expect(sorted[0].id).toBe(3)
-      expect(sorted[1].id).toBe(2)
-      expect(sorted[2].id).toBe(1)
-    })
+  it('readLogFile reports a friendly message when no log exists', async () => {
+    vi.resetModules()
+    process.chdir(tmpDir)
+    const logger = await import('../utils/logger.js')
+    expect(logger.readLogFile()).toBe('No log file found')
   })
 })
