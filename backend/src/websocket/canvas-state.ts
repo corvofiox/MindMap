@@ -197,10 +197,13 @@ export function removeCanvasState(canvasId: number): void {
 //   4. 无活跃 WS 房间（有活跃用户时不回收，避免破坏房间广播监听）
 // 动态导入 websocket/index.js 查询房间状态（静态导入会形成循环依赖）；
 // 导入失败时保守跳过该画布（不回收）。
-const IDLE_STATE_RECLAIM_MS = 5 * 60 * 1000
+// 导出仅为测试可见（canvas-state.reclaim.test.ts 直接驱动扫描）；生产路径仍走
+// ensureIdleReclaimTimer 的定时器。
+export const IDLE_STATE_RECLAIM_MS = 5 * 60 * 1000
 let idleReclaimTimer: ReturnType<typeof setInterval> | null = null
 
-async function reclaimIdleCanvasStates(): Promise<void> {
+// 导出仅为测试可见（同 IDLE_STATE_RECLAIM_MS）；生产路径由 reclaim 定时器调用。
+export async function reclaimIdleCanvasStates(): Promise<void> {
   const now = Date.now()
   for (const [canvasId, state] of Array.from(canvasStates.entries())) {
     if (state.persistError) continue

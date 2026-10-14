@@ -88,6 +88,19 @@ interface WebSocketWithUserData extends WebSocket {
   userId?: number | null
   canvasId?: number
   userRole?: 'owner' | 'editor' | 'viewer'
+  /**
+   * Project the canvas belongs to, snapshotted at connect.
+   * Role revalidation resolves ownership/membership against this instead of
+   * re-deriving it from the canvas on every write.
+   */
+  projectId?: number
+  /** When `userRole` was last confirmed against the database (ms epoch). */
+  roleCheckedAt?: number
+  /**
+   * In-flight revalidation, shared by concurrent frames from this connection so
+   * a write burst triggers one pair of queries rather than one per frame.
+   */
+  roleRevalidating?: Promise<boolean> | null
   userInfo?: CanvasActiveUser
   isAlive?: boolean
   lastPong?: number
@@ -468,6 +481,9 @@ export function updateUserRole(canvasId: number, userId: number, newRole: 'edito
   for (const client of Array.from(room.clients)) {
     if (client.userId === userId) {
       client.userRole = newRole
+      // The REST layer just wrote this role to the DB, so treat the snapshot as
+      // freshly verified — otherwise the next write would re-query needlessly.
+      client.roleCheckedAt = Date.now()
     }
   }
 
@@ -722,6 +738,10 @@ async function handleConnection(ws: WebSocketWithUserData, req: any) {
   ws.userId = userId
   ws.canvasId = canvasId
   ws.userRole = userRole as 'owner' | 'editor' | 'viewer'
+  // Role revalidation state: writes re-check membership/ownership against this
+  // project once the snapshot goes stale (ROLE_REVALIDATE_TTL_MS).
+  ws.projectId = canvasProjectId
+  ws.roleCheckedAt = Date.now()
   ws.userInfo = userInfo
   ws.isAlive = true
   ws.lastPong = Date.now()
@@ -791,10 +811,21 @@ async function handleConnection(ws: WebSocketWithUserData, req: any) {
     users: existingUsers,
   }))
 
-  // Replace early message listener with the real one
+  // Replace early message listener with the real one.
+  // handleMessage is async only on the (rare) role-revalidation path; the frame
+  // is applied synchronously otherwise. The .catch chain is RETURNED (not
+  // void-ed) so an awaiting caller — tests drive frames through this handler —
+  // still observes completion; production callers ignore the promise, and a
+  // rejection is already logged inside handleMessage, so nothing goes unhandled.
   ws.off('message', earlyMessageListener)
   ws.on('message', (data: Buffer, isBinary: boolean) => {
-    handleMessage(ws, room!, data, isBinary)
+    return Promise.resolve(handleMessage(ws, room!, data, isBinary)).catch((error) => {
+      logError('Unhandled error while processing WebSocket message', {
+        userId: ws.userId,
+        canvasId: ws.canvasId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    })
   })
 
   // Replace early close listener with the real one
@@ -815,9 +846,11 @@ async function handleConnection(ws: WebSocketWithUserData, req: any) {
     handleClientDisconnect(ws, room!, true)
   })
 
-  // Process buffered early messages (e.g. Yjs SYNC STEP1 sent right after connect)
+  // Process buffered early messages (e.g. Yjs SYNC STEP1 sent right after connect).
+  // Awaited sequentially so their order is preserved: a write whose role snapshot
+  // needs re-checking must not be reordered ahead of the frame that preceded it.
   for (const { isBinary, data } of earlyMessages) {
-    handleMessage(ws, room!, data, isBinary)
+    await handleMessage(ws, room!, data, isBinary)
   }
 
   } catch (error) {
@@ -845,7 +878,12 @@ async function handleConnection(ws: WebSocketWithUserData, req: any) {
  * Message dispatcher. Text frames carry business JSON (cursor/ping/kicked/etc.),
  * binary frames carry Yjs sync protocol bytes.
  */
-function handleMessage(ws: WebSocketWithUserData, room: CanvasRoom, data: Buffer, isBinary: boolean) {
+function handleMessage(
+  ws: WebSocketWithUserData,
+  room: CanvasRoom,
+  data: Buffer,
+  isBinary: boolean,
+): void | Promise<void> {
   // Per-connection rate limit with separate windows for SYNC (doc edits)
   // and AWARENESS (cursor movements). Text messages share one window.
   // SYNC messages are CPU-heavy (Y.applyUpdate + N-way broadcast).
@@ -938,6 +976,113 @@ function handleMessage(ws: WebSocketWithUserData, room: CanvasRoom, data: Buffer
 }
 
 /**
+ * How long a connection's role snapshot is trusted before a write re-checks it.
+ *
+ * Role is resolved once at connect (`userRole`) and kept live by the REST layer
+ * pushing `updateUserRole` / `kickUserFromRoom`. That covers every normal path,
+ * but nothing *enforces* it: a direct DB change, or a future code path that
+ * mutates `project_members` without kicking, would let a revoked user keep
+ * writing to the authoritative doc (CRDT writes are irreversible).
+ *
+ * This is defense-in-depth, so it is deliberately cheap:
+ *   - only WRITE frames re-check (awareness/cursor/reads never do);
+ *   - the result is cached for this TTL, so a burst costs one query pair;
+ *   - the common case (write within TTL of connect) stays fully synchronous,
+ *     preserving per-frame ordering.
+ */
+const ROLE_REVALIDATE_TTL_MS = 5000
+
+/**
+ * Re-check the connection's write permission against the database.
+ *
+ * Returns whether a write may proceed, and updates `ws.userRole` to the current
+ * truth. Failure policy is split deliberately:
+ *   - query succeeds and shows no membership → DEFINITIVE revocation: evict the
+ *     connection (reusing the same kicked-notice + cleanup path the REST layer
+ *     uses) and refuse the write;
+ *   - query throws → INDETERMINATE: keep the last known role and allow the
+ *     write, because silently dropping Yjs updates diverges the peer's doc from
+ *     the server while the client still believes it synced. The last known role
+ *     was verified at connect (or at the previous successful re-check), so the
+ *     exposure window stays bounded by the DB outage.
+ */
+async function revalidateWriteRole(ws: WebSocketWithUserData): Promise<boolean> {
+  const now = Date.now()
+  if (ws.roleCheckedAt !== undefined && now - ws.roleCheckedAt < ROLE_REVALIDATE_TTL_MS) {
+    return ws.userRole !== 'viewer'
+  }
+  // Share one in-flight check between concurrent frames of this connection.
+  if (ws.roleRevalidating) return ws.roleRevalidating
+
+  const canvasId = ws.canvasId
+  const projectId = ws.projectId
+  const userId = ws.userId
+
+  const task = (async (): Promise<boolean> => {
+    if (canvasId === undefined || projectId === undefined || !userId) {
+      // Cannot verify (older connection shape) — trust the connect-time decision.
+      ws.roleCheckedAt = Date.now()
+      return ws.userRole !== 'viewer'
+    }
+    try {
+      const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) })
+      if (!project) {
+        // Project gone: the room should have been closed already; refuse.
+        return false
+      }
+      if (getProjectOwnerId(project as Record<string, unknown>) === userId) {
+        ws.userRole = 'owner'
+        ws.roleCheckedAt = Date.now()
+        return true
+      }
+      const member = await db.query.projectMembers.findFirst({
+        where: and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, userId)),
+      })
+      if (!member) {
+        log('WS write revalidation: membership gone, evicting connection', {
+          userId,
+          canvasId,
+          projectId,
+        })
+        ws.roleCheckedAt = Date.now()
+        kickUserFromRoom(canvasId, userId, 'removed')
+        return false
+      }
+      const role = (member.role as 'owner' | 'editor' | 'viewer') || 'viewer'
+      const changed = ws.userRole !== role
+      ws.userRole = role
+      ws.roleCheckedAt = Date.now()
+      if (changed) {
+        // Keep the roster UI in step, mirroring updateUserRole's behaviour.
+        const room = canvasRooms.get(canvasId)
+        const info = room?.activeUsers.get(userId)
+        if (room && info) {
+          info.role = role
+          room.activeUsers.set(userId, info)
+          broadcastToRoom(room, { type: 'user-role-changed', userId, role }, null)
+        }
+        log('WS write revalidation: role changed', { userId, canvasId, role })
+      }
+      return role !== 'viewer'
+    } catch (error) {
+      logError('WS write revalidation failed; keeping last known role', {
+        userId,
+        canvasId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+      // Refresh the stamp so a broken DB is not hammered on every frame.
+      ws.roleCheckedAt = Date.now()
+      return ws.userRole !== 'viewer'
+    } finally {
+      ws.roleRevalidating = null
+    }
+  })()
+
+  ws.roleRevalidating = task
+  return task
+}
+
+/**
  * Parse a Yjs sync-protocol binary frame (y-websocket compatible).
  *
  * 标准信封：[varUint messageType, payload...]
@@ -948,9 +1093,17 @@ function handleMessage(ws: WebSocketWithUserData, room: CanvasRoom, data: Buffer
  *   messageType 1 = AWARENESS：awareness 二进制 update
  *
  * 用 syncProtocol.readSyncMessage 一次性处理 STEP1/STEP2/UPDATE，它会按需写入 encoder 作为回复。
- * STEP2/UPDATE 是写操作：viewer 角色在 apply 前拦截（CRDT 不可撤销）。
+ * STEP2/UPDATE 是写操作：viewer 角色在 apply 前拦截（CRDT 不可撤销），
+ * 且角色快照过期时先经 revalidateWriteRole 复验。
+ *
+ * 注意：本函数在角色快照仍新鲜（绝大多数帧）时不产生 await——async 函数在首个
+ * await 前同步执行，因此该路径的 apply/广播仍与调用同栈完成，帧序不变。
  */
-function handleYjsBinaryMessage(ws: WebSocketWithUserData, room: CanvasRoom, data: Uint8Array) {
+async function handleYjsBinaryMessage(
+  ws: WebSocketWithUserData,
+  room: CanvasRoom,
+  data: Uint8Array,
+): Promise<void> {
   const doc = getCanvasDoc(room.id)
   if (!doc) return
   if (data.length === 0) return
@@ -964,17 +1117,55 @@ function handleYjsBinaryMessage(ws: WebSocketWithUserData, room: CanvasRoom, dat
   if (messageType === 0) {
     // SYNC：readSyncMessage 把读+apply 耦合，一旦调用无法回滚（CRDT 不可撤销），
     // 所以必须先 peek subType 判断角色，对 viewer 的写操作在 apply 前拦截。
-    const peekDecoder = decoding.createDecoder(remaining)
-    const subType = decoding.readVarUint(peekDecoder)
-
-    // viewer 权限拦截：STEP2(1)/UPDATE(2) 是写操作，STEP1(0) 是读操作（请求状态）。
-    if (ws.userRole === 'viewer' && subType !== syncProtocol.messageYjsSyncStep1) {
-      log('Viewer SYNC write blocked before apply', {
+    //
+    // peek 必须自捕获：残缺帧（如只有 SYNC 信封、没有 sub-protocol 字节）会让
+    // readVarUint 同步抛 "Unexpected end of array"。本函数自改为 async 后，
+    // 未捕获的同步抛出会变成 rejected promise 泄漏成 unhandledRejection；
+    // 残缺帧的既有语义是"丢弃、不崩溃、不回复"，这里保持不变。
+    let subType: number
+    try {
+      subType = decoding.readVarUint(decoding.createDecoder(remaining))
+    } catch {
+      log('Malformed SYNC frame: cannot read subType, dropping', {
         userId: ws.userId,
         canvasId: ws.canvasId,
-        subType,
+        length: remaining.length,
       })
       return
+    }
+    const isWrite = subType !== syncProtocol.messageYjsSyncStep1
+
+    if (isWrite) {
+      // 同步快路径：快照是 viewer 直接拒绝，无需查库。
+      if (ws.userRole === 'viewer') {
+        log('Viewer SYNC write blocked before apply', {
+          userId: ws.userId,
+          canvasId: ws.canvasId,
+          subType,
+        })
+        return
+      }
+      // 快照过期才复验（TTL 见 ROLE_REVALIDATE_TTL_MS）。
+      if (
+        ws.roleCheckedAt === undefined ||
+        Date.now() - ws.roleCheckedAt >= ROLE_REVALIDATE_TTL_MS
+      ) {
+        const allowed = await revalidateWriteRole(ws)
+        if (!allowed) {
+          log('SYNC write blocked by role revalidation', {
+            userId: ws.userId,
+            canvasId: ws.canvasId,
+            subType,
+          })
+          return
+        }
+        // 复验期间连接可能已被踢出 / 房间已拆除 / 文档已销毁 —— apply 前重新确认。
+        // OPEN 常量在 mock 连接上不存在（测试用 readyState: 1 的普通对象），故回退 1。
+        const OPEN = ws.OPEN ?? 1
+        if (ws.readyState !== OPEN) return
+        if (canvasRooms.get(room.id) !== room) return
+        if (!getCanvasDoc(room.id)) return
+      }
     }
 
     // 权限通过，用全新 decoder 从 subType 开始交给 syncProtocol 处理。
@@ -986,7 +1177,7 @@ function handleYjsBinaryMessage(ws: WebSocketWithUserData, room: CanvasRoom, dat
     // applyAwarenessUpdate 解析二进制 Yjs update 为 JSON 时抛出 SyntaxError，
     // isSynced 永远不为 true，后续本地编辑全部堆积在 pendingUpdates 无法发送。
     encoding.writeVarUint(encoder, 0) // SYNC envelope
-    syncProtocol.readSyncMessage(syncDecoder, encoder, doc, ws as unknown)
+    syncProtocol.readSyncMessage(syncDecoder, encoder, getCanvasDoc(room.id)!, ws as unknown)
 
     // 若 encoder 有回复内容（STEP1 的回复是 STEP2），发回客户端。
     // encoder 至少包含 1 byte 的 SYNC 信封，所以 reply > 1 表示有 sub-protocol 内容。

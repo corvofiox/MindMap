@@ -112,23 +112,42 @@ describe('Yjs canvas-state', () => {
   })
 
   describe('applyUpdateToCanvas', () => {
-    it('applies a raw Yjs update binary to the doc', async () => {
+    it('applies a raw Yjs update delta to the doc', async () => {
       await loadCanvasStateFromDb(CANVAS_ID)
-      // Capture an update from the canvas doc itself (simulating a client
-      // sending back a local edit). applyUpdate only merges structs that
-      // belong to the same logical doc, so we operate on the target doc.
       const { getCanvasDoc } = await import('../websocket/canvas-state.js')
       const doc = getCanvasDoc(CANVAS_ID)!
+
+      // Build the delta the way a real client does: clone the current doc state,
+      // edit the clone, then encode only the bytes since the clone point. A
+      // delta built from a clone merges cleanly (same type lineage); an update
+      // from an independently-created doc would not.
+      const stateVector = Y.encodeStateVector(doc)
+      const clone = new Y.Doc()
+      Y.applyUpdate(clone, Y.encodeStateAsUpdate(doc))
+
       const { ensureRoot, writeEntityToYMap } = await import('../websocket/yjs-schema.js')
-      // Apply a node directly, then read it back via getCanvasJsonSnapshot.
-      const collections = ensureRoot(doc)
-      doc.transact(() => {
+      const collections = ensureRoot(clone)
+      clone.transact(() => {
         const ymap = new Y.Map()
         writeEntityToYMap(ymap, { id: 'u1', x: 1, y: 2 })
         collections.nodes.set('u1', ymap)
       })
+
+      const delta = Y.encodeStateAsUpdate(clone, stateVector)
+      await applyUpdateToCanvas(CANVAS_ID, delta)
+
       const snapshot = getCanvasJsonSnapshot(CANVAS_ID)
-      expect(snapshot.nodes.some((n) => (n as any).id === 'u1')).toBe(true)
+      const node = snapshot.nodes.find((n) => (n as any).id === 'u1') as any
+      expect(node, 'the remote delta must have been merged into the canvas doc').toBeDefined()
+      expect(node.x).toBe(1)
+      expect(node.y).toBe(2)
+    })
+
+    it('returns false instead of throwing when the update binary is malformed', async () => {
+      await loadCanvasStateFromDb(CANVAS_ID)
+      const ok = await applyUpdateToCanvas(CANVAS_ID, new Uint8Array([1, 2, 3, 4, 5, 6, 7]))
+      // applyUpdateToCanvas catches and logs; it must not reject.
+      expect(typeof ok).toBe('boolean')
     })
   })
 

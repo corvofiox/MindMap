@@ -59,9 +59,9 @@ export function writeEntityToYMap(ymap: Y.Map<unknown>, data: Record<string, unk
     if (value === undefined) continue
     if (Array.isArray(value)) {
       const arr = new Y.Array<unknown>()
-      // Insert each element individually. Using arr.push(value) would wrap
-      // the whole array as a single element, producing nodeIds: [["id1","id2"]]
-      // instead of nodeIds: ["id1","id2"].
+      // Insert the elements as one block. (Y.Array.push(value) is semantically
+      // equivalent — its argument is an array of items, so it also inserts each
+      // element individually; insert(0, …) is just the explicit form.)
       arr.insert(0, value as unknown[])
       ymap.set(key, arr)
     } else if (value !== null && typeof value === 'object') {
