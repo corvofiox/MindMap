@@ -1,6 +1,6 @@
 # MindMap 项目指南
 
-**最后更新**: 2026-05-23
+**最后更新**: 2026-10-13
 
 ## 概述
 
@@ -146,6 +146,33 @@ TypeScript ESM + `moduleResolution: "bundler"` 强制执行此约定。
 - 实时协作基于 **Yjs CRDT**（自研 provider 复用现有 wsServer 的鉴权/房间/心跳/踢人基础设施）
 - 数据流：客户端 `Y.Doc` update → 服务端 `Y.applyUpdate` → 广播给房间其他客户端；撤销重做保留 Zustand `ownCommands`（方案 B）
 
+### WS 写操作的角色复验（TTL，2026-10-14）
+连接的角色（`ws.userRole`）在 connect 时快照，正常变更由 REST 层推送
+`updateUserRole` / `kickUserFromRoom`。这覆盖所有正常路径但**不强制**——绕过 REST
+直接改库（或未来漏调 kick 的代码路径）会让被撤权者继续写权威文档（CRDT 写不可撤销）。
+防线（`websocket/index.ts` 的 `revalidateWriteRole`）：
+- **只有写帧复验**（SYNC STEP2/UPDATE）；awareness/cursor/读帧永不查库；
+- 结果按连接缓存 **5s TTL**，一次写突发只付一对查询；快照新鲜时的快路径**无 await**（帧序不变）；
+- 查询成功且显示无成员资格 → **确定撤权**：复用 kicked 通知 + 清理路径踢出；
+- 查询抛错 → **状态不明**：保留最后已知角色放行并记日志——静默丢 Yjs 更新会让
+  对端文档与服务端分叉而客户端仍以为已同步，比有界的放行窗口更糟。
+注意 `updateUserRole` 会同时刷新 `roleCheckedAt`（REST 刚写库，快照即新鲜）。
+
+### sanitizeHTML：unwrap 必须逐子消毒（mXSS）+ CSS 值检查用空白剥离副本
+- 白名单外标签解包时，**被提升的每个子节点必须立即重新 `sanitizeNode`**：外层循环
+  迭代的是提升前的 childNodes 快照，否则提升的子树完全逃过净化——
+  `<math><mtext><mglyph><style><img onerror=…>` 曾借这个洞把裸 `<style>` 正文
+  （CDATA 里的 img 标记）原样送进输出。同时解包不得对已脱管节点再 `removeChild`
+  （必抛 NotFoundError，曾让 `safeHTML` 整体降级成 stripHTML、合法 `<b>` 全丢）。
+- 解包后**元素自身必须从 DOM 移除，输出不得残留空壳**（`<font>x</font>` →
+  恰为 `x`，不是 `x<font></font>`）。该处的 parentNode 守卫在 fragment 重构后
+  恒真（children 摘走、element 无人动），已简化为无条件移除并由精确输出测试锁定。
+- `sanitizeStyle` 的危险值检查（`javascript:` 等）必须测**空白剥离后的副本**：
+  CSS 里换行是普通空白，`url(java\nscript:…)` 在浏览器拼回可执行协议，
+  字面 `/javascript:/i` 测不到；声明的原值保留原间距。
+- **jsdom 的 DOM 操作是 O(位置)**（实测纯 DOM 解包 4k→0.8s、8k→2.9s），真实浏览器
+  是 O(1) 链表操作——净化器性能测试不要用几万标签的输入，那测的是环境不是代码。
+
 ### 同步对象数组时顺序必须保真（顺序即语义）
 `connection.bendPoints` 这类**对象数组**在 Yjs 里是 `Y.Array`，绑定层
 （`frontend/src/services/yjsBinding.ts` → `diffObjectArrayById`）按 `id` 做增量
@@ -226,9 +253,28 @@ if (isNaN(id)) {
 
 - **框架**: Vitest，前端 jsdom + vitest-canvas-mock，后端 node + supertest
 - **前端位置**: `src/test/*.test.ts`, `src/**/__tests__/*.test.tsx`
-- **后端位置**: `src/__tests__/*.test.ts`
-- **覆盖率阈值**（后端）: statements 85%, branches 80%, functions 85%, lines 85%
+- **后端位置**: `src/__tests__/*.test.ts`（controller 集成测试在 `src/__tests__/*.integration.test.ts`）
+- **覆盖率阈值**（后端，`backend/vitest.config.ts`）: statements 76%, branches 68%, functions 75%, lines 78%
+  （2026-10-13 重新标定为真实水平；旧 85/80 从未真实达成过。提高方式：补真实覆盖后上调数字。）
+- **覆盖率阈值**（前端，`frontend/vitest.config.ts`）: statements 33%, branches 27%, functions 36%, lines 33%
+  （2026-10-14 重新标定为真实水平——旧 80/75/80/80 从未真实达成过，`--coverage` 一直以退出码 1
+  静默失败，门限形同虚设；页面层（CanvasPage/LoginPage/ProjectsPage/NodePoolPanel）目前接近 0 覆盖。
+  提高方式：补真实覆盖后上调数字。）
 - **后端覆盖率排除** `src/index.ts`, `src/types/**`, `src/__tests__/**`
+- **MCP E2E 冒烟**（不属于 vitest，手动跑）: `npm run smoke:mcp`（HTTP 全链路）、`npm run smoke:mcp:stdio`（stdio 代理）
+
+### 测试真实性纪律（2026-10-13 全量审视确立，有守卫测试强制）
+
+项目曾出现大量"假测试"——断言恒真、看起来在覆盖实际什么都没验证。实证：把
+canvas 列表路由改成永远 500，对应 25 条"测试"仍全绿。现已清理，并由
+`backend/src/__tests__/test-quality-guard.test.ts` 守卫防回潮。规则：
+
+1. **测试必须 import 被测的真实模块**。禁止在测试文件里重新实现被测逻辑再断言自己的副本。
+2. **supertest 调用必须 `await`**（或 `return`）。未 await 时拿到的是 Test 对象，`expect(res).toBeDefined()` 恒真。
+3. **禁止只有 `toBeDefined()`/`toBeTruthy()` 断言的用例**——每个测试必须能在被测行为改变时失败。
+4. **后端 controller 测试用集成写法**：真实 router + 真实 in-memory SQLite（`runMigrations`）+ 真实 HTTP 响应断言 + 数据库行断言。共享夹具在 `src/__tests__/helpers/integration-harness.ts`（`createTestDatabase` / `buildApp` / `seedUser` / `authHeader` 等）。参照 `canvas.controller.integration.test.ts`。
+5. **安全关键行为（鉴权、越权、XSS/路径穿越防护、密钥哈希）必须做变异验证**：临时破坏实现 → 确认测试变红 → 还原。守卫测试防的是"恒真"，变异验证防的是"断言了错误的期望"。
+6. **只 mock 真正的外部**（数据库连接、限速、websocket、logger）；**绝不 mock 被测模块本身**。
 
 ## 项目结构
 
@@ -243,12 +289,40 @@ MindMap/
 │   ├── services/             # API + WebSocket 客户端
 │   └── utils/                # 工具函数 (nodeCache 等)
 ├── backend/src/
-│   ├── controllers/          # auth, user, project, canvas, upload, collaboration, AI
+│   ├── controllers/          # auth, user, project, canvas, upload, collaboration, token
 │   ├── database/             # Drizzle schema, connection (better-sqlite3), migration
-│   ├── middleware/            # CORS, CSRF, auth, error, rateLimit, validation
+│   ├── middleware/           # CORS, CSRF, auth, mcpAuth, error, rateLimit, validation
+│   ├── mcp/                  # MCP server（画布工具 + stdio/HTTP 传输 + 访问控制）
 │   └── websocket/            # Yjs CRDT provider (sync/awareness) + canvas-state doc 管理
 └── shared/src/               # 共享类型
 ```
+
+## MCP 服务（外部 agent 接入）
+
+项目**不再内置 AI 助手**（侧边栏对话、服务端 LLM 代理、供应商密钥加密存储均已移除）。
+改为对外提供 MCP 服务，由外部 agent 自带模型来管理画布。
+
+| 传输 | 入口 | 鉴权 |
+|------|------|------|
+| Streamable HTTP | `POST /mcp`（复用 3000/9000 端口） | `Authorization: Bearer mmp_…` |
+| stdio | `npm run mcp:stdio`（`backend/dist/mcp/stdio.js`） | 环境变量 `MINDMAP_TOKEN` |
+
+- 令牌在网页端「账号设置 → 访问令牌」创建，只存 SHA-256 哈希，明文仅创建时返回一次；
+  表为 `personal_access_tokens`，管理接口 `/api/tokens`（JWT + CSRF）。
+- `/mcp` **不挂 CSRF**：凭证是显式 Authorization 头，跨站表单无法设置。
+- stdio 入口是**代理**，不是独立实现：它把 JSON-RPC 转发给已运行的服务端。
+  原因——画布是**服务端进程内存里的 Y.Doc**，且广播 handler 也在那里；独立进程
+  自己从 SQLite 载入副本会产生第二个写入者，改动既不会广播给浏览器，还会被服务端
+  下一次持久化覆盖。
+- 工具层在 `backend/src/mcp/tools.ts`（23 个工具），实体操作在 `canvas-ops.ts`，
+  访问控制在 `access.ts`。工具语义与已删除的前端 `aiTools.ts` 保持一致。
+
+**关键约束：MCP 写操作必须走 `canvas-ops.ts` 的 `upsertEntities` / `deleteEntities`。**
+它们以 `MCP_ORIGIN` 事务写入，这是 `undo`/`redo` 能追踪 agent 自己改动、
+且不会回退他人编辑的前提；同时是**实体级**写入，不会像
+`mergeJsonSnapshotIntoCanvas` 那样整集合替换（那会静默删除协作方的内容）。
+另注意 `Y.UndoManager` 只能观察**构造之后**的事务，故 `getUndoManager` 必须在
+写入前调用（已封装在两个写函数内部，勿绕过）。
 
 ## 反模式（禁止）
 

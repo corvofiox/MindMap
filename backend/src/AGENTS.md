@@ -12,9 +12,10 @@ Express 4 + TypeScript + SQLite (better-sqlite3) REST API + Yjs CRDT WebSocket �
 src/
 ├── controllers/       # API 路由控制器（7 文件）
 ├── database/         # Drizzle ORM + SQLite（5 文件）
-├── middleware/       # Express 中间件（4 文件）
+├── mcp/              # MCP server：画布工具 + stdio/HTTP 传输 + 访问控制（6 文件）
+├── middleware/       # Express 中间件（5 文件，含 mcpAuth）
 ├── websocket/        # Yjs CRDT provider (sync/awareness) + canvas-state doc 管理
-├── utils/            # 工具函数（3 文件）
+├── utils/            # 工具函数（含 personalToken）
 ├── __tests__/        # 单元测试
 └── index.ts         # 应用入口
 ```
@@ -28,7 +29,25 @@ src/
 | 数据库连接 | `database/connection.ts` | better-sqlite3 文件数据库 |
 | WebSocket 服务 | `websocket/index.ts` | Yjs CRDT 自研 provider（鉴权/房间/心跳/踢人 + sync 协议）|
 | 认证中间件 | `middleware/auth.middleware.ts` | JWT 验证 |
+| MCP 令牌鉴权 | `middleware/mcpAuth.middleware.ts` | PAT（`mmp_…`）验证，供 `/mcp` 使用 |
+| MCP 工具集 | `mcp/tools.ts` | 23 个画布工具（读写节点/连线/组/域） |
+| MCP 实体操作 | `mcp/canvas-ops.ts` | Yjs doc 的实体级 upsert/delete + MCP_ORIGIN 撤销 |
+| MCP 传输 | `mcp/http.ts` / `mcp/stdio.ts` | Streamable HTTP（无状态）/ stdio 代理 |
 | CORS 中间件 | `middleware/cors.middleware.ts` | 动态 CORS |
+
+## MCP 服务要点
+
+外部 agent 通过 MCP 管理画布；项目**不再内置 AI 助手**。详见根 AGENTS.md 的「MCP 服务」一节。
+
+- 路由：`/mcp`（Streamable HTTP，无状态 JSON 模式）+ `mcpRouter`；`/api/tokens` 管理令牌。
+- **`/mcp` 不挂 `csrfProtectionMiddleware`**：凭证是显式 `Authorization` 头，跨站表单无法设置。
+- 写操作**必须**经 `canvas-ops.ts` 的 `upsertEntities` / `deleteEntities`：它们以
+  `MCP_ORIGIN` 事务写入（undo/redo 可追踪、且不回退他人编辑），并且是实体级写入，
+  不会像 `mergeJsonSnapshotIntoCanvas` 那样整集合替换。
+- `getUndoManager` 必须在写入**之前**调用（`Y.UndoManager` 只观察构造后的事务）；
+  两个写函数内部已封装，勿绕过。
+- 服务端写入会经房间级 `update` handler 广播给在线浏览器，因此 agent 的改动实时可见。
+
 
 ## 数据库架构
 
@@ -42,6 +61,9 @@ src/
 - `folders` - 文件夹
 - `node_cards` - 节点卡片
 - `files` - 上传文件
+- `personal_access_tokens` - MCP 访问令牌（只存 SHA-256 哈希 + 前缀，支持过期/撤销）
+
+> 已移除：`ai_conversations`、`ai_provider_keys`（随 AI 助手功能删除；migration 里有一次性 DROP）。
 
 **数据连接**（`database/connection.ts`）:
 ```typescript
@@ -97,6 +119,11 @@ export function getSqlite(): Database.Database {
 | project.controller.ts | `/api/projects` | 项目 CRUD、成员管理 |
 | canvas.controller.ts | `/api/canvases` | 画布 CRUD、Yjs 数据 |
 | upload.controller.ts | `/api/upload` | 文件上传（multer）|
+| collaboration.controller.ts | `/api/collaboration` | 项目成员/邀请 |
+| token.controller.ts | `/api/tokens` | MCP 个人访问令牌（创建/列出/撤销）|
+| log.routes.ts | `/api/logs` | 前端日志落盘 |
+
+另有 `/mcp`（MCP 服务，见上），不走 `controllers/`。
 
 **响应格式**:
 ```typescript
@@ -194,7 +221,8 @@ npm run lint            # ESLint
 - yjs 13.x + lib0 + y-protocols - CRDT 协作核心（doc 管理 / sync / awareness）
 - bcrypt 6.x - 密码加密
 - JWT 9.x - Token 认证
-- Zod - Schema 验证
+- Zod - Schema 验证（同时用于 MCP 工具入参 schema）
+- @modelcontextprotocol/sdk 1.32.x - MCP 服务端（McpServer + Streamable HTTP / stdio 传输）
 - multer - 文件上传
 - csurf - CSRF 保护
 - express-rate-limit - 速率限制
