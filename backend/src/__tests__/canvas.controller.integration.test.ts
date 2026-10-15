@@ -53,7 +53,7 @@ import {
 // persistence so `yjs_update` row assertions are deterministic, dropping per-test
 // in-memory docs (canvas ids restart at 1 in every fresh database), and decoding
 // a persisted doc to read back live entities.
-import { flushAllCanvasStates, getCanvasStatesSnapshot, removeCanvasState } from '../websocket/canvas-state.js'
+import { flushAllCanvasStates, getCanvasState, getCanvasStatesSnapshot, removeCanvasState } from '../websocket/canvas-state.js'
 import { decodeBase64ToDoc, docToJsonSnapshot } from '../websocket/yjs-schema.js'
 // Mocked at the top of this file; imported to assert room teardown side effects.
 import { closeRoom } from '../websocket/index.js'
@@ -575,6 +575,230 @@ describe('canvas.controller (integration, real router + real DB)', () => {
       expect(nodeIds).toContain('fresh-put')
       expect(nodeIds).toContain('peer-stay')
     })
+
+    it('refuses to ghost-revive a deleted entity inside an upsertOnly merge (H2)', async () => {
+      const canvasId = seedCanvas(t.raw, projectId, 'Tombstone')
+
+      // 1) Seed three entities.
+      const seeded = await supertest(app)
+        .post(`/api/canvases/${canvasId}/data`)
+        .set(authHeader(ownerId))
+        .send({ nodes: [{ id: 'victim' }, { id: 'peer' }, { id: 'extra' }] })
+      expect(seeded.status).toBe(200)
+
+      // 2) B deletes 'victim'. The explicit declaration keeps the merge in
+      //    authoritative (upsertOnly=false) mode, so the deletion really lands
+      //    and 'victim' becomes a tombstone in the doc.
+      const deleted = await supertest(app)
+        .post(`/api/canvases/${canvasId}/data`)
+        .set(authHeader(ownerId))
+        .send({ nodes: [{ id: 'peer' }, { id: 'extra' }], deletedIds: { nodes: ['victim'] } })
+      expect(deleted.status).toBe(200)
+      await flushAllCanvasStates()
+      expect(await readDocNodeIds(canvasId)).not.toContain('victim')
+
+      // 3) A's stale snapshot still carries 'victim' and omits 'extra'. Omitting
+      //    an undeclared doc entity makes the merge upsertOnly (stale snapshot),
+      //    and the tombstoned 'victim' must NOT be written back — otherwise the
+      //    entity reappears for A while B (who deleted it) never sees it.
+      const stale = await supertest(app)
+        .post(`/api/canvases/${canvasId}/data`)
+        .set(authHeader(ownerId))
+        .send({ nodes: [{ id: 'victim' }, { id: 'peer' }] })
+      expect(stale.status).toBe(200)
+
+      await flushAllCanvasStates()
+      const nodeIds = await readDocNodeIds(canvasId)
+      expect(nodeIds).not.toContain('victim')
+      expect(nodeIds).toContain('peer')
+      expect(nodeIds).toContain('extra')
+    })
+  })
+
+  describe('POST /:id/data — legacy payloads, declaration caps, empty bodies', () => {
+    it('accepts the legacy base64 yjsData field and merges its entities', async () => {
+      const canvasId = seedCanvas(t.raw, projectId, 'Legacy')
+      const yjsData = Buffer.from(
+        JSON.stringify({ nodes: [{ id: 'legacy-node-1', title: 'L' }] }),
+        'utf8',
+      ).toString('base64')
+
+      const res = await supertest(app)
+        .post(`/api/canvases/${canvasId}/data`)
+        .set(authHeader(ownerId))
+        .send({ yjsData })
+
+      expect(res.status).toBe(200)
+      expect(res.body.success).toBe(true)
+      await flushAllCanvasStates()
+      // Decode through the project's own Yjs decoder: proves the entity landed
+      // in the live doc, not merely that the request was accepted.
+      const detail = await supertest(app)
+        .get(`/api/canvases/detail/${canvasId}`)
+        .set(authHeader(ownerId))
+      expect(detail.status).toBe(200)
+      const doc = decodeBase64ToDoc(detail.body.data.yjsUpdate)
+      expect(doc).not.toBeNull()
+      const ids = docToJsonSnapshot(doc as NonNullable<typeof doc>).nodes.map((n) => String(n.id))
+      expect(ids).toContain('legacy-node-1')
+    })
+
+    it('returns 400 for a corrupt legacy yjsData field', async () => {
+      const canvasId = seedCanvas(t.raw, projectId, 'LegacyBad')
+      const res = await supertest(app)
+        .post(`/api/canvases/${canvasId}/data`)
+        .set(authHeader(ownerId))
+        .send({ yjsData: Buffer.from('not json', 'utf8').toString('base64') })
+
+      expect(res.status).toBe(400)
+      expect(res.body.error).toContain('invalid or corrupt yjsData')
+      // A rejected decode must not touch the row.
+      expect(countRows(t.raw, 'canvases', 'id = ?', canvasId)).toBe(1)
+    })
+
+    it('ignores a deletion declaration above the per-collection cap (stays upsertOnly)', async () => {
+      const canvasId = seedCanvas(t.raw, projectId, 'Cap')
+      // Seed a peer entity that the next snapshot will omit.
+      const seeded = await supertest(app)
+        .post(`/api/canvases/${canvasId}/data`)
+        .set(authHeader(ownerId))
+        .send({ nodes: [{ id: 'cap-peer' }] })
+      expect(seeded.status).toBe(200)
+
+      // 10_001 declarations exceeds MAX_DELETED_IDS_PER_COLLECTION: the whole
+      // collection declaration is dropped, so 'cap-peer' is an undeclared
+      // missing entity → upsertOnly must protect it from ghost deletion.
+      const flood = Array.from({ length: 10_001 }, (_, i) => `filler-${i}`)
+      const res = await supertest(app)
+        .post(`/api/canvases/${canvasId}/data`)
+        .set(authHeader(ownerId))
+        .send({ nodes: [{ id: 'cap-fresh' }], deletedIds: { nodes: flood } })
+
+      expect(res.status).toBe(200)
+      await flushAllCanvasStates()
+      const detail = await supertest(app)
+        .get(`/api/canvases/detail/${canvasId}`)
+        .set(authHeader(ownerId))
+      const doc = decodeBase64ToDoc(detail.body.data.yjsUpdate)
+      const ids = docToJsonSnapshot(doc as NonNullable<typeof doc>).nodes.map((n) => String(n.id))
+      expect(ids).toContain('cap-fresh')
+      expect(ids).toContain('cap-peer')
+    })
+
+    it('honors a declaration at exactly the cap (boundary is inclusive)', async () => {
+      const canvasId = seedCanvas(t.raw, projectId, 'CapEdge')
+      const seeded = await supertest(app)
+        .post(`/api/canvases/${canvasId}/data`)
+        .set(authHeader(ownerId))
+        .send({ nodes: [{ id: 'edge-peer' }] })
+      expect(seeded.status).toBe(200)
+
+      // 10_000 is the last accepted size; one real declaration inside it must
+      // still execute, proving the cap rejects only the oversized payload.
+      const declared = Array.from({ length: 9_999 }, (_, i) => `filler-${i}`)
+      declared.push('edge-peer')
+      const res = await supertest(app)
+        .post(`/api/canvases/${canvasId}/data`)
+        .set(authHeader(ownerId))
+        .send({ nodes: [{ id: 'edge-fresh' }], deletedIds: { nodes: declared } })
+
+      expect(res.status).toBe(200)
+      await flushAllCanvasStates()
+      const detail = await supertest(app)
+        .get(`/api/canvases/detail/${canvasId}`)
+        .set(authHeader(ownerId))
+      const doc = decodeBase64ToDoc(detail.body.data.yjsUpdate)
+      const ids = docToJsonSnapshot(doc as NonNullable<typeof doc>).nodes.map((n) => String(n.id))
+      expect(ids).toContain('edge-fresh')
+      expect(ids).not.toContain('edge-peer')
+    })
+
+    it('loads the canvas doc even when the body carries no collections', async () => {
+      const canvasId = seedCanvas(t.raw, projectId, 'Empty')
+      const res = await supertest(app)
+        .post(`/api/canvases/${canvasId}/data`)
+        .set(authHeader(ownerId))
+        .send({})
+
+      expect(res.status).toBe(200)
+      // The empty-body path still calls loadCanvasStateFromDb so later reads
+      // are consistent; a mutation dropping that call leaves loaded=false.
+      expect(getCanvasState(canvasId)?.loaded).toBe(true)
+    })
+  })
+
+  describe('PUT /:id — main-branch metadata fields', () => {
+    it('persists previewText and sortOrder', async () => {
+      const canvasId = seedCanvas(t.raw, projectId, 'Meta')
+
+      const res = await supertest(app)
+        .put(`/api/canvases/${canvasId}`)
+        .set(authHeader(ownerId))
+        .send({ previewText: 'preview body', sortOrder: 7 })
+
+      expect(res.status).toBe(200)
+      expect(
+        readColumn<string>(t.raw, 'SELECT preview_text FROM canvases WHERE id = ?', canvasId),
+      ).toBe('preview body')
+      expect(
+        readColumn<number>(t.raw, 'SELECT sort_order FROM canvases WHERE id = ?', canvasId),
+      ).toBe(7)
+    })
+
+    it('moves a canvas into a folder of its own project', async () => {
+      const folderId = seedFolder(t.raw, projectId, 'Target')
+      const canvasId = seedCanvas(t.raw, projectId, 'Movable')
+
+      const res = await supertest(app)
+        .put(`/api/canvases/${canvasId}`)
+        .set(authHeader(ownerId))
+        .send({ folderId })
+
+      expect(res.status).toBe(200)
+      expect(
+        readColumn<number>(t.raw, 'SELECT folder_id FROM canvases WHERE id = ?', canvasId),
+      ).toBe(folderId)
+    })
+
+    it('removes a canvas from its folder when folderId is null', async () => {
+      const folderId = seedFolder(t.raw, projectId, 'Source')
+      const canvasId = seedCanvas(t.raw, projectId, 'Nested', { folderId })
+
+      const res = await supertest(app)
+        .put(`/api/canvases/${canvasId}`)
+        .set(authHeader(ownerId))
+        .send({ folderId: null })
+
+      expect(res.status).toBe(200)
+      expect(
+        readColumn<number | null>(t.raw, 'SELECT folder_id FROM canvases WHERE id = ?', canvasId),
+      ).toBeNull()
+    })
+
+    it('rejects a non-numeric or cross-project folderId without writing the row', async () => {
+      const canvasId = seedCanvas(t.raw, projectId, 'Guarded')
+
+      const badType = await supertest(app)
+        .put(`/api/canvases/${canvasId}`)
+        .set(authHeader(ownerId))
+        .send({ folderId: 'abc' })
+      expect(badType.status).toBe(400)
+      expect(badType.body.error).toContain('无效的文件夹')
+
+      const otherProject = seedProject(t.raw, ownerId, 'Other')
+      const foreignFolder = seedFolder(t.raw, otherProject, 'Foreign')
+      const crossProject = await supertest(app)
+        .put(`/api/canvases/${canvasId}`)
+        .set(authHeader(ownerId))
+        .send({ folderId: foreignFolder })
+      expect(crossProject.status).toBe(400)
+      expect(crossProject.body.error).toContain('文件夹不属于该项目')
+
+      // Neither rejected request may have linked the canvas to a folder.
+      expect(
+        readColumn<number | null>(t.raw, 'SELECT folder_id FROM canvases WHERE id = ?', canvasId),
+      ).toBeNull()
+    })
   })
 
   describe('folders', () => {
@@ -606,14 +830,11 @@ describe('canvas.controller (integration, real router + real DB)', () => {
         .set(authHeader(ownerId))
         .send({ name: 'Renamed' })
 
-      if (res.status === 200) {
-        expect(readColumn<string>(t.raw, 'SELECT name FROM folders WHERE id = ?', folderId)).toBe(
-          'Renamed',
-        )
-      } else {
-        // Route shape differs; assert the folder is at least unchanged, never corrupted.
-        expect(readColumn<string>(t.raw, 'SELECT name FROM folders WHERE id = ?', folderId)).toBe('Old')
-      }
+      expect(res.status).toBe(200)
+      expect(res.body.success).toBe(true)
+      expect(readColumn<string>(t.raw, 'SELECT name FROM folders WHERE id = ?', folderId)).toBe(
+        'Renamed',
+      )
     })
 
     it('deletes a folder', async () => {
@@ -622,11 +843,9 @@ describe('canvas.controller (integration, real router + real DB)', () => {
         .delete(`/api/canvases/folders/${folderId}`)
         .set(authHeader(ownerId))
 
-      if (res.status === 200) {
-        expect(countRows(t.raw, 'folders', 'id = ?', folderId)).toBe(0)
-      } else {
-        expect(countRows(t.raw, 'folders', 'id = ?', folderId)).toBe(1)
-      }
+      expect(res.status).toBe(200)
+      expect(res.body.success).toBe(true)
+      expect(countRows(t.raw, 'folders', 'id = ?', folderId)).toBe(0)
     })
 
     it('rejects folder creation with a non-numeric, nonexistent, or cross-project parentId', async () => {

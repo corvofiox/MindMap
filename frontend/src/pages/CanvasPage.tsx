@@ -517,9 +517,16 @@ function getCsrfToken(): string {
 //   send 是同步的，大概率能发出）；
 // - 本会话见过其他协作者（收到过远端编辑广播或 room 事件中出现他人）时，
 //   即使当前已断开也不发 REST 快照——快照可能过期，全量合并会静默覆盖或
-//   删除对端编辑，比"少存一次本地兜底"严重得多。已知取舍：此时未同步的
-//   本地编辑只能靠 localStorage 缓存（重载时 DB 优先，可能丢失）；
-// - 纯单用户会话保持原有 REST 兜底（离线编辑的唯一保存途径）。
+//   删除对端编辑，比"少存一次本地兜底"严重得多。
+//
+// H1 修复（断线关页丢失，2026-10-15）：上面这条"有协作证据就不发"的防线
+// 曾把"WS 会管"当作充分信任，但 WS 此刻可能并不在线。精确触发条件是
+// "协作中断线 + 未重连就关页"：此时离线编辑只在 pendingUpdates 缓冲里，
+// 关页后缓冲随 provider 销毁，重载时 DB 优先 → 编辑真实丢失。
+// 现在改为：**仅当确有待发离线编辑（provider.hasPendingOfflineEdits()）
+// 时才保留原防线**；无待发编辑则放行 REST 兜底。判定在 flushPendingUpdates()
+// 之后进行——socket 仍 open 时缓冲已发空，不会产生多余请求。
+// 残余取舍：待发编辑超过 48KB 时仍只靠 localStorage 缓存（重载时 DB 优先）。
 //
 // beforeunload 与 pagehide 两个处理器共用此逻辑。
 const KEEPALIVE_MAX_BODY_BYTES = 48 * 1024
@@ -537,7 +544,16 @@ function sendKeepaliveSnapshot(
     // best-effort
   }
   if (collabService.isConnected()) return
-  if (collabService.hasCollaborationEvidence(id)) return
+  // H1 修复（断线关页丢失）：
+  // hasCollaborationEvidence 一旦置位在本次画布会话内永不清除。若仅凭它跳过
+  // REST 兜底，则"协作中断线 + 未重连就关页"时离线编辑只剩 localStorage
+  // （重载时 DB 优先）→ 真实丢失。改为：仅当**确有待发离线编辑**时才保留
+  // 原防线；否则（无待发编辑）放行 REST 兜底。
+  // 注意判定必须在上面 flushPendingUpdates() 之后——socket 仍 open 时缓冲已
+  // 发空，此处返回 false，不会产生多余请求。
+  const provider = getActiveYjsProvider(id)
+  const hasPendingOfflineEdits = provider?.hasPendingOfflineEdits() ?? false
+  if (collabService.hasCollaborationEvidence(id) && !hasPendingOfflineEdits) return
   // R1 幽灵复活修复：附带本地删除声明，服务端据此区分"客户端主动删除"
   // 与"未知实体"，允许单用户离线删除通过全量合并生效。
   const deletedIds = getLocalDeletions(id)

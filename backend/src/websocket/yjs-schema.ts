@@ -48,6 +48,90 @@ export function ensureRoot(doc: Y.Doc) {
 }
 
 /**
+ * H2 幽灵复活防护：读取 doc 中四个实体集合的"删除墓碑"。
+ *
+ * Yjs 删除一个 map key 并不会抹掉它的 Item——struct 会以 `deleted=true`
+ * 保留在 store 里（内容退化成 ContentDeleted / GC），并且 `parentSub` 仍是
+ * 被删的实体 id、`parent` 仍指向所属集合 Y.Map。实测该 struct 在任意次
+ * encodeStateAsUpdate → applyUpdate 往返后依然存在（doc.gc=true 也不回收
+ * struct 本身），因此无需新增任何 doc 结构或 wire 格式，直接扫描即可得到
+ * "本集合中被删除且尚未重建的实体 id"。
+ *
+ * 用途：REST 全量快照合并时，若快照仍携带某个已被删除的实体 id，直接写回
+ * 会让该实体在所有人面前复活（而删除它的协作者本地看不到它——分叉）。
+ * 合并前用本函数判定并跳过这类 id。
+ *
+ * 判定必须排除"当前仍存活"的 id：删除后用同一个 id 重新 set 会生成一个新的
+ * Item（旧 Item 仍是 deleted），此时 `target.has(id)` 为 true，说明是重建而
+ * 非幽灵，不应拦截。Y.UndoManager 撤销删除时是把原 Item 的 deleted 置回
+ * false，同样会被 `has` 排除。
+ */
+interface YjsStoreLike {
+  clients?: Map<number, Record<string, unknown>>
+}
+
+interface YjsStructLike {
+  deleted?: boolean
+  parent?: unknown
+  parentSub?: unknown
+}
+
+export interface TombstonedIds {
+  nodes: Set<string>
+  groups: Set<string>
+  domains: Set<string>
+  connections: Set<string>
+}
+
+export function collectTombstonedIds(
+  doc: Y.Doc,
+  collections: {
+    nodes: Y.Map<unknown>
+    groups: Y.Map<unknown>
+    domains: Y.Map<unknown>
+    connections: Y.Map<unknown>
+  },
+): TombstonedIds {
+  const result: TombstonedIds = {
+    nodes: new Set<string>(),
+    groups: new Set<string>(),
+    domains: new Set<string>(),
+    connections: new Set<string>(),
+  }
+  const byParent = new Map<Y.Map<unknown>, Set<string>>([
+    [collections.nodes, result.nodes],
+    [collections.groups, result.groups],
+    [collections.domains, result.domains],
+    [collections.connections, result.connections],
+  ])
+
+  const store = (doc as unknown as { store?: YjsStoreLike }).store
+  if (!store?.clients) return result
+
+  for (const client of store.clients.values()) {
+    if (!client || typeof client !== 'object') continue
+    for (const key in client) {
+      const struct = client[key] as YjsStructLike | undefined
+      if (!struct || typeof struct !== 'object') continue
+      if (struct.deleted !== true) continue
+      const bucket = byParent.get(struct.parent as Y.Map<unknown>)
+      if (!bucket) continue
+      const id = struct.parentSub
+      if (typeof id !== 'string' || id.length === 0) continue
+      bucket.add(id)
+    }
+  }
+
+  // 排除仍存活的 id（删除后以同 id 重建 / undo 撤销删除）。
+  for (const [parent, bucket] of byParent) {
+    for (const id of Array.from(bucket)) {
+      if (parent.has(id)) bucket.delete(id)
+    }
+  }
+  return result
+}
+
+/**
  * Write a plain object entity into a (possibly pre-existing) Y.Map node.
  * - Scalar values overwrite in place.
  * - Array values (group.nodeIds, connection.bendPoints) are stored as Y.Array

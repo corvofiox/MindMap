@@ -729,6 +729,53 @@ describe('R1: collaboration evidence tracking', () => {
     expect(captured.pendingUpdates.length).toBe(before)
     provider.disconnect()
   })
+
+  it('hasPendingOfflineEdits reports buffered local edits while disconnected (H1)', async () => {
+    const provider = createProvider()
+    provider.connect()
+    await tick()
+
+    // Nothing edited yet → no pending edits, so the unload REST fallback is allowed.
+    expect(provider.hasPendingOfflineEdits()).toBe(false)
+
+    // Drop the socket, then edit locally: the update is buffered, not sent.
+    MockWebSocket.last().simulateClose()
+    const nodes = provider.doc.getMap<Y.Map<unknown>>('nodes')
+    const node = new Y.Map<unknown>()
+    node.set('id', 'n1')
+    nodes.set('n1', node)
+
+    expect(provider.hasPendingOfflineEdits()).toBe(true)
+
+    // Still disconnected: an explicit flush cannot send, so the buffer (and the
+    // flag) must survive — this is exactly the case the unload fallback guards.
+    provider.flushPendingUpdates()
+    expect(provider.hasPendingOfflineEdits()).toBe(true)
+    provider.disconnect()
+  })
+
+  it('hasPendingOfflineEdits is false once a connected flush drains the buffer', async () => {
+    const provider = createProvider()
+    provider.connect()
+    await tick()
+
+    const nodes = provider.doc.getMap<Y.Map<unknown>>('nodes')
+    const node = new Y.Map<unknown>()
+    node.set('id', 'n1')
+    nodes.set('n1', node)
+
+    // Coalescing window (SYNC_COALESCE_MS) may hold the update; an explicit
+    // flush sends it immediately.
+    provider.flushPendingUpdates()
+    expect(provider.hasPendingOfflineEdits()).toBe(false)
+
+    // Sanity: the update really went out over the wire.
+    const sent = MockWebSocket.last().sent.filter(
+      (d): d is Uint8Array => d instanceof Uint8Array,
+    )
+    expect(sent.length).toBeGreaterThan(0)
+    provider.disconnect()
+  })
 })
 
 describe('R1: local deletion declarations', () => {

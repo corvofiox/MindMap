@@ -40,11 +40,18 @@ import {
   removeCanvasState,
   mergeJsonSnapshotIntoCanvas,
   getCanvasJsonSnapshot,
+  getCanvasDoc,
   applyUpdateToCanvas,
   isCanvasStatePersisted,
   snapshotMissingDocEntities,
 } from '../websocket/canvas-state.js'
-import { encodeDocToBase64, jsonSnapshotToDoc } from '../websocket/yjs-schema.js'
+import {
+  encodeDocToBase64,
+  jsonSnapshotToDoc,
+  ensureRoot,
+  writeEntityToYMap,
+  collectTombstonedIds,
+} from '../websocket/yjs-schema.js'
 import { db } from '../database/connection.js'
 
 const CANVAS_ID = 1
@@ -111,10 +118,141 @@ describe('Yjs canvas-state', () => {
     })
   })
 
+  /**
+   * H2 幽灵复活防护。
+   *
+   * 场景：A 与 B 协作。B 删除实体 E（doc 中产生删除墓碑）。A 的客户端因断线
+   * 仍持有一份包含 E 的旧全量快照，重连后 POST /data 把它发上来。若服务端
+   * 直接写回 E，E 会在所有人面前复活，而删除它的 B 本地看不到它 —— 双端分叉。
+   *
+   * 服务端因此在 doc 中读取删除墓碑（collectTombstonedIds），在 upsertOnly
+   * （快照不可信）分支拒绝复活。反向约束同样重要：单用户"删除 → 撤销"必须
+   * 仍能落库，故墓碑**不**强制 upsertOnly、且不拦截仍存活的 id。
+   */
+  describe('H2 tombstone protection against ghost revival', () => {
+    it('collectTombstonedIds reports deleted ids and excludes live ones', async () => {
+      await loadCanvasStateFromDb(CANVAS_ID)
+      await mergeJsonSnapshotIntoCanvas(CANVAS_ID, {
+        nodes: [
+          { id: 'gone', x: 1, y: 2 } as any,
+          { id: 'alive', x: 3, y: 4 } as any,
+        ],
+      })
+
+      const doc = getCanvasDoc(CANVAS_ID)!
+      expect(collectTombstonedIds(doc, ensureRoot(doc)).nodes.size).toBe(0)
+
+      // 全量替换（upsertOnly=false）且快照只保留 alive → gone 被真删除。
+      await mergeJsonSnapshotIntoCanvas(CANVAS_ID, {
+        nodes: [{ id: 'alive', x: 3, y: 4 } as any],
+      })
+
+      const tombstones = collectTombstonedIds(doc, ensureRoot(doc))
+      expect(tombstones.nodes.has('gone')).toBe(true)
+      expect(tombstones.nodes.has('alive')).toBe(false)
+    })
+
+    it('upsertOnly merge refuses to resurrect a tombstoned entity (H2)', async () => {
+      await loadCanvasStateFromDb(CANVAS_ID)
+      await mergeJsonSnapshotIntoCanvas(CANVAS_ID, {
+        nodes: [{ id: 'gone', x: 1, y: 2 } as any],
+      })
+      // B 删除 gone → 墓碑产生。
+      await mergeJsonSnapshotIntoCanvas(CANVAS_ID, { nodes: [] })
+      expect(getCanvasJsonSnapshot(CANVAS_ID).nodes).toHaveLength(0)
+
+      // A 的过期快照把它带回来；upsertOnly=true 表示"快照不可信"。
+      await mergeJsonSnapshotIntoCanvas(
+        CANVAS_ID,
+        { nodes: [{ id: 'gone', x: 1, y: 2 } as any] },
+        true,
+      )
+
+      const snapshot = getCanvasJsonSnapshot(CANVAS_ID)
+      expect(
+        snapshot.nodes.some((n) => (n as any).id === 'gone'),
+        'a tombstoned entity must not be revived by a stale snapshot',
+      ).toBe(false)
+    })
+
+    it('a live (re-created) id is not treated as tombstoned', async () => {
+      await loadCanvasStateFromDb(CANVAS_ID)
+      await mergeJsonSnapshotIntoCanvas(CANVAS_ID, {
+        nodes: [{ id: 'phoenix', x: 1, y: 2 } as any],
+      })
+      await mergeJsonSnapshotIntoCanvas(CANVAS_ID, { nodes: [] })
+
+      const doc = getCanvasDoc(CANVAS_ID)!
+      expect(collectTombstonedIds(doc, ensureRoot(doc)).nodes.has('phoenix')).toBe(true)
+
+      // 同 id 重建：旧 Item 仍 deleted，但 target.has(id) 为 true → 不算墓碑。
+      await mergeJsonSnapshotIntoCanvas(CANVAS_ID, {
+        nodes: [{ id: 'phoenix', x: 7, y: 8 } as any],
+      })
+      expect(collectTombstonedIds(doc, ensureRoot(doc)).nodes.has('phoenix')).toBe(false)
+      const node = getCanvasJsonSnapshot(CANVAS_ID).nodes.find(
+        (n) => (n as any).id === 'phoenix',
+      ) as any
+      expect(node).toBeDefined()
+      expect(node.x).toBe(7)
+    })
+
+    it('single-user full replace may re-add a deleted id (undo must still land)', async () => {
+      await loadCanvasStateFromDb(CANVAS_ID)
+      await mergeJsonSnapshotIntoCanvas(CANVAS_ID, {
+        nodes: [{ id: 'undone', x: 1, y: 2 } as any],
+      })
+      // 删除（产生墓碑）
+      await mergeJsonSnapshotIntoCanvas(CANVAS_ID, { nodes: [] })
+      expect(getCanvasJsonSnapshot(CANVAS_ID).nodes).toHaveLength(0)
+
+      // 单用户 Ctrl+Z：upsertOnly=false 的权威全量快照必须能把它写回。
+      await mergeJsonSnapshotIntoCanvas(CANVAS_ID, {
+        nodes: [{ id: 'undone', x: 1, y: 2 } as any],
+      })
+      const node = getCanvasJsonSnapshot(CANVAS_ID).nodes.find(
+        (n) => (n as any).id === 'undone',
+      ) as any
+      expect(node, 'undo must not be silently blocked by a tombstone').toBeDefined()
+      expect(node.x).toBe(1)
+    })
+
+    it('tombstones are isolated per collection (same id in another collection is unaffected)', async () => {
+      await loadCanvasStateFromDb(CANVAS_ID)
+      await mergeJsonSnapshotIntoCanvas(CANVAS_ID, {
+        nodes: [{ id: 'dup', x: 1, y: 2 } as any],
+        connections: [{ id: 'dup', fromNodeId: 'a', toNodeId: 'b' } as any],
+      })
+      // 只删除 nodes 集合中的 dup（connections 的 dup 必须提供才能保留）
+      await mergeJsonSnapshotIntoCanvas(CANVAS_ID, {
+        nodes: [],
+        connections: [{ id: 'dup', fromNodeId: 'a', toNodeId: 'b' } as any],
+      })
+
+      const doc = getCanvasDoc(CANVAS_ID)!
+      const tombstones = collectTombstonedIds(doc, ensureRoot(doc))
+      expect(tombstones.nodes.has('dup')).toBe(true)
+      expect(tombstones.connections.has('dup')).toBe(false)
+
+      // upsertOnly 合并：nodes.dup 被拒，connections.dup 正常更新。
+      await mergeJsonSnapshotIntoCanvas(
+        CANVAS_ID,
+        {
+          nodes: [{ id: 'dup', x: 9, y: 9 } as any],
+          connections: [{ id: 'dup', fromNodeId: 'a', toNodeId: 'b', label: 'updated' } as any],
+        },
+        true,
+      )
+      const snapshot = getCanvasJsonSnapshot(CANVAS_ID)
+      expect(snapshot.nodes.some((n) => (n as any).id === 'dup')).toBe(false)
+      const conn = snapshot.connections.find((c) => (c as any).id === 'dup') as any
+      expect(conn.label).toBe('updated')
+    })
+  })
+
   describe('applyUpdateToCanvas', () => {
     it('applies a raw Yjs update delta to the doc', async () => {
       await loadCanvasStateFromDb(CANVAS_ID)
-      const { getCanvasDoc } = await import('../websocket/canvas-state.js')
       const doc = getCanvasDoc(CANVAS_ID)!
 
       // Build the delta the way a real client does: clone the current doc state,
@@ -125,7 +263,6 @@ describe('Yjs canvas-state', () => {
       const clone = new Y.Doc()
       Y.applyUpdate(clone, Y.encodeStateAsUpdate(doc))
 
-      const { ensureRoot, writeEntityToYMap } = await import('../websocket/yjs-schema.js')
       const collections = ensureRoot(clone)
       clone.transact(() => {
         const ymap = new Y.Map()

@@ -158,6 +158,40 @@ TypeScript ESM + `moduleResolution: "bundler"` 强制执行此约定。
   对端文档与服务端分叉而客户端仍以为已同步，比有界的放行窗口更糟。
 注意 `updateUserRole` 会同时刷新 `roleCheckedAt`（REST 刚写库，快照即新鲜）。
 
+### REST 全量快照合并：三条防线与两个已知限制（2026-10-15 协作审查）
+单用户 REST 客户端仍会发**完整 JSON 快照**（`POST /api/canvases/:id/data`、
+`PUT /api/canvases/:id` 的 `yjsData`）。它和 CRDT 是两套语义，合并逻辑在
+`backend/src/websocket/canvas-state.ts` 的 `mergeJsonSnapshotIntoCanvas`。三道防线：
+
+1. **upsertOnly（保守合并）**：快照"缺失 doc 中存在的实体"即视为过期快照
+   （`snapshotMissingDocEntities`），或房间仍有活跃用户 / 15s 内刚拆除
+   （`shouldUpsertOnlyForSnapshot`）→ 只增改、不删。删除只认客户端显式声明的
+   `deletedIds`（`MAX_DELETED_IDS_PER_COLLECTION = 10_000`，超限即丢弃该集合声明
+   转为保守）。
+2. **H2 删除墓碑**：doc 里被删除的实体 id 由 `yjs-schema.collectTombstonedIds`
+   从 Yjs struct 历史中读出（`deleted===true` 且 `parentSub` 命中集合，排除仍
+   存活的 id）。upsertOnly 分支拒绝把墓碑 id 写回——否则 A 的过期快照会让 B
+   刚删的实体在 A 眼前复活、而 B 看不到，双端分叉。
+   **墓碑不反向强制 upsertOnly**：单用户"删除 → Ctrl+Z"重发同 id 是合法写入，
+   无条件拦截会让撤销静默不落库。
+3. **写路径互斥**：`withPostSaveMutex` 串行化同一画布的 REST 合并；但它**不**
+   串行 WS 应用，故第 1 条的判定必须保守（见 `canvas.controller.ts` 注释）。
+
+**已知限制（未根治，改动相关代码前先读）：**
+- **H3 字段级 LWW**：同一实体的**字段**冲突仍按"后写覆盖"处理。REST 快照会整
+  字段覆盖协作方刚改的字段。实体级增删已由防线 1/2 保护，字段级没有——无删除
+  声明信号时服务端无法区分"本地权威修改"与"过期字段值"。
+- **残余复活窗口**：房间拆除超过 15s 宽限期后，单用户过期快照仍可复活已删 id
+  （与 H3 同源）。要真正根治需要 doc 内持久化墓碑集合 + 快照携带版本向量。
+
+### 断线关页：本地缓冲编辑必须有 REST 兜底（H1，2026-10-15 修复）
+`hasCollaborationEvidence()` 一旦置位本会话不再清除，但**它不保证 WS 此刻在线**。
+`CanvasPage.tsx` 的 `sendKeepaliveSnapshot` 因此不能只凭该标志跳过 REST：
+先 `provider.flushPendingUpdates()`，再用 `provider.hasPendingOfflineEdits()`
+（= `pendingUpdates.length > 0`，`frontend/src/services/yjsProvider.ts`）判定，
+**仍有待发编辑时即使有协作证据也要发 keepalive REST**。
+残余取舍：待发编辑体积超过 48KB（`KEEPALIVE_MAX_BODY_BYTES`）时仍只靠 localStorage。
+
 ### sanitizeHTML：unwrap 必须逐子消毒（mXSS）+ CSS 值检查用空白剥离副本
 - 白名单外标签解包时，**被提升的每个子节点必须立即重新 `sanitizeNode`**：外层循环
   迭代的是提升前的 childNodes 快照，否则提升的子树完全逃过净化——

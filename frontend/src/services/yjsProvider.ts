@@ -895,6 +895,21 @@ export class MindMapYjsProvider {
   }
 
   /**
+   * 是否存在"尚未送达服务端"的本地编辑（离线缓冲非空）。
+   *
+   * 用途：页面卸载时的 REST 兜底判定。`hasCollaborationEvidence()` 一旦置位
+   * 在本次会话内永不清除，若仅凭它跳过 REST 快照，则"协作中断线 + 关页"
+   * 场景下离线编辑只剩 localStorage（重载时 DB 优先）→ 真实丢失（H1）。
+   * 因此调用方应改为：仅在**确有待发编辑**时才放行 REST 兜底。
+   *
+   * 注意必须在 `flushPendingUpdates()` 之后调用——若 socket 仍 open，
+   * flush 会把缓冲发空，此方法返回 false，从而避免多余的 REST 请求。
+   */
+  hasPendingOfflineEdits(): boolean {
+    return this.pendingUpdates.length > 0
+  }
+
+  /**
    * Replay all buffered pending updates that accumulated while disconnected.
    * Called after the STEP1/STEP2 sync handshake completes on reconnect, and
    * by the pagehide/beforeunload path (R1) to push offline edits out on the

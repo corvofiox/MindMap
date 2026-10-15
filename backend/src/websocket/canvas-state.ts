@@ -29,6 +29,7 @@ import {
   encodeDocToBase64,
   docToJsonSnapshot,
   writeEntityToYMap,
+  collectTombstonedIds,
 } from './yjs-schema.js'
 
 export interface YjsCanvasState {
@@ -547,10 +548,28 @@ export async function mergeJsonSnapshotIntoCanvas(
   const state = await loadCanvasStateFromDb(canvasId)
   try {
     const collections = ensureRoot(state.doc)
+
+    // H2 幽灵复活防护：读取 doc 中的删除墓碑（见 yjs-schema.collectTombstonedIds）。
+    // 若快照仍携带某个已被删除的实体 id，把它写回 doc 会让该实体在所有人
+    // 面前复活——而删除它的协作者本地看不到它，双端分叉。
+    //
+    // 只在 upsertOnly（保守分支）下拦截，且**不**让墓碑反过来强制 upsertOnly：
+    // 单用户 REST 客户端"删除实体 → 撤销（Ctrl+Z）"会重新发出携带同一 id 的
+    // 完整快照，那是合法写入；若无条件拦截，撤销会静默不落库（本地看着恢复、
+    // 重载后消失）——比幽灵复活更糟。upsertOnly 为真时本函数已经在"快照不可
+    // 信"的语义下工作（活跃房间 / 15s 拆除宽限期 / 快照缺失 doc 实体），此时
+    // 拒绝复活是对称保护，且这些窗口内不存在合法的单用户权威写入。
+    //
+    // 残余窗口（已知限制，见 AGENTS.md）：房间拆除超过 15s 宽限期后，单用户
+    // 过期快照仍可复活已被删除的 id——与 H3 的"REST 全量 LWW vs CRDT"同源，
+    // 无声明删除信号时服务端无法区分"撤销"与"过期快照"。
+    const tombstones = collectTombstonedIds(state.doc, collections)
+
     const syncCollection = (
       target: Y.Map<Y.Map<unknown>>,
       items: unknown[] | undefined,
       declaredDeletedIds: string[] | undefined,
+      tombstoned: Set<string>,
     ) => {
       if (!Array.isArray(items)) return
       // Build the set of ids present in the incoming snapshot.
@@ -560,6 +579,10 @@ export async function mergeJsonSnapshotIntoCanvas(
         const record = item as Record<string, unknown>
         const id = record.id
         if (typeof id !== 'string') continue
+        if (upsertOnly && tombstoned.has(id)) {
+          // 已被删除且尚未重建：保守分支下拒绝复活（H2）。
+          continue
+        }
         incomingIds.add(id)
         const existing = target.get(id)
         if (existing) {
@@ -591,10 +614,15 @@ export async function mergeJsonSnapshotIntoCanvas(
       }
     }
     state.doc.transact(() => {
-      syncCollection(collections.nodes, snapshot.nodes, deletedIds?.nodes)
-      syncCollection(collections.groups, snapshot.groups, deletedIds?.groups)
-      syncCollection(collections.domains, snapshot.domains, deletedIds?.domains)
-      syncCollection(collections.connections, snapshot.connections, deletedIds?.connections)
+      syncCollection(collections.nodes, snapshot.nodes, deletedIds?.nodes, tombstones.nodes)
+      syncCollection(collections.groups, snapshot.groups, deletedIds?.groups, tombstones.groups)
+      syncCollection(collections.domains, snapshot.domains, deletedIds?.domains, tombstones.domains)
+      syncCollection(
+        collections.connections,
+        snapshot.connections,
+        deletedIds?.connections,
+        tombstones.connections,
+      )
     })
     return true
   } catch (err) {
