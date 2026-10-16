@@ -755,6 +755,18 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
         return fail(`连接不存在: ${connectionId}，可用 getAllConnections 获取有效连接 ID`)
       }
 
+      // M3-fix: 校验新的端点节点存在——否则产生悬空连线：前端渲染
+      // `if (!fromNode || !toNode) return null` 静默跳过，用户看不见但实体
+      // 仍在 doc 中、会被导出与 getAllConnections 返回。createConnection
+      // 有完整校验，这里对"重定向端点"路径补齐同款防线。
+      const allNodes = nodesById(res.snapshot)
+      if (rest.fromNodeId !== undefined && !allNodes.has(String(rest.fromNodeId))) {
+        return fail(`源节点不存在: ${rest.fromNodeId}，可用 getAllNodes 获取有效节点 ID`)
+      }
+      if (rest.toNodeId !== undefined && !allNodes.has(String(rest.toNodeId))) {
+        return fail(`目标节点不存在: ${rest.toNodeId}，可用 getAllNodes 获取有效节点 ID`)
+      }
+
       const updates: Record<string, unknown> = {}
       if (rest.fromNodeId !== undefined) updates.fromNodeId = String(rest.fromNodeId)
       if (rest.toNodeId !== undefined) updates.toNodeId = String(rest.toNodeId)
@@ -1265,6 +1277,9 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
 
       // Step 2: connections, resolving from/to by id or title.
       const connectionsOut: Record<string, unknown>[] = []
+      // L2-fix: 无法解析端点引用的连线不再静默丢弃——记录条数并在返回值中
+      // 报告，调用方（agent）能发现图的边缺失而不是以为全部创建成功。
+      let skippedConnections = 0
       const usedConnectionIds = new Set<string>()
       if (Array.isArray(graph.connections)) {
         const defaultConn = (graph.defaultConnectionStyle ?? {}) as Record<string, unknown>
@@ -1274,7 +1289,10 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
           const fromNodeId =
             nodeIdMap.get(fromRef) ?? nodesOut.find((n) => n.title === fromRef)?.id
           const toNodeId = nodeIdMap.get(toRef) ?? nodesOut.find((n) => n.title === toRef)?.id
-          if (typeof fromNodeId !== 'string' || typeof toNodeId !== 'string') continue
+          if (typeof fromNodeId !== 'string' || typeof toNodeId !== 'string') {
+            skippedConnections++
+            continue
+          }
 
           const fromNode = nodesOut.find((n) => n.id === fromNodeId)
           const toNode = nodesOut.find((n) => n.id === toNodeId)
@@ -1309,7 +1327,9 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
             toPort,
             type: connData.type ?? defaultConn.type ?? 'curve',
             style: connData.style ?? defaultConn.style ?? 'solid',
-            color: connData.color ?? defaultConn.color ?? '#666666',
+            // L2-fix: 默认色与 createConnection 统一为 CONNECTION 蓝，避免
+            // 同一画布上 agent 建的线与用户手画的线颜色不一致。
+            color: connData.color ?? defaultConn.color ?? '#3b82f6',
             width: toFiniteNumber(connData.width ?? defaultConn.width, 2),
             arrowType: connData.arrowType ?? defaultConn.arrowType ?? 'end',
             direction: connData.direction ?? defaultConn.direction ?? 'directed',
@@ -1423,6 +1443,9 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
         groupsCreated: groupsOut.length,
         domainsCreated: domainsOut.length,
         nodeIds: nodesOut.map((n) => n.id),
+        // L2-fix: 端点引用无法解析而被跳过的连线数——0 缺省，>0 时调用方
+        // 应检查 from/to 拼写（id 或 title 均可，但必须能在本图内解析）。
+        connectionsSkipped: skippedConnections,
       })
     },
   )

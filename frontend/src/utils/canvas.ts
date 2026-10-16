@@ -633,4 +633,52 @@ export function calculateLabelAntiCollisionOffset(
   }
 }
 
+/**
+ * 按两节点相对方位计算连线的最优端口对（"优化连线"的唯一实现）。
+ *
+ * 单处定义的理由：该逻辑此前在 CanvasToolbar 按钮、CanvasPage 的 O 快捷键
+ * 两处各有一份逐字拷贝且已漂移（提示文案不一致）。收敛于此，调用方只管装配。
+ *
+ * 设计取舍（2026-10-16）：
+ * - from 端口用 from 节点视角的四象限判定（指向目标）；
+ * - to 端口恒取 from 的反向（互补对）。对角方位（如目标在右上 315°）时
+ *   "对端独立取象限"会产生 [top, left] 这类非互补组合，straight 连线渲染
+ *   成 S 形；互补对保证渲染恒为直线，最坏偏差 45°（四象限判定的固有上界）。
+ *   后端 MCP createConnection 采用的是"对端独立取象限"（getPortByAngle
+ *   (angle + PI)）——那是创建时的初始猜测，二者在对角有差但各自有测试锚定；
+ *   优化动作要求稳定直线优先。
+ *
+ * 纯几何函数：不读写 store，可单测钉住。
+ */
+export function computeOptimalPorts(
+  fromNode: { x: number; y: number; width: number; height: number },
+  toNode: { x: number; y: number; width: number; height: number },
+): { fromPort: PortDirection; toPort: PortDirection } {
+  const fromCenterX = fromNode.x + fromNode.width / 2
+  const fromCenterY = fromNode.y + fromNode.height / 2
+  const toCenterX = toNode.x + toNode.width / 2
+  const toCenterY = toNode.y + toNode.height / 2
+
+  const angle = Math.atan2(toCenterY - fromCenterY, toCenterX - fromCenterX)
+  const fromPort = angleToPort(angle)
+  const toPort = OPPOSITE_PORT[fromPort]
+  return { fromPort, toPort }
+}
+
+const OPPOSITE_PORT: Record<PortDirection, PortDirection> = {
+  top: 'bottom',
+  bottom: 'top',
+  left: 'right',
+  right: 'left',
+}
+
+/** 角度 → 端口：0 右、90 下、180 左、270 上（屏幕坐标系，y 向下）。 */
+function angleToPort(angle: number): PortDirection {
+  const normalized = ((angle % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)
+  if (normalized < Math.PI / 4 || normalized >= (7 * Math.PI) / 4) return 'right'
+  if (normalized < (3 * Math.PI) / 4) return 'bottom'
+  if (normalized < (5 * Math.PI) / 4) return 'left'
+  return 'top'
+}
+
 

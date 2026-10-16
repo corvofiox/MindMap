@@ -2102,6 +2102,20 @@ export function CanvasPage() {
         return
       }
 
+      // H3-fix: viewer 只读契约。工具栏已禁用编辑工具（isDisabled），但全局
+      // 快捷键绕过了它——viewer 按 Delete/L/O/Ctrl+D 会触发"幽灵变更"：本地
+      // store 变了、provider C5 拦截广播永不上行，重载即回退；更糟的是幽灵
+      // 删除会 recordLocalDeletion，此后该实体对 viewer 永久"失明"（C18 守卫
+      // 跳过其远端更新）。这里在 mutation 类快捷键前统一拦截；缩放/面板/
+      // 视图类快捷键不受影响（走后面的分支）。
+      if (isViewer && (
+        e.key === 'Delete' || e.key === 'Backspace' ||
+        ['l', 'L', 'n', 'N', 'i', 'I', 'r', 'R', 'g', 'G', 'd', 'D', 'o', 'O', 'v', 'V'].includes(e.key) ||
+        ((e.ctrlKey || e.metaKey) && ['z', 'Z', 'y', 'Y', 'd', 'D', 's', 'S'].includes(e.key))
+      )) {
+        return
+      }
+
       // Ctrl+S save shortcut
       if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
         e.preventDefault()
@@ -2287,68 +2301,32 @@ export function CanvasPage() {
           toggleRelationshipHighlightMode()
           return
         } else if (e.key === 'o' || e.key === 'O') {
-          // 优化连线 - 调整所有连线到最近端口
+          // 优化连线 - 调整所有连线到最近端口。
+          // 2026-10-16 重构：算法与命令构建收敛到 store 的 organizeConnections
+          // （此前与工具栏按钮逐字重复 ~65 行且已漂移），整批单条 undo 命令。
           e.preventDefault()
-          const { connections: currentConnections, nodes: currentNodes, updateConnection } = useCanvasStore.getState()
-          let organizedCount = 0
-
-          currentConnections.forEach((conn) => {
-            const fromNode = currentNodes.get(conn.fromNodeId)
-            const toNode = currentNodes.get(conn.toNodeId)
-            if (!fromNode || !toNode) return
-
-            // 计算两个节点的中心点
-            const fromCenterX = fromNode.x + fromNode.width / 2
-            const fromCenterY = fromNode.y + fromNode.height / 2
-            const toCenterX = toNode.x + toNode.width / 2
-            const toCenterY = toNode.y + toNode.height / 2
-
-            // 计算角度来确定最佳端口方向
-            const dx = toCenterX - fromCenterX
-            const dy = toCenterY - fromCenterY
-            const angle = Math.atan2(dy, dx) * (180 / Math.PI)
-
-            // 根据角度确定最佳端口方向
-            let bestFromPort: 'top' | 'right' | 'bottom' | 'left'
-            let bestToPort: 'top' | 'right' | 'bottom' | 'left'
-
-            if (angle >= -45 && angle < 45) {
-              bestFromPort = 'right'
-              bestToPort = 'left'
-            } else if (angle >= 45 && angle < 135) {
-              bestFromPort = 'bottom'
-              bestToPort = 'top'
-            } else if (angle >= 135 || angle < -135) {
-              bestFromPort = 'left'
-              bestToPort = 'right'
-            } else {
-              bestFromPort = 'top'
-              bestToPort = 'bottom'
-            }
-
-            // 只有当端口发生变化时才更新
-            if (conn.fromPort !== bestFromPort || conn.toPort !== bestToPort) {
-              updateConnection(conn.id, {
-                fromPort: bestFromPort,
-                toPort: bestToPort,
-              })
-              organizedCount++
-            }
-          })
+          const { organizeConnections } = useCanvasStore.getState()
+          const { organized, skippedBendPoints } = organizeConnections()
 
           // 显示提示
-          if (organizedCount > 0) {
+          if (organized > 0) {
             addToast({
               type: 'success',
               title: '优化完成',
-              message: `已优化 ${organizedCount} 条连线的端口位置`,
+              message:
+                skippedBendPoints > 0
+                  ? `已优化 ${organized} 条连线的端口位置（${skippedBendPoints} 条含自定义弯折点，保持原样）`
+                  : `已优化 ${organized} 条连线的端口位置`,
               duration: 3000,
             })
           } else {
             addToast({
               type: 'info',
               title: '无需优化',
-              message: '所有连线的端口位置已经是最优',
+              message:
+                skippedBendPoints > 0
+                  ? `所有可调整的连线已是最优（${skippedBendPoints} 条含自定义弯折点，保持原样）`
+                  : '所有连线的端口位置已经是最优',
               duration: 2000,
             })
           }
@@ -2368,6 +2346,10 @@ export function CanvasPage() {
           setIsCreatingConnection(false)
           setConnectionStartNodeId(null)
           setStartPortPreview(null)
+          // L3-fix: 连线创建中断时一并清理吸附与预览终点，避免残留的
+          // snappedPort/connectionEndPosition 在下一次进入连线工具时闪现旧圆圈。
+          setSnappedPort(null)
+          setConnectionEndPosition({ x: 0, y: 0 })
           return
         }
       }
@@ -2448,7 +2430,8 @@ export function CanvasPage() {
     }
     // E12: deps 全部为稳定引用——易变值(zoom/currentTool/nodes/groups/selectedIds)
     // 通过 ref 读取,避免每次编辑/选择变化都解绑并重绑全局 keydown 监听。
-  }, [setCurrentTool, setZoom, setPan, toggleGrid, toggleQuickEditMode, toggleRelationshipHighlightMode, toggleDragMode, toggleMinimap, setEditingId, addGroup, toggleSidebar, toggleNodePool, setSettingsOpen, setCommandPaletteOpen, handleManualSave, setIsCreatingConnection, setConnectionStartNodeId, setStartPortPreview, setSelectedIds, canUndo, canRedo, undo, redo, addNode, addToast])
+    // isViewer 是 React state，需要进依赖（viewer→editor 提权后快捷键应生效）。
+  }, [setCurrentTool, setZoom, setPan, toggleGrid, toggleQuickEditMode, toggleRelationshipHighlightMode, toggleDragMode, toggleMinimap, setEditingId, addGroup, toggleSidebar, toggleNodePool, setSettingsOpen, setCommandPaletteOpen, handleManualSave, setIsCreatingConnection, setConnectionStartNodeId, setStartPortPreview, setSelectedIds, canUndo, canRedo, undo, redo, addNode, addToast, isViewer])
 
   // CommandPalette "Save" 命令：复用 Ctrl+S 的完整保存逻辑（协作模式守卫/
   // 本地删除声明/缩略图/错误提示），避免在面板内复制一份漂移的保存实现
@@ -2537,6 +2520,13 @@ export function CanvasPage() {
         return
       }
 
+      // H3-fix: viewer 不能发起连线创建——NodeItem 的 click 分发只判
+      // currentTool，viewer 通过快捷键残留的 connection 工具状态仍会走到这。
+      // 幽灵连线只在本地 store 存在（C5 拦截广播），重载即消失。
+      if (isViewer) {
+        return
+      }
+
       const node = nodes.get(nodeId)
       if (node) {
         setIsCreatingConnection(true)
@@ -2561,7 +2551,7 @@ export function CanvasPage() {
     return () => {
       window.removeEventListener('connectionStart', handleConnectionStart)
     }
-  }, [nodes, panX, panY, zoom])
+  }, [nodes, panX, panY, zoom, isViewer])
 
   // Handle node editing field change from NodeItem
   useEffect(() => {
@@ -3413,6 +3403,25 @@ export function CanvasPage() {
     }
 
     if (isCreatingConnection && connectionStartNodeId && connectionStartPort) {
+      // M4-fix: 重画已有连线只重定向端点，不再重置 style/type/arrowType/direction
+      // ——用户可能已对这条连线做过虚线/曲线等定制，重复绘制应是"改指向"而非
+      // "恢复默认"。H2-fix: 方向被反转（from/to 互换）时必须同时反转 bendPoints，
+      // 否则 ≥2 个弯折点的折线按颠倒的遍历顺序渲染成交叉折返（顺序即几何）。
+      const applyReconnect = (
+        targetId: string,
+        updates: { fromNodeId: string; fromPort: PortDirection; toNodeId: string; toPort: PortDirection },
+      ) => {
+        const existing = connections.get(targetId)
+        if (!existing) return
+        const reversed =
+          existing.fromNodeId === updates.toNodeId && existing.toNodeId === updates.fromNodeId &&
+          !(existing.fromNodeId === updates.fromNodeId && existing.toNodeId === updates.toNodeId)
+        updateConnection(targetId, {
+          ...updates,
+          bendPoints: reversed ? [...(existing.bendPoints || [])].reverse() : existing.bendPoints,
+        })
+      }
+
       if (snappedPort && snappedPort.nodeId !== connectionStartNodeId) {
         const existingConnection = Array.from(connections.values()).find(
           conn =>
@@ -3421,14 +3430,11 @@ export function CanvasPage() {
         )
 
         if (existingConnection) {
-          updateConnection(existingConnection.id, {
+          applyReconnect(existingConnection.id, {
             fromNodeId: connectionStartNodeId,
             fromPort: connectionStartPort,
             toNodeId: snappedPort.nodeId,
             toPort: snappedPort.port,
-            style: connectionStyle,
-            arrowType: connectionDirection === 'bidirectional' ? 'both' : connectionDirection === 'undirected' ? 'none' : 'end',
-            direction: connectionDirection,
           })
         } else {
           const newConnection: Connection = {
@@ -3472,14 +3478,11 @@ export function CanvasPage() {
             )
 
             if (existingConnection) {
-              updateConnection(existingConnection.id, {
+              applyReconnect(existingConnection.id, {
                 fromNodeId: connectionStartNodeId,
                 fromPort: connectionStartPort,
                 toNodeId: nodeId,
                 toPort: toPort,
-                style: connectionStyle,
-                arrowType: connectionDirection === 'bidirectional' ? 'both' : connectionDirection === 'undirected' ? 'none' : 'end',
-                direction: connectionDirection,
               })
             } else {
               const newConnection: Connection = {
@@ -3577,6 +3580,14 @@ export function CanvasPage() {
         // M9: 端点重连 = 更新已存在连接 + 删除被拖连接。此前各调一次
         // updateConnection/removeConnection 产生两条历史记录（撤销需按
         // 两次且顺序颠倒会出错），合并为单条命令。
+        // H2-fix: 幸存连线继承被拖连线的 bendPoints——它的端点对已被换成
+        // 被拖连线的几何，旧弯折点是按旧端点位置摆的，对新几何完全错位
+        // （渲染出交叉折返）。方向若被反转还需反转弯折点顺序。
+        const draggedEndpointSwapped =
+          connection.fromNodeId !== newFromNodeId && connection.toNodeId !== newToNodeId
+        const inheritedBendPoints = draggedEndpointSwapped
+          ? [...(connection.bendPoints || [])].reverse()
+          : connection.bendPoints
         const existingConnectionSnapshot = { ...existingConnection }
         const draggingConnectionSnapshot = { ...connection }
         const { executeCommand } = useCanvasStore.getState()
@@ -3594,6 +3605,7 @@ export function CanvasPage() {
                 fromPort: newFromPort,
                 toNodeId: newToNodeId,
                 toPort: newToPort,
+                bendPoints: inheritedBendPoints,
               })
             }
             connections.delete(draggingConnectionId)
@@ -3694,7 +3706,7 @@ export function CanvasPage() {
         }
       }
     }
-  }, [isDragging, isDraggingGroup, isCreatingGroup, groupStartPos, groupEndPos, groupDragStart, groupInitialPositions, initialGroupNodeIds, groupDragInitialGroupPos, draggingGroupId, groupDragOffset, nodes, groups, updateGroup, addGroup, isCreatingConnection, connectionStartNodeId, connectionStartPort, isDraggingConnectionEndpoint, draggingConnectionId, draggingEndpoint, connections, panX, panY, zoom, containerRef, updateConnection, findBestPort, snappedPort, addConnection, removeConnection, isBoxSelecting, boxSelectionStart, boxSelectionEnd, addToSelection, isCreatingDomain, domainBoxStart, domainBoxEnd, domains, addDomain, isDraggingBendPoint, draggingBendPointId, isResizingGroup, resizingGroupId, resizeInitialGroup, resizeInitialNodePositions, setSelectedIds, setSelectedType, connectionType])
+  }, [isDragging, isDraggingGroup, isCreatingGroup, groupStartPos, groupEndPos, groupDragStart, groupInitialPositions, initialGroupNodeIds, groupDragInitialGroupPos, draggingGroupId, groupDragOffset, nodes, groups, updateGroup, addGroup, isCreatingConnection, connectionStartNodeId, connectionStartPort, isDraggingConnectionEndpoint, draggingConnectionId, draggingEndpoint, connections, panX, panY, zoom, containerRef, updateConnection, findBestPort, snappedPort, addConnection, removeConnection, isBoxSelecting, boxSelectionStart, boxSelectionEnd, addToSelection, isCreatingDomain, domainBoxStart, domainBoxEnd, domains, addDomain, isDraggingBendPoint, draggingBendPointId, isResizingGroup, resizingGroupId, resizeInitialGroup, resizeInitialNodePositions, setSelectedIds, setSelectedType, connectionType, connectionStyle, connectionDirection])
 
   // E13: window 级 mouseup 兜底——拖拽过程中指针移出容器甚至移出窗口时,
   // 释放鼠标仍能触发 handleMouseUp 结束拖拽。
@@ -4825,22 +4837,15 @@ export function CanvasPage() {
                       opacity={connectionOpacity}
                     />
                     {conn.label && (() => {
-                      const fromOffsetX = fromDraggingPos ? fromDraggingPos.x - fromNode.x : 0
-                      const fromOffsetY = fromDraggingPos ? fromDraggingPos.y - fromNode.y : 0
-                      const toOffsetX = toDraggingPos ? toDraggingPos.x - toNode.x : 0
-                      const toOffsetY = toDraggingPos ? toDraggingPos.y - toNode.y : 0
-
-                      const adjustedBendPoints = conn.bendPoints?.map((bp, index, arr) => {
-                        const ratio = (index + 1) / (arr.length + 1)
-                        return {
-                          x: bp.x + fromOffsetX * (1 - ratio) + toOffsetX * ratio,
-                          y: bp.y + fromOffsetY * (1 - ratio) + toOffsetY * ratio
-                        }
-                      }) || []
-
+                      // M1-fix: 标签定位直接用原始 bendPoints + 上方已算好的
+                      // fromX/fromY/toX/toY（已含拖拽位置与智能端口分布）。
+                      // 原实现按节点拖拽偏移对 bendPoints 做线性插值——但折线
+                      // 渲染（ConnectionLine）用的仍是原始 bendPoints，于是拖动
+                      // 节点时标签飘离线条；插值也无法复现真实弯折点应跟随的
+                      // 位移（弯折点属于连线而非端点的插值组合）。
                       const fromPortDir = getConnectionPort(conn, 'start')
                       const toPortDir = getConnectionPort(conn, 'end')
-                      const labelPos = getLabelPosition(conn.type, fromX, fromY, toX, toY, adjustedBendPoints, fromPortDir, toPortDir)
+                      const labelPos = getLabelPosition(conn.type, fromX, fromY, toX, toY, conn.bendPoints || [], fromPortDir, toPortDir)
                       return (
                         <text
                           x={labelPos.x}
@@ -5135,7 +5140,9 @@ export function CanvasPage() {
             })}
 
           {/* Render bend points for straight, step and curve connections */}
-          {Array.from(connections.values())
+          {/* H3-fix: viewer 不渲染弯折点手柄（与上方端点圆圈的 isViewer 守卫
+              对称）——手柄可拖动/可右键删除，viewer 触发的变更永不上行。 */}
+          {!isViewer && Array.from(connections.values())
             .filter(conn => (conn.type === 'straight' || conn.type === 'step' || conn.type === 'curve') && selectedIds.includes(conn.id) && conn.bendPoints && conn.bendPoints.length > 0)
             .map((conn) => {
               const fromNode = nodes.get(conn.fromNodeId)
@@ -5472,34 +5479,49 @@ export function CanvasPage() {
                       const { addConnectionBendPoint } = useCanvasStore.getState()
                       let newBendPointX, newBendPointY, insertIndex
 
+                      // L1-fix: 插入索引的端点坐标必须用智能端口分布后的实际
+                      // 附着点（与渲染一致），而非端口中心。同端口多条连线时
+                      // 中心点会让"最近段"判定偏一档，索引错 → 顺序错 → 对端
+                      // 画出折返交叉（顺序即几何）。
+                      const computeEndpoints = () => {
+                        const fromNode = nodes.get(connection.fromNodeId)
+                        const toNode = nodes.get(connection.toNodeId)
+                        if (!fromNode || !toNode) return null
+                        const fromPort = getConnectionPort(connection, 'start')
+                        const toPort = getConnectionPort(connection, 'end')
+                        const fromKey = `${connection.fromNodeId}-${fromPort}`
+                        const toKey = `${connection.toNodeId}-${toPort}`
+                        const fromPos = calculateSmartPortPosition(
+                          fromNode, fromPort, portDistribution.connectionInfoMap.get(fromKey) || [], connection.id,
+                        )
+                        const toPos = calculateSmartPortPosition(
+                          toNode, toPort, portDistribution.connectionInfoMap.get(toKey) || [], connection.id,
+                        )
+                        return { fromPos, toPos }
+                      }
+
                       // Use click position if available, otherwise calculate optimal position
                       if (connectionContextMenu.clickX !== undefined && connectionContextMenu.clickY !== undefined) {
                         newBendPointX = connectionContextMenu.clickX
                         newBendPointY = connectionContextMenu.clickY
 
                         // Calculate insert index based on existing bend points
-                        const fromNode = nodes.get(connection.fromNodeId)
-                        const toNode = nodes.get(connection.toNodeId)
-                        if (fromNode && toNode) {
-                          const fromPos = getPortPosition(fromNode, getConnectionPort(connection, 'start'))
-                          const toPos = getPortPosition(toNode, getConnectionPort(connection, 'end'))
+                        const endpoints = computeEndpoints()
+                        if (endpoints) {
                           insertIndex = findBendPointInsertIndex(
                             newBendPointX,
                             newBendPointY,
-                            fromPos.x,
-                            fromPos.y,
-                            toPos.x,
-                            toPos.y,
+                            endpoints.fromPos.x,
+                            endpoints.fromPos.y,
+                            endpoints.toPos.x,
+                            endpoints.toPos.y,
                             connection.bendPoints || []
                           )
                         }
                       } else {
-                        const fromNode = nodes.get(connection.fromNodeId)
-                        const toNode = nodes.get(connection.toNodeId)
-                        if (fromNode && toNode) {
-                          const fromPos = getPortPosition(fromNode, getConnectionPort(connection, 'start'))
-                          const toPos = getPortPosition(toNode, getConnectionPort(connection, 'end'))
-                          const optimalPos = calculateOptimalBendPoint(fromPos.x, fromPos.y, toPos.x, toPos.y)
+                        const endpoints = computeEndpoints()
+                        if (endpoints) {
+                          const optimalPos = calculateOptimalBendPoint(endpoints.fromPos.x, endpoints.fromPos.y, endpoints.toPos.x, endpoints.toPos.y)
                           newBendPointX = optimalPos.x
                           newBendPointY = optimalPos.y
 
@@ -5507,10 +5529,10 @@ export function CanvasPage() {
                           insertIndex = findBendPointInsertIndex(
                             newBendPointX,
                             newBendPointY,
-                            fromPos.x,
-                            fromPos.y,
-                            toPos.x,
-                            toPos.y,
+                            endpoints.fromPos.x,
+                            endpoints.fromPos.y,
+                            endpoints.toPos.x,
+                            endpoints.toPos.y,
                             connection.bendPoints || []
                           )
                         } else {
@@ -5518,7 +5540,11 @@ export function CanvasPage() {
                         }
                       }
 
-                      const newBendPointId = `${connection.id}-bend-${Date.now()}`
+                      // M2-fix: id 带随机成分——纯 Date.now() 在同一毫秒内连加
+                      // 两个弯折点时会产生相同 id，此后 updateConnectionBendPoint
+                      // (按 id map) 会同时移动两点、removeConnectionBendPoint
+                      // (filter) 会一次删掉两点。
+                      const newBendPointId = `${connection.id}-bend-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
                       addConnectionBendPoint(connectionContextMenu.connectionId, newBendPointId, newBendPointX, newBendPointY, insertIndex)
                     }
                     setConnectionContextMenu(null)

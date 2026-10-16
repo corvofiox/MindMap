@@ -4,6 +4,7 @@ import {
   findBendPointInsertIndex,
   pointToLineSegmentDistance,
 } from '@/utils/connectionBendPoints'
+import { computeOptimalPorts } from '@/utils/canvas'
 
 /**
  * 弯折点插入索引的几何语义。
@@ -78,6 +79,75 @@ describe('connectionBendPoints', () => {
       expect(
         findBendPointInsertIndex(400, 100, rtlFrom.x, rtlFrom.y, rtlTo.x, rtlTo.y, [bpLeftHalf]),
       ).toBe(0)
+    })
+  })
+
+  /**
+   * computeOptimalPorts（优化连线的唯一算法实现）。
+   *
+   * 关键约束：恒返回互补端口对（right↔left、top↔bottom）——straight 连线
+   * 渲染恒为直线；若对角方位让对端独立取象限，会产生 [top,left] 这类
+   * 非互补组合 → S 形。设计取舍见 computeOptimalPorts 注释。
+   */
+  describe('computeOptimalPorts', () => {
+    // 帮助函数：100x160 的测试节点，返回其参数所需形状。
+    const node = (x: number, y: number) => ({ x, y, width: 200, height: 160 })
+
+    it('正右方 → right→left', () => {
+      expect(computeOptimalPorts(node(100, 100), node(500, 100))).toEqual({
+        fromPort: 'right',
+        toPort: 'left',
+      })
+    })
+
+    it('正下方 → bottom→top', () => {
+      expect(computeOptimalPorts(node(100, 100), node(100, 500))).toEqual({
+        fromPort: 'bottom',
+        toPort: 'top',
+      })
+    })
+
+    it('正左方 → left→right', () => {
+      expect(computeOptimalPorts(node(500, 100), node(100, 100))).toEqual({
+        fromPort: 'left',
+        toPort: 'right',
+      })
+    })
+
+    it('正上方 → top→bottom', () => {
+      expect(computeOptimalPorts(node(100, 500), node(100, 100))).toEqual({
+        fromPort: 'top',
+        toPort: 'bottom',
+      })
+    })
+
+    it('斜向目标落在出发节点的对应象限（避开 45° 浮点边界）', () => {
+      // 目标在右上方偏上（约 -63°）：from 出发端口 top（向上缘出）。
+      const up = computeOptimalPorts(node(100, 500), node(300, 200))
+      expect(up.fromPort).toBe('top')
+      expect(up.toPort).toBe('bottom')
+      // 目标在右下方偏下（约 68°）：from 出发端口 bottom。
+      const down = computeOptimalPorts(node(100, 100), node(300, 1000))
+      expect(down.fromPort).toBe('bottom')
+      expect(down.toPort).toBe('top')
+    })
+
+    it('恒返回互补端口对（渲染恒为直线，扫一圈角度）', () => {
+      const opposite = {
+        top: 'bottom',
+        bottom: 'top',
+        left: 'right',
+        right: 'left',
+      } as const
+      for (let deg = 0; deg < 360; deg += 5) {
+        const rad = (deg * Math.PI) / 180
+        const cx = 1000
+        const cy = 1000
+        const from = node(cx, cy)
+        const to = node(cx + Math.cos(rad) * 800, cy + Math.sin(rad) * 800)
+        const { fromPort, toPort } = computeOptimalPorts(from, to)
+        expect(opposite[fromPort], `deg=${deg}`).toBe(toPort)
+      }
     })
   })
 })

@@ -344,4 +344,103 @@ describe('useCanvasStore', () => {
       expect(useCanvasStore.getState().history.commands.length).toBe(0)
     })
   })
+
+  describe('organizeConnections（优化连线，工具栏按钮 + O 快捷键共用）', () => {
+    function makeConn(id: string, from: string, to: string, overrides?: Partial<Connection>): Connection {
+      return {
+        id,
+        fromNodeId: from,
+        toNodeId: to,
+        fromPort: 'right',
+        toPort: 'left',
+        type: 'straight',
+        style: 'solid',
+        color: '#3b82f6',
+        width: 2,
+        arrowType: 'end',
+        direction: 'directed',
+        ...overrides,
+      } as Connection
+    }
+
+    it('按相对方位更新端口且整批只产生一条历史命令', () => {
+      const store = useCanvasStore.getState()
+      // A(100,100) B 在 A 正右方 (500,100)：right→left 已最优。
+      store.addNode(createTestNode('a', { x: 100, y: 100 }))
+      store.addNode(createTestNode('b', { x: 500, y: 100 }))
+      // C 在 A 正下方 (100,500)：最优 bottom→top。
+      store.addNode(createTestNode('c', { x: 100, y: 500 }))
+      store.addConnection(makeConn('c1', 'a', 'b')) // 已最优
+      store.addConnection(makeConn('c2', 'a', 'c', { fromPort: 'right', toPort: 'left' })) // 需调整
+      const before = useCanvasStore.getState().history.commands.length // 3
+
+      const result = useCanvasStore.getState().organizeConnections()
+
+      expect(result.organized).toBe(1)
+      expect(result.skippedBendPoints).toBe(0)
+      const state = useCanvasStore.getState()
+      // c1 不动；c2 调整为 bottom→top。
+      expect(state.connections.get('c1')?.fromPort).toBe('right')
+      expect(state.connections.get('c2')?.fromPort).toBe('bottom')
+      expect(state.connections.get('c2')?.toPort).toBe('top')
+      // 整批一条历史命令（M6 先例）。
+      expect(state.history.commands.length).toBe(before + 1)
+
+      // 一次撤销恢复全部旧端口。
+      useCanvasStore.getState().undo()
+      const undone = useCanvasStore.getState().connections.get('c2')
+      expect(undone?.fromPort).toBe('right')
+      expect(undone?.toPort).toBe('left')
+    })
+
+    it('带弯折点的连线跳过不碰并在结果中报告', () => {
+      const store = useCanvasStore.getState()
+      // A 正上方有 B：无弯折点连线会被调为 top→bottom。
+      store.addNode(createTestNode('a', { x: 100, y: 100 }))
+      store.addNode(createTestNode('b', { x: 100, y: -300 }))
+      store.addConnection(makeConn('free1', 'a', 'b', { fromPort: 'right', toPort: 'left' }))
+      store.addConnection(
+        makeConn('bent1', 'a', 'b', {
+          fromPort: 'right',
+          toPort: 'left',
+          bendPoints: [{ id: 'bp1', x: 300, y: 50 }],
+        }),
+      )
+
+      const result = useCanvasStore.getState().organizeConnections()
+
+      expect(result.organized).toBe(1)
+      expect(result.skippedBendPoints).toBe(1)
+      const state = useCanvasStore.getState()
+      // 弯折点连线保持原样——手工定制不被优化覆盖。
+      expect(state.connections.get('bent1')?.fromPort).toBe('right')
+      expect(state.connections.get('bent1')?.toPort).toBe('left')
+      // 无弯折点的照常调整。
+      expect(state.connections.get('free1')?.fromPort).toBe('top')
+    })
+
+    it('全部已最优时不产生历史命令', () => {
+      const store = useCanvasStore.getState()
+      store.addNode(createTestNode('a', { x: 100, y: 100 }))
+      store.addNode(createTestNode('b', { x: 500, y: 100 }))
+      store.addConnection(makeConn('c1', 'a', 'b')) // right→left 已最优
+      const before = useCanvasStore.getState().history.commands.length
+
+      const result = useCanvasStore.getState().organizeConnections()
+
+      expect(result.organized).toBe(0)
+      expect(useCanvasStore.getState().history.commands.length).toBe(before)
+    })
+
+    it('悬空连线（端点节点缺失）被静默跳过', () => {
+      const store = useCanvasStore.getState()
+      store.addNode(createTestNode('a', { x: 100, y: 100 }))
+      store.addConnection(makeConn('ghost', 'a', 'missing-node', { fromPort: 'right', toPort: 'left' }))
+
+      const result = useCanvasStore.getState().organizeConnections()
+
+      expect(result.organized).toBe(0)
+      expect(useCanvasStore.getState().connections.get('ghost')?.fromPort).toBe('right')
+    })
+  })
 })

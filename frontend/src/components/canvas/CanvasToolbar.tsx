@@ -353,74 +353,40 @@ export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToo
     }
   }
 
-  // 整理连线 - 重新计算所有连线的端口到最近位置
+  // 整理连线 - 重新计算所有连线的端口到最近位置。
+  //
+  // 2026-10-16 重构：算法与命令构建收敛到 store 的 organizeConnections
+  // （此前与 CanvasPage 的 O 快捷键逐字重复 ~50 行且已漂移：两处文案不一、
+  // 端点判定不对称）；整批合并为单条 undo 历史命令（M6 先例），协作模式下
+  // 一次 Yjs 事务广播；带弯折点的连线视为用户手工定制，跳过不碰。
   const handleOrganizeConnections = () => {
     if (isViewer) return
 
-    const { updateConnection } = useCanvasStore.getState()
-    let organizedCount = 0
+    const { organizeConnections } = useCanvasStore.getState()
+    const { organized, skippedBendPoints } = organizeConnections()
 
-    connections.forEach((conn) => {
-      const fromNode = nodes.get(conn.fromNodeId)
-      const toNode = nodes.get(conn.toNodeId)
-      if (!fromNode || !toNode) return
-
-      // 计算两个节点的中心点
-      const fromCenterX = fromNode.x + fromNode.width / 2
-      const fromCenterY = fromNode.y + fromNode.height / 2
-      const toCenterX = toNode.x + toNode.width / 2
-      const toCenterY = toNode.y + toNode.height / 2
-
-      // 计算角度来确定最佳端口方向
-      const dx = toCenterX - fromCenterX
-      const dy = toCenterY - fromCenterY
-      const angle = Math.atan2(dy, dx) * (180 / Math.PI)
-
-      // 根据角度确定最佳端口方向
-      let bestFromPort: 'top' | 'right' | 'bottom' | 'left'
-      let bestToPort: 'top' | 'right' | 'bottom' | 'left'
-
-      // 确定起始节点的出口方向（指向目标节点）
-      if (angle >= -45 && angle < 45) {
-        bestFromPort = 'right'
-        bestToPort = 'left'
-      } else if (angle >= 45 && angle < 135) {
-        bestFromPort = 'bottom'
-        bestToPort = 'top'
-      } else if (angle >= 135 || angle < -135) {
-        bestFromPort = 'left'
-        bestToPort = 'right'
-      } else {
-        bestFromPort = 'top'
-        bestToPort = 'bottom'
-      }
-
-      // 只有当端口发生变化时才更新
-      if (conn.fromPort !== bestFromPort || conn.toPort !== bestToPort) {
-        updateConnection(conn.id, {
-          fromPort: bestFromPort,
-          toPort: bestToPort,
-        })
-        organizedCount++
-      }
-    })
-
-    // 显示提示
-    if (organizedCount > 0) {
-      addToast({
-        type: 'success',
-        title: '整理完成',
-        message: `已优化 ${organizedCount} 条连线的端口位置`,
-        duration: 3000,
-      })
-    } else {
+    if (organized === 0) {
       addToast({
         type: 'info',
         title: '无需整理',
-        message: '所有连线的端口位置已经是最优',
-        duration: 2000,
+        message:
+          skippedBendPoints > 0
+            ? `所有可调整的连线已是最优（${skippedBendPoints} 条含自定义弯折点，保持原样）`
+            : '所有连线的端口位置已经是最优',
+        duration: 2500,
       })
+      return
     }
+
+    addToast({
+      type: 'success',
+      title: '整理完成',
+      message:
+        skippedBendPoints > 0
+          ? `已优化 ${organized} 条连线的端口位置（${skippedBendPoints} 条含自定义弯折点，保持原样）`
+          : `已优化 ${organized} 条连线的端口位置`,
+      duration: 3000,
+    })
   }
 
   // Show secondary toolbar when connection tool is active

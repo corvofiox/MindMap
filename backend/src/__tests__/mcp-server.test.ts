@@ -565,6 +565,51 @@ describe('MCP tools — error paths and options', () => {
       expect(result.isError).toBe(true)
       expect(text).toContain('没有提供任何要更新的字段')
     })
+
+    it('updateConnection refuses to re-point an endpoint at a nonexistent node (M3)', async () => {
+      const { client } = await connect()
+      const a = await callOk(client, 'createNode', { canvasId: CANVAS_ID, title: 'A' })
+      const b = await callOk(client, 'createNode', { canvasId: CANVAS_ID, title: 'B' })
+      const conn = await callOk(client, 'createConnection', {
+        canvasId: CANVAS_ID,
+        fromNodeId: a.nodeId,
+        toNodeId: b.nodeId,
+      })
+
+      // New fromNodeId doesn't exist: must be refused BEFORE the write, so no
+      // dangling connection (rendering skips it but it lingers in the doc) can
+      // be created.
+      const badFrom = await callTool(client, 'updateConnection', {
+        canvasId: CANVAS_ID,
+        connectionId: conn.connectionId,
+        fromNodeId: 'ghost-node-x',
+      })
+      expect(badFrom.result.isError).toBe(true)
+      expect(badFrom.text).toContain('源节点不存在')
+
+      const badTo = await callTool(client, 'updateConnection', {
+        canvasId: CANVAS_ID,
+        connectionId: conn.connectionId,
+        toNodeId: 'ghost-node-y',
+      })
+      expect(badTo.result.isError).toBe(true)
+      expect(badTo.text).toContain('目标节点不存在')
+
+      // Neither rejected request may have touched the connection.
+      const conns = await callOk(client, 'getAllConnections', { canvasId: CANVAS_ID })
+      const unchanged = conns.connections.find((c: { id: string }) => c.id === conn.connectionId)
+      expect(unchanged.fromNodeId).toBe(a.nodeId)
+      expect(unchanged.toNodeId).toBe(b.nodeId)
+
+      // A valid re-point still works.
+      const c = await callOk(client, 'createNode', { canvasId: CANVAS_ID, title: 'C' })
+      const okReply = await callOk(client, 'updateConnection', {
+        canvasId: CANVAS_ID,
+        connectionId: conn.connectionId,
+        toNodeId: c.nodeId,
+      })
+      expect(okReply.updates.toNodeId).toBe(c.nodeId)
+    })
   })
 
   describe('batchUpdateNodes', () => {
@@ -1208,6 +1253,36 @@ describe('MCP tools — error paths and options', () => {
       expect(conn.width).toBe(5)
       expect(conn.arrowType).toBe('none')
       expect(conn.direction).toBe('undirected')
+    })
+
+    it('reports skipped connections whose endpoint refs cannot be resolved (L2)', async () => {
+      const { client } = await connect()
+      const res = await callOk(client, 'generateGraphFromJSON', {
+        canvasId: CANVAS_ID,
+        data: {
+          nodes: [{ title: 'A', x: 0, y: 0 }],
+          connections: [
+            { from: 'A', to: 'B' }, // B 不存在 → 跳过
+            { from: 'Ghost', to: 'A' }, // Ghost 不存在 → 跳过
+          ],
+        },
+      })
+
+      expect(res.connectionsCreated).toBe(0)
+      expect(res.connectionsSkipped).toBe(2)
+
+      // 默认色与 createConnection 一致（agent 建线与用户手画同色）。
+      const okRes = await callOk(client, 'generateGraphFromJSON', {
+        canvasId: CANVAS_ID,
+        data: {
+          nodes: [{ title: 'A', x: 0, y: 0 }, { title: 'B', x: 400, y: 0 }],
+          connections: [{ from: 'A', to: 'B' }],
+        },
+      })
+      expect(okRes.connectionsSkipped).toBe(0)
+      const conns = await callOk(client, 'getAllConnections', { canvasId: CANVAS_ID })
+      const conn = (conns.connections as ConnectionShape[])[0]
+      expect(conn.color).toBe('#3b82f6')
     })
   })
 

@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import type { Node, NodeGroup, Domain, Connection } from '@/types'
 import { CANVAS_DEFAULTS } from '@/constants'
 import { logger } from '@/utils/logger'
+import { computeOptimalPorts } from '@/utils/canvas'
 import { useAuthStore } from '@/store/useAuthStore'
 
 /**
@@ -262,6 +263,14 @@ interface CanvasState {
   updateConnection: (id: string, updates: Partial<Connection>) => void
   updateConnectionWithoutHistory: (id: string, updates: Partial<Connection>, markDirty?: boolean) => void
   removeConnection: (id: string) => void
+  /**
+   * 优化连线（工具栏按钮 + O 快捷键共用的唯一实现）：按两节点相对方位把
+   * 每条连线的端口调整到最近方向。整批合并为**单条** undo 历史命令
+   * （M6 先例——逐条 updateConnection 会产生 N 条历史且协作下 N 次独立
+   * Yjs 事务）；带弯折点的连线视为用户手工定制，跳过不碰。
+   * @returns 实际调整的连线数与跳过的弯折点连线数（供 toast 汇报）。
+   */
+  organizeConnections: () => { organized: number; skippedBendPoints: number }
 
   // Bend point actions
   addConnectionBendPoint: (connectionId: string, bendPointId: string, x: number, y: number, insertIndex?: number) => void
@@ -774,6 +783,77 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         return { connections, isDirty: true }
       },
     })
+  },
+
+  // 优化连线：算法在 utils/canvas.ts 的 computeOptimalPorts（单处定义，
+  // 此前工具栏按钮与 O 快捷键各有一份拷贝且已漂移）。带弯折点的连线视为
+  // 用户手工定制不碰；整批一条 undo 命令、一个 LOCAL_ORIGIN 事务。
+  organizeConnections: () => {
+    const state = get()
+
+    const changes: {
+      connectionId: string
+      from: { fromPort: Connection['fromPort']; toPort: Connection['toPort'] }
+      to: { fromPort: Connection['fromPort']; toPort: Connection['toPort'] }
+    }[] = []
+    let skippedBendPoints = 0
+
+    for (const conn of state.connections.values()) {
+      const fromNode = state.nodes.get(conn.fromNodeId)
+      const toNode = state.nodes.get(conn.toNodeId)
+      if (!fromNode || !toNode) continue
+      if (conn.bendPoints && conn.bendPoints.length > 0) {
+        skippedBendPoints++
+        continue
+      }
+      const optimal = computeOptimalPorts(fromNode, toNode)
+      if (conn.fromPort !== optimal.fromPort || conn.toPort !== optimal.toPort) {
+        changes.push({
+          connectionId: conn.id,
+          from: { fromPort: conn.fromPort, toPort: conn.toPort },
+          to: optimal,
+        })
+      }
+    }
+
+    if (changes.length === 0) {
+      return { organized: 0, skippedBendPoints }
+    }
+
+    get().executeCommand({
+      type: 'organizeConnections',
+      timestamp: Date.now(),
+      execute: () => {
+        const s = get()
+        const connections = new Map(s.connections)
+        for (const change of changes) {
+          const conn = connections.get(change.connectionId)
+          if (!conn) continue
+          connections.set(change.connectionId, {
+            ...conn,
+            fromPort: change.to.fromPort,
+            toPort: change.to.toPort,
+          })
+        }
+        return { connections, isDirty: true }
+      },
+      undo: () => {
+        const s = get()
+        const connections = new Map(s.connections)
+        for (const change of changes) {
+          const conn = connections.get(change.connectionId)
+          if (!conn) continue
+          connections.set(change.connectionId, {
+            ...conn,
+            fromPort: change.from.fromPort,
+            toPort: change.from.toPort,
+          })
+        }
+        return { connections, isDirty: true }
+      },
+    })
+
+    return { organized: changes.length, skippedBendPoints }
   },
 
   // M6: 批量删除选中实体——一次手势/一次按键对多个实体各调 removeXxx 会
