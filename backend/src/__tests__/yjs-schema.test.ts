@@ -152,6 +152,38 @@ describe('yjs-schema', () => {
       expect(result.nodes).toHaveLength(1)
       expect(result.nodes[0].id).toBe('valid')
     })
+
+    it('为没有层序的旧快照按数组顺序补 zIndex，固化当时的绘制次序', () => {
+      const doc = jsonSnapshotToDoc({
+        nodes: [
+          { id: 'n1', x: 0, y: 0 },
+          { id: 'n2', x: 0, y: 0 },
+          { id: 'n3', x: 0, y: 0 },
+        ],
+      })
+      const byId = new Map(docToJsonSnapshot(doc).nodes.map((n: any) => [n.id, n]))
+
+      // 旧快照没有该字段时，顺序必须成为可持久化的数值，而不是留在 Map 键序里
+      expect(byId.get('n1')!.zIndex).toBe(0)
+      expect(byId.get('n2')!.zIndex).toBe(1000)
+      expect(byId.get('n3')!.zIndex).toBe(2000)
+    })
+
+    it('已有 zIndex 的快照原样保留，不被数组顺序覆盖', () => {
+      const doc = jsonSnapshotToDoc({
+        nodes: [
+          { id: 'top', x: 0, y: 0, zIndex: 5000 },
+          { id: 'bottom', x: 0, y: 0, zIndex: 1000 },
+          { id: 'auto', x: 0, y: 0 },
+        ],
+      })
+      const byId = new Map(docToJsonSnapshot(doc).nodes.map((n: any) => [n.id, n]))
+
+      expect(byId.get('top')!.zIndex).toBe(5000)
+      expect(byId.get('bottom')!.zIndex).toBe(1000)
+      // 缺省的那个按它在数组中的位置补：index 2 → 2000
+      expect(byId.get('auto')!.zIndex).toBe(2000)
+    })
   })
 
   describe('encodeDocToBase64 / decodeBase64ToDoc round-trip', () => {

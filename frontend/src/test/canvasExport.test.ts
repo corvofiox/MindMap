@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { exportCanvas, importCanvas, EXPORT_VERSION, EXPORT_APP } from '../utils/canvasExport'
+import { compareNodeZIndex, NODE_Z_STEP } from '@shared/z-order'
 import type { Node, Connection, NodeGroup, Domain } from '../types'
 
 function createNode(id: string, overrides?: Partial<Node>): Node {
@@ -128,6 +129,50 @@ describe('importCanvas', () => {
     const result = importCanvas('not json')
     expect(result.success).toBe(false)
     expect(result.error).toContain('JSON')
+  })
+
+  it('导入无层序字段的文件时按数组顺序固化 zIndex，保留叠放次序', () => {
+    const data = {
+      version: EXPORT_VERSION,
+      app: EXPORT_APP,
+      exportedAt: new Date().toISOString(),
+      data: { nodes: [createNode('n1'), createNode('n2'), createNode('n3')] },
+    }
+
+    const result = importCanvas(JSON.stringify(data))
+
+    expect(result.success).toBe(true)
+    expect(result.data?.nodes.map((n) => n.zIndex)).toEqual([
+      0,
+      NODE_Z_STEP,
+      NODE_Z_STEP * 2,
+    ])
+    // 固化后的层序必须与实际绘制顺序一致
+    expect([...result.data!.nodes].sort(compareNodeZIndex).map((n) => n.id)).toEqual([
+      'n1',
+      'n2',
+      'n3',
+    ])
+  })
+
+  it('导入自带 zIndex 的文件时保留原层序（不被数组顺序覆盖）', () => {
+    const data = {
+      version: EXPORT_VERSION,
+      app: EXPORT_APP,
+      exportedAt: new Date().toISOString(),
+      data: {
+        nodes: [
+          createNode('top', { zIndex: 5000 }),
+          createNode('bottom', { zIndex: 1000 }),
+        ],
+      },
+    }
+
+    const result = importCanvas(JSON.stringify(data))
+
+    expect(result.success).toBe(true)
+    const sorted = [...result.data!.nodes].sort(compareNodeZIndex).map((n) => n.id)
+    expect(sorted).toEqual(['bottom', 'top'])
   })
 
   it('should reject missing version', () => {

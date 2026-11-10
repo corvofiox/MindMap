@@ -66,11 +66,17 @@ function rel(p: string): string {
 
 /**
  * 判断一个 import 说明符是否指向"项目自己的代码"。
- * 相对路径与 `@/` 别名都算；裸模块名（vitest/node/express…）不算。
+ * 相对路径、`@/` 别名、`@shared/` 别名（指向 shared/src）以及工作区包
+ * `mindmap-shared` 都算；裸模块名（vitest/node/express…）不算。
+ *
+ * 2026-11-10：补 `@shared/` 与 `mindmap-shared`。此前只认 `@/`，把"只测共享
+ * 纯函数"的测试误判成自造实现——而 shared/ 是仓库自己的源码，正是该被断言的对象。
  */
 function isProjectImport(specifier: string): boolean {
   if (specifier.startsWith('.')) return true
   if (specifier.startsWith('@/')) return true
+  if (specifier.startsWith('@shared/')) return true
+  if (specifier === 'mindmap-shared' || specifier.startsWith('mindmap-shared/')) return true
   return false
 }
 
@@ -397,6 +403,16 @@ const NO_PROJECT_IMPORT_ALLOWED = new Set(['backend/src/__tests__/test-quality-g
 
 describe('源码守卫：测试必须真实有效', () => {
   describe('测试文件必须 import 项目代码', () => {
+    it('把共享模块别名视为项目代码（否则只测 shared 的测试会被误判）', () => {
+      expect(isProjectImport('@shared/z-order')).toBe(true)
+      expect(isProjectImport('mindmap-shared')).toBe(true)
+      expect(isProjectImport('./local')).toBe(true)
+      expect(isProjectImport('@/store/useCanvasStore')).toBe(true)
+      // 真·外部依赖仍然不算
+      expect(isProjectImport('vitest')).toBe(false)
+      expect(isProjectImport('react')).toBe(false)
+      expect(isProjectImport('@modelcontextprotocol/sdk/server/mcp.js')).toBe(false)
+    })
     it('backend 测试文件都引用了项目模块（不是自造实现）', () => {
       const offenders: string[] = []
       for (const file of backendTests) {

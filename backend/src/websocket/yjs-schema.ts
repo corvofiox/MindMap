@@ -21,6 +21,7 @@
  * strings to keep the wire format stable.
  */
 import * as Y from 'yjs'
+import { NODE_Z_STEP } from 'mindmap-shared'
 
 export const ROOT_KEY = 'root'
 export const NODES_KEY = 'nodes'
@@ -234,7 +235,19 @@ export function jsonSnapshotToDoc(snapshot: {
       target.set(id, ymap)
     }
   }
-  populate(collections.nodes, snapshot.nodes)
+  // 旧快照没有层序字段。按数组顺序补一个，把"当时的绘制顺序"固化成持久化的
+  // zIndex；否则迁移后所有节点层序都读作 0，只剩 Map 键序这种不可寻址的顺序，
+  // 画布层级会随协作与重载漂移。
+  const withNodeZIndex = (items: unknown[] | undefined): unknown[] | undefined => {
+    if (!Array.isArray(items)) return items
+    return items.map((item, index) => {
+      if (!item || typeof item !== 'object') return item
+      const record = item as Record<string, unknown>
+      if (record.zIndex !== undefined) return record
+      return { ...record, zIndex: index * NODE_Z_STEP }
+    })
+  }
+  populate(collections.nodes, withNodeZIndex(snapshot.nodes))
   populate(collections.groups, snapshot.groups)
   populate(collections.domains, snapshot.domains)
   populate(collections.connections, snapshot.connections)

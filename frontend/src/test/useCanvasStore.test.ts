@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { useCanvasStore } from '../store/useCanvasStore'
 import type { Node, NodeGroup, Domain, Connection } from '../types'
+import { compareNodeZIndex, nextZIndexAbove, NODE_Z_STEP } from '@shared/z-order'
 
 function createTestNode(id: string, overrides?: Partial<Node>): Node {
   return {
@@ -441,6 +442,133 @@ describe('useCanvasStore', () => {
 
       expect(result.organized).toBe(0)
       expect(useCanvasStore.getState().connections.get('ghost')?.fromPort).toBe('right')
+    })
+  })
+
+  describe('节点层序 (zIndex)', () => {
+    const zOf = (id: string) => useCanvasStore.getState().nodes.get(id)?.zIndex
+    const sortedIds = () =>
+      [...useCanvasStore.getState().nodes.values()].sort(compareNodeZIndex).map((n) => n.id)
+
+    it('新建节点依次叠加在最上层', () => {
+      const store = useCanvasStore.getState()
+      store.addNode(createTestNode('a'))
+      store.addNode(createTestNode('b'))
+
+      const za = zOf('a')
+      const zb = zOf('b')
+      expect(za).toBe(NODE_Z_STEP)
+      expect(zb).toBeGreaterThan(za as number)
+      expect(sortedIds()).toEqual(['a', 'b'])
+    })
+
+    it('显式传入的层序原样保留', () => {
+      useCanvasStore.getState().addNode(createTestNode('a', { zIndex: 42 }))
+      expect(zOf('a')).toBe(42)
+    })
+
+    it('从卡片池拖入的节点同样落在最上层', () => {
+      const store = useCanvasStore.getState()
+      store.addNode(createTestNode('a'))
+      store.moveNodeFromPool(createTestNode('pooled'))
+
+      expect(zOf('pooled')).toBeGreaterThan(zOf('a') as number)
+      expect(sortedIds()).toEqual(['a', 'pooled'])
+    })
+
+    it('复制出的节点压在原节点之上', () => {
+      const store = useCanvasStore.getState()
+      store.addNode(createTestNode('a'))
+      store.addNode(createTestNode('b'))
+      store.duplicateNode('a')
+
+      const copy = [...useCanvasStore.getState().nodes.values()].find((n) =>
+        n.id.startsWith('a-copy-'),
+      )
+      expect(copy).toBeDefined()
+      expect(copy?.zIndex).toBeGreaterThan(zOf('b') as number)
+      expect(sortedIds().at(-1)).toBe(copy?.id)
+    })
+
+    it('bringNodeToFront / sendNodeToBack 改变层序，对不存在的节点安全无操作', () => {
+      const store = useCanvasStore.getState()
+      store.addNode(createTestNode('a'))
+      store.addNode(createTestNode('b'))
+      store.addNode(createTestNode('c'))
+
+      useCanvasStore.getState().bringNodeToFront('a')
+      expect(sortedIds()).toEqual(['b', 'c', 'a'])
+
+      useCanvasStore.getState().sendNodeToBack('c')
+      expect(sortedIds()).toEqual(['c', 'b', 'a'])
+
+      // 不存在的节点：不改状态、不写历史（菜单可能对已删除的节点触发）
+      const historyBefore = useCanvasStore.getState().history.commands.length
+      useCanvasStore.getState().bringNodeToFront('ghost')
+      expect(useCanvasStore.getState().history.commands.length).toBe(historyBefore)
+      expect(sortedIds()).toEqual(['c', 'b', 'a'])
+    })
+
+    it('置顶写入 zIndex：会置 dirty、可撤销、可重做', async () => {
+      const store = useCanvasStore.getState()
+      store.addNode(createTestNode('a'))
+      store.addNode(createTestNode('b'))
+      const originalZ = zOf('a')
+      const historyBefore = useCanvasStore.getState().history.commands.length
+
+      // 清掉 addNode 造成的 dirty，单独观察这次层序变更
+      useCanvasStore.setState({ isDirty: false })
+      store.updateNode('a', { zIndex: nextZIndexAbove(useCanvasStore.getState().nodes.values()) })
+
+      expect(zOf('a')).toBeGreaterThan(zOf('b') as number)
+      expect(sortedIds()).toEqual(['b', 'a'])
+      // 层序是普通字段：必须进历史、必须置 dirty（旧实现刻意两者都不做）
+      expect(useCanvasStore.getState().history.commands.length).toBe(historyBefore + 1)
+      expect(useCanvasStore.getState().isDirty).toBe(true)
+
+      await useCanvasStore.getState().undo()
+      expect(zOf('a')).toBe(originalZ)
+      expect(sortedIds()).toEqual(['a', 'b'])
+
+      await useCanvasStore.getState().redo()
+      expect(zOf('a')).toBeGreaterThan(zOf('b') as number)
+    })
+
+    it('撤销新增后重做，节点沿用最初的层序而不是重新取最大值', async () => {
+      const store = useCanvasStore.getState()
+      store.addNode(createTestNode('a'))
+      store.addNode(createTestNode('b'))
+      const originalZ = zOf('b')
+
+      await useCanvasStore.getState().undo() // 移除 b
+
+      // 模拟协作者在此期间插入了一个层序很高的节点（不进本地历史）
+      useCanvasStore.setState((state) => {
+        const nodes = new Map(state.nodes)
+        nodes.set('remote', createTestNode('remote', { zIndex: 9000 }))
+        return { nodes }
+      })
+
+      await useCanvasStore.getState().redo()
+
+      // 若重做时重新计算 max+STEP，b 会变成 10000；正确行为是还原 2000 量级
+      expect(zOf('b')).toBe(originalZ)
+      expect(zOf('b')).toBeLessThan(zOf('remote') as number)
+    })
+
+    it('旧画布缺省层序的节点保持原有相对顺序', () => {
+      // 直接注入没有任何 zIndex 的节点，模拟升级前的存量画布
+      useCanvasStore.setState({
+        nodes: new Map([
+          ['legacy-1', createTestNode('legacy-1')],
+          ['legacy-2', createTestNode('legacy-2')],
+        ]),
+      })
+      expect(sortedIds()).toEqual(['legacy-1', 'legacy-2'])
+
+      useCanvasStore.getState().addNode(createTestNode('fresh'))
+      // 新节点一定在旧节点之上
+      expect(sortedIds()).toEqual(['legacy-1', 'legacy-2', 'fresh'])
     })
   })
 })

@@ -96,6 +96,7 @@ export interface Node {
   type?: 'text' | 'image'  // 节点类型
   imageUrl?: string        // 图片URL
   aspectRatio?: number     // 图片宽高比
+  zIndex?: number          // 层序；缺失按 0 处理，见 shared/src/z-order.ts
   _version?: number        // 版本号（用于冲突检测）
 }
 

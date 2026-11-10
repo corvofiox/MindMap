@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { Node, NodeGroup, Domain, Connection } from '@/types'
 import { CANVAS_DEFAULTS } from '@/constants'
+import { nextZIndexAbove, nextZIndexBelow } from '@shared/z-order'
 import { logger } from '@/utils/logger'
 import { computeOptimalPorts } from '@/utils/canvas'
 import { useAuthStore } from '@/store/useAuthStore'
@@ -176,11 +177,6 @@ interface Command {
   afterExecute?: () => Promise<void>
   /** Optional async side effect that runs after the synchronous undo(). */
   afterUndo?: () => Promise<void>
-  /**
-   * R8: 纯本地顺序操作标记(如置顶/置底——仅重排 Map 顺序,不持久化、
-   * 不同步 Yjs)。undo/redo 分支识别后不置 dirty,避免触发冗余自动保存。
-   */
-  pureOrderChange?: boolean
 }
 
 function getCurrentUserId(): number | null {
@@ -235,6 +231,9 @@ interface CanvasState {
   // Node actions
   addNode: (node: Node) => void
   updateNode: (id: string, updates: Partial<Node>) => void
+  /** 把节点移到最上层/最下层（写入 zIndex 字段，可撤销、会同步）。 */
+  bringNodeToFront: (id: string) => void
+  sendNodeToBack: (id: string) => void
   updateNodeWithoutHistory: (id: string, updates: Partial<Node>, markDirty?: boolean) => void
   updateNodeWithOriginal: (id: string, updates: Partial<Node>, originalValues: Partial<Node>) => void
   removeNode: (id: string) => void
@@ -363,14 +362,24 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   setCanvasName: (name) => set({ canvasName: name }),
 
   // Node actions
-  addNode: (node) =>
-    get().executeCommand({
+  addNode: (node) => {
+    // 层序只在首次 execute 时计算一次并记住：undo→redo 必须还原同一个
+    // zIndex，否则期间产生的远端/本地节点会让重做后的层序偏移。
+    let placed: Node | null = null
+    return get().executeCommand({
       type: 'addNode',
       timestamp: Date.now(),
       execute: () => {
         const state = get()
         const nodes = new Map(state.nodes)
-        nodes.set(node.id, node)
+        // 未显式指定层序的新节点一律落在最上层。集中在这里赋值而不是在
+        // 各个创建点各写一遍，否则漏掉一处该节点就会沉到所有节点下面。
+        if (!placed) {
+          placed = node.zIndex === undefined
+            ? { ...node, zIndex: nextZIndexAbove(state.nodes.values()) }
+            : node
+        }
+        nodes.set(node.id, placed)
         return { nodes, isDirty: true }
       },
       undo: () => {
@@ -379,7 +388,22 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         nodes.delete(node.id)
         return { nodes, isDirty: true }
       },
-    }),
+    })
+  },
+
+  // 层序操作：置顶/置底。集中成 store 动作而不是散在右键菜单里，
+  // 这样行为可被 store 单测直接覆盖，菜单只剩一层转调。
+  bringNodeToFront: (id) => {
+    const { nodes, updateNode } = get()
+    if (!nodes.has(id)) return
+    updateNode(id, { zIndex: nextZIndexAbove(nodes.values()) })
+  },
+
+  sendNodeToBack: (id) => {
+    const { nodes, updateNode } = get()
+    if (!nodes.has(id)) return
+    updateNode(id, { zIndex: nextZIndexBelow(nodes.values()) })
+  },
 
   updateNode: (id, updates) => {
     const state = get()
@@ -502,6 +526,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       id: `${node.id}-copy-${Date.now()}`,
       x: node.x + 20,
       y: node.y + 20,
+      // 副本放在最上层，而不是继承原节点的层序（否则会被原节点盖住）。
+      zIndex: nextZIndexAbove(state.nodes.values()),
     }
     get().addNode(newNode)
     get().setSelectedIds([newNode.id])
@@ -1205,7 +1231,11 @@ moveNodeToPool: (nodeId: string, nodeData: Node, afterExecute?: () => Promise<vo
       execute: () => {
         const state = get()
         const nodes = new Map(state.nodes)
-        nodes.set(node.id, node)
+        // 从卡片池拖进画布的节点同样落在最上层（与 addNode 同一规则）。
+        const placed = node.zIndex === undefined
+          ? { ...node, zIndex: nextZIndexAbove(state.nodes.values()) }
+          : node
+        nodes.set(node.id, placed)
         return { nodes, selectedIds: [node.id], isDirty: true }
       },
       undo: () => {
@@ -1344,18 +1374,15 @@ moveNodeToPool: (nodeId: string, nodeData: Node, afterExecute?: () => Promise<vo
       const commandResult = command.undo()
 
       // R7-fix: 空结果(如节点已不存在)不置 dirty——与 C22 execute 路径一致,
-      // 避免置顶/置底等无内容变化的命令 undo 后触发冗余自动保存。
-      // R8-fix: pureOrderChange 命令(置顶/置底)的 undo 仅恢复本地顺序,
-      // 同样不置 dirty。
+      // 避免无内容变化的命令 undo 后触发冗余自动保存。
       const hasChanges = Object.keys(commandResult).length > 0
-      const isPureOrder = command.pureOrderChange === true
       set((state) => ({
         ...commandResult,
         history: {
           ...state.history,
           currentIndex: targetIndex - 1,
         },
-        isDirty: hasChanges && !isPureOrder ? true : state.isDirty,
+        isDirty: hasChanges ? true : state.isDirty,
       }))
       syncDiffToYDoc(beforeSnapshot, get())
 
@@ -1413,16 +1440,14 @@ moveNodeToPool: (nodeId: string, nodeData: Node, afterExecute?: () => Promise<vo
       const commandResult = command.execute()
 
       // R7-fix: 空结果不置 dirty(与 undo 分支一致)
-      // R8-fix: pureOrderChange 命令的 redo 同样不置 dirty
       const hasChanges = Object.keys(commandResult).length > 0
-      const isPureOrder = command.pureOrderChange === true
       set((state) => ({
         ...commandResult,
         history: {
           ...state.history,
           currentIndex: targetIndex,
         },
-        isDirty: hasChanges && !isPureOrder ? true : state.isDirty,
+        isDirty: hasChanges ? true : state.isDirty,
       }))
       syncDiffToYDoc(beforeSnapshot, get())
 

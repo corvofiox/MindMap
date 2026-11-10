@@ -147,6 +147,32 @@ describe('yjsBinding', () => {
       binding.destroy()
     })
 
+    it('把远端修改的 zIndex 同步进 store（层序是普通字段，不是容器顺序）', () => {
+      const doc = new Y.Doc()
+      ensureRoot(doc)
+      const store = createMockStore()
+      store.nodes.set('n1', { id: 'n1', x: 1, y: 2, title: 'Old', zIndex: 1000 } as any)
+      const binding = bindYjsToStore(createMockProvider(doc), store as any)
+
+      const collections = ensureRoot(doc)
+      doc.transact(() => {
+        collections.nodes.set('n1', entityToYMap({ id: 'n1', x: 1, y: 2, title: 'Old', zIndex: 1000 }))
+      }, LOCAL_ORIGIN) // 本地 origin → observer 跳过
+
+      // 远端协作者把该节点置顶
+      doc.transact(() => {
+        collections.nodes.get('n1')!.set('zIndex', 7000)
+      })
+
+      expect(store.updateNodeWithoutHistory).toHaveBeenCalledWith(
+        'n1',
+        expect.objectContaining({ zIndex: 7000 }),
+        false,
+      )
+      expect(store.nodes.get('n1')?.zIndex).toBe(7000)
+      binding.destroy()
+    })
+
     it('fires removeNode when a node is deleted from the doc', () => {
       const doc = new Y.Doc()
       ensureRoot(doc)
@@ -302,6 +328,32 @@ describe('yjsBinding', () => {
 
       const collections = ensureRoot(doc)
       expect(collections.nodes.get('n1')!.get('title')).toBe('New')
+      binding.destroy()
+    })
+
+    it('把本地 zIndex 变更写进 Y.Doc（否则置顶无法持久化/广播）', () => {
+      const doc = new Y.Doc()
+      ensureRoot(doc)
+      const store = createMockStore()
+      const binding = bindYjsToStore(createMockProvider(doc), store as any)
+      const collections = ensureRoot(doc)
+
+      const base = { id: 'n1', x: 1, y: 2, title: 'A', zIndex: 1000 } as any
+      doc.transact(() => {
+        collections.nodes.set('n1', entityToYMap(base))
+      }, LOCAL_ORIGIN)
+
+      binding.applyDiff(
+        { nodes: new Map([['n1', { ...base }]]), groups: new Map(), domains: new Map(), connections: new Map() },
+        {
+          nodes: new Map([['n1', { ...base, zIndex: 9000 }]]),
+          groups: new Map(),
+          domains: new Map(),
+          connections: new Map(),
+        },
+      )
+
+      expect(collections.nodes.get('n1')!.get('zIndex')).toBe(9000)
       binding.destroy()
     })
   })

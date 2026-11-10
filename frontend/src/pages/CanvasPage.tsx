@@ -6,6 +6,7 @@ import { useUIStore } from '@/store/useUIStore'
 import { useAuthStore } from '@/store/useAuthStore'
 import { useNodePoolStore } from '@/features/node-pool/stores/useNodePoolStore'
 import { createNodeFromCard, parseCardNodeData } from '@/features/node-pool/utils/createNodeFromCard'
+import { sortByZIndex } from '@shared/z-order'
 import { useCollaboration, getActiveYjsProvider } from '@/hooks/useCollaboration'
 import { CanvasToolbar } from '@/components/canvas/CanvasToolbar'
 import { CanvasGrid } from '@/components/canvas/CanvasGrid'
@@ -5256,8 +5257,10 @@ export function CanvasPage() {
 
             return (
               <>
-                {/* Render nodes */}
-                {Array.from(nodes.values()).map((node) => {
+                {/* Render nodes — 按 zIndex 升序绘制，后者覆盖前者。
+                    sort 是稳定的：旧画布里 zIndex 全缺省的节点读作 0，
+                    相互比较为 0，因此保持 Map 的既有顺序（与改造前视觉一致）。 */}
+                {sortByZIndex(nodes.values()).map((node) => {
                   // Check if this node is in the currently dragging group
                   let nodeGroupDragOffset: { x: number; y: number } | undefined = undefined
                   if (isDraggingGroup && draggingGroupId) {

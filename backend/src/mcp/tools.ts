@@ -14,6 +14,7 @@
  */
 import { z } from 'zod'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import { nextZIndexAbove, NODE_Z_STEP } from 'mindmap-shared'
 import { db } from '../database/connection.js'
 import { canvases, projects, projectMembers } from '../database/schema.js'
 import { eq, inArray, desc } from 'drizzle-orm'
@@ -425,6 +426,9 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
         collapsed: Boolean(rest.collapsed ?? false),
         locked: Boolean(rest.locked ?? false),
         type: nodeType,
+        // 与前端 addNode 同一规则：新建节点落在最上层。缺了这个字段，AI 建的
+        // 节点层序读作 0，会被已有节点整片盖住。
+        zIndex: nextZIndexAbove(res.snapshot.nodes as { zIndex?: number }[]),
       }
       if (rest.titleAlign) node.titleAlign = rest.titleAlign
       if (rest.contentAlign) node.contentAlign = rest.contentAlign
@@ -465,6 +469,10 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
         type: z.enum(['text', 'image']).optional().describe('节点类型'),
         imageUrl: z.string().optional().describe('图片 URL'),
         aspectRatio: z.number().optional().describe('图片宽高比'),
+        zIndex: z
+          .number()
+          .optional()
+          .describe('节点层序，数值越大越靠上（省略则保持不变）'),
       },
     },
     async (args) => {
@@ -504,10 +512,10 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
       if (rest.type !== undefined) updates.type = rest.type
       if (rest.imageUrl !== undefined) updates.imageUrl = String(rest.imageUrl)
       if (rest.aspectRatio !== undefined) {
-        updates.aspectRatio = toFiniteNumber(
-          rest.aspectRatio,
-          toFiniteNumber(existing.aspectRatio, 1),
-        )
+        updates.aspectRatio = toFiniteNumber(rest.aspectRatio, toFiniteNumber(existing.aspectRatio, 1))
+      }
+      if (rest.zIndex !== undefined) {
+        updates.zIndex = toFiniteNumber(rest.zIndex, toFiniteNumber(existing.zIndex, 0))
       }
 
       if (Object.keys(updates).length === 0) {
@@ -1211,6 +1219,8 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
       const usedNodeIds = new Set<string>()
       const nodesOut: Record<string, unknown>[] = []
       const defaultStyle = (graph.defaultNodeStyle ?? {}) as Record<string, unknown>
+      // 整批导入的节点叠在现有节点之上，并保留图形数组内部的相对顺序。
+      const baseZIndex = nextZIndexAbove(existing.nodes as { zIndex?: number }[])
 
       // Step 1: materialise nodes (positions computed when omitted).
       ;(graph.nodes as Record<string, unknown>[]).forEach((nodeData, index) => {
@@ -1261,6 +1271,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
           collapsed: Boolean(nodeData.collapsed ?? defaultStyle.collapsed ?? false),
           locked: Boolean(nodeData.locked ?? defaultStyle.locked ?? false),
           type: nodeData.type ?? defaultStyle.type ?? 'text',
+          zIndex: baseZIndex + index * NODE_Z_STEP,
         }
         const titleAlign = nodeData.titleAlign ?? defaultStyle.titleAlign
         const contentAlign = nodeData.contentAlign ?? defaultStyle.contentAlign

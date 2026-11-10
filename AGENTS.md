@@ -218,6 +218,29 @@ diff。踩过的坑：新增项曾被一律追加到数组末尾，于是「本�
 折返的折线。插入索引的计算在 `frontend/src/utils/connectionBendPoints.ts`，
 顺序保真的回归测试在 `frontend/src/test/yjsBinding.test.ts`。
 
+### 节点层序（zIndex）：顺序是字段，不是容器顺序
+节点的绘制先后由 `Node.zIndex` 决定，取值规则集中在 `shared/src/z-order.ts`，
+渲染必须走 `sortByZIndex(nodes.values())`（`frontend/src/pages/CanvasPage.tsx`）。
+`nodes` 这个 Map 的键顺序与视觉**无关**，它只是数据结构的实现细节。
+
+为什么不能靠 Map 顺序：那是一个不可寻址的位置——读不到、存不下、传不出。
+Yjs 侧 `nodes` 是 `Y.Map<nodeId, Y.Map<field, value>>`，按节点 ID 做字段级 diff，
+容器的迭代顺序不在任何字段里，于是"置顶"在刷新后丢失、协作者也看不到。
+改成普通字段后，持久化与广播自动成立（不需要另加同步代码）。
+
+约定：
+- 步长 `NODE_Z_STEP = 1000`；置顶 `max + STEP`，置底 `min - STEP`，插中间取中值。
+- 缺省（旧画布）读作 `0`，等值项由稳定排序保持迭代顺序——所以老画布的视觉不变。
+- 新节点一律落在最上层。**赋值只发生在 `useCanvasStore` 的 `addNode` /
+  `moveNodeFromPool` 里**，不要在各自的创建点重复写一遍（漏一处就会沉到底层）；
+  创建时显式给了 `zIndex` 则尊重原值。
+- 后端同样要赋值：MCP 的 `createNode` / `importGraph`（`backend/src/mcp/tools.ts`）、
+  旧快照迁移 `jsonSnapshotToDoc`（按数组顺序固化成 0/1000/2000…）、
+  前端导入归一化（`frontend/src/utils/canvasExport.ts`）。
+- 回归测试：`frontend/src/test/zOrder.test.ts`（纯函数 + 绘制顺序）、
+  `useCanvasStore.test.ts`（自动赋值/复制置顶/撤销重做）、`yjsBinding.test.ts`
+  （双向同步）、`backend/src/__tests__/yjs-schema.test.ts`（迁移保值）。
+
 ### CSRF 保护
 - `/api/csrf-token` 是公开端点，返回 CSRF token
 - `/api/auth/*` 路由免 CSRF（登录/注册需要先获取 token）

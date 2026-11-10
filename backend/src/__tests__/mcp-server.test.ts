@@ -452,6 +452,7 @@ interface NodeShape {
   type: string
   imageUrl?: string
   aspectRatio?: number
+  zIndex?: number
 }
 
 interface ConnectionShape {
@@ -865,6 +866,68 @@ describe('MCP tools — error paths and options', () => {
       expect(node.collapsed).toBe(false)
       expect(node.locked).toBe(false)
       expect(node.type).toBe('text')
+    })
+  })
+
+  describe('节点层序 (zIndex)', () => {
+    it('AI 新建的节点自动获得层序，且晚建的盖住早建的', async () => {
+      const { client } = await connect()
+      await callOk(client, 'createNode', { canvasId: CANVAS_ID, title: 'first' })
+      await callOk(client, 'createNode', { canvasId: CANVAS_ID, title: 'second' })
+
+      const listed = await callOk(client, 'getAllNodes', { canvasId: CANVAS_ID })
+      const nodes = listed.nodes as NodeShape[]
+      const first = nodes.find((n) => n.title === 'first')
+      const second = nodes.find((n) => n.title === 'second')
+
+      // 缺这个字段会让 AI 建的节点读作 0，被已有节点整片盖住
+      expect(typeof first?.zIndex).toBe('number')
+      expect(second!.zIndex!).toBeGreaterThan(first!.zIndex!)
+    })
+
+    it('updateNode 可以把节点置顶，并如实落库', async () => {
+      const { client } = await connect()
+      const a = await callOk(client, 'createNode', { canvasId: CANVAS_ID, title: 'a' })
+      const b = await callOk(client, 'createNode', { canvasId: CANVAS_ID, title: 'b' })
+
+      const listedBefore = await callOk(client, 'getAllNodes', { canvasId: CANVAS_ID })
+      const before = (listedBefore.nodes as NodeShape[]).find((n) => n.id === a.nodeId)!
+      const topZ = Math.max(...(listedBefore.nodes as NodeShape[]).map((n) => n.zIndex ?? 0))
+
+      await callOk(client, 'updateNode', {
+        canvasId: CANVAS_ID,
+        nodeId: a.nodeId,
+        zIndex: topZ + 1000,
+      })
+
+      const listedAfter = await callOk(client, 'getAllNodes', { canvasId: CANVAS_ID })
+      const nodesAfter = listedAfter.nodes as NodeShape[]
+      const movedA = nodesAfter.find((n) => n.id === a.nodeId)!
+      const otherB = nodesAfter.find((n) => n.id === b.nodeId)!
+
+      expect(movedA.zIndex).toBe(topZ + 1000)
+      expect(movedA.zIndex!).toBeGreaterThan(otherB.zIndex!)
+      // 其它字段不能被层序更新顺手改掉
+      expect(movedA.title).toBe(before.title)
+    })
+
+    it('未传 zIndex 时 updateNode 不改动已有层序', async () => {
+      const { client } = await connect()
+      const created = await callOk(client, 'createNode', { canvasId: CANVAS_ID, title: 'keep' })
+
+      const listed = await callOk(client, 'getAllNodes', { canvasId: CANVAS_ID })
+      const originalZ = (listed.nodes as NodeShape[]).find((n) => n.id === created.nodeId)!.zIndex
+
+      await callOk(client, 'updateNode', {
+        canvasId: CANVAS_ID,
+        nodeId: created.nodeId,
+        title: 'renamed',
+      })
+
+      const after = await callOk(client, 'getAllNodes', { canvasId: CANVAS_ID })
+      const node = (after.nodes as NodeShape[]).find((n) => n.id === created.nodeId)!
+      expect(node.zIndex).toBe(originalZ)
+      expect(node.title).toBe('renamed')
     })
   })
 

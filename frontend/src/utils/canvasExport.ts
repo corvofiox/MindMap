@@ -1,4 +1,5 @@
 import type { Node, Connection, NodeGroup, Domain } from '@/types'
+import { NODE_Z_STEP } from '@shared/z-order'
 import {
   CANVAS_DEFAULTS,
   NODE_DEFAULTS,
@@ -71,7 +72,7 @@ function pickString<T extends string>(
   return valid.includes(value as T) ? (value as T) : fallback
 }
 
-function sanitizeNode(raw: unknown): Node | null {
+function sanitizeNode(raw: unknown, index: number): Node | null {
   if (!isPlainObject(raw)) return null
   const id = raw.id
   if (!isNonEmptyString(id)) return null
@@ -102,6 +103,8 @@ function sanitizeNode(raw: unknown): Node | null {
     type: raw.type === 'image' ? 'image' : 'text',
     imageUrl: isNonEmptyString(raw.imageUrl) ? raw.imageUrl : undefined,
     aspectRatio: isNumber(raw.aspectRatio) ? raw.aspectRatio : undefined,
+    // 导入的文件可能没有层序字段：按数组顺序固化，保留导出时的绘制次序。
+    zIndex: isNumber(raw.zIndex) ? raw.zIndex : index * NODE_Z_STEP,
     _version: isNumber(raw._version) ? raw._version : undefined,
   }
 }
@@ -290,7 +293,7 @@ export function importCanvas(jsonString: string): ImportResult {
   const nodes: Node[] = []
   if (Array.isArray(rawData.nodes)) {
     for (const raw of rawData.nodes) {
-      const sanitized = sanitizeNode(raw)
+      const sanitized = sanitizeNode(raw, nodes.length)
       if (sanitized) nodes.push(sanitized)
     }
   }

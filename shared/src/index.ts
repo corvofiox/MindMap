@@ -1,5 +1,6 @@
 // Shared types between frontend and backend
 export * from './constants.js'
+export * from './z-order.js'
 
 export interface APIResponse<T = unknown> {
   success: boolean
@@ -59,6 +60,8 @@ export interface Node {
   textAlign: 'left' | 'center' | 'right'
   collapsed: boolean
   locked: boolean
+  /** Paint order among nodes; see shared/src/z-order.ts. */
+  zIndex?: number
 }
 
 export interface NodeGroup {
