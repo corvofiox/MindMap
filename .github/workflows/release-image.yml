@@ -1,0 +1,209 @@
+name: release-image
+
+# 发布多架构镜像到 Docker Hub（corvofiox/mindmap）。
+#
+# 触发：
+#   - push tag `v*`（真实发版，会 push 镜像与 manifest）
+#   - workflow_dispatch（默认只构建 + 冒烟，不 push，用于验证流水线本身）
+#
+# 为什么每个架构用各自的 runner：builder 阶段要跑 npm install + node-gyp 编
+# better-sqlite3 / bcrypt。放在 QEMU 里模拟 arm64 编译会慢到不可用，公开仓库
+# 可以直接用原生 arm64 runner（ubuntu-24.04-arm），两个架构同速。
+#
+# 流程对齐 AGENTS.md 的发布核对清单：
+#   1. 测试全绿才允许进入构建（test job）
+#   2. 每个架构先本地 --load、起容器、curl /health，版本号必须等于本次 tag
+#      （不是 dev），并核对 image label 的 revision == 本次 commit
+#   3. 冒烟通过后才 push 架构镜像，最后由 manifest job 合成多架构 manifest
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（手动验证时使用，例如 v1.9.22-dryrun）'
+        required: false
+        default: 'v0.0.0-dryrun'
+      push:
+        description: '是否真的推送镜像（手动验证时保持 false）'
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-image-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: corvofiox/mindmap
+
+jobs:
+  test:
+    name: 测试（发布前置门禁）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - run: npm ci
+
+      - name: 构建 shared（前后端都依赖它的 dist）
+        run: npm run build:shared
+
+      - name: 后端测试
+        run: npm run test:backend:run
+
+      - name: 前端测试
+        run: npm run test:frontend:run
+
+  build:
+    name: 构建 ${{ matrix.arch }}
+    needs: test
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 原生 arm64：公开仓库免费。若该标签不可用，退回 ubuntu-22.04-arm。
+          - runner: ubuntu-latest
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 解析版本号
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+            PUSH="${{ inputs.push }}"
+          else
+            VERSION="${GITHUB_REF_NAME}"
+            PUSH="true"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "push=${PUSH}" >> "$GITHUB_OUTPUT"
+          echo "版本=${VERSION} push=${PUSH}"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: 构建（本地 load，先不推）
+        run: |
+          docker buildx build \
+            --platform linux/${{ matrix.arch }} \
+            --build-arg APP_VERSION='${{ steps.version.outputs.version }}' \
+            --build-arg GIT_REVISION='${{ github.sha }}' \
+            -t "$IMAGE:local-${{ matrix.arch }}" \
+            --load .
+
+      - name: 冒烟：容器能起、/health 版本正确、revision 对得上
+        run: |
+          set -euo pipefail
+          EXPECTED='${{ steps.version.outputs.version }}'
+          docker run -d --name smoke -p 9000:9000 "$IMAGE:local-${{ matrix.arch }}"
+
+          ok=false
+          for i in $(seq 1 45); do
+            if curl -fsS --max-time 2 http://localhost:9000/health > /tmp/health.json 2>/dev/null; then
+              ok=true
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ok" != "true" ]; then
+            echo "::error::/health 在 90s 内没有响应"
+            docker logs smoke || true
+            exit 1
+          fi
+
+          cat /tmp/health.json
+          ACTUAL=$(python3 -c 'import json;print(json.load(open("/tmp/health.json"))["version"])')
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "::error::/health 版本为 ${ACTUAL}，期望 ${EXPECTED}"
+            docker logs smoke || true
+            exit 1
+          fi
+          if [ "$ACTUAL" = "dev" ]; then
+            echo "::error::版本号是 dev —— 说明 build-arg 没注入"
+            exit 1
+          fi
+
+          REV=$(docker image inspect -f '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$IMAGE:local-${{ matrix.arch }}")
+          if [ "$REV" != "${{ github.sha }}" ]; then
+            echo "::error::镜像 revision=${REV} 与本次 commit 不符"
+            exit 1
+          fi
+          echo "冒烟通过：version=${ACTUAL} revision=${REV}"
+
+      - name: 推送架构镜像
+        if: steps.version.outputs.push == 'true'
+        run: |
+          set -euo pipefail
+          VERSION='${{ steps.version.outputs.version }}'
+          TAG="${VERSION}-${{ matrix.arch }}"
+          docker tag "$IMAGE:local-${{ matrix.arch }}" "$IMAGE:$TAG"
+          docker push "$IMAGE:$TAG"
+
+          DIGEST=$(docker image inspect -f '{{index .RepoDigests 0}}' "$IMAGE:$TAG" | sed 's/.*@//')
+          echo "$DIGEST" > "digest-${{ matrix.arch }}.txt"
+          echo "pushed $IMAGE:$TAG digest=$DIGEST"
+
+      - name: 上传 digest
+        if: steps.version.outputs.push == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.arch }}
+          path: digest-${{ matrix.arch }}.txt
+          retention-days: 3
+
+  manifest:
+    name: 合成多架构 manifest
+    needs: build
+    if: github.event_name == 'push' || inputs.push
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: digests
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: 合并并验证
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME}"
+          fi
+
+          AMD=$(cat digests/digest-amd64/digest-amd64.txt)
+          ARM=$(cat digests/digest-arm64/digest-arm64.txt)
+
+          docker buildx imagetools create \
+            -t "$IMAGE:${VERSION}" \
+            -t "$IMAGE:latest" \
+            "$IMAGE@${AMD}" \
+            "$IMAGE@${ARM}"
+
+          echo "=== 最终 manifest ==="
+          docker buildx imagetools inspect "$IMAGE:${VERSION}"
+
+          # 两个架构都必须在 manifest 里，否则 NAS（arm64）拉不到
+          docker buildx imagetools inspect "$IMAGE:${VERSION}" --format '{{json .Manifest}}' \
+            | python3 -c 'import json,sys; m=json.load(sys.stdin); archs={x["platform"]["architecture"] for x in m["manifests"]}; print("archs:",sorted(archs)); assert {"amd64","arm64"} <= archs, "缺少架构"'
