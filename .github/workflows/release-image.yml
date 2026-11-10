@@ -43,6 +43,32 @@ env:
   IMAGE: corvofiox/mindmap
 
 jobs:
+  # 版本号与"是否真的推送"统一在这里判定，供后续 job 使用。
+  # 干跑约定：tag 名带 -dryrun 后缀（如 v1.9.22-dryrun）只构建 + 冒烟，不推送。
+  meta:
+    name: 解析版本
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      push: ${{ steps.resolve.outputs.push }}
+    steps:
+      - name: 解析版本号与推送开关
+        id: resolve
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+            PUSH="${{ inputs.push }}"
+          else
+            VERSION="${GITHUB_REF_NAME}"
+            case "$VERSION" in
+              *-dryrun*) PUSH="false" ;;
+              *)         PUSH="true" ;;
+            esac
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "push=${PUSH}" >> "$GITHUB_OUTPUT"
+          echo "版本=${VERSION} push=${PUSH}"
+
   test:
     name: 测试（发布前置门禁）
     runs-on: ubuntu-latest
@@ -67,7 +93,7 @@ jobs:
 
   build:
     name: 构建 ${{ matrix.arch }}
-    needs: test
+    needs: [meta, test]
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -81,27 +107,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 解析版本号
-        id: version
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ inputs.version }}"
-            PUSH="${{ inputs.push }}"
-          else
-            VERSION="${GITHUB_REF_NAME}"
-            PUSH="true"
-          fi
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "push=${PUSH}" >> "$GITHUB_OUTPUT"
-          echo "版本=${VERSION} push=${PUSH}"
-
       - uses: docker/setup-buildx-action@v3
 
       - name: 构建（本地 load，先不推）
         run: |
           docker buildx build \
             --platform linux/${{ matrix.arch }} \
-            --build-arg APP_VERSION='${{ steps.version.outputs.version }}' \
+            --build-arg APP_VERSION='${{ needs.meta.outputs.version }}' \
             --build-arg GIT_REVISION='${{ github.sha }}' \
             -t "$IMAGE:local-${{ matrix.arch }}" \
             --load .
@@ -109,7 +121,7 @@ jobs:
       - name: 冒烟：容器能起、/health 版本正确、revision 对得上
         run: |
           set -euo pipefail
-          EXPECTED='${{ steps.version.outputs.version }}'
+          EXPECTED='${{ needs.meta.outputs.version }}'
           docker run -d --name smoke -p 9000:9000 "$IMAGE:local-${{ matrix.arch }}"
 
           ok=false
@@ -146,10 +158,10 @@ jobs:
           echo "冒烟通过：version=${ACTUAL} revision=${REV}"
 
       - name: 推送架构镜像
-        if: steps.version.outputs.push == 'true'
+        if: needs.meta.outputs.push == 'true'
         run: |
           set -euo pipefail
-          VERSION='${{ steps.version.outputs.version }}'
+          VERSION='${{ needs.meta.outputs.version }}'
           TAG="${VERSION}-${{ matrix.arch }}"
           docker tag "$IMAGE:local-${{ matrix.arch }}" "$IMAGE:$TAG"
           docker push "$IMAGE:$TAG"
@@ -159,7 +171,7 @@ jobs:
           echo "pushed $IMAGE:$TAG digest=$DIGEST"
 
       - name: 上传 digest
-        if: steps.version.outputs.push == 'true'
+        if: needs.meta.outputs.push == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: digest-${{ matrix.arch }}
@@ -168,8 +180,8 @@ jobs:
 
   manifest:
     name: 合成多架构 manifest
-    needs: build
-    if: github.event_name == 'push' || inputs.push
+    needs: [meta, build]
+    if: needs.meta.outputs.push == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -186,11 +198,7 @@ jobs:
       - name: 合并并验证
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ inputs.version }}"
-          else
-            VERSION="${GITHUB_REF_NAME}"
-          fi
+          VERSION='${{ needs.meta.outputs.version }}'
 
           AMD=$(cat digests/digest-amd64/digest-amd64.txt)
           ARM=$(cat digests/digest-arm64/digest-arm64.txt)
