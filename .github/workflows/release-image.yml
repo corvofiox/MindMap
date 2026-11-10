@@ -157,6 +157,15 @@ jobs:
           fi
           echo "冒烟通过：version=${ACTUAL} revision=${REV}"
 
+      # 必须在这里登录：build job 是独立 runner，manifest job 里的 login 不会
+      # 传递过来。少了这一步 docker push 会以未认证身份失败。
+      - name: 登录 Docker Hub
+        if: needs.meta.outputs.push == 'true'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - name: 推送架构镜像
         if: needs.meta.outputs.push == 'true'
         run: |
@@ -169,7 +178,6 @@ jobs:
           DIGEST=$(docker image inspect -f '{{index .RepoDigests 0}}' "$IMAGE:$TAG" | sed 's/.*@//')
           echo "$DIGEST" > "digest-${{ matrix.arch }}.txt"
           echo "pushed $IMAGE:$TAG digest=$DIGEST"
-
       - name: 上传 digest
         if: needs.meta.outputs.push == 'true'
         uses: actions/upload-artifact@v4
