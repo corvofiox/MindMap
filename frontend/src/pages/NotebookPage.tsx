@@ -1,19 +1,43 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { FileText, LayoutGrid, Plus, Search, Trash2, Upload } from 'lucide-react'
+import {
+  ChevronDown,
+  ChevronRight,
+  LayoutGrid,
+  PanelLeft,
+  Trash2,
+  Upload,
+} from 'lucide-react'
 import { useNotebookStore } from '@/store/useNotebookStore'
 import { useNodePoolStore } from '@/features/node-pool/stores/useNodePoolStore'
 import { useUIStore } from '@/store/useUIStore'
 import { sanitizeHTML } from '@/utils/sanitizeHTML'
+import { NotebookSidebar } from '@/features/notebook/NotebookSidebar'
+import { NotebookEditor } from '@/features/notebook/NotebookEditor'
+import '@/features/notebook/notebook.css'
 
 const AUTOSAVE_DELAY = 800
+const SIDEBAR_STORAGE_KEY = 'notebook:sidebar-collapsed'
+
+/** 字数与图片数：从 HTML 里算，避免依赖后端额外字段。 */
+function computeStats(html: string): { chars: number; images: number } {
+  if (!html) return { chars: 0, images: 0 }
+  const holder = document.createElement('div')
+  holder.innerHTML = html
+  const chars = (holder.textContent || '').replace(/\s+/g, '').length
+  return { chars, images: holder.querySelectorAll('img').length }
+}
 
 /**
  * 笔记本工作台：左侧手稿列表 + 中间编辑区（docs §8）。
  *
  * 这一页刻意不复用画布的 shell（侧栏项目树 / 节点池面板）——手稿是"打开就写"
- * 的地方，混进画布的工具条只会制造干扰。顶部只保留两个入口：思维导图、从节点池
- * 导入。
+ * 的地方，混进画布的工具条只会制造干扰。
+ *
+ * 布局约定：
+ *   - 顶部工具栏只放"页面级动作"（导入 / 送入节点池 / 删除 / 思维导图）；
+ *   - 纸张（.notebook-paper）里只有标题、元信息与正文，不放任何破坏性操作；
+ *   - 左栏可收纳，状态记在 localStorage，刷新后保持。
  */
 export function NotebookPage() {
   const navigate = useNavigate()
@@ -33,6 +57,8 @@ export function NotebookPage() {
     create,
     save,
     remove,
+    moveToFolder,
+    addFolder,
     sendToPool,
     restoreFromCard,
   } = useNotebookStore()
@@ -41,6 +67,15 @@ export function NotebookPage() {
 
   const [titleDraft, setTitleDraft] = useState('')
   const [importOpen, setImportOpen] = useState(false)
+  const [stats, setStats] = useState({ chars: 0, images: 0 })
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(SIDEBAR_STORAGE_KEY) === '1'
+    } catch {
+      return false
+    }
+  })
+
   const editorRef = useRef<HTMLDivElement | null>(null)
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingHtml = useRef<string | null>(null)
@@ -66,10 +101,12 @@ export function NotebookPage() {
   useEffect(() => {
     if (!active) {
       setTitleDraft('')
+      setStats({ chars: 0, images: 0 })
       if (editorRef.current) editorRef.current.innerHTML = ''
       return
     }
     setTitleDraft(active.title)
+    setStats(computeStats(active.contentHtml || ''))
     if (editorRef.current) {
       editorRef.current.innerHTML = sanitizeHTML(active.contentHtml || '')
     }
@@ -119,6 +156,18 @@ export function NotebookPage() {
   // 这里只做常规保存，不追加大负载请求）
   useEffect(() => () => flushSave(), [flushSave])
 
+  const toggleSidebar = useCallback(() => {
+    setCollapsed((previous) => {
+      const next = !previous
+      try {
+        localStorage.setItem(SIDEBAR_STORAGE_KEY, next ? '1' : '0')
+      } catch {
+        // 隐私模式下 localStorage 可能不可写，纯 UI 偏好丢了不影响使用
+      }
+      return next
+    })
+  }, [])
+
   const handleCreate = async () => {
     const manuscript = await create()
     if (manuscript) navigate(`/notebook/${manuscript.id}`)
@@ -129,6 +178,14 @@ export function NotebookPage() {
     if (!window.confirm(`删除手稿「${active.title || '未命名'}」？`)) return
     await remove(active.id)
     navigate('/notebook')
+  }
+
+  /** 列表里的删除：删的不是当前打开的那篇时不要跳走。 */
+  const handleDeleteById = async (id: number) => {
+    const target = manuscripts.find((item) => item.id === id)
+    if (!window.confirm(`删除手稿「${target?.title || '未命名'}」？`)) return
+    await remove(id)
+    if (active?.id === id) navigate('/notebook')
   }
 
   const handleSendToPool = async () => {
@@ -153,6 +210,13 @@ export function NotebookPage() {
       addToast({ type: 'success', title: '已还原为手稿', message: `「${manuscript.title}」已加入笔记本` })
       navigate(`/notebook/${manuscript.id}`)
     }
+  }
+
+  const handleContentInput = () => {
+    if (!editorRef.current) return
+    const html = editorRef.current.innerHTML
+    setStats(computeStats(html))
+    scheduleSave({ contentHtml: html })
   }
 
   /**
@@ -185,173 +249,165 @@ export function NotebookPage() {
       editorRef.current.appendChild(holder)
     }
 
-    if (editorRef.current) scheduleSave({ contentHtml: editorRef.current.innerHTML })
+    handleContentInput()
   }
 
   const cards = useMemo(() => Array.from(cardsMap.values()).slice(0, 50), [cardsMap])
-  const saveLabel = saveState === 'saving'
-    ? '保存中…'
-    : saveState === 'saved'
-      ? '已保存'
-      : saveState === 'error'
-        ? '保存失败，点这里重试'
-        : saveState === 'dirty'
-          ? '未保存'
-          : ''
 
   return (
-    <div className="h-screen w-screen flex flex-col bg-gray-50 dark:bg-gray-900">
-      {/* 顶部：模态切换 + 搜索 + 新建 */}
-      <header className="flex items-center gap-3 px-4 py-3 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
-        <span className="font-semibold text-gray-800 dark:text-gray-100 flex items-center gap-2">
-          <FileText size={18} /> 笔记本
-        </span>
-
-        <div className="relative flex-1 max-w-sm">
-          <Search size={15} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
-          <input
-            value={query}
-            onChange={(e) => { void load({ q: e.target.value }) }}
-            placeholder="搜索标题或正文"
-            className="w-full pl-8 pr-3 py-1.5 text-sm rounded-md border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 text-gray-800 dark:text-gray-100"
-          />
-        </div>
-
-        <button
-          onClick={handleCreate}
-          className="px-3 py-1.5 text-sm rounded-md bg-blue-600 text-white hover:bg-blue-700 flex items-center gap-1"
-        >
-          <Plus size={15} /> 新建手稿
-        </button>
-
-        <div className="relative">
+    <div className="flex h-screen w-screen flex-col bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
+      {/* 顶部工具栏：页面级动作都在这里，纸张里不放 */}
+      <header className="z-20 flex h-14 shrink-0 items-center gap-2 border-b border-zinc-200/80 bg-white/85 px-3 backdrop-blur-md dark:border-zinc-800 dark:bg-zinc-900/85">
+        {collapsed && (
           <button
-            onClick={() => setImportOpen((v) => !v)}
-            className="px-3 py-1.5 text-sm rounded-md border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-1"
+            type="button"
+            onClick={toggleSidebar}
+            title="展开侧栏"
+            aria-label="展开侧栏"
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-800 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
           >
-            <Upload size={15} /> 从节点池导入
+            <PanelLeft size={16} />
           </button>
-          {importOpen && (
-            <div className="absolute right-0 mt-1 w-72 max-h-80 overflow-auto rounded-md border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 shadow-lg z-50">
-              {cards.length === 0 && (
-                <p className="px-3 py-2 text-sm text-gray-500">节点池还是空的</p>
-              )}
-              {cards.map((card) => (
-                <button
-                  key={card.id}
-                  onClick={() => { void handleRestore(card.id) }}
-                  className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 truncate"
-                  title={card.name}
-                >
-                  {card.name}
-                </button>
-              ))}
-            </div>
+        )}
+
+        <div className="flex min-w-0 items-center gap-1.5 text-[12.5px]">
+          <span className="font-medium text-zinc-800 dark:text-zinc-100">笔记本</span>
+          {active && (
+            <>
+              <ChevronRight size={13} className="text-zinc-300 dark:text-zinc-600" />
+              <span className="truncate text-zinc-400 dark:text-zinc-500">
+                {saveState === 'saving' ? '保存中…' : '编辑中'}
+              </span>
+            </>
           )}
         </div>
 
-        <button
-          onClick={() => navigate('/projects')}
-          className="ml-auto px-3 py-1.5 text-sm rounded-md border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-1"
-        >
-          <LayoutGrid size={15} /> 思维导图
-        </button>
+        <div className="ml-auto flex items-center gap-1.5">
+          {/* 从节点池导入 */}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setImportOpen((value) => !value)}
+              className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12.5px] font-medium text-zinc-600 transition hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-50"
+            >
+              <Upload size={14} />
+              <span className="hidden sm:inline">从节点池导入</span>
+              <ChevronDown size={12} className={`hidden transition-transform sm:block ${importOpen ? 'rotate-180' : ''}`} />
+            </button>
+
+            {importOpen && (
+              <>
+                <div className="fixed inset-0 z-30" onClick={() => setImportOpen(false)} aria-hidden="true" />
+                <div className="absolute right-0 z-40 mt-1.5 w-72 overflow-hidden rounded-xl border border-zinc-200/80 bg-white shadow-xl shadow-zinc-900/5 dark:border-zinc-800 dark:bg-zinc-900 dark:shadow-black/40">
+                  <div className="border-b border-zinc-100 px-3 py-2 text-[11px] font-medium uppercase tracking-wider text-zinc-400 dark:border-zinc-800">
+                    节点池卡片
+                  </div>
+                  <div className="notebook-scroll max-h-80 overflow-y-auto p-1">
+                    {cards.length === 0 && (
+                      <p className="px-2.5 py-6 text-center text-[12.5px] text-zinc-400">节点池还是空的</p>
+                    )}
+                    {cards.map((card) => (
+                      <button
+                        key={card.id}
+                        type="button"
+                        onClick={() => { void handleRestore(card.id) }}
+                        className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left transition hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                        title={card.name}
+                      >
+                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-zinc-100 text-[11px] font-medium text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
+                          {(card.name || '未').slice(0, 1)}
+                        </span>
+                        <span className="min-w-0 flex-1 truncate text-[12.5px] text-zinc-700 dark:text-zinc-200">
+                          {card.name}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* 送入节点池：只在有文档时出现 */}
+          {active && (
+            <button
+              type="button"
+              onClick={() => { void handleSendToPool() }}
+              className="rounded-lg bg-blue-600 px-3 py-1.5 text-[12.5px] font-medium text-white shadow-sm transition hover:bg-blue-700 active:scale-[0.99] dark:hover:bg-blue-500"
+            >
+              送入节点池
+            </button>
+          )}
+
+          {/* 删除：图标按钮，红 hover，和主操作拉开距离 */}
+          {active && (
+            <button
+              type="button"
+              onClick={() => { void handleDelete() }}
+              title="删除手稿"
+              aria-label="删除手稿"
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-zinc-400 transition hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-500/10 dark:hover:text-red-400"
+            >
+              <Trash2 size={15} />
+            </button>
+          )}
+
+          <span className="mx-0.5 h-5 w-px bg-zinc-200 dark:bg-zinc-800" aria-hidden="true" />
+
+          <button
+            type="button"
+            onClick={() => navigate('/projects')}
+            className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12.5px] font-medium text-zinc-600 transition hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-50"
+          >
+            <LayoutGrid size={14} />
+            思维导图
+          </button>
+        </div>
       </header>
 
-      <div className="flex-1 flex min-h-0">
-        {/* 左：手稿列表 */}
-        <aside className="w-72 shrink-0 border-r border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 overflow-y-auto">
-          {loading && <p className="px-4 py-3 text-sm text-gray-500">加载中…</p>}
-          {!loading && manuscripts.length === 0 && (
-            <p className="px-4 py-6 text-sm text-gray-500">
-              还没有手稿。点右上角「新建手稿」开始记录。
-            </p>
-          )}
-          {manuscripts.map((item) => (
-            <button
-              key={item.id}
-              onClick={() => navigate(`/notebook/${item.id}`)}
-              className={`w-full text-left px-4 py-3 border-b border-gray-100 dark:border-gray-700/60 hover:bg-gray-50 dark:hover:bg-gray-700/50 ${
-                active?.id === item.id ? 'bg-blue-50 dark:bg-blue-900/20' : ''
-              }`}
-            >
-              <div className="flex items-center gap-1.5">
-                <span className="flex-1 truncate text-sm font-medium text-gray-800 dark:text-gray-100">
-                  {item.title || '未命名手稿'}
-                </span>
-                {item.imageCount > 0 && (
-                  <span className="text-[10px] text-gray-400">{item.imageCount} 图</span>
-                )}
-              </div>
-              <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400 truncate">
-                {item.previewText || '空白手稿'}
-              </p>
-            </button>
-          ))}
-          {folders.length > 0 && (
-            <div className="px-4 py-3 text-xs text-gray-400">
-              文件夹：{folders.map((f) => f.name).join('、')}
-            </div>
-          )}
+      <div className="flex min-h-0 flex-1">
+        {/* 左栏：可收纳 */}
+        <aside
+          className={`shrink-0 overflow-hidden border-zinc-200/80 transition-[width] duration-300 ease-out dark:border-zinc-800 ${
+            collapsed ? 'w-0' : 'w-[288px] border-r'
+          }`}
+          aria-hidden={collapsed}
+        >
+          <div className="h-full w-[288px]">
+            <NotebookSidebar
+              manuscripts={manuscripts}
+              folders={folders}
+              activeId={active?.id}
+              query={query}
+              loading={loading}
+              onSearch={(value) => { void load({ q: value }) }}
+              onCreate={() => { void handleCreate() }}
+              onOpen={(id) => navigate(`/notebook/${id}`)}
+              onCollapse={toggleSidebar}
+              onAddFolder={(name) => { void addFolder(name) }}
+              onMoveToFolder={(id, folderId) => { void moveToFolder(id, folderId) }}
+              onDelete={(id) => { void handleDeleteById(id) }}
+            />
+          </div>
         </aside>
 
-        {/* 右：编辑区 */}
-        <main className="flex-1 min-w-0 overflow-y-auto">
-          {!active ? (
-            <div className="h-full flex items-center justify-center text-sm text-gray-400">
-              选择左侧手稿，或新建一篇
-            </div>
-          ) : (
-            <div className="max-w-3xl mx-auto px-8 py-8">
-              <div className="flex items-center gap-2">
-                <input
-                  value={titleDraft}
-                  onChange={(e) => {
-                    setTitleDraft(e.target.value)
-                    scheduleSave({ title: e.target.value })
-                  }}
-                  onBlur={flushSave}
-                  placeholder="手稿标题"
-                  className="flex-1 text-2xl font-semibold bg-transparent outline-none text-gray-900 dark:text-gray-50"
-                />
-                <button
-                  onClick={handleSendToPool}
-                  className="px-3 py-1.5 text-sm rounded-md bg-emerald-600 text-white hover:bg-emerald-700 whitespace-nowrap"
-                >
-                  送入节点池
-                </button>
-                <button
-                  onClick={handleDelete}
-                  title="删除手稿"
-                  className="p-1.5 rounded-md text-gray-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20"
-                >
-                  <Trash2 size={16} />
-                </button>
-              </div>
-
-              <div
-                ref={editorRef}
-                contentEditable
-                suppressContentEditableWarning
-                data-testid="manuscript-editor"
-                onInput={() => {
-                  if (editorRef.current) scheduleSave({ contentHtml: editorRef.current.innerHTML })
-                }}
-                onPaste={handlePaste}
-                onBlur={flushSave}
-                className="mt-6 min-h-[60vh] outline-none text-[15px] leading-7 text-gray-800 dark:text-gray-100 [&_img]:max-w-full [&_img]:rounded-md"
-              />
-
-              <div className="mt-4 h-5 text-xs text-gray-400">
-                {saveState === 'error' ? (
-                  <button className="text-red-500" onClick={flushSave}>{saveLabel}</button>
-                ) : (
-                  saveLabel
-                )}
-              </div>
-            </div>
-          )}
-        </main>
+        <NotebookEditor
+          active={active}
+          titleDraft={titleDraft}
+          editorRef={editorRef}
+          saveState={saveState}
+          stats={stats}
+          onCreate={() => { void handleCreate() }}
+          onTitleChange={(value) => {
+            setTitleDraft(value)
+            scheduleSave({ title: value })
+          }}
+          onTitleBlur={flushSave}
+          onContentInput={handleContentInput}
+          onPaste={handlePaste}
+          onBlur={flushSave}
+          onRetrySave={flushSave}
+        />
       </div>
     </div>
   )

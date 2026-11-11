@@ -40,6 +40,8 @@ interface NotebookState {
   /** 本地即时更新 + 落库；保存状态由 saveState 暴露给 UI。 */
   save: (patch: { title?: string; contentHtml?: string }) => Promise<void>
   remove: (id: number) => Promise<void>
+  /** 收纳：把手稿移到某个文件夹（null = 未归档）。 */
+  moveToFolder: (id: number, folderId: number | null) => Promise<void>
   sendToPool: (id: number, folderId?: number | null) => Promise<NodeCard | null>
   restoreFromCard: (cardId: number) => Promise<Manuscript | null>
   addFolder: (name: string) => Promise<void>
@@ -157,6 +159,21 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
       manuscripts: state.manuscripts.filter((item) => item.id !== id),
       active: state.active?.id === id ? null : state.active,
     }))
+  },
+
+  moveToFolder: async (id, folderId) => {
+    try {
+      const updated = await updateManuscript(id, { folderId })
+      set((state) => ({
+        manuscripts: state.manuscripts.map((item) =>
+          item.id === id ? { ...item, folderId: updated.folderId } : item,
+        ),
+        active: state.active?.id === id ? { ...state.active, folderId: updated.folderId } : state.active,
+      }))
+    } catch (error) {
+      logger.error('[notebook] 移动到手稿夹失败', error)
+      set({ error: error instanceof Error ? error.message : '移动失败' })
+    }
   },
 
   sendToPool: async (id, folderId = null) => {

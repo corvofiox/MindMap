@@ -6,7 +6,7 @@
  * 点击打开与"送入节点池"的接线。
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 
 vi.mock('@/services/api', async () => {
@@ -35,6 +35,7 @@ vi.mock('@/services/api', async () => {
     manuscriptToNodeCard: vi.fn(async () => ({ id: 1, name: '卡片' })),
     nodeCardToManuscript: vi.fn(),
     getManuscriptFolders: vi.fn(async () => []),
+    createManuscriptFolder: vi.fn(async (name: string) => ({ id: 9, name, parentId: null, sortOrder: 0, createdAt: 0 })),
     getNodePool: vi.fn(async () => []),
   }
 })
