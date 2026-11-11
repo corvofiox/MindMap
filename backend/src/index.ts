@@ -30,6 +30,7 @@ import { errorHandler } from './middleware/error.middleware.js'
 import { initDatabase } from './database/init.js'
 import { initializeDb, registerShutdownHandlers } from './database/connection.js'
 import { migrateCanvasesToYjs } from './database/migrate-to-yjs.js'
+import { migrateNodesToUnified } from './database/migrate-node-unify.js'
 import { fileRouter } from './controllers/file.controller.js'
 import { getValidatedEnv, isTrustProxyEnabled } from './utils/env.js'
 import { log, logError } from './utils/logger.js'
@@ -157,6 +158,11 @@ async function start() {
     // yjs_update column.
     await migrateCanvasesToYjs().catch((err) => {
       logError('Yjs data migration failed (non-fatal, will retry next start)', err)
+    })
+    // 统一节点迁移：先把 base64 图抽成文件，再改结构（见 docs §17）。
+    // 必须在 listen 之前跑完——此刻没有任何活跃 Y.Doc 房间。
+    await migrateNodesToUnified().catch((err) => {
+      logError('Node unification migration failed', (err as Error).message)
     })
 
     // WebSocket server configuration
