@@ -2281,7 +2281,20 @@ export function CanvasPage() {
           setCurrentTool(currentToolRef.current === 'node' ? 'select' : 'node')
           return
         } else if (e.key === 'i' || e.key === 'I') {
-          setCurrentTool(currentToolRef.current === 'image' ? 'select' : 'image')
+          // 统一节点后没有"图片节点"这种类型：I 的含义是"给当前节点插一张图"，
+          // 图片是正文里的块，不是另一种节点。
+          const targetNodeId = selectedIdsRef.current[0]
+          if (targetNodeId) {
+            window.dispatchEvent(
+              new CustomEvent('nodeImageUploadRequest', { detail: { nodeId: targetNodeId } }),
+            )
+          } else {
+            addToast({
+              type: 'info',
+              title: '先选中一个节点',
+              message: '图片会插进节点正文；也可以双击节点后直接粘贴图片',
+            })
+          }
           return
         } else if (e.key === 'r' || e.key === 'R') {
           setCurrentTool(currentToolRef.current === 'domain' ? 'select' : 'domain')
@@ -3909,32 +3922,6 @@ export function CanvasPage() {
       addNode(newNode)
 
       setCurrentTool('select')
-    } else if (currentTool === 'image') {
-      const newNode: Node = {
-        id: generateId('node'),
-        x: snappedX - nodeDefaults.imageNode.width / 2,
-        y: snappedY - nodeDefaults.imageNode.height / 2,
-        width: nodeDefaults.imageNode.width,
-        height: nodeDefaults.imageNode.height,
-        title: '',
-        content: '',
-        fontSize: nodeDefaults.imageNode.fontSize,
-        textAlign: nodeDefaults.imageNode.titleAlign,
-        titleAlign: nodeDefaults.imageNode.titleAlign,
-        collapsedTitleAlign: nodeDefaults.imageNode.collapsedTitleAlign,
-        collapsed: false,
-        locked: false,
-      }
-
-      addNode(newNode)
-      setCurrentTool('select')
-      // 统一节点：图片不再是节点类型，而是正文里的块。这里建好空节点后请
-      // NodeItem 打开文件选择器，把图直接插进它的正文（三入口之一）。
-      window.setTimeout(() => {
-        window.dispatchEvent(
-          new CustomEvent('nodeImageUploadRequest', { detail: { nodeId: newNode.id } }),
-        )
-      }, 0)
     }
   }, [connections, updateConnection, nodes, panX, panY, zoom, containerRef, currentTool, isDragging, setSelectedIds, dragMode, addNode, setCurrentTool, findBestPort, stylePanelOpen, closeStylePanel, nodeDefaults])
 
@@ -4276,7 +4263,7 @@ export function CanvasPage() {
         }}
 
         style={{
-          cursor: customCursor || (isCreatingConnection ? 'crosshair' : isCreatingGroup ? 'crosshair' : isDragging ? 'grabbing' : isDefaultSelectionTool(currentTool) || currentTool === 'pan' || isSpacePressed ? 'grab' : currentTool === 'node' || currentTool === 'image' ? 'pointer' : currentTool === 'domain' ? 'cell' : currentTool === 'connection' ? 'crosshair' : currentTool === 'group' ? 'crosshair' : 'default'),
+          cursor: customCursor || (isCreatingConnection ? 'crosshair' : isCreatingGroup ? 'crosshair' : isDragging ? 'grabbing' : isDefaultSelectionTool(currentTool) || currentTool === 'pan' || isSpacePressed ? 'grab' : currentTool === 'node' ? 'pointer' : currentTool === 'domain' ? 'cell' : currentTool === 'connection' ? 'crosshair' : currentTool === 'group' ? 'crosshair' : 'default'),
           userSelect: isDragging || currentTool === 'pan' ? 'none' : undefined,
         }}
       >
@@ -5705,6 +5692,14 @@ export function CanvasPage() {
           if (!['fontSize', 'justifyLeft', 'justifyCenter', 'justifyRight'].includes(command)) {
             execFormatCommand(command, value)
           }
+        }}
+        onInsertImage={() => {
+          // 统一节点：这张图会插入到正在编辑的节点正文里，而不是新建"图片节点"。
+          const targetNodeId = editingId ?? selectedIdsRef.current[0]
+          if (!targetNodeId) return
+          window.dispatchEvent(
+            new CustomEvent('nodeImageUploadRequest', { detail: { nodeId: targetNodeId } }),
+          )
         }}
         onClose={() => setRichTextToolbarVisible(false)}
         onFocus={() => {

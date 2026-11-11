@@ -7,7 +7,9 @@ import { X, Loader2 } from 'lucide-react'
 
 export function NodeDefaultsDialog() {
   const { nodeDefaultsOpen, setNodeDefaultsOpen, nodeDefaults, setNodeDefaults, saveNodeDefaults, resetNodeDefaults, addSuccessToast, addErrorToast } = useUIStore()
-  const [activeTab, setActiveTab] = useState<'text' | 'image'>('text')
+  // 统一节点后只剩一种节点：外观只有一套，不再分"文本节点 / 图片节点"两个页签。
+  // imageNode 的默认值仍保留在类型与存储里（老配置反序列化时要用），只是不再暴露编辑入口。
+  const activeTab: 'text' | 'image' = 'text'
   const [tempDefaults, setTempDefaults] = useState<NodeDefaults>(DEFAULT_NODE_DEFAULTS)
   const [isSaving, setIsSaving] = useState(false)
 
@@ -92,26 +94,9 @@ export function NodeDefaultsDialog() {
 
         <div className="border-b border-gray-200 dark:border-gray-700">
           <div className="flex">
-            <button
-              className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
-                activeTab === 'text'
-                  ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 dark:border-blue-400'
-                  : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
-              }`}
-              onClick={() => setActiveTab('text')}
-            >
-              文本节点
-            </button>
-            <button
-              className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
-                activeTab === 'image'
-                  ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 dark:border-blue-400'
-                  : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
-              }`}
-              onClick={() => setActiveTab('image')}
-            >
-              图片节点
-            </button>
+            <span className="flex-1 px-4 py-3 text-sm font-medium text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 dark:border-blue-400">
+              节点外观
+            </span>
           </div>
         </div>
 

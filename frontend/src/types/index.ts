@@ -258,7 +258,7 @@ export interface AwarenessState {
 }
 
 // Tool types
-export type Tool = 'select' | 'pan' | 'node' | 'image' | 'domain' | 'group' | 'connection'
+export type Tool = 'select' | 'pan' | 'node' | 'domain' | 'group' | 'connection'
 
 // View modes
 export type DragMode = 'free' | 'grid'

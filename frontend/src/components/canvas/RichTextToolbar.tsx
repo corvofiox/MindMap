@@ -1,4 +1,4 @@
-import { Bold, Italic, Underline, Strikethrough, Palette, X, RemoveFormatting } from 'lucide-react'
+import { Bold, Italic, Underline, Strikethrough, Palette, X, RemoveFormatting, ImagePlus } from 'lucide-react'
 import { useState, useCallback, useRef, useEffect, useLayoutEffect } from 'react'
 import { Z_INDEX } from '@/constants'
 import { queryFormatState, queryCurrentColor, ColorUtils } from '@/utils/richTextCommands'
@@ -7,6 +7,8 @@ interface RichTextToolbarProps {
   visible: boolean
   position: { x: number; y: number }
   onCommand: (command: string, value?: string) => void
+  /** 统一节点：图片是正文里的块，所以"插入图片"放在文字工具条上，而不是画布工具里。 */
+  onInsertImage?: () => void
   onClose: () => void
   onFocus?: () => void
 }
@@ -18,7 +20,7 @@ const TEXT_COLORS = [
 
 const FORMAT_COMMANDS = ['bold', 'italic', 'underline', 'strikeThrough'] as const
 
-export function RichTextToolbar({ visible, position, onCommand, onClose, onFocus }: RichTextToolbarProps) {
+export function RichTextToolbar({ visible, position, onCommand, onInsertImage, onClose, onFocus }: RichTextToolbarProps) {
   const [showColorDropdown, setShowColorDropdown] = useState(false)
   const [activeFormats, setActiveFormats] = useState<Record<string, boolean>>({})
   const [activeColor, setActiveColor] = useState<string | null>(null)
@@ -263,6 +265,22 @@ export function RichTextToolbar({ visible, position, onCommand, onClose, onFocus
       </div>
 
       <div className="w-px h-6 bg-gray-200 dark:bg-gray-600 mx-1" />
+
+      {onInsertImage && (
+        <button
+          tabIndex={-1}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={(e) => {
+            e.stopPropagation()
+            e.preventDefault()
+            onInsertImage()
+          }}
+          className="p-2 rounded transition-colors hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400"
+          title="插入图片（也可以直接粘贴或拖入）"
+        >
+          <ImagePlus className="w-4 h-4" />
+        </button>
+      )}
 
       <button
         tabIndex={-1}

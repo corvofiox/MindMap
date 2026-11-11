@@ -17,7 +17,6 @@ import {
   Check,
   Map,
   Layout,
-  Image as ImageIcon,
   Pencil,
   ChevronDown,
   GitBranch,
@@ -50,13 +49,13 @@ interface CanvasToolbarProps {
 
 const tools: { id: Tool; icon: typeof MousePointer2; label: string; shortcut: string }[] = [
   { id: 'node', icon: Square, label: '节点', shortcut: 'N' },
-  { id: 'image', icon: ImageIcon, label: '图片', shortcut: 'I' },
   { id: 'connection', icon: Link, label: '连线', shortcut: 'L' },
   { id: 'group', icon: Layers, label: '分组', shortcut: 'G' },
   { id: 'domain', icon: Layout, label: '创建域', shortcut: 'R' },
 ]
 
-const toolSeparators = [1, 2]
+// 分隔符按"创建 / 组织"分组：节点·连线 | 分组·域
+const toolSeparators = [1]
 
 export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToolbarProps) {
   const {
