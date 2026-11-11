@@ -176,3 +176,36 @@ describe('左栏收纳动作', () => {
     promptSpy.mockRestore()
   })
 })
+
+describe('编辑区工具栏', () => {
+  it('打开手稿时显示格式工具栏', () => {
+    renderPage()
+    expect(screen.getByTestId('notebook-format-toolbar')).toBeTruthy()
+  })
+
+  it('没有打开手稿时不显示', () => {
+    useNotebookStore.setState({ active: null })
+    renderPage()
+    expect(screen.queryByTestId('notebook-format-toolbar')).toBeNull()
+  })
+
+  it('点「加粗」会在编辑器上执行 bold 命令', () => {
+    const execCommand = vi.fn().mockReturnValue(true)
+    ;(document as unknown as { execCommand: typeof execCommand }).execCommand = execCommand
+    renderPage()
+
+    fireEvent.click(screen.getByLabelText('加粗 (Ctrl+B)'))
+
+    expect(execCommand).toHaveBeenCalledWith('bold', false, undefined)
+  })
+
+  it('点「标题 2」执行 formatBlock H2', () => {
+    const execCommand = vi.fn().mockReturnValue(true)
+    ;(document as unknown as { execCommand: typeof execCommand }).execCommand = execCommand
+    renderPage()
+
+    fireEvent.click(screen.getByLabelText('标题 2'))
+
+    expect(execCommand).toHaveBeenCalledWith('formatBlock', false, 'H2')
+  })
+})

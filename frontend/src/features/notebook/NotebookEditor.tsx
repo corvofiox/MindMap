@@ -1,4 +1,4 @@
-import type { RefObject } from 'react'
+import type { ReactNode, RefObject } from 'react'
 import { BookOpen, Plus } from 'lucide-react'
 import type { Manuscript } from '@/services/api'
 import type { SaveState } from '@/store/useNotebookStore'
@@ -11,6 +11,8 @@ interface NotebookEditorProps {
   saveState: SaveState
   stats: { chars: number; images: number }
   onCreate: () => void
+  /** 格式工具栏（由页面注入，便于复用命令逻辑与选区状态） */
+  toolbar?: ReactNode
   onTitleChange: (value: string) => void
   onTitleBlur: () => void
   onContentInput: () => void
@@ -73,6 +75,7 @@ export function NotebookEditor({
   saveState,
   stats,
   onCreate,
+  toolbar,
   onTitleChange,
   onTitleBlur,
   onContentInput,
@@ -104,7 +107,8 @@ export function NotebookEditor({
 
   return (
     <main className="notebook-scroll flex-1 overflow-y-auto bg-zinc-50/70 dark:bg-zinc-950">
-      <div className="mx-auto w-full max-w-[880px] px-5 pb-16 pt-8 lg:px-8">
+      <div className="mx-auto w-full max-w-[880px] px-5 pb-16 pt-4 lg:px-8">
+        {toolbar}
         <article
           key={active.id}
           className="notebook-paper rounded-2xl border border-zinc-200/80 bg-white shadow-[0_1px_2px_rgba(24,24,27,0.04),0_12px_32px_-20px_rgba(24,24,27,0.18)] dark:border-zinc-800 dark:bg-zinc-900"

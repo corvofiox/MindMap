@@ -14,10 +14,25 @@ import { useUIStore } from '@/store/useUIStore'
 import { sanitizeHTML } from '@/utils/sanitizeHTML'
 import { NotebookSidebar } from '@/features/notebook/NotebookSidebar'
 import { NotebookEditor } from '@/features/notebook/NotebookEditor'
+import {
+  NotebookFormatToolbar,
+  type BlockFormat,
+  type InlineFormats,
+} from '@/features/notebook/NotebookFormatToolbar'
+import { uploadFile } from '@/services/api'
 import '@/features/notebook/notebook.css'
 
 const AUTOSAVE_DELAY = 800
 const SIDEBAR_STORAGE_KEY = 'notebook:sidebar-collapsed'
+
+const EMPTY_FORMATS: InlineFormats = {
+  bold: false,
+  italic: false,
+  underline: false,
+  strikeThrough: false,
+  insertUnorderedList: false,
+  insertOrderedList: false,
+}
 
 /** 字数与图片数：从 HTML 里算，避免依赖后端额外字段。 */
 function computeStats(html: string): { chars: number; images: number } {
@@ -68,6 +83,9 @@ export function NotebookPage() {
   const [titleDraft, setTitleDraft] = useState('')
   const [importOpen, setImportOpen] = useState(false)
   const [stats, setStats] = useState({ chars: 0, images: 0 })
+  const [formats, setFormats] = useState<InlineFormats>(EMPTY_FORMATS)
+  const [block, setBlock] = useState<BlockFormat>('p')
+  const imageInputRef = useRef<HTMLInputElement | null>(null)
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     try {
       return localStorage.getItem(SIDEBAR_STORAGE_KEY) === '1'
@@ -102,11 +120,15 @@ export function NotebookPage() {
     if (!active) {
       setTitleDraft('')
       setStats({ chars: 0, images: 0 })
+      setFormats(EMPTY_FORMATS)
+      setBlock('p')
       if (editorRef.current) editorRef.current.innerHTML = ''
       return
     }
     setTitleDraft(active.title)
     setStats(computeStats(active.contentHtml || ''))
+    setFormats(EMPTY_FORMATS)
+    setBlock('p')
     if (editorRef.current) {
       editorRef.current.innerHTML = sanitizeHTML(active.contentHtml || '')
     }
@@ -212,11 +234,109 @@ export function NotebookPage() {
     }
   }
 
-  const handleContentInput = () => {
+  const handleContentInput = useCallback(() => {
     if (!editorRef.current) return
     const html = editorRef.current.innerHTML
     setStats(computeStats(html))
     scheduleSave({ contentHtml: html })
+  }, [scheduleSave])
+
+  /**
+   * 把 HTML 插到光标处（没有光标就追加）。
+   * 粘贴采集与"插入图片"共用这一段，避免两处各写一份插入逻辑后行为跑偏。
+   */
+  const insertHtmlAtCaret = useCallback((markup: string) => {
+    const editor = editorRef.current
+    if (!editor) return
+    const holder = document.createElement('div')
+    holder.innerHTML = markup
+
+    const selection = window.getSelection()
+    const hasCaret = selection !== null
+      && selection.rangeCount > 0
+      && selection.anchorNode !== null
+      && editor.contains(selection.anchorNode)
+
+    if (hasCaret && selection !== null) {
+      const range = selection.getRangeAt(0)
+      range.deleteContents()
+      const fragment = document.createDocumentFragment()
+      while (holder.firstChild) fragment.appendChild(holder.firstChild)
+      range.insertNode(fragment)
+      range.collapse(false)
+    } else {
+      editor.appendChild(holder)
+    }
+    handleContentInput()
+  }, [handleContentInput])
+
+  /** 工具栏状态：只在选区位于编辑器内时刷新，避免点到侧栏时状态乱跳。 */
+  const refreshFormatState = useCallback(() => {
+    const editor = editorRef.current
+    if (!editor) return
+    const selection = window.getSelection()
+    const inside = selection !== null
+      && selection.rangeCount > 0
+      && selection.anchorNode !== null
+      && editor.contains(selection.anchorNode)
+    if (!inside) return
+
+    const state = (command: string) => {
+      try {
+        return document.queryCommandState(command)
+      } catch {
+        return false
+      }
+    }
+    setFormats({
+      bold: state('bold'),
+      italic: state('italic'),
+      underline: state('underline'),
+      strikeThrough: state('strikeThrough'),
+      insertUnorderedList: state('insertUnorderedList'),
+      insertOrderedList: state('insertOrderedList'),
+    })
+
+    try {
+      const raw = String(document.queryCommandValue('formatBlock') || '').toLowerCase().replace(/[<>]/g, '')
+      setBlock(raw === 'h1' || raw === 'h2' || raw === 'h3' || raw === 'blockquote' ? raw : 'p')
+    } catch {
+      setBlock('p')
+    }
+  }, [])
+
+  useEffect(() => {
+    document.addEventListener('selectionchange', refreshFormatState)
+    return () => document.removeEventListener('selectionchange', refreshFormatState)
+  }, [refreshFormatState])
+
+  const runFormatCommand = useCallback((command: string, value?: string) => {
+    const editor = editorRef.current
+    if (!editor) return
+    editor.focus()
+    try {
+      document.execCommand(command, false, value)
+    } catch {
+      // 某些环境（jsdom / 极旧浏览器）没有 execCommand，静默降级
+    }
+    handleContentInput()
+    refreshFormatState()
+  }, [handleContentInput, refreshFormatState])
+
+  const handleImagePicked = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    try {
+      const uploaded = await uploadFile(file)
+      insertHtmlAtCaret(`<img src="${uploaded.url}" data-file-id="${uploaded.id}" alt="">`)
+    } catch (error) {
+      addToast({
+        type: 'error',
+        title: '插入图片失败',
+        message: error instanceof Error ? error.message : '请稍后重试',
+      })
+    }
   }
 
   /**
@@ -230,26 +350,7 @@ export function NotebookPage() {
 
     event.preventDefault()
     const safe = html ? sanitizeHTML(html) : sanitizeHTML(`<p>${text.replace(/</g, '&lt;')}</p>`)
-    const holder = document.createElement('div')
-    holder.innerHTML = safe
-
-    const selection = window.getSelection()
-    const hasCaret = selection !== null && selection.rangeCount > 0 && editorRef.current !== null
-      && selection.anchorNode !== null && editorRef.current.contains(selection.anchorNode)
-
-    if (hasCaret && selection !== null) {
-      const range = selection.getRangeAt(0)
-      range.deleteContents()
-      const fragment = document.createDocumentFragment()
-      while (holder.firstChild) fragment.appendChild(holder.firstChild)
-      range.insertNode(fragment)
-      range.collapse(false)
-    } else if (editorRef.current) {
-      // 没有光标（例如刚点开编辑器还没聚焦）：退化为追加到末尾，不能吞掉粘贴。
-      editorRef.current.appendChild(holder)
-    }
-
-    handleContentInput()
+    insertHtmlAtCaret(safe)
   }
 
   const cards = useMemo(() => Array.from(cardsMap.values()).slice(0, 50), [cardsMap])
@@ -398,6 +499,14 @@ export function NotebookPage() {
           saveState={saveState}
           stats={stats}
           onCreate={() => { void handleCreate() }}
+          toolbar={active ? (
+            <NotebookFormatToolbar
+              block={block}
+              formats={formats}
+              onCommand={runFormatCommand}
+              onInsertImage={() => imageInputRef.current?.click()}
+            />
+          ) : null}
           onTitleChange={(value) => {
             setTitleDraft(value)
             scheduleSave({ title: value })
@@ -409,6 +518,15 @@ export function NotebookPage() {
           onRetrySave={flushSave}
         />
       </div>
+
+      {/* 插入图片：隐藏的文件选择器，由工具栏的图片按钮触发 */}
+      <input
+        ref={imageInputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/gif,image/webp"
+        className="hidden"
+        onChange={(event) => { void handleImagePicked(event) }}
+      />
     </div>
   )
 }
