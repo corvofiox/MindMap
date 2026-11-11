@@ -84,6 +84,29 @@ export async function uploadImage(file: File): Promise<{ url: string, filename: 
   return await apiClient.post<{ url: string, filename: string, mimetype: string, size: number }>(API_ENDPOINTS.UPLOAD, formData)
 }
 
+export interface UploadedFile {
+  id: number
+  sha256: string
+  /** 短 URL（`/api/files/<sha256>`），可直接放进 <img src> */
+  url: string
+  filename: string
+  mimetype: string
+  size: number
+  deduped: boolean
+}
+
+/**
+ * 统一节点的图片来源：上传到内容寻址的文件服务，拿回短 URL。
+ *
+ * 与 `uploadImage` 的区别是关键的——后者返回 base64 data URL，会把节点正文
+ * 撑成几 MB 的文本（见 docs/requirements-notebook.md §14.3）。新代码一律走这个。
+ */
+export async function uploadFile(file: File): Promise<UploadedFile> {
+  const formData = new FormData()
+  formData.append('image', file)
+  return await apiClient.post<UploadedFile>(API_ENDPOINTS.UPLOAD_FILE, formData)
+}
+
 // Projects API
 export async function getProjects(): Promise<Project[]> {
   return await apiClient.get<Project[]>(API_ENDPOINTS.PROJECTS)

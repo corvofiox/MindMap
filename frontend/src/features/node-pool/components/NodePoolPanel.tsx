@@ -110,11 +110,11 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
           const card = await addCard({
             name: node.title || node.content || '未命名',
             content: JSON.stringify(node),
-            type: node.type || 'text',
+            type: node.cover ? 'image' : 'text',
             color: node.color,
             tags: null,
             sortOrder: 0,
-            thumbnail: node.type === 'image' ? node.imageUrl : undefined,
+            thumbnail: node.cover,
           })
           createdCardIds.set(nodeId, card.id)
         },

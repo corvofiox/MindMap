@@ -292,7 +292,6 @@ export const NodeItem = memo(function NodeItem({ node, isSelected, zoom, onDragS
   const contextMenuStartRef = useRef({ x: 0, y: 0 })
   const timerRefsRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set())
   const imageRef = useRef<HTMLImageElement | null>(null)
-  const uploadSeqRef = useRef(0)
   const inputSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const dragSyncThrottleRef = useRef<number>(0)
   const resizeSyncThrottleRef = useRef<number>(0)
@@ -375,43 +374,69 @@ export const NodeItem = memo(function NodeItem({ node, isSelected, zoom, onDragS
     }
   }, [node.id])
 
-  // Image Upload Handler
-  const handleImageUpload = useCallback(async (file: File) => {
-    // 请求序号：防止快速连续上传时旧请求的 onload 覆盖新结果（D13）
-    const requestSeq = ++uploadSeqRef.current
-    try {
-      // 使用 import.meta.glob 预加载的模块
-      const apiModule = await loadApiModule()
-      const { uploadImage } = apiModule
-      const { url } = await uploadImage(file)
+  // 图片入口（粘贴 / 拖入 / 工具栏三处共用）。
+  //
+  // 统一节点后图片是正文里的一个 <img> 块，不再是"把节点变成图片类型"：
+  //   - 正在编辑正文 → 在光标处插入，随后走 saveContent 的正常提交路径
+  //   - 否则 → 追加到正文末尾
+  // 两种情况都补齐 cover（取第一张图），供画布缩略图/拖拽影子/节点池卡片使用。
+  const insertImageMarkup = useCallback((url: string, fileId?: number) => {
+    const attr = fileId === undefined ? '' : ` data-file-id="${fileId}"`
+    const markup = `<img src="${url}"${attr} alt="">`
 
-      // 已有更新的上传请求，丢弃本次结果
-      if (requestSeq !== uploadSeqRef.current) return
+    const editor = contentRef.current
+    const selection = window.getSelection()
+    const canInsertAtCaret =
+      editingField === 'content' &&
+      editor !== null &&
+      selection !== null &&
+      selection.rangeCount > 0 &&
+      selection.anchorNode !== null &&
+      editor.contains(selection.anchorNode)
 
-      // Load image to get dimensions
-      const img = new Image()
-      imageRef.current = img
-      img.src = url
-      img.onload = () => {
-        if (requestSeq !== uploadSeqRef.current) return
-        const aspectRatio = img.width / img.height
-        updateNode(node.id, {
-          imageUrl: url,
-          aspectRatio: aspectRatio,
-          type: 'image',
-          height: toFinite(node.width, NODE_DEFAULTS.WIDTH) / toFinite(aspectRatio, 1)
-        })
-        addToast({ type: 'success', title: '上传成功', message: '图片已上传' })
+    if (canInsertAtCaret && selection !== null) {
+      const range = selection.getRangeAt(0)
+      range.deleteContents()
+      const holder = document.createElement('div')
+      holder.innerHTML = markup
+      const imageEl = holder.firstChild
+      if (imageEl) {
+        range.insertNode(imageEl)
+        range.setStartAfter(imageEl)
+        range.collapse(true)
+        selection.removeAllRanges()
+        selection.addRange(range)
       }
+    }
+
+    const nextContent = canInsertAtCaret && editor
+      ? cleanHtmlContent(editor.innerHTML)
+      : `${node.content || ''}${markup}`
+
+    updateNodeWithOriginal(
+      node.id,
+      { content: nextContent, ...(node.cover ? {} : { cover: url }) },
+      { content: node.content || '' },
+    )
+    if (canInsertAtCaret) editingContentRef.current = nextContent
+  }, [node.id, node.content, node.cover, editingField, updateNodeWithOriginal])
+
+  // 上传 + 插入。失败只提示，不改节点。
+  const handleImageUpload = useCallback(async (file: File) => {
+    try {
+      const apiModule = await loadApiModule()
+      const { uploadFile } = apiModule
+      const uploaded = await uploadFile(file)
+      insertImageMarkup(uploaded.url, uploaded.id)
+      addToast({ type: 'success', title: '上传成功', message: '图片已插入节点' })
     } catch (error) {
-      if (requestSeq !== uploadSeqRef.current) return
       addToast({
         type: 'error',
         title: '上传失败',
         message: error instanceof Error ? error.message : '上传图片失败，请重试',
       })
     }
-  }, [node.id, node.width, updateNode, addToast])
+  }, [insertImageMarkup, addToast])
 
   const isEditingTitle = editingField === 'title'
   const isEditingContent = editingField === 'content'
@@ -758,11 +783,7 @@ export const NodeItem = memo(function NodeItem({ node, isSelected, zoom, onDragS
           const clickedField = fieldElement?.dataset.field as 'title' | 'content' | undefined
 
           if (clickedField && clickedField !== editingField) {
-            if (clickedField === 'content' && node.type === 'image') {
-              e.preventDefault()
-              e.stopPropagation()
-              return
-            }
+
             e.preventDefault()
             e.stopPropagation()
             if (editingField === 'title') {
@@ -816,19 +837,9 @@ export const NodeItem = memo(function NodeItem({ node, isSelected, zoom, onDragS
         if (clickedField === 'title') {
           field = 'title'
         } else if (clickedField === 'content') {
-          if (node.type === 'image') {
-            setSelectedIds([node.id])
-            setSelectedType('node')
-            return
-          }
           field = 'content'
         } else {
           field = node.title && node.title.trim() !== '' ? 'content' : 'title'
-          if (node.type === 'image' && field === 'content') {
-            setSelectedIds([node.id])
-            setSelectedType('node')
-            return
-          }
         }
 
         if (isEditingTitle) {
@@ -880,7 +891,6 @@ export const NodeItem = memo(function NodeItem({ node, isSelected, zoom, onDragS
       node.width,
       node.height,
       node.title,
-      node.type,
       setSelectedIds,
       addToSelection,
       removeFromSelection,
@@ -1109,10 +1119,6 @@ export const NodeItem = memo(function NodeItem({ node, isSelected, zoom, onDragS
         field = node.title && node.title.trim() !== '' ? 'content' : 'title'
       }
 
-      // 对于图片节点，只允许编辑title，不允许编辑content
-      if (node.type === 'image' && field === 'content') {
-        return
-      }
 
       // Save current editing content before switching fields
       if (isEditingTitle) {
@@ -1132,7 +1138,7 @@ export const NodeItem = memo(function NodeItem({ node, isSelected, zoom, onDragS
       setEditingId(node.id)
       dispatchEditingFieldChange(field, node.id)
     },
-    [node.locked, node.title, node.type, isEditingTitle, isEditingContent, saveTitle, saveContent, isViewer, node.id, dispatchEditingFieldChange, resetFieldEditState]
+    [node.locked, node.title, isEditingTitle, isEditingContent, saveTitle, saveContent, isViewer, node.id, dispatchEditingFieldChange, resetFieldEditState]
   )
 
   // 中文输入法开始
@@ -1268,6 +1274,14 @@ export const NodeItem = memo(function NodeItem({ node, isSelected, zoom, onDragS
   // Handle paste - 统一处理 HTML 和纯文本，保留换行格式
   const handlePaste = useCallback((e: React.ClipboardEvent) => {
     e.preventDefault()
+
+    // 剪贴板里如果是图片（截图/网页复制过来的图），走上传+插图，不要当成文本清空。
+    const pastedImages = Array.from(e.clipboardData.files || [])
+      .filter((file) => file.type.startsWith('image/'))
+    if (pastedImages.length > 0) {
+      pastedImages.forEach((file) => { void handleImageUpload(file) })
+      return
+    }
 
     // 获取剪贴板中的 HTML 和纯文本
     const htmlData = e.clipboardData.getData('text/html')
@@ -1614,7 +1628,7 @@ export const NodeItem = memo(function NodeItem({ node, isSelected, zoom, onDragS
               overflow: 'hidden',
               display: 'flex',
               flexDirection: 'column',
-              backgroundColor: node.type === 'image' ? '#ffffff' : node.color,
+              backgroundColor: node.color,
               borderRadius: 'inherit',
             }}
             onMouseDown={handleMouseDown}
@@ -1639,14 +1653,23 @@ export const NodeItem = memo(function NodeItem({ node, isSelected, zoom, onDragS
               }
             }}
             onDoubleClick={(e) => {
-              // 对于图片节点，根元素双击只允许编辑title
-              if (node.type === 'image') {
-                handleDoubleClick(e, 'title')
-              } else {
-                handleDoubleClick(e)
-              }
+              handleDoubleClick(e)
             }}
             onContextMenu={handleContextMenu}
+            onDragOver={(e) => {
+              if (e.dataTransfer.types.includes('Files')) {
+                e.preventDefault()
+                e.stopPropagation()
+              }
+            }}
+            onDrop={(e) => {
+              const images = Array.from(e.dataTransfer.files || [])
+                .filter((file) => file.type.startsWith('image/'))
+              if (images.length === 0) return
+              e.preventDefault()
+              e.stopPropagation()
+              images.forEach((file) => { void handleImageUpload(file) })
+            }}
           >
           {/* Node content */}
           {node.collapsed ? (
@@ -1683,101 +1706,6 @@ export const NodeItem = memo(function NodeItem({ node, isSelected, zoom, onDragS
                 {node.title || stripHtml(node.content) || '双击添加标题'}
               </div>
             )
-          ) : node.type === 'image' ? (
-            // Image Type Logic
-            <div className="w-full h-full flex flex-col">
-              {/* Title Area */}
-              <div
-                data-field="title"
-                className="flex-shrink-0 px-4 py-2.5 border-b border-gray-100 dark:border-gray-700/50 bg-white dark:bg-gray-800"
-                style={{ minHeight: '36px' }}
-              >
-                {isEditingTitle ? (
-                  <div
-                    ref={titleRef}
-                    contentEditable
-                    suppressContentEditableWarning
-                    className="font-semibold"
-                    style={{
-                      minHeight: '24px',
-                      outline: 'none',
-                      fontSize: `${node.fontSize + 2}px`,
-                      textAlign: node.titleAlign || node.textAlign,
-                    }}
-                    onInput={handleInputChange}
-                    onKeyDown={(e) => handleKeyDown(e, 'title')}
-                    onCompositionStart={handleCompositionStart}
-                    onCompositionEnd={handleCompositionEnd}
-                    onPaste={handlePaste}
-                    onBlur={(e) => handleBlur('title', e)}
-                    onMouseDown={(e) => e.stopPropagation()}
-                  />
-                ) : (
-                  <div
-                    className="font-semibold"
-                    style={{
-                      minHeight: '24px',
-                      fontSize: `${node.fontSize + 2}px`,
-                      textAlign: node.titleAlign || node.textAlign,
-                      whiteSpace: 'pre-wrap',
-                    }}
-                    onDoubleClick={(e) => handleDoubleClick(e, 'title')}
-                    dangerouslySetInnerHTML={{ __html: highlightState?.keywords ? safeHighlightTitle(node.title || '', highlightState.keywords) : textToSafeHtml(node.title || '') }}
-                  />
-                )}
-              </div>
-
-              {/* Image Content Area */}
-              <div className="flex-1 overflow-hidden relative group/image">
-                {node.imageUrl ? (
-                  <>
-                    <img
-                      src={node.imageUrl}
-                      alt={node.title || 'Node Image'}
-                      className="w-full h-full object-contain pointer-events-none"
-                    />
-                    {!node.locked && (
-                      <div className="absolute inset-0 bg-black/50 opacity-0 group-hover/image:opacity-100 flex items-center justify-center transition-opacity duration-200">
-                        <label className="cursor-pointer bg-white text-gray-800 px-3 py-1.5 rounded-md text-sm font-medium hover:bg-gray-100 transition-colors shadow-lg">
-                          更换图片
-                          <input
-                            type="file"
-                            accept="image/*"
-                            className="hidden"
-                            onChange={(e) => {
-                              const file = e.target.files?.[0]
-                              if (file) {
-                                handleImageUpload(file)
-                              }
-                            }}
-                          />
-                        </label>
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center bg-gray-50 dark:bg-gray-800/50">
-                    <label className="cursor-pointer flex flex-col items-center gap-2 text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300 transition-colors p-4">
-                      <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                      </svg>
-                      <span className="text-sm font-medium">上传图片</span>
-                      <input
-                        type="file"
-                        accept="image/*"
-                        className="hidden"
-                        onChange={(e) => {
-                          const file = e.target.files?.[0]
-                          if (file) {
-                            handleImageUpload(file)
-                          }
-                        }}
-                      />
-                    </label>
-                  </div>
-                )}
-              </div>
-            </div>
           ) : (
             // Text Type Logic (Default)
             <div className="w-full h-full flex flex-col">

@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import type { Node, NodeGroup, Domain, Connection } from '@/types'
 import { CANVAS_DEFAULTS } from '@/constants'
 import { nextZIndexAbove, nextZIndexBelow } from '@shared/z-order'
+import { normalizeNode } from '@shared/node'
 import { logger } from '@/utils/logger'
 import { computeOptimalPorts } from '@/utils/canvas'
 import { useAuthStore } from '@/store/useAuthStore'
@@ -375,9 +376,12 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         // 未显式指定层序的新节点一律落在最上层。集中在这里赋值而不是在
         // 各个创建点各写一遍，否则漏掉一处该节点就会沉到所有节点下面。
         if (!placed) {
-          placed = node.zIndex === undefined
-            ? { ...node, zIndex: nextZIndexAbove(state.nodes.values()) }
-            : node
+          // 统一节点：老形态（type/imageUrl）在这里折成 content/cover 一次
+          // 归一，之后store 里只存在一种形状。
+          const base = normalizeNode(node)
+          placed = base.zIndex === undefined
+            ? { ...base, zIndex: nextZIndexAbove(state.nodes.values()) }
+            : base
         }
         nodes.set(node.id, placed)
         return { nodes, isDirty: true }
@@ -1517,7 +1521,9 @@ moveNodeToPool: (nodeId: string, nodeData: Node, afterExecute?: () => Promise<vo
     const before = captureSnapshot(get())
     set((state) => {
       return {
-        nodes: data.nodes ? new Map(data.nodes.map((n) => [n.id, n])) : state.nodes,
+        // 所有文档入口（REST / 缓存 / Yjs 全量）都经过 normalizeNode，
+        // 保证下游只见到统一节点形状。
+        nodes: data.nodes ? new Map(data.nodes.map((n) => [n.id, normalizeNode(n)])) : state.nodes,
         groups: data.groups ? new Map(data.groups.map((g) => [g.id, g])) : state.groups,
         domains: data.domains ? new Map(data.domains.map((d) => [d.id, d])) : state.domains,
         connections: data.connections

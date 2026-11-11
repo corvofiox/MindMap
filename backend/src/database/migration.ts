@@ -216,6 +216,10 @@ export async function runMigrations(sqlite: Database.Database) {
           mime_type TEXT NOT NULL,
           uploader_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
           project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
+          sha256 TEXT,
+          status TEXT NOT NULL DEFAULT 'ready',
+          orphaned_at INTEGER,
+          deleted_at INTEGER,
           created_at INTEGER DEFAULT (strftime('%s', 'now'))
         )
       `)
@@ -252,6 +256,26 @@ export async function runMigrations(sqlite: Database.Database) {
     // Add sort_order column
     if (!columns.includes('sort_order')) {
       sqlite.exec('ALTER TABLE node_cards ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0')
+    }
+
+    // files: content-addressed storage + GC bookkeeping (2026-11 节点统一改造)
+    // 老库只有 filename/path/size/mime_type，这里补齐 sha256（能力 URL + 去重键）
+    // 与三阶段 GC 需要的列。
+    const filesColumns = getColumns(sqlite, 'files')
+    if (filesColumns.length > 0) {
+      if (!filesColumns.includes('sha256')) {
+        sqlite.exec('ALTER TABLE files ADD COLUMN sha256 TEXT')
+      }
+      if (!filesColumns.includes('status')) {
+        sqlite.exec(`ALTER TABLE files ADD COLUMN status TEXT NOT NULL DEFAULT 'ready'`)
+      }
+      if (!filesColumns.includes('orphaned_at')) {
+        sqlite.exec('ALTER TABLE files ADD COLUMN orphaned_at INTEGER')
+      }
+      if (!filesColumns.includes('deleted_at')) {
+        sqlite.exec('ALTER TABLE files ADD COLUMN deleted_at INTEGER')
+      }
+      sqlite.exec('CREATE UNIQUE INDEX IF NOT EXISTS files_sha256_idx ON files (sha256)')
     }
 
     // Create project_invitations table if it doesn't exist
@@ -559,6 +583,9 @@ export async function runMigrations(sqlite: Database.Database) {
         sqlite.exec(`ALTER TABLE settings_new RENAME TO settings`)
 
         // files: uploader_id/project_id ON DELETE CASCADE
+        // 列顺序必须与 schema.ts 一致，且 INSERT 显式列出列名——此前是
+        // `INSERT INTO files_new SELECT *`，一旦给 files 加列（如 sha256/status）
+        // 就会因列数不匹配而整批回滚。
         sqlite.exec(`
           CREATE TABLE files_new (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -568,12 +595,25 @@ export async function runMigrations(sqlite: Database.Database) {
             mime_type TEXT NOT NULL,
             uploader_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
+            sha256 TEXT,
+            status TEXT NOT NULL DEFAULT 'ready',
+            orphaned_at INTEGER,
+            deleted_at INTEGER,
             created_at INTEGER DEFAULT (strftime('%s', 'now'))
           )
         `)
-        sqlite.exec(`INSERT INTO files_new SELECT * FROM files`)
+        sqlite.exec(`
+          INSERT INTO files_new
+            (id, filename, path, size, mime_type, uploader_id, project_id,
+             sha256, status, orphaned_at, deleted_at, created_at)
+          SELECT id, filename, path, size, mime_type, uploader_id, project_id,
+                 sha256, status, orphaned_at, deleted_at, created_at
+          FROM files
+        `)
         sqlite.exec(`DROP TABLE files`)
         sqlite.exec(`ALTER TABLE files_new RENAME TO files`)
+        // 重建表会连带丢掉索引，这里补回来（内容寻址 + 去重依赖它）
+        sqlite.exec('CREATE UNIQUE INDEX IF NOT EXISTS files_sha256_idx ON files (sha256)')
 
         // (ai_conversations was rewritten here for cascade deletes. The AI
         // assistant feature — and that table — has been removed, so the block is

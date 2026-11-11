@@ -139,6 +139,11 @@ export const settings = sqliteTable('settings', {
 })
 
 // Files
+//
+// Content-addressed storage for images referenced by nodes / node-pool cards /
+// manuscripts. `sha256` is the capability token in `/api/files/:sha256` and the
+// dedupe key; `status`/`orphanedAt`/`deletedAt` drive the three-phase GC
+// (mark → quarantine → sweep) described in docs/requirements-notebook.md §18.
 export const files = sqliteTable('files', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   filename: text('filename').notNull(),
@@ -147,6 +152,10 @@ export const files = sqliteTable('files', {
   mimeType: text('mime_type').notNull(),
   uploaderId: integer('uploader_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   projectId: integer('project_id').references(() => projects.id, { onDelete: 'cascade' }),
+  sha256: text('sha256'),
+  status: text('status').notNull().default('ready'), // 'pending' | 'ready'
+  orphanedAt: integer('orphaned_at'),
+  deletedAt: integer('deleted_at'),
   createdAt: integer('created_at').default(sql`strftime('%s', 'now')`),
 })
 

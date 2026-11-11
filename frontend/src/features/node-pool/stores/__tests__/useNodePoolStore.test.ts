@@ -1,4 +1,4 @@
-﻿/**
+/**
  * useNodePoolStore 真实行为测试
  *
  * 只 mock 真正的外部:`@/services/api`(网络层)。store 本体、`createNodeFromCard`
@@ -570,7 +570,9 @@ describe('useCard:取出到画布', () => {
     await state().useCard(state().getCard(7)!, addNodeToCanvas)
 
     const node = addNodeToCanvas.mock.calls[0][0] as Node
-    expect(node.type).toBe('text')
+    // 统一节点：不再写 type，文字内容进 content
+    expect(node.type).toBeUndefined()
+    expect(node.content).toBeTruthy()
     expect(node.title).toBe('纯文本卡')
     expect(node.content).toBe('not json')
   })

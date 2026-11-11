@@ -4,6 +4,11 @@ import { v4 as uuidv4 } from 'uuid'
 import type { Request, Response } from 'express'
 import { authenticate } from '../middleware/auth.middleware.js'
 import { log } from '../utils/logger.js'
+import {
+    MAX_IMAGE_BYTES,
+    UNSUPPORTED_IMAGE_MESSAGE,
+    sniffImageMime,
+} from '../utils/image-bytes.js'
 
 const router = Router()
 
@@ -20,7 +25,7 @@ const fileFilter = (req: Request, file: Express.Multer.File, cb: multer.FileFilt
         // R5 #7: 显式携带 statusCode=400——fileFilter 错误是客户端请求
         // 问题（文件类型不符），error.middleware 按 statusCode 返回 4xx，
         // 不能落入 500 让客户端误以为是服务端故障。
-        const err = new Error('仅支持上传 PNG/JPEG/GIF/WebP 图片（不支持 SVG/BMP 等格式）') as Error & { statusCode?: number }
+        const err = new Error(UNSUPPORTED_IMAGE_MESSAGE) as Error & { statusCode?: number }
         err.statusCode = 400
         cb(err)
     }
@@ -30,47 +35,12 @@ const upload = multer({
     storage: storage,
     fileFilter: fileFilter,
     limits: {
-        fileSize: 5 * 1024 * 1024 // 5MB limit
+        fileSize: MAX_IMAGE_BYTES // 5MB limit
     }
 })
 
-// A5: 魔数嗅探——客户端声明的 mimetype 可伪造（如 image/svg+xml 实际是
-// HTML/脚本），按文件头签名识别真实图片类型；无法识别则拒绝。
-interface ImageSignature {
-    mime: string
-    match: (buf: Buffer) => boolean
-}
-
-const IMAGE_SIGNATURES: ImageSignature[] = [
-    {
-        mime: 'image/png',
-        match: (b) => b.length >= 8
-            && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47
-            && b[4] === 0x0d && b[5] === 0x0a && b[6] === 0x1a && b[7] === 0x0a,
-    },
-    {
-        mime: 'image/jpeg',
-        match: (b) => b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff,
-    },
-    {
-        mime: 'image/gif',
-        match: (b) => b.length >= 6
-            && (b.toString('ascii', 0, 6) === 'GIF87a' || b.toString('ascii', 0, 6) === 'GIF89a'),
-    },
-    {
-        mime: 'image/webp',
-        match: (b) => b.length >= 12
-            && b.toString('ascii', 0, 4) === 'RIFF'
-            && b.toString('ascii', 8, 12) === 'WEBP',
-    },
-]
-
-function sniffImageMime(buffer: Buffer): string | null {
-    for (const sig of IMAGE_SIGNATURES) {
-        if (sig.match(buffer)) return sig.mime
-    }
-    return null
-}
+// A5: 魔数嗅探与大小上限统一由 utils/image-bytes.ts 提供（/api/files 共用同一套
+// 签名），避免两条上传路径的校验规则漂移。
 
 // Upload endpoint（A5: 要求登录，杜绝匿名上传滥用）
 router.post('/', authenticate, upload.single('image'), async (req: Request, res: Response) => {

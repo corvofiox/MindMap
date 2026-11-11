@@ -1,4 +1,5 @@
 import type { Node, NodeCard } from '@/types'
+import { normalizeNode } from '@shared/node'
 
 /**
  * Parse a node pool card's JSON content into partial node data.
@@ -46,11 +47,12 @@ export function createNodeFromCard(
     locked: false,
   }
 
-  return {
+  // 卡片内容可能是统一改造前存的（type/imageUrl），这里折成 content/cover。
+  return normalizeNode({
     ...baseNode,
     ...nodeData,
     id: baseNode.id,
     x: baseNode.x,
     y: baseNode.y,
-  }
+  })
 }

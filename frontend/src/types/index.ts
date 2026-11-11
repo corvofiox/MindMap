@@ -93,9 +93,14 @@ export interface Node {
   collapsed: boolean
   locked: boolean
   expandedHeight?: number  // 保存展开时的高度
-  type?: 'text' | 'image'  // 节点类型
-  imageUrl?: string        // 图片URL
-  aspectRatio?: number     // 图片宽高比
+  /** 封面：正文第一张图（派生）。统一节点后用它做缩略图/拖拽影子。 */
+  cover?: string
+  /** @deprecated 统一节点后废弃；读入时由 normalizeNode 折进 content/cover */
+  type?: 'text' | 'image'
+  /** @deprecated 统一节点后废弃；读入时由 normalizeNode 折进 cover 与 content */
+  imageUrl?: string
+  /** @deprecated 图片变成正文块后不再需要 */
+  aspectRatio?: number
   zIndex?: number          // 层序；缺失按 0 处理，见 shared/src/z-order.ts
   _version?: number        // 版本号（用于冲突检测）
 }

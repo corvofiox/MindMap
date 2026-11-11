@@ -30,6 +30,7 @@ import { errorHandler } from './middleware/error.middleware.js'
 import { initDatabase } from './database/init.js'
 import { initializeDb, registerShutdownHandlers } from './database/connection.js'
 import { migrateCanvasesToYjs } from './database/migrate-to-yjs.js'
+import { fileRouter } from './controllers/file.controller.js'
 import { getValidatedEnv, isTrustProxyEnabled } from './utils/env.js'
 import { log, logError } from './utils/logger.js'
 
@@ -102,6 +103,10 @@ app.use('/api/canvases', apiLimiter(), csrfProtectionMiddleware, canvasRouter)
 // 注意：只能挂载一次——若在带限速版本之前还有一次裸挂载，Express 会先命中
 // 裸挂载，限速永远不会生效（曾发生）。
 app.use('/api/upload', apiLimiter(), csrfProtectionMiddleware, uploadRouter)
+// 图片文件服务：GET 是内容寻址的能力 URL（sha256），不套限速——一个画布可能瞬间
+// 请求几十张图，套限速会让图裂。CSRF 中间件本身忽略 GET/HEAD/OPTIONS，所以放在
+// 挂载点即可（与其它写接口一致），POST 另需 authenticate（在 router 内部）。
+app.use('/api/files', csrfProtectionMiddleware, fileRouter)
 app.use('/api/collaboration', apiLimiter(), csrfProtectionMiddleware, collaborationRouter)
 // Personal access tokens for external agents. Browser-driven (JWT + CSRF), unlike
 // /mcp which authenticates with the token itself.

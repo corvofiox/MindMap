@@ -17,6 +17,7 @@ export const API_ENDPOINTS = {
   USER_DELETE_ACCOUNT: '/api/users/account',
   USER_SEARCH: '/api/users/search',
   UPLOAD: '/api/upload',
+  UPLOAD_FILE: '/api/files',
 
   // Personal access tokens（外部 agent 通过 MCP 接入用的长期凭证）
   TOKENS: '/api/tokens',

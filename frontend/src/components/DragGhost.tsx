@@ -81,7 +81,7 @@ export function DragGhost() {
       }
     }
 
-    const isImageNode = nodeData.type === 'image' && (nodeData.imageUrl || draggingCardFromPoolLocal.thumbnail)
+    const isImageNode = Boolean(nodeData.cover || nodeData.imageUrl || draggingCardFromPoolLocal.thumbnail)
     const nodeWidth = 160
     const nodeHeight = isImageNode ? 100 : 80
     const nodeColor = nodeData.color || draggingCardFromPoolLocal.color || '#ffffff'
@@ -127,7 +127,7 @@ export function DragGhost() {
             {isImageNode ? (
               <div className="w-full h-full flex items-center justify-center bg-gray-50 dark:bg-gray-800/50 rounded">
                 <img
-                  src={nodeData.imageUrl || draggingCardFromPoolLocal.thumbnail}
+                  src={nodeData.cover || nodeData.imageUrl || draggingCardFromPoolLocal.thumbnail}
                   alt={nodeData.title}
                   className="w-full h-full object-cover rounded"
                 />
@@ -168,7 +168,7 @@ export function DragGhost() {
       }
     }
 
-    const isImageNode = nodeData.type === 'image' && (nodeData.imageUrl || draggingCardFromPool.thumbnail)
+    const isImageNode = Boolean(nodeData.cover || nodeData.imageUrl || draggingCardFromPool.thumbnail)
     const nodeWidth = nodeData.width || 200
     const nodeHeight = nodeData.height || (isImageNode ? nodeWidth * 0.75 : 120)
     const nodeColor = nodeData.color || draggingCardFromPool.color || '#ffffff'
@@ -215,7 +215,7 @@ export function DragGhost() {
             {isImageNode ? (
               <div className="w-full h-full flex items-center justify-center bg-gray-50 dark:bg-gray-800/50">
                 <img
-                  src={nodeData.imageUrl || draggingCardFromPool.thumbnail}
+                  src={nodeData.cover || nodeData.imageUrl || draggingCardFromPool.thumbnail}
                   alt={nodeData.title}
                   className="w-full h-full object-contain"
                 />
@@ -243,7 +243,7 @@ export function DragGhost() {
   // 处理从画布拖拽节点到节点池的幽灵效果
   if (draggingNodeFromCanvas && isOverNodePool && canvasDragGhostPosition) {
     const node = draggingNodeFromCanvas.nodeData as Node
-    const isImageNode = node.type === 'image' && node.imageUrl
+    const isImageNode = Boolean(node.cover || node.imageUrl)
     const nodeWidth = 160
     const nodeHeight = isImageNode ? 100 : 80
     const nodeColor = node.color || '#ffffff'
@@ -289,7 +289,7 @@ export function DragGhost() {
             {isImageNode ? (
               <div className="w-full h-full flex items-center justify-center bg-gray-50 dark:bg-gray-800/50 rounded">
                 <img
-                  src={node.imageUrl}
+                  src={node.cover || node.imageUrl}
                   alt={node.title}
                   className="w-full h-full object-cover rounded"
                 />

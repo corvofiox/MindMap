@@ -144,14 +144,16 @@ export function NodeContextMenu({ nodeId, position, onClose }: NodeContextMenuPr
       return
     }
 
+    // 统一节点没有"类型"了；卡片仍保留一个粗粒度 type（有图/无图），
+    // 供节点池卡片列表选择缩略图样式，不需要改动卡片表结构。
     const cardData = {
       name: node.title || node.content || '未命名',
       content: JSON.stringify(node),
-      type: node.type || 'text',
-      color: node.type === 'image' ? undefined : node.color,
+      type: node.cover ? 'image' : 'text',
+      color: node.color,
       tags: null,
       sortOrder: 0,
-      thumbnail: node.type === 'image' ? node.imageUrl : undefined,
+      thumbnail: node.cover,
     }
 
     onClose()
@@ -166,126 +168,6 @@ export function NodeContextMenu({ nodeId, position, onClose }: NodeContextMenuPr
     }
   }
 
-  const handleReplaceImage = async () => {
-    const input = document.createElement('input')
-    input.type = 'file'
-    input.accept = 'image/*'
-    input.onchange = async (e) => {
-      const file = (e.target as HTMLInputElement).files?.[0]
-      if (!file) return
-
-      try {
-        const { url } = await uploadImage(file)
-        const img = new Image()
-        img.onload = () => {
-          const aspectRatio = img.width / img.height
-          const newHeight = node.width / aspectRatio
-          const updates: any = {
-            imageUrl: url,
-            aspectRatio: aspectRatio,
-            height: node.collapsed ? 36 : newHeight,
-            expandedHeight: newHeight
-          }
-          updateNode(nodeId, updates)
-          addToast({ type: 'success', title: '更新成功', message: '图片已更换' })
-        }
-        img.src = url
-      } catch (error) {
-        addToast({ type: 'error', title: '更新失败', message: '上传图片失败' })
-      }
-    }
-    input.click()
-    onClose()
-  }
-
-  const handleDownloadImage = async () => {
-    if (!node.imageUrl) {
-      addToast({ type: 'warning', title: '下载失败', message: '节点未包含图片' })
-      onClose()
-      return
-    }
-
-    if (node.imageUrl.startsWith('data:')) {
-      const a = document.createElement('a')
-      a.href = node.imageUrl
-      // Extract file extension from data URL MIME type (e.g. "data:image/jpeg" → "jpeg")
-      const mimeMatch = node.imageUrl.match(/^data:(image\/\w+)/)
-      const ext = mimeMatch ? mimeMatch[1].split('/')[1] : 'png'
-      a.download = `image.${ext}`
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      addToast({ type: 'success', title: '下载成功', message: '图片已保存到本地' })
-      onClose()
-      return
-    }
-
-    try {
-      const response = await fetch(node.imageUrl)
-      if (!response.ok) {
-        throw new Error('获取图片失败')
-      }
-      const blob = await response.blob()
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      const filename = node.imageUrl.split('/').pop() || 'image.png'
-      a.download = filename
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      URL.revokeObjectURL(url)
-      addToast({ type: 'success', title: '下载成功', message: '图片已保存到本地' })
-    } catch {
-      addToast({ type: 'error', title: '下载失败', message: '无法下载图片' })
-    }
-    onClose()
-  }
-
-  const handleResetAspectRatio = () => {
-    if (!node.imageUrl) {
-      addToast({ type: 'warning', title: '重置失败', message: '节点未包含图片' })
-      onClose()
-      return
-    }
-
-    const performReset = (ratio: number) => {
-      const newHeight = node.width / ratio
-      const updates: any = {
-        aspectRatio: ratio,
-        height: newHeight,
-      }
-
-      // If node is not collapsed, update height normally.
-      // If it is collapsed, height should stay 36, but expandedHeight should be updated.
-      if (node.collapsed) {
-        updates.height = 36
-        updates.expandedHeight = newHeight
-      } else {
-        updates.expandedHeight = newHeight
-      }
-
-      updateNode(nodeId, updates)
-      addToast({ type: 'success', title: '重置成功', message: '已重置图片比例' })
-      onClose()
-    }
-
-    if (node.aspectRatio) {
-      performReset(node.aspectRatio)
-    } else {
-      // If aspectRatio is missing, try to calculate it from the image
-      const img = new Image()
-      img.onload = () => {
-        const ratio = img.width / img.height
-        performReset(ratio)
-      }
-      img.onerror = () => {
-        addToast({ type: 'error', title: '重置失败', message: '无法读取图片信息' })
-        onClose()
-      }
-      img.src = node.imageUrl
-    }
-  }
 
   const handleDuplicate = () => {
     duplicateNode(nodeId)
@@ -437,34 +319,14 @@ export function NodeContextMenu({ nodeId, position, onClose }: NodeContextMenuPr
               label={node.locked ? '解锁' : '锁定'}
               onClick={handleLock}
             />
-            {node.type !== 'image' && (
+            {(
               <MenuItem
                 icon={node.collapsed ? Plus : Minus}
                 label={node.collapsed ? '展开' : '折叠'}
                 onClick={handleToggleCollapse}
               />
             )}
-            {node.type === 'image' && (
-              <>
-                <MenuItem
-                  icon={ImageIcon}
-                  label="更换图片"
-                  onClick={handleReplaceImage}
-                  disabled={node.locked}
-                />
-                <MenuItem
-                  icon={Download}
-                  label="下载图片"
-                  onClick={handleDownloadImage}
-                />
-                <MenuItem
-                  icon={RefreshCw}
-                  label="重置比例"
-                  onClick={handleResetAspectRatio}
-                  disabled={node.locked}
-                />
-              </>
-            )}
+
           </div>
 
           <MenuDivider />
@@ -485,7 +347,7 @@ export function NodeContextMenu({ nodeId, position, onClose }: NodeContextMenuPr
 
           <MenuDivider />
 
-          {node.type !== 'image' && (
+          {(
             <div ref={colorSectionRef}>
               <button
                 className="w-full px-3 py-2.5 text-left flex items-center gap-3 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 transition-all duration-150 group"

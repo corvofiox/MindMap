@@ -41,6 +41,8 @@ const EXPECTED_ALLOWED_TAGS = [
   'code', 'pre',
   'blockquote',
   'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td',
+  // 统一节点：图片成为正文块（src 由 isSafeImageSrc 单独把关）
+  'img',
 ]
 
 /** 净化后绝不允许出现的标签（执行/注入载体） */
@@ -48,7 +50,7 @@ const NEVER_TAGS = [
   'script', 'style', 'iframe', 'frame', 'frameset', 'object', 'embed', 'form',
   'link', 'meta', 'base', 'svg', 'math', 'template', 'plaintext', 'xmp',
   'noembed', 'noframes', 'noscript', 'textarea', 'title', 'input', 'button',
-  'select', 'option', 'img', 'audio', 'video', 'source', 'marquee', 'details',
+  'select', 'option', 'audio', 'video', 'source', 'marquee', 'details',
   'applet', 'body', 'html', 'head', 'font', 'a',
 ]
 
@@ -677,13 +679,51 @@ describe('源码守卫：白名单本身不许被放宽', () => {
     expect(tags.filter((t) => NEVER_TAGS.includes(t))).toEqual([])
   })
 
-  it('ALLOWED_ATTRIBUTES 里不存在 href/src/srcdoc/action/formaction/target/on* 等属性', () => {
+  it('ALLOWED_ATTRIBUTES 里不存在 href/srcdoc/action/formaction/target/on* 等属性', () => {
     const body = blockBody(/const ALLOWED_ATTRIBUTES[\s\S]*?=\s*\{([\s\S]*?)\n\}/, 'ALLOWED_ATTRIBUTES')
     const attrs = quoted(body)
     expect(attrs).toContain('class')
     expect(attrs).toContain('style')
     expect(attrs).toContain('colspan')
-    expect(attrs.filter((a) => /^(on[a-z]|href|src|srcdoc|action|formaction|target|data-)/i.test(a))).toEqual([])
+    expect(attrs.filter((a) => /^(on[a-z]|href|srcdoc|action|formaction|target)/i.test(a))).toEqual([])
+  })
+
+  it('src / data-file-id 只允许出现在 img 上，且 img 没有事件属性', () => {
+    const body = blockBody(/const ALLOWED_ATTRIBUTES[\s\S]*?=\s*\{([\s\S]*?)\n\}/, 'ALLOWED_ATTRIBUTES')
+    const lines = body.split('\n').filter((line) => line.includes("'"))
+
+    const srcLines = lines.filter((line) => /'src'/.test(line))
+    expect(srcLines).toHaveLength(1)
+    expect(srcLines[0]).toContain("'img'")
+
+    const fileIdLines = lines.filter((line) => /'data-file-id'/.test(line))
+    expect(fileIdLines).toHaveLength(1)
+    expect(fileIdLines[0]).toContain("'img'")
+
+    // img 的允许属性里不能混进任何 on* 事件
+    const imgLine = lines.find((line) => line.includes("'img'")) as string
+    expect(imgLine.match(/'on[a-z]+'/gi)).toBeNull()
+  })
+
+  it('img 的 src 只放行本站内容寻址 URL 与 base64 图片，其余整块丢弃', () => {
+    const sha = 'a'.repeat(64)
+    expect(sanitizeHTML(`<img src="/api/files/${sha}" alt="x">`)).toContain(`/api/files/${sha}`)
+    expect(sanitizeHTML('<img src="data:image/png;base64,iVBORw0KGgo=">')).toContain('data:image/png')
+
+    // 危险/外链来源一律不出现，且不留空壳 <img>
+    for (const src of [
+      'javascript:alert(1)',
+      'vbscript:msgbox(1)',
+      'https://evil.example/track.png',
+      '//evil.example/x.png',
+      'blob:http://localhost/abc',
+      '/api/files/../../etc/passwd',
+      '/api/files/notahash',
+    ]) {
+      const out = sanitizeHTML(`<p>keep</p><img src="${src}">`)
+      expect(out, src).not.toContain('<img')
+      expect(out, src).toContain('keep')
+    }
   })
 
   it('ALLOWED_STYLES 不含 background/behavior/binding/-moz-binding/position 之类可执行属性', () => {

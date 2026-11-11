@@ -144,7 +144,8 @@ describe('createNodeFromCard', () => {
 
     expect(node.title).toBe('映射标题')
     expect(node.content).toBe('映射内容')
-    expect(node.type).toBe('text')
+    // 统一节点：卡片里遗留的 type 被丢弃，不再有节点类型
+    expect(node.type).toBeUndefined()
     expect(node.width).toBe(250)
     expect(node.height).toBe(90)
     expect(node.fontSize).toBe(18)
@@ -154,7 +155,7 @@ describe('createNodeFromCard', () => {
     expect(node.color).toBe('#123456')
   })
 
-  it('图片卡:content 中 type=image 与 imageUrl 原样带入节点', () => {
+  it('老图片卡：imageUrl/aspectRatio 折成正文 <img> 与 cover', () => {
     const card = makeCard({
       type: 'image',
       content: JSON.stringify({
@@ -169,9 +170,12 @@ describe('createNodeFromCard', () => {
 
     const node = createNodeFromCard(card, POS)
 
-    expect(node.type).toBe('image')
-    expect(node.imageUrl).toBe('https://example.com/a.png')
-    expect(node.aspectRatio).toBe(1.5)
+    // 统一节点：不再是"图片类型节点"，图片成为正文里的一个块
+    expect(node.type).toBeUndefined()
+    expect(node.imageUrl).toBeUndefined()
+    expect(node.aspectRatio).toBeUndefined()
+    expect(node.content).toBe('<img src="https://example.com/a.png" alt="">')
+    expect(node.cover).toBe('https://example.com/a.png')
     expect(node.width).toBe(320)
     expect(node.height).toBe(200)
   })
@@ -197,7 +201,7 @@ describe('createNodeFromCard', () => {
 
     expect(node.title).toBe('烂内容')
     expect(node.content).toBe('plain text not json')
-    expect(node.type).toBe('text')
+    expect(node.type).toBeUndefined()
     expect(node.width).toBe(200)
     expect(node.height).toBe(120)
   })

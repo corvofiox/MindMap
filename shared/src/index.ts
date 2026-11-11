@@ -1,6 +1,7 @@
 // Shared types between frontend and backend
 export * from './constants.js'
 export * from './z-order.js'
+export * from './node.js'
 
 export interface APIResponse<T = unknown> {
   success: boolean
@@ -55,13 +56,20 @@ export interface Node {
   borderColor: string
   borderWidth: number
   borderRadius: number
-  imageUrl?: string
+  /** 封面：正文第一张图的 URL，供缩略图/拖拽影子使用（派生字段） */
+  cover?: string
   fontSize: number
   textAlign: 'left' | 'center' | 'right'
   collapsed: boolean
   locked: boolean
   /** Paint order among nodes; see shared/src/z-order.ts. */
   zIndex?: number
+  /** @deprecated 统一节点后废弃：读入时经 normalizeNode 折进 content/cover */
+  type?: string
+  /** @deprecated 见 cover */
+  imageUrl?: string
+  /** @deprecated 图片改为正文块后不再需要 */
+  aspectRatio?: number
 }
 
 export interface NodeGroup {

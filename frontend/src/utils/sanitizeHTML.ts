@@ -22,6 +22,8 @@ const ALLOWED_TAGS = new Set([
   'blockquote',
   // Table
   'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td',
+  // 统一节点后图片成为正文块（src 另行白名单校验）
+  'img',
   // Links (disabled for security, can be enabled if needed)
   // 'a',
 ])
@@ -33,7 +35,28 @@ const ALLOWED_ATTRIBUTES: Record<string, Set<string>> = {
   '*': new Set(['class', 'style']),
   'td': new Set(['class', 'style', 'colspan', 'rowspan']),
   'th': new Set(['class', 'style', 'colspan', 'rowspan']),
+  // src 另行做协议/来源校验（见 isSafeImageSrc），其余属性一律不接受
+  'img': new Set(['src', 'alt', 'width', 'height', 'data-file-id']),
   // 'a': new Set(['href', 'class', 'style', 'target', 'title']),
+}
+
+/**
+ * 图片 src 白名单。
+ *
+ * 统一节点后 `<img>` 可以出现在正文里，但只允许两种来源：
+ *   1. 本站内容寻址的文件服务：`/api/files/<64 位 sha256>`；
+ *   2. 迁移期遗留的 base64 内联图（迁移完成后自然消失）。
+ *
+ * 明确拒绝：`javascript:`、外部 http(s)（跟踪像素 / 混合内容）、`blob:`
+ * （会话级 URL 落库后必然失效）、以及任何 `//host` 形式的协议相对地址。
+ */
+const SAFE_FILE_URL = /^\/api\/files\/[a-f0-9]{64}(?:\?[^"'<>]*)?$/i
+const SAFE_DATA_IMAGE = /^data:image\/(?:png|jpe?g|gif|webp);base64,[a-z0-9+/=\s]+$/i
+
+function isSafeImageSrc(src: string): boolean {
+  const value = src.trim()
+  if (value === '') return false
+  return SAFE_FILE_URL.test(value) || SAFE_DATA_IMAGE.test(value)
 }
 
 /**
@@ -130,6 +153,16 @@ export function sanitizeHTML(html: string): string {
           }
         }
       })
+
+      // 图片：src 不在白名单内（javascript: / 外链 / blob:）就整块丢弃，
+      // 不要留一个没有 src 的空 <img> 占位。
+      if (tagName === 'img') {
+        const src = element.getAttribute('src')
+        if (!src || !isSafeImageSrc(src)) {
+          element.parentNode?.removeChild(element)
+          return
+        }
+      }
     }
 
     // Process children recursively. Iterate a SNAPSHOT: sanitizeNode may detach
