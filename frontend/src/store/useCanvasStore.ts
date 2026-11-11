@@ -449,7 +449,9 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       const currentNodes = new Map(state.nodes)
       const currentNode = currentNodes.get(id)
       if (currentNode) {
-        currentNodes.set(id, { ...currentNode, ...updates })
+        // 远端（Yjs）或缓存来的更新可能是老形态（type/imageUrl）。合并后统一
+        // 归一化一次，避免"部分字段是新的、部分还是旧的"这种半迁移状态。
+        currentNodes.set(id, normalizeNode({ ...currentNode, ...updates }))
         return markDirty ? { nodes: currentNodes, isDirty: true } : { nodes: currentNodes }
       }
       return {}

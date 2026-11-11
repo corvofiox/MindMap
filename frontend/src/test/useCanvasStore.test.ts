@@ -445,6 +445,43 @@ describe('useCanvasStore', () => {
     })
   })
 
+describe('统一节点（老形态在入口处折算）', () => {
+    const SHA = 'f'.repeat(64)
+
+    it('addNode 收到老形态：type/imageUrl/aspectRatio 折成 content/cover', () => {
+      useCanvasStore.getState().addNode(
+        createTestNode('legacy', {
+          type: 'image',
+          imageUrl: `/api/files/${SHA}`,
+          aspectRatio: 1.5,
+          content: '',
+        }),
+      )
+
+      const node = useCanvasStore.getState().nodes.get('legacy')!
+      expect(node.type).toBeUndefined()
+      expect(node.imageUrl).toBeUndefined()
+      expect(node.aspectRatio).toBeUndefined()
+      expect(node.content).toBe(`<img src="/api/files/${SHA}" alt="">`)
+      expect(node.cover).toBe(`/api/files/${SHA}`)
+    })
+
+    it('远端更新（updateNodeWithoutHistory）也会归一化', () => {
+      const store = useCanvasStore.getState()
+      store.addNode(createTestNode('n1', { content: '<p>已有正文</p>' }))
+
+      store.updateNodeWithoutHistory('n1', {
+        type: 'image',
+        imageUrl: `/api/files/${SHA}`,
+      })
+
+      const node = useCanvasStore.getState().nodes.get('n1')!
+      expect(node.type).toBeUndefined()
+      expect(node.imageUrl).toBeUndefined()
+      expect(node.content).toBe('<p>已有正文</p>')
+      expect(node.cover).toBe(`/api/files/${SHA}`)
+    })
+  })
   describe('节点层序 (zIndex)', () => {
     const zOf = (id: string) => useCanvasStore.getState().nodes.get(id)?.zIndex
     const sortedIds = () =>
