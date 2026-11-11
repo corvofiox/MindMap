@@ -338,8 +338,12 @@ export async function runFileGc(options: GcOptions = {}): Promise<GcReport> {
 //   tsx src/database/gc-files.ts                  真跑三阶段
 //   tsx src/database/gc-files.ts --mark           只跑某一阶段（可重复传）
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  // 建表交给 initDatabase（它会跑 runMigrations）；只 initializeDb 只会打开连接，
+  // 空库上会因为缺表直接报错。
+  const { initDatabase } = await import('./init.js')
   const { initializeDb } = await import('./connection.js')
   await initializeDb()
+  initDatabase()
 
   const dryRun = process.argv.includes('--dry-run')
   const requested = (['mark', 'quarantine', 'sweep'] as const).filter((phase) =>

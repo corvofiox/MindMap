@@ -413,8 +413,12 @@ export async function rollbackNodeUnify(options: { sqlite?: RawSqlite } = {}): P
 //   tsx src/database/migrate-node-unify.ts            (真的写)
 //   tsx src/database/migrate-node-unify.ts --rollback (还原备份)
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  // 建表交给 initDatabase（它会跑 runMigrations）；只 initializeDb 只会打开连接，
+  // 空库上会因为缺表直接报错。
+  const { initDatabase } = await import('./init.js')
   const { initializeDb } = await import('./connection.js')
   await initializeDb()
+  initDatabase()
 
   if (process.argv.includes('--rollback')) {
     const restored = await rollbackNodeUnify()
