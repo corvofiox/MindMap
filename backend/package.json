@@ -35,7 +35,9 @@
     "ws": "node src/websocket/index.js",
     "mcp:stdio": "node dist/mcp/stdio.js",
     "mcp:stdio:dev": "tsx src/mcp/stdio.ts",
-    "db:clean": "node -e \"const fs=require('fs'); const base='data/mindmap.db'; ['','-wal','-shm'].forEach(suffix=>{ const p=base+suffix; if(fs.existsSync(p)) fs.rmSync(p); });\""
+    "db:clean": "node -e \"const fs=require('fs'); const base='data/mindmap.db'; ['','-wal','-shm'].forEach(suffix=>{ const p=base+suffix; if(fs.existsSync(p)) fs.rmSync(p); });\"",
+    "migrate:node-unify": "tsx src/database/migrate-node-unify.ts",
+    "gc:files": "tsx src/database/gc-files.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",

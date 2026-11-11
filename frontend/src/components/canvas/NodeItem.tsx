@@ -373,6 +373,18 @@ export const NodeItem = memo(function NodeItem({ node, isSelected, zoom, onDragS
       window.removeEventListener('nodeSearchHighlight', handleHighlight)
     }
   }, [node.id])
+  // 图片工具（画布工具栏）通过事件请 NodeItem 打开文件选择器：上传与插入的
+  // 逻辑只应存在于这里一份，工具栏不该自己再写一遍。
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{ nodeId?: string }>).detail
+      if (detail?.nodeId !== node.id) return
+      fileInputRef.current?.click()
+    }
+    window.addEventListener('nodeImageUploadRequest', handler)
+    return () => window.removeEventListener('nodeImageUploadRequest', handler)
+  }, [node.id])
 
   // 图片入口（粘贴 / 拖入 / 工具栏三处共用）。
   //
@@ -1442,6 +1454,18 @@ export const NodeItem = memo(function NodeItem({ node, isSelected, zoom, onDragS
   return (
     <>
       {/* 全局样式已由 ensureNodeItemStyles() 注入一次（D12） */}
+      {/* 隐藏的文件选择器：粘贴/拖入/工具栏三条入口最终都走 handleImageUpload */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0]
+          if (file) void handleImageUpload(file)
+          e.target.value = ''
+        }}
+      />
       {/* Wrapper for node and resize handles */}
       <div
         style={{

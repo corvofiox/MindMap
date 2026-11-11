@@ -3921,12 +3921,17 @@ export function CanvasPage() {
         collapsedTitleAlign: nodeDefaults.imageNode.collapsedTitleAlign,
         collapsed: false,
         locked: false,
-        type: 'image',
       }
 
       addNode(newNode)
-
       setCurrentTool('select')
+      // 统一节点：图片不再是节点类型，而是正文里的块。这里建好空节点后请
+      // NodeItem 打开文件选择器，把图直接插进它的正文（三入口之一）。
+      window.setTimeout(() => {
+        window.dispatchEvent(
+          new CustomEvent('nodeImageUploadRequest', { detail: { nodeId: newNode.id } }),
+        )
+      }, 0)
     }
   }, [connections, updateConnection, nodes, panX, panY, zoom, containerRef, currentTool, isDragging, setSelectedIds, dragMode, addNode, setCurrentTool, findBestPort, stylePanelOpen, closeStylePanel, nodeDefaults])
 

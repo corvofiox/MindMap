@@ -68,7 +68,7 @@ export function htmlToPlainText(html: string | null | undefined): string {
  *
  * The input is never mutated.
  */
-export function normalizeNode<T extends LegacyNodeFields>(raw: T): T {
+export function normalizeNode<T extends LegacyNodeFields>(raw: T): T & LegacyNodeFields {
   const source = (raw ?? {}) as T
   const legacyImage = typeof source.imageUrl === 'string' && source.imageUrl !== ''
     ? source.imageUrl
@@ -85,7 +85,7 @@ export function normalizeNode<T extends LegacyNodeFields>(raw: T): T {
     || undefined
 
   const { type: _type, imageUrl: _imageUrl, aspectRatio: _aspectRatio, ...rest } = source
-  const normalized = { ...rest, content } as T
+  const normalized = { ...rest, content } as T & LegacyNodeFields
   if (cover) {
     ;(normalized as LegacyNodeFields).cover = cover
   } else {
