@@ -32,7 +32,8 @@ export function RegisterPage() {
     try {
       await register({ email, password, nickname })
       addToast({ type: 'success', title: '账户创建成功！', message: '欢迎来到 MindMap' })
-      navigate('/projects')
+      // 主页已是笔记本：登录/注册成功后落到 /notebook
+      navigate('/notebook')
     } catch (error) {
       addToast({
         type: 'error',

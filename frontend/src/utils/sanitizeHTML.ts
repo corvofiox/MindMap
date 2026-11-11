@@ -53,7 +53,7 @@ const ALLOWED_ATTRIBUTES: Record<string, Set<string>> = {
 const SAFE_FILE_URL = /^\/api\/files\/[a-f0-9]{64}(?:\?[^"'<>]*)?$/i
 const SAFE_DATA_IMAGE = /^data:image\/(?:png|jpe?g|gif|webp);base64,[a-z0-9+/=\s]+$/i
 
-function isSafeImageSrc(src: string): boolean {
+export function isSafeImageSrc(src: string): boolean {
   const value = src.trim()
   if (value === '') return false
   return SAFE_FILE_URL.test(value) || SAFE_DATA_IMAGE.test(value)

@@ -88,3 +88,7 @@ aux
 CLOCK$
 com[1-9]
 lpt[1-9]
+
+# E2E 运行产物（临时库、截图、Edge profile）
+.e2e/
+e2e/.tmp/

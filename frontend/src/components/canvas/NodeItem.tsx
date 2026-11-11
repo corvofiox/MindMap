@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo, memo } from 'react'
+import { isSafeImageSrc } from '@/utils/sanitizeHTML'
 import { useCanvasStore, getYjsBinding } from '@/store/useCanvasStore'
 import { useUIStore } from '@/store/useUIStore'
 import { snapToGrid } from '@/utils/canvas'
@@ -66,16 +67,22 @@ function toFinite(value: number | undefined | null, fallback: number): number {
   return value
 }
 
-// 判断一段 HTML 是否没有任何可见文本（用于显示占位符）
-function isVisuallyEmpty(html: string | undefined | null): boolean {
+/**
+ * 判断一段 HTML 是否"看起来是空的"（用于显示占位符）。
+ *
+ * 统一节点之后不能只看 textContent：一张图没有任何文字，但节点显然不是空的。
+ * 漏了这一步会让"只有图片的节点"永远显示「双击添加内容」。
+ */
+export function isVisuallyEmpty(html: string | undefined | null): boolean {
   if (!html) return true
   const div = document.createElement('div')
   div.innerHTML = html
+  if (div.querySelector('img')) return false
   return (div.textContent || '').replace(/\s+/g, '').length === 0
 }
 
 // 清理 HTML 内容，保留基本的文字格式标签
-function cleanHtmlContent(html: string): string {
+export function cleanHtmlContent(html: string): string {
   // 创建临时元素来解析 HTML
   const temp = document.createElement('div')
   temp.innerHTML = html
@@ -114,6 +121,20 @@ function cleanHtmlContent(html: string): string {
     if (node.nodeType === globalThis.Node.ELEMENT_NODE) {
       const element = node as Element
       const tagName = element.tagName.toLowerCase()
+
+      // 统一节点：图片是正文里的块。必须在这里特判，否则提交时会被标签白名单剥掉
+      // （sanitizeHTML 与 cleanHtmlContent 是两套清洗器，白名单必须同步）。
+      if (tagName === 'img') {
+        const src = element.getAttribute('src') || ''
+        if (!isSafeImageSrc(src)) return document.createTextNode('')
+        const img = document.createElement('img')
+        img.setAttribute('src', src)
+        for (const attr of ['alt', 'width', 'height', 'data-file-id']) {
+          const value = element.getAttribute(attr)
+          if (value) img.setAttribute(attr, value)
+        }
+        return img
+      }
 
       // 如果是允许的标签，保留它并清理其属性
       if (allowedTags.has(tagName)) {
@@ -395,42 +416,44 @@ export const NodeItem = memo(function NodeItem({ node, isSelected, zoom, onDragS
   const insertImageMarkup = useCallback((url: string, fileId?: number) => {
     const attr = fileId === undefined ? '' : ` data-file-id="${fileId}"`
     const markup = `<img src="${url}"${attr} alt="">`
+    const coverPatch = node.cover ? {} : { cover: url }
 
     const editor = contentRef.current
-    const selection = window.getSelection()
-    const canInsertAtCaret =
-      editingField === 'content' &&
-      editor !== null &&
-      selection !== null &&
-      selection.rangeCount > 0 &&
-      selection.anchorNode !== null &&
-      editor.contains(selection.anchorNode)
+    const editing = editingField === 'content' && editor !== null
 
-    if (canInsertAtCaret && selection !== null) {
-      const range = selection.getRangeAt(0)
-      range.deleteContents()
+    // 关键：编辑态下 DOM 才是正文的真相（saveContent 提交的是 innerHTML）。
+    // 若只更新 store 而不改 DOM，失焦提交会用旧 DOM 覆盖掉刚插入的图片。
+    if (editing && editor) {
+      const selection = window.getSelection()
+      const hasCaret = selection !== null
+        && selection.rangeCount > 0
+        && selection.anchorNode !== null
+        && editor.contains(selection.anchorNode)
+
       const holder = document.createElement('div')
       holder.innerHTML = markup
       const imageEl = holder.firstChild
-      if (imageEl) {
+
+      if (hasCaret && selection !== null && imageEl) {
+        const range = selection.getRangeAt(0)
+        range.deleteContents()
         range.insertNode(imageEl)
         range.setStartAfter(imageEl)
         range.collapse(true)
         selection.removeAllRanges()
         selection.addRange(range)
+      } else if (imageEl) {
+        editor.appendChild(imageEl)
       }
+
+      const nextContent = cleanHtmlContent(editor.innerHTML)
+      updateNodeWithOriginal(node.id, { content: nextContent, ...coverPatch }, { content: node.content || '' })
+      editingContentRef.current = nextContent
+      return
     }
 
-    const nextContent = canInsertAtCaret && editor
-      ? cleanHtmlContent(editor.innerHTML)
-      : `${node.content || ''}${markup}`
-
-    updateNodeWithOriginal(
-      node.id,
-      { content: nextContent, ...(node.cover ? {} : { cover: url }) },
-      { content: node.content || '' },
-    )
-    if (canInsertAtCaret) editingContentRef.current = nextContent
+    const nextContent = `${node.content || ''}${markup}`
+    updateNodeWithOriginal(node.id, { content: nextContent, ...coverPatch }, { content: node.content || '' })
   }, [node.id, node.content, node.cover, editingField, updateNodeWithOriginal])
 
   // 上传 + 插入。失败只提示，不改节点。
