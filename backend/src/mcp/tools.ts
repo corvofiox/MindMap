@@ -14,7 +14,7 @@
  */
 import { z } from 'zod'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import { nextZIndexAbove, NODE_Z_STEP } from 'mindmap-shared'
+import { nextZIndexAbove, NODE_Z_STEP, normalizeNode } from 'mindmap-shared'
 import { db } from '../database/connection.js'
 import { canvases, projects, projectMembers } from '../database/schema.js'
 import { eq, inArray, desc } from 'drizzle-orm'
@@ -258,7 +258,9 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
     async ({ canvasId }) => {
       const res = await withCanvas(ctx, canvasId)
       if ('error' in res) return res.error
-      return ok({ nodes: res.snapshot.nodes, count: res.snapshot.nodes.length })
+      // 统一节点：把老形态在出口处折成 content/cover，外部 agent 只看到一种形状
+      const nodes = res.snapshot.nodes.map((node) => normalizeNode(node))
+      return ok({ nodes, count: nodes.length })
     },
   )
 
@@ -438,8 +440,10 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
         node.aspectRatio = toFiniteNumber(rest.aspectRatio, 1)
       }
 
-      await upsertEntities(canvasId, { nodes: [node] })
-      return ok({ nodeId, title, type: nodeType })
+      // 统一节点：type/imageUrl/aspectRatio 都是废弃入参，这里折成 content/cover
+      const unified = normalizeNode(node) as Record<string, unknown>
+      await upsertEntities(canvasId, { nodes: [unified] })
+      return ok({ nodeId, title, cover: unified.cover ?? null })
     },
   )
 
@@ -453,7 +457,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
         canvasId: canvasIdSchema,
         nodeId: z.string().describe('要更新的节点 ID'),
         title: z.string().optional().describe('新的节点标题'),
-        content: z.string().optional().describe('新的节点内容'),
+        content: z.string().optional().describe('新的节点正文（富文本 HTML，可含 <img>）'),
         x: z.number().optional().describe('新的 X 坐标'),
         y: z.number().optional().describe('新的 Y 坐标'),
         width: z.number().optional().describe('新的宽度，建议不小于 200'),
@@ -469,6 +473,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
         type: z.enum(['text', 'image']).optional().describe('节点类型'),
         imageUrl: z.string().optional().describe('图片 URL'),
         aspectRatio: z.number().optional().describe('图片宽高比'),
+        cover: z.string().optional().describe('封面图 URL（正文首图）'),
         zIndex: z
           .number()
           .optional()
@@ -509,13 +514,21 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
       }
       if (rest.collapsed !== undefined) updates.collapsed = Boolean(rest.collapsed)
       if (rest.locked !== undefined) updates.locked = Boolean(rest.locked)
-      if (rest.type !== undefined) updates.type = rest.type
-      if (rest.imageUrl !== undefined) updates.imageUrl = String(rest.imageUrl)
-      if (rest.aspectRatio !== undefined) {
-        updates.aspectRatio = toFiniteNumber(rest.aspectRatio, toFiniteNumber(existing.aspectRatio, 1))
-      }
+      if (rest.content !== undefined) updates.content = String(rest.content)
+      if (rest.cover !== undefined) updates.cover = String(rest.cover)
       if (rest.zIndex !== undefined) {
         updates.zIndex = toFiniteNumber(rest.zIndex, toFiniteNumber(existing.zIndex, 0))
+      }
+
+      // 统一节点：type/imageUrl/aspectRatio 是废弃入参。仍然接受（老 agent 会传），
+      // 但落地前折成 content/cover，绝不再写回废弃字段。
+      if (rest.type !== undefined || rest.imageUrl !== undefined || rest.aspectRatio !== undefined) {
+        const merged = normalizeNode({ ...existing, ...updates }) as Record<string, unknown>
+        updates.content = merged.content
+        if (merged.cover !== undefined) updates.cover = merged.cover
+        delete updates.type
+        delete updates.imageUrl
+        delete updates.aspectRatio
       }
 
       if (Object.keys(updates).length === 0) {
@@ -1270,7 +1283,6 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
           textAlign: nodeData.textAlign ?? defaultStyle.textAlign ?? 'center',
           collapsed: Boolean(nodeData.collapsed ?? defaultStyle.collapsed ?? false),
           locked: Boolean(nodeData.locked ?? defaultStyle.locked ?? false),
-          type: nodeData.type ?? defaultStyle.type ?? 'text',
           zIndex: baseZIndex + index * NODE_Z_STEP,
         }
         const titleAlign = nodeData.titleAlign ?? defaultStyle.titleAlign
@@ -1283,7 +1295,8 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
         if (collapsedTitleAlign !== undefined) node.collapsedTitleAlign = collapsedTitleAlign
         if (imageUrl !== undefined) node.imageUrl = imageUrl
         if (aspectRatio !== undefined) node.aspectRatio = aspectRatio
-        nodesOut.push(node)
+        // 统一节点：把 imageUrl/type 等老字段折成 content/cover
+        nodesOut.push(normalizeNode(node) as Record<string, unknown>)
       })
 
       // Step 2: connections, resolving from/to by id or title.

@@ -452,6 +452,7 @@ interface NodeShape {
   type: string
   imageUrl?: string
   aspectRatio?: number
+  cover?: string
   zIndex?: number
 }
 
@@ -782,7 +783,7 @@ describe('MCP tools — error paths and options', () => {
   })
 
   describe('createNode option handling', () => {
-    it('sets imageUrl for type:image', async () => {
+    it('imageUrl 被折成正文里的 <img> 与 cover（统一节点不再有 type/imageUrl）', async () => {
       const { client } = await connect()
       await callOk(client, 'createNode', {
         canvasId: CANVAS_ID,
@@ -793,27 +794,30 @@ describe('MCP tools — error paths and options', () => {
 
       const listed = await callOk(client, 'getAllNodes', { canvasId: CANVAS_ID })
       const node = (listed.nodes as NodeShape[])[0]
-      expect(node.type).toBe('image')
-      expect(node.imageUrl).toBe('https://example.test/a.png')
+      expect(node.type).toBeUndefined()
+      expect(node.imageUrl).toBeUndefined()
+      expect(node.content).toContain('https://example.test/a.png')
+      expect(node.cover).toBe('https://example.test/a.png')
     })
 
-    it('defaults imageUrl to an empty string for type:image without one', async () => {
+    it('type=image 但没有 imageUrl 时不会凭空造出图片', async () => {
       const { client } = await connect()
       await callOk(client, 'createNode', { canvasId: CANVAS_ID, title: 'Pic', type: 'image' })
 
       const listed = await callOk(client, 'getAllNodes', { canvasId: CANVAS_ID })
-      expect((listed.nodes as NodeShape[])[0].imageUrl).toBe('')
+      const node = (listed.nodes as NodeShape[])[0]
+      expect(node.content).toBe('')
+      expect(node.cover).toBeUndefined()
     })
 
-    it('persists aspectRatio when supplied and omits it otherwise', async () => {
+    it('aspectRatio 是废弃入参：不再落库', async () => {
       const { client } = await connect()
       await callOk(client, 'createNode', { canvasId: CANVAS_ID, title: 'With', aspectRatio: 1.5 })
-      await callOk(client, 'createNode', { canvasId: CANVAS_ID, title: 'Without' })
 
       const listed = await callOk(client, 'getAllNodes', { canvasId: CANVAS_ID })
-      const nodes = listed.nodes as NodeShape[]
-      expect(nodes.find((n) => n.title === 'With')?.aspectRatio).toBe(1.5)
-      expect(nodes.find((n) => n.title === 'Without')?.aspectRatio).toBeUndefined()
+      const node = (listed.nodes as NodeShape[])[0]
+      expect(node.aspectRatio).toBeUndefined()
+      expect(node.width).toBe(200)
     })
 
     it('persists every alignment field', async () => {
@@ -865,7 +869,8 @@ describe('MCP tools — error paths and options', () => {
       expect(node.textAlign).toBe('center')
       expect(node.collapsed).toBe(false)
       expect(node.locked).toBe(false)
-      expect(node.type).toBe('text')
+      // 统一节点：不再写 type
+      expect(node.type).toBeUndefined()
     })
   })
 
@@ -973,7 +978,7 @@ describe('MCP tools — error paths and options', () => {
       expect(node.content).toBe('keep')
     })
 
-    it('updates alignment fields and aspectRatio individually', async () => {
+    it('updates alignment fields individually；aspectRatio 作为废弃入参被忽略', async () => {
       const { client } = await connect()
       const created = await callOk(client, 'createNode', { canvasId: CANVAS_ID, title: 'N' })
 
@@ -993,7 +998,24 @@ describe('MCP tools — error paths and options', () => {
       expect(node.titleAlign).toBe('center')
       expect(node.contentAlign).toBe('left')
       expect(node.collapsedTitleAlign).toBe('right')
-      expect(node.aspectRatio).toBe(2)
+      expect(node.aspectRatio).toBeUndefined()
+    })
+
+    it('updateNode 可以写正文与封面（统一节点的两个真实字段）', async () => {
+      const { client } = await connect()
+      const created = await callOk(client, 'createNode', { canvasId: CANVAS_ID, title: 'N' })
+
+      await callOk(client, 'updateNode', {
+        canvasId: CANVAS_ID,
+        nodeId: created.nodeId,
+        content: '<p>新正文</p>',
+        cover: '/api/files/' + 'a'.repeat(64),
+      })
+
+      const listed = await callOk(client, 'getAllNodes', { canvasId: CANVAS_ID })
+      const node = (listed.nodes as NodeShape[])[0]
+      expect(node.content).toBe('<p>新正文</p>')
+      expect(node.cover).toBe('/api/files/' + 'a'.repeat(64))
     })
 
     it('returns the applied updates so the caller can see what changed', async () => {

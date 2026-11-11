@@ -27,8 +27,13 @@ function toPositiveInt(value: unknown): number | null {
 }
 
 function sanitizeTitle(raw: unknown): string {
-  const text = typeof raw === 'string' ? raw.replace(/[\u0000-\u001f]/g, ' ').trim() : ''
-  return text.slice(0, MAX_TITLE)
+  if (typeof raw !== 'string') return ''
+  // 去掉控制字符（\x00-\x1f）而不写控制字符正则——eslint 的 no-control-regex
+  // 会拦，且按码位过滤比正则更直白。
+  const cleaned = Array.from(raw)
+    .map((ch) => (ch.charCodeAt(0) < 0x20 ? ' ' : ch))
+    .join('')
+  return cleaned.trim().slice(0, MAX_TITLE)
 }
 
 function countImages(html: string): number {
