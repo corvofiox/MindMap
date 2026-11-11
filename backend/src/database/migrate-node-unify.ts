@@ -236,7 +236,7 @@ async function migrateEntity(
 
   // normalizeNode 负责把 legacy imageUrl 折成 content/cover 并删除已废弃字段
   const normalized = normalizeNode({ ...obj, content: nextContent })
-  return { changed: true, entity: normalized as Record<string, unknown> }
+  return { changed: true, entity: normalized as unknown as Record<string, unknown> }
 }
 
 const MIGRATION_NAME = '202611-node-unify'

@@ -1,0 +1,302 @@
+/**
+ * 笔记本 API —— 手稿 CRUD、账号隔离、以及与节点池的双向转换。
+ *
+ * 这里钉的是三条容易悄悄坏掉的契约：
+ *   1. 隔离：别人的手稿在我这里必须 404（不是 403，不泄露存在性）；
+ *   2. 转换是抄送：手稿 → 卡片只复制内容 + 记录来源，之后各改各的；
+ *   3. 统一节点：卡片里存的必须是 {title, content, cover}，不再有 type/imageUrl。
+ */
+import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
+import supertest from 'supertest'
+import express from 'express'
+import cookieParser from 'cookie-parser'
+
+vi.mock('../utils/logger.js', () => ({ log: vi.fn(), logError: vi.fn() }))
+
+vi.mock('../database/connection.js', async () => {
+  const { installDbMock } = await import('./helpers/integration-harness.js')
+  return installDbMock()
+})
+
+// authenticate 走 getValidatedEnv()，它要求 PORT/WS_PORT/DB_FILE/ALLOWED_ORIGINS/
+// NODE_ENV 齐全，缺一个就会在鉴权里抛错并被兜成 401（看起来像令牌无效）。
+process.env.JWT_SECRET = process.env.JWT_SECRET || 'manuscript-test-jwt-secret'
+process.env.JWT_EXPIRES_IN = '1h'
+process.env.PORT = '3098'
+process.env.WS_PORT = '3198'
+process.env.DB_FILE = ':memory:'
+process.env.ALLOWED_ORIGINS = 'http://localhost:5173'
+process.env.NODE_ENV = 'test'
+
+const {
+  manuscriptRouter,
+  manuscriptFolderRouter,
+  manuscriptToCardPayload,
+  cardToManuscriptPayload,
+} = await import('../controllers/manuscript.controller.js')
+const { createTestDatabase, seedUser, signToken } = await import('./helpers/integration-harness.js')
+
+let app: express.Express
+let tokenA: string
+let tokenB: string
+let userA: number
+let testDb: ReturnType<typeof createTestDatabase>
+
+beforeAll(() => {
+  testDb = createTestDatabase()
+  userA = seedUser(testDb.raw, 'a@nb.com', 'hash', 'A')
+  const userB = seedUser(testDb.raw, 'b@nb.com', 'hash', 'B')
+  tokenA = signToken(userA)
+  tokenB = signToken(userB)
+
+  const mounted = express()
+  mounted.use(cookieParser())
+  mounted.use(express.json({ limit: '20mb' }))
+  mounted.use('/api/manuscripts', manuscriptRouter)
+  mounted.use('/api/manuscript-folders', manuscriptFolderRouter)
+  mounted.use(
+    (err: { statusCode?: number; message?: string }, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+      res.status(err.statusCode || 500).json({ success: false, error: err.message || 'error' })
+    },
+  )
+  app = mounted
+})
+
+beforeEach(() => {
+  testDb.raw.exec('DELETE FROM manuscripts')
+  testDb.raw.exec('DELETE FROM node_cards')
+})
+
+const authA = () => ({ Authorization: `Bearer ${tokenA}` })
+const authB = () => ({ Authorization: `Bearer ${tokenB}` })
+
+async function createManuscript(overrides: Record<string, unknown> = {}) {
+  const res = await supertest(app)
+    .post('/api/manuscripts')
+    .set(authA())
+    .send({ title: '周记', contentHtml: '<p>今天写了点东西</p>', ...overrides })
+  return res
+}
+
+describe('manuscripts CRUD', () => {
+  it('新建后能按 id 读回，列表里也有', async () => {
+    const created = await createManuscript()
+    expect(created.status).toBe(201)
+
+    const id = created.body.data.id
+    const one = await supertest(app).get(`/api/manuscripts/${id}`).set(authA())
+    expect(one.status).toBe(200)
+    expect(one.body.data.title).toBe('周记')
+
+    const list = await supertest(app).get('/api/manuscripts').set(authA())
+    expect(list.status).toBe(200)
+    expect(list.body.data.map((m: { id: number }) => m.id)).toContain(id)
+  })
+
+  it('保存会刷新 previewText / imageCount / updatedAt', async () => {
+    const created = await createManuscript()
+    const id = created.body.data.id
+
+    await supertest(app)
+      .put(`/api/manuscripts/${id}`)
+      .set(authA())
+      .send({ contentHtml: '<p>改了</p><img src="/api/files/' + 'a'.repeat(64) + '">' })
+
+    const one = await supertest(app).get(`/api/manuscripts/${id}`).set(authA())
+    expect(one.body.data.previewText).toContain('改了')
+    expect(one.body.data.imageCount).toBe(1)
+  })
+
+  it('删除是软删除：列表与详情都拿不到，但行还在', async () => {
+    const created = await createManuscript()
+    const id = created.body.data.id
+
+    await supertest(app).delete(`/api/manuscripts/${id}`).set(authA())
+
+    expect((await supertest(app).get(`/api/manuscripts/${id}`).set(authA())).status).toBe(404)
+    const list = await supertest(app).get('/api/manuscripts').set(authA())
+    expect(list.body.data.map((m: { id: number }) => m.id)).not.toContain(id)
+    const row = testDb.raw.prepare('SELECT deleted_at FROM manuscripts WHERE id = ?').get(id) as {
+      deleted_at: number | null
+    }
+    expect(row.deleted_at).not.toBeNull()
+  })
+
+  it('按标题/正文搜索', async () => {
+    await createManuscript({ title: '苹果笔记', contentHtml: '<p>关于苹果</p>' })
+    await createManuscript({ title: '香蕉笔记', contentHtml: '<p>关于香蕉</p>' })
+
+    const res = await supertest(app).get('/api/manuscripts?q=香蕉').set(authA())
+
+    expect(res.body.data).toHaveLength(1)
+    expect(res.body.data[0].title).toBe('香蕉笔记')
+  })
+
+  it('隔离：别人的手稿在读取/保存/删除/转换上都返回 404', async () => {
+    const created = await createManuscript()
+    const id = created.body.data.id
+
+    expect((await supertest(app).get(`/api/manuscripts/${id}`).set(authB())).status).toBe(404)
+    expect(
+      (await supertest(app).put(`/api/manuscripts/${id}`).set(authB()).send({ title: 'x' })).status,
+    ).toBe(404)
+    expect((await supertest(app).delete(`/api/manuscripts/${id}`).set(authB())).status).toBe(404)
+    expect(
+      (await supertest(app).post(`/api/manuscripts/${id}/to-node-card`).set(authB()).send({})).status,
+    ).toBe(404)
+
+    const listB = await supertest(app).get('/api/manuscripts').set(authB())
+    expect(listB.body.data).toHaveLength(0)
+  })
+
+  it('未登录一律 401', async () => {
+    expect((await supertest(app).get('/api/manuscripts')).status).toBe(401)
+    expect((await supertest(app).post('/api/manuscripts').send({ title: 'x' })).status).toBe(401)
+  })
+})
+
+describe('手稿 → 节点池', () => {
+  it('生成卡片：正文原样搬过去，首图作 thumbnail，并记录来源', async () => {
+    const sha = 'b'.repeat(64)
+    const created = await createManuscript({
+      title: '带图手稿',
+      contentHtml: `<p>正文</p><img src="/api/files/${sha}">`,
+    })
+    const id = created.body.data.id
+
+    const res = await supertest(app).post(`/api/manuscripts/${id}/to-node-card`).set(authA()).send({})
+
+    expect(res.status).toBe(201)
+    const card = res.body.data
+    expect(card.sourceManuscriptId).toBe(id)
+    expect(card.sourceKind).toBe('manuscript')
+    expect(card.type).toBe('image')
+    expect(card.thumbnail).toBe(`/api/files/${sha}`)
+
+    const payload = JSON.parse(card.content)
+    expect(payload.content).toContain('<p>正文</p>')
+    expect(payload.content).toContain(`/api/files/${sha}`)
+    expect(payload.cover).toBe(`/api/files/${sha}`)
+    expect(payload.type).toBeUndefined()
+    expect(payload.imageUrl).toBeUndefined()
+  })
+
+  it('纯文字手稿 → 卡片 type 为 text', async () => {
+    const created = await createManuscript({ title: '纯文字', contentHtml: '<p>只有字</p>' })
+    const res = await supertest(app)
+      .post(`/api/manuscripts/${created.body.data.id}/to-node-card`)
+      .set(authA())
+      .send({})
+
+    expect(res.body.data.type).toBe('text')
+    // 无图卡片 thumbnail 落库为 NULL（drizzle 返回 null），不是 undefined
+    expect(res.body.data.thumbnail).toBeNull()
+  })
+
+  it('转换是抄送：改手稿不会改已生成的卡片', async () => {
+    const created = await createManuscript({ title: '原稿', contentHtml: '<p>第一版</p>' })
+    const id = created.body.data.id
+    const card = (await supertest(app).post(`/api/manuscripts/${id}/to-node-card`).set(authA()).send({}))
+      .body.data
+
+    await supertest(app).put(`/api/manuscripts/${id}`).set(authA()).send({ contentHtml: '<p>第二版</p>' })
+
+    const row = testDb.raw.prepare('SELECT content FROM node_cards WHERE id = ?').get(card.id) as {
+      content: string
+    }
+    expect(row.content).toContain('第一版')
+    expect(row.content).not.toContain('第二版')
+  })
+})
+
+describe('节点池 → 手稿', () => {
+  function insertCard(content: string, name = '卡片') {
+    const info = testDb.raw
+      .prepare(`INSERT INTO node_cards (user_id, name, content, type) VALUES (?, ?, ?, 'text')`)
+      .run(userA, name, content)
+    return Number(info.lastInsertRowid)
+  }
+
+  it('从统一形态卡片还原手稿', async () => {
+    const cardId = insertCard(JSON.stringify({ title: '卡片标题', content: '<p>卡片正文</p>' }))
+
+    const res = await supertest(app).post('/api/manuscripts/from-card').set(authA()).send({ cardId })
+
+    expect(res.status).toBe(201)
+    expect(res.body.data.title).toBe('卡片标题')
+    expect(res.body.data.contentHtml).toBe('<p>卡片正文</p>')
+    expect(res.body.data.sourceCardId).toBe(cardId)
+  })
+
+  it('老图片卡片（type/imageUrl）也能还原：图折进正文', async () => {
+    const sha = 'c'.repeat(64)
+    const cardId = insertCard(
+      JSON.stringify({ type: 'image', title: '老卡', imageUrl: `/api/files/${sha}` }),
+    )
+
+    const res = await supertest(app).post('/api/manuscripts/from-card').set(authA()).send({ cardId })
+
+    expect(res.body.data.contentHtml).toContain(`/api/files/${sha}`)
+    expect(res.body.data.imageCount).toBe(1)
+  })
+
+  it('别人的卡片不能还原（404）', async () => {
+    const cardId = insertCard(JSON.stringify({ title: 'T', content: 'x' }))
+    const res = await supertest(app).post('/api/manuscripts/from-card').set(authB()).send({ cardId })
+    expect(res.status).toBe(404)
+  })
+})
+
+describe('转换纯函数', () => {
+  it('manuscriptToCardPayload：无标题时用正文首段兜底', () => {
+    const payload = manuscriptToCardPayload(
+      { id: 1, title: '   ', contentHtml: '<p>第一段文字</p>', userId: 7 },
+      null,
+    )
+    const parsed = JSON.parse(payload.content)
+    expect(payload.name).toBe('第一段文字')
+    expect(parsed.title).toBe('   ')
+    expect(payload.type).toBe('text')
+  })
+
+  it('cardToManuscriptPayload：坏 JSON 不抛错，整串当正文', () => {
+    const payload = cardToManuscriptPayload({
+      id: 9,
+      userId: 1,
+      name: '坏卡',
+      content: 'not json at all',
+    })
+    expect(payload.title).toBe('坏卡')
+    expect(payload.contentHtml).toBe('not json at all')
+    expect(payload.sourceCardId).toBe(9)
+  })
+})
+
+describe('手稿文件夹', () => {
+  it('建/列/删，且不跨账号', async () => {
+    const created = await supertest(app)
+      .post('/api/manuscript-folders')
+      .set(authA())
+      .send({ name: '灵感' })
+    expect(created.status).toBe(201)
+
+    const list = await supertest(app).get('/api/manuscript-folders').set(authA())
+    expect(list.body.data.map((f: { name: string }) => f.name)).toContain('灵感')
+
+    const listB = await supertest(app).get('/api/manuscript-folders').set(authB())
+    expect(listB.body.data).toHaveLength(0)
+
+    const id = created.body.data.id
+    expect(
+      (await supertest(app).delete(`/api/manuscript-folders/${id}`).set(authB())).status,
+    ).toBe(404)
+    expect(
+      (await supertest(app).delete(`/api/manuscript-folders/${id}`).set(authA())).status,
+    ).toBe(200)
+  })
+
+  it('空名字被拒绝', async () => {
+    const res = await supertest(app).post('/api/manuscript-folders').set(authA()).send({ name: '   ' })
+    expect(res.status).toBe(400)
+  })
+})

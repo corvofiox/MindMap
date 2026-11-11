@@ -357,3 +357,86 @@ export async function cancelInvitation(invitationId: number): Promise<{ message:
 export async function updateMemberRole(projectId: number, userId: number, role: 'editor' | 'viewer'): Promise<import('@/types').ProjectMember> {
   return await apiClient.put(API_ENDPOINTS.COLLABORATION_UPDATE_ROLE(projectId, userId), { role })
 }
+
+// ---- 笔记本（手稿）--------------------------------------------------------
+// 账号私有、不协作：纯 REST，没有 Yjs/房间。
+
+export interface ManuscriptSummary {
+  id: number
+  folderId: number | null
+  title: string
+  previewText: string | null
+  imageCount: number
+  createdAt: number | null
+  updatedAt: number | null
+}
+
+export interface Manuscript extends ManuscriptSummary {
+  contentHtml: string
+  sourceCardId: number | null
+}
+
+export interface ManuscriptFolder {
+  id: number
+  userId: number
+  name: string
+  parentId: number | null
+  sortOrder: number
+  collapsed: boolean
+  createdAt: number | null
+}
+
+export async function getManuscripts(params: { q?: string; folderId?: number | null } = {}): Promise<ManuscriptSummary[]> {
+  const query = new URLSearchParams()
+  if (params.q) query.set('q', params.q)
+  if (params.folderId !== undefined && params.folderId !== null) query.set('folderId', String(params.folderId))
+  const suffix = query.toString() ? `?${query.toString()}` : ''
+  return await apiClient.get<ManuscriptSummary[]>(`${API_ENDPOINTS.MANUSCRIPTS}${suffix}`)
+}
+
+export async function getManuscript(id: number): Promise<Manuscript> {
+  return await apiClient.get<Manuscript>(`${API_ENDPOINTS.MANUSCRIPTS}/${id}`)
+}
+
+export async function createManuscript(data: {
+  title?: string
+  contentHtml?: string
+  folderId?: number | null
+}): Promise<Manuscript> {
+  return await apiClient.post<Manuscript>(API_ENDPOINTS.MANUSCRIPTS, data)
+}
+
+export async function updateManuscript(
+  id: number,
+  data: { title?: string; contentHtml?: string; folderId?: number | null },
+): Promise<Manuscript> {
+  return await apiClient.put<Manuscript>(`${API_ENDPOINTS.MANUSCRIPTS}/${id}`, data)
+}
+
+export async function deleteManuscript(id: number): Promise<{ id: number }> {
+  return await apiClient.delete<{ id: number }>(`${API_ENDPOINTS.MANUSCRIPTS}/${id}`)
+}
+
+/** 手稿 → 节点池卡片（抄送语义：只复制内容并记录来源）。 */
+export async function manuscriptToNodeCard(id: number, folderId?: number | null): Promise<NodeCard> {
+  return await apiClient.post<NodeCard>(`${API_ENDPOINTS.MANUSCRIPTS}/${id}/to-node-card`, {
+    folderId: folderId ?? null,
+  })
+}
+
+/** 节点池卡片 → 手稿。 */
+export async function nodeCardToManuscript(cardId: number): Promise<Manuscript> {
+  return await apiClient.post<Manuscript>(`${API_ENDPOINTS.MANUSCRIPTS}/from-card`, { cardId })
+}
+
+export async function getManuscriptFolders(): Promise<ManuscriptFolder[]> {
+  return await apiClient.get<ManuscriptFolder[]>(API_ENDPOINTS.MANUSCRIPT_FOLDERS)
+}
+
+export async function createManuscriptFolder(data: { name: string; parentId?: number | null }): Promise<ManuscriptFolder> {
+  return await apiClient.post<ManuscriptFolder>(API_ENDPOINTS.MANUSCRIPT_FOLDERS, data)
+}
+
+export async function deleteManuscriptFolder(id: number): Promise<{ id: number }> {
+  return await apiClient.delete<{ id: number }>(`${API_ENDPOINTS.MANUSCRIPT_FOLDERS}/${id}`)
+}

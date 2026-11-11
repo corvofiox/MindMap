@@ -258,8 +258,15 @@ export async function runMigrations(sqlite: Database.Database) {
       sqlite.exec('ALTER TABLE node_cards ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0')
     }
 
-    // files: content-addressed storage + GC bookkeeping (2026-11 节点统一改造)
-    // 老库只有 filename/path/size/mime_type，这里补齐 sha256（能力 URL + 去重键）
+    // 手稿 ⇄ 卡片 的溯源列（抄送语义，不做双向绑定）
+    if (!columns.includes('source_manuscript_id')) {
+      sqlite.exec('ALTER TABLE node_cards ADD COLUMN source_manuscript_id INTEGER')
+    }
+    if (!columns.includes('source_kind')) {
+      sqlite.exec('ALTER TABLE node_cards ADD COLUMN source_kind TEXT')
+    }
+
+    // files: content-addressed storage + GC bookkeeping (2026-11 节点统一改造)    // 老库只有 filename/path/size/mime_type，这里补齐 sha256（能力 URL + 去重键）
     // 与三阶段 GC 需要的列。
     const filesColumns = getColumns(sqlite, 'files')
     if (filesColumns.length > 0) {
@@ -276,6 +283,42 @@ export async function runMigrations(sqlite: Database.Database) {
         sqlite.exec('ALTER TABLE files ADD COLUMN deleted_at INTEGER')
       }
       sqlite.exec('CREATE UNIQUE INDEX IF NOT EXISTS files_sha256_idx ON files (sha256)')
+    }
+
+    // 笔记本（手稿）—— 账号私有，不参与协作（见 docs/requirements-notebook.md §6）
+    if (!tableExists(sqlite, 'manuscript_folders')) {
+      sqlite.exec(`
+        CREATE TABLE manuscript_folders (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          name TEXT NOT NULL,
+          parent_id INTEGER REFERENCES manuscript_folders(id) ON DELETE CASCADE,
+          sort_order INTEGER NOT NULL DEFAULT 0,
+          collapsed INTEGER NOT NULL DEFAULT 0,
+          created_at INTEGER DEFAULT (strftime('%s', 'now'))
+        )
+      `)
+    }
+    if (!tableExists(sqlite, 'manuscripts')) {
+      sqlite.exec(`
+        CREATE TABLE manuscripts (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          folder_id INTEGER REFERENCES manuscript_folders(id) ON DELETE SET NULL,
+          title TEXT NOT NULL DEFAULT '',
+          content_html TEXT NOT NULL DEFAULT '',
+          preview_text TEXT,
+          image_count INTEGER NOT NULL DEFAULT 0,
+          source_card_id INTEGER,
+          created_at INTEGER DEFAULT (strftime('%s', 'now')),
+          updated_at INTEGER DEFAULT (strftime('%s', 'now')),
+          deleted_at INTEGER
+        )
+      `)
+      sqlite.exec(
+        'CREATE INDEX IF NOT EXISTS manuscripts_user_updated_idx ON manuscripts (user_id, updated_at DESC)',
+      )
+      sqlite.exec('CREATE INDEX IF NOT EXISTS manuscripts_user_folder_idx ON manuscripts (user_id, folder_id)')
     }
 
     // Create project_invitations table if it doesn't exist
@@ -464,7 +507,7 @@ export async function runMigrations(sqlite: Database.Database) {
             joined_at INTEGER DEFAULT (strftime('%s', 'now'))
           )
         `)
-        sqlite.exec(`INSERT INTO group_members_new SELECT * FROM group_members`)
+        sqlite.exec(`INSERT INTO group_members_new (id, group_id, user_id, role, joined_at) SELECT id, group_id, user_id, role, joined_at FROM group_members`)
         sqlite.exec(`DROP TABLE group_members`)
         sqlite.exec(`ALTER TABLE group_members_new RENAME TO group_members`)
 
@@ -478,7 +521,7 @@ export async function runMigrations(sqlite: Database.Database) {
             joined_at INTEGER DEFAULT (strftime('%s', 'now'))
           )
         `)
-        sqlite.exec(`INSERT INTO project_members_new SELECT * FROM project_members`)
+        sqlite.exec(`INSERT INTO project_members_new (id, project_id, user_id, role, joined_at) SELECT id, project_id, user_id, role, joined_at FROM project_members`)
         sqlite.exec(`DROP TABLE project_members`)
         sqlite.exec(`ALTER TABLE project_members_new RENAME TO project_members`)
 
@@ -495,7 +538,7 @@ export async function runMigrations(sqlite: Database.Database) {
             responded_at INTEGER
           )
         `)
-        sqlite.exec(`INSERT INTO project_invitations_new SELECT * FROM project_invitations`)
+        sqlite.exec(`INSERT INTO project_invitations_new (id, project_id, inviter_id, invitee_id, role, status, created_at) SELECT id, project_id, inviter_id, invitee_id, role, status, created_at FROM project_invitations`)
         sqlite.exec(`DROP TABLE project_invitations`)
         sqlite.exec(`ALTER TABLE project_invitations_new RENAME TO project_invitations`)
 
@@ -510,7 +553,7 @@ export async function runMigrations(sqlite: Database.Database) {
             created_at INTEGER DEFAULT (strftime('%s', 'now'))
           )
         `)
-        sqlite.exec(`INSERT INTO folders_new SELECT * FROM folders`)
+        sqlite.exec(`INSERT INTO folders_new (id, name, project_id, parent_id, sort_order, created_at) SELECT id, name, project_id, parent_id, sort_order, created_at FROM folders`)
         sqlite.exec(`DROP TABLE folders`)
         sqlite.exec(`ALTER TABLE folders_new RENAME TO folders`)
 
@@ -525,7 +568,7 @@ export async function runMigrations(sqlite: Database.Database) {
             expires_at INTEGER NOT NULL
           )
         `)
-        sqlite.exec(`INSERT INTO canvas_recycle_bin_new SELECT * FROM canvas_recycle_bin`)
+        sqlite.exec(`INSERT INTO canvas_recycle_bin_new (id, canvas_id, project_id, deleted_by, deleted_at) SELECT id, canvas_id, project_id, deleted_by, deleted_at FROM canvas_recycle_bin`)
         sqlite.exec(`DROP TABLE canvas_recycle_bin`)
         sqlite.exec(`ALTER TABLE canvas_recycle_bin_new RENAME TO canvas_recycle_bin`)
 
@@ -541,11 +584,13 @@ export async function runMigrations(sqlite: Database.Database) {
             created_at INTEGER DEFAULT (strftime('%s', 'now'))
           )
         `)
-        sqlite.exec(`INSERT INTO node_pool_folders_new SELECT * FROM node_pool_folders`)
+        sqlite.exec(`INSERT INTO node_pool_folders_new (id, user_id, name, parent_id, sort_order, collapsed, created_at) SELECT id, user_id, name, parent_id, sort_order, collapsed, created_at FROM node_pool_folders`)
         sqlite.exec(`DROP TABLE node_pool_folders`)
         sqlite.exec(`ALTER TABLE node_pool_folders_new RENAME TO node_pool_folders`)
 
         // node_cards: user_id CASCADE, created_by/folder_id SET NULL
+        // 列名必须显式列出：`SELECT *` 在给 node_cards 加列（source_manuscript_id /
+        // source_kind）后会因列数不匹配整批回滚——files 表踩过同一个坑。
         sqlite.exec(`
           CREATE TABLE node_cards_new (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -561,10 +606,19 @@ export async function runMigrations(sqlite: Database.Database) {
             description TEXT,
             thumbnail TEXT,
             sort_order INTEGER NOT NULL DEFAULT 0,
+            source_manuscript_id INTEGER,
+            source_kind TEXT,
             created_at INTEGER DEFAULT (strftime('%s', 'now'))
           )
         `)
-        sqlite.exec(`INSERT INTO node_cards_new SELECT * FROM node_cards`)
+        sqlite.exec(`
+          INSERT INTO node_cards_new
+            (id, user_id, name, content, type, color, tags, use_count, created_by,
+             folder_id, description, thumbnail, sort_order, source_manuscript_id, source_kind, created_at)
+          SELECT id, user_id, name, content, type, color, tags, use_count, created_by,
+                 folder_id, description, thumbnail, sort_order, source_manuscript_id, source_kind, created_at
+          FROM node_cards
+        `)
         sqlite.exec(`DROP TABLE node_cards`)
         sqlite.exec(`ALTER TABLE node_cards_new RENAME TO node_cards`)
 
@@ -578,7 +632,7 @@ export async function runMigrations(sqlite: Database.Database) {
             category TEXT NOT NULL DEFAULT 'general'
           )
         `)
-        sqlite.exec(`INSERT INTO settings_new SELECT * FROM settings`)
+        sqlite.exec(`INSERT INTO settings_new (id, user_id, key, value, category) SELECT id, user_id, key, value, category FROM settings`)
         sqlite.exec(`DROP TABLE settings`)
         sqlite.exec(`ALTER TABLE settings_new RENAME TO settings`)
 

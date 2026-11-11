@@ -32,6 +32,7 @@ import { initializeDb, registerShutdownHandlers } from './database/connection.js
 import { migrateCanvasesToYjs } from './database/migrate-to-yjs.js'
 import { migrateNodesToUnified } from './database/migrate-node-unify.js'
 import { fileRouter } from './controllers/file.controller.js'
+import { manuscriptRouter, manuscriptFolderRouter } from './controllers/manuscript.controller.js'
 import { getValidatedEnv, isTrustProxyEnabled } from './utils/env.js'
 import { log, logError } from './utils/logger.js'
 
@@ -112,6 +113,9 @@ app.use('/api/collaboration', apiLimiter(), csrfProtectionMiddleware, collaborat
 // Personal access tokens for external agents. Browser-driven (JWT + CSRF), unlike
 // /mcp which authenticates with the token itself.
 app.use('/api/tokens', apiLimiter(), csrfProtectionMiddleware, tokenRouter)
+// 笔记本：账号私有手稿 + 与节点池的双向转换（不参与协作，纯 REST）
+app.use('/api/manuscripts', apiLimiter(), csrfProtectionMiddleware, manuscriptRouter)
+app.use('/api/manuscript-folders', apiLimiter(), csrfProtectionMiddleware, manuscriptFolderRouter)
 // MCP endpoint for external agents. Deliberately NOT behind csrfProtectionMiddleware:
 // the credential is an explicit Authorization header (a cross-site form cannot set
 // one), so CSRF does not apply, and requiring a token here would force agents to

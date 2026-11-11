@@ -399,7 +399,11 @@ describe('源码守卫自检', () => {
  * pattern so it cannot be widened by accident — and so adding an entry is a
  * visible change in review.
  */
-const NO_PROJECT_IMPORT_ALLOWED = new Set(['backend/src/__tests__/test-quality-guard.test.ts'])
+const NO_PROJECT_IMPORT_ALLOWED = new Set([
+  // 源码扫描型守卫：断言的对象是文件内容而不是运行时模块，无需 import 项目代码
+  'backend/src/__tests__/test-quality-guard.test.ts',
+  'backend/src/__tests__/migration-guards.test.ts',
+])
 
 describe('源码守卫：测试必须真实有效', () => {
   describe('测试文件必须 import 项目代码', () => {

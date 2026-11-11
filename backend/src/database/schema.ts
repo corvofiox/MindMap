@@ -113,6 +113,10 @@ export const nodeCards = sqliteTable('node_cards', {
   createdBy: integer('created_by').references(() => users.id, { onDelete: 'set null' }),
   folderId: integer('folder_id').references(() => nodePoolFolders.id, { onDelete: 'set null' }),
   description: text('description'),
+  /** 来自笔记本手稿时记录来源（抄送语义：只做溯源，不做双向绑定） */
+  sourceManuscriptId: integer('source_manuscript_id'),
+  /** 'canvas' | 'manuscript'，供节点池区分卡片的来路 */
+  sourceKind: text('source_kind'),
   thumbnail: text('thumbnail'),
   sortOrder: integer('sort_order').notNull().default(0),
   createdAt: integer('created_at').default(sql`strftime('%s', 'now')`),
@@ -124,6 +128,40 @@ export const nodePoolFolders = sqliteTable('node_pool_folders', {
   userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   name: text('name').notNull(),
   parentId: integer('parent_id').references(() => nodePoolFolders.id, { onDelete: 'cascade' }),
+  sortOrder: integer('sort_order').notNull().default(0),
+  collapsed: integer('collapsed', { mode: 'boolean' }).notNull().default(false),
+  createdAt: integer('created_at').default(sql`strftime('%s', 'now')`),
+})
+
+// Manuscripts (Notebook) — 账号私有的富文本手稿。
+//
+// 与画布不同，手稿不做协作：没有 Yjs 文档、没有房间、没有快照合并，只有一行
+// REST 记录。`contentHtml` 与节点正文共用同一套 sanitize 白名单，双向转换时
+// 只是搬运字符串；图片是 `/api/files/<sha>` 短 URL（见 docs §14/§17）。
+//
+// `deleted_at` 是软删除：GC 的引用扫描只统计未删除的手稿，物理清理交给
+// 数据保留策略，避免"删了手稿顺手删了还在别处用的图"。
+export const manuscripts = sqliteTable('manuscripts', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  folderId: integer('folder_id').references(() => manuscriptFolders.id, { onDelete: 'set null' }),
+  title: text('title').notNull().default(''),
+  contentHtml: text('content_html').notNull().default(''),
+  previewText: text('preview_text'),
+  imageCount: integer('image_count').notNull().default(0),
+  /** 从节点池卡片还原而来时记录来源，便于提示"这张稿子从哪来" */
+  sourceCardId: integer('source_card_id'),
+  createdAt: integer('created_at').default(sql`strftime('%s', 'now')`),
+  updatedAt: integer('updated_at').default(sql`strftime('%s', 'now')`),
+  deletedAt: integer('deleted_at'),
+})
+
+// Manuscript folders — 与 node_pool_folders 同构（账号私有 + 树形 + 排序）
+export const manuscriptFolders = sqliteTable('manuscript_folders', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  parentId: integer('parent_id').references(() => manuscriptFolders.id, { onDelete: 'cascade' }),
   sortOrder: integer('sort_order').notNull().default(0),
   collapsed: integer('collapsed', { mode: 'boolean' }).notNull().default(false),
   createdAt: integer('created_at').default(sql`strftime('%s', 'now')`),
