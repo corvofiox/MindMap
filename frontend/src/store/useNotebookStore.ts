@@ -44,7 +44,8 @@ interface NotebookState {
   moveToFolder: (id: number, folderId: number | null) => Promise<void>
   sendToPool: (id: number, folderId?: number | null) => Promise<NodeCard | null>
   restoreFromCard: (cardId: number) => Promise<Manuscript | null>
-  addFolder: (name: string) => Promise<void>
+  /** 收纳：新建手稿夹；parentId 非空时建成子文件夹。 */
+  addFolder: (name: string, parentId?: number | null) => Promise<void>
   removeFolder: (id: number) => Promise<void>
 }
 
@@ -212,8 +213,8 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
     }
   },
 
-  addFolder: async (name) => {
-    const folder = await createManuscriptFolder({ name })
+  addFolder: async (name, parentId = null) => {
+    const folder = await createManuscriptFolder({ name, parentId })
     set((state) => ({ folders: [...state.folders, folder] }))
   },
 

@@ -12,6 +12,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import type { ManuscriptFolder, ManuscriptSummary } from '@/services/api'
+import { NotebookFolderTree, collectSubtreeIds } from './NotebookFolderTree'
 
 interface NotebookSidebarProps {
   manuscripts: ManuscriptSummary[]
@@ -23,8 +24,10 @@ interface NotebookSidebarProps {
   onCreate: () => void
   onOpen: (id: number) => void
   onCollapse: () => void
-  /** 收纳：新建手稿夹 */
-  onAddFolder: (name: string) => void
+  /** 收纳：新建手稿夹；parentId 非空时建子文件夹 */
+  onAddFolder: (name: string, parentId?: number | null) => void
+  /** 删除文件夹（子文件夹会上移到上一层） */
+  onDeleteFolder: (id: number) => void
   /** 收纳：把手稿移入某个夹（null = 未归档） */
   onMoveToFolder: (id: number, folderId: number | null) => void
   onDelete: (id: number) => void
@@ -72,30 +75,31 @@ export function NotebookSidebar({
   onOpen,
   onCollapse,
   onAddFolder,
+  onDeleteFolder,
   onMoveToFolder,
   onDelete,
 }: NotebookSidebarProps) {
   const [folderFilter, setFolderFilter] = useState<number | null>(null)
-  const [foldersOpen, setFoldersOpen] = useState(true)
   const [menuFor, setMenuFor] = useState<number | null>(null)
 
-  const visible = useMemo(
-    () => (folderFilter === null ? manuscripts : manuscripts.filter((m) => m.folderId === folderFilter)),
-    [manuscripts, folderFilter],
-  )
+  // 选中父文件夹时，它下面（所有层级）的手稿都要列出来
+  const visible = useMemo(() => {
+    if (folderFilter === null) return manuscripts
+    const ids = collectSubtreeIds(folders, folderFilter)
+    return manuscripts.filter((m) => m.folderId !== null && m.folderId !== undefined && ids.has(m.folderId))
+  }, [manuscripts, folders, folderFilter])
 
-  const countByFolder = useMemo(() => {
-    const map = new Map<number, number>()
-    for (const item of manuscripts) {
-      if (item.folderId === null || item.folderId === undefined) continue
-      map.set(item.folderId, (map.get(item.folderId) ?? 0) + 1)
-    }
-    return map
-  }, [manuscripts])
+  const handleAddFolder = (parentId: number | null) => {
+    const parentName = parentId === null ? null : folders.find((f) => f.id === parentId)?.name
+    const name = window.prompt(parentName ? `在「${parentName}」下新建子文件夹` : '新文件夹名称')?.trim()
+    if (name) onAddFolder(name, parentId)
+  }
 
-  const handleAddFolder = () => {
-    const name = window.prompt('新文件夹名称')?.trim()
-    if (name) onAddFolder(name)
+  const handleDeleteFolder = (id: number) => {
+    const target = folders.find((f) => f.id === id)
+    if (!window.confirm(`删除文件夹「${target?.name || ''}」？里面的手稿会变成未归档，子文件夹会上移一层。`)) return
+    onDeleteFolder(id)
+    if (folderFilter === id) setFolderFilter(null)
   }
 
   return (
@@ -145,20 +149,15 @@ export function NotebookSidebar({
         </button>
       </div>
 
-      {/* 文件夹：可新建，也可点选筛选 */}
+      {/* 文件夹：固定高度的树形列表，超出就滚动 */}
       <div className="px-3 pt-3">
         <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={() => setFoldersOpen((open) => !open)}
-            className="flex items-center gap-1 rounded px-1 py-1 text-[11px] font-medium uppercase tracking-wider text-zinc-400 transition hover:text-zinc-600 dark:hover:text-zinc-300"
-          >
-            <ChevronDown size={12} className={`transition-transform ${foldersOpen ? '' : '-rotate-90'}`} />
+          <span className="px-1 py-1 text-[11px] font-medium uppercase tracking-wider text-zinc-400">
             文件夹
-          </button>
+          </span>
           <button
             type="button"
-            onClick={handleAddFolder}
+            onClick={() => handleAddFolder(null)}
             title="新建文件夹"
             aria-label="新建文件夹"
             className="ml-auto flex h-6 w-6 items-center justify-center rounded text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
@@ -167,41 +166,14 @@ export function NotebookSidebar({
           </button>
         </div>
 
-        {foldersOpen && (
-          <div className="mt-1 flex flex-wrap gap-1 pb-1">
-            <button
-              type="button"
-              onClick={() => setFolderFilter(null)}
-              className={`rounded-md px-2 py-1 text-[11.5px] transition ${
-                folderFilter === null
-                  ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900'
-                  : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700'
-              }`}
-            >
-              全部
-            </button>
-            {folders.map((folder) => (
-              <button
-                key={folder.id}
-                type="button"
-                onClick={() => setFolderFilter((current) => (current === folder.id ? null : folder.id))}
-                className={`flex max-w-full items-center gap-1 truncate rounded-md px-2 py-1 text-[11.5px] transition ${
-                  folderFilter === folder.id
-                    ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900'
-                    : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700'
-                }`}
-                title={folder.name}
-              >
-                <FolderClosed size={11} />
-                <span className="truncate">{folder.name}</span>
-                <span className="tabular-nums opacity-60">{countByFolder.get(folder.id) ?? 0}</span>
-              </button>
-            ))}
-            {folders.length === 0 && (
-              <span className="px-1 py-1 text-[11.5px] text-zinc-400">还没有文件夹，点右侧 + 新建</span>
-            )}
-          </div>
-        )}
+        <NotebookFolderTree
+          folders={folders}
+          manuscripts={manuscripts}
+          selectedId={folderFilter}
+          onSelect={setFolderFilter}
+          onCreate={(parentId) => handleAddFolder(parentId)}
+          onDelete={handleDeleteFolder}
+        />
       </div>
 
       {/* 列表 */}

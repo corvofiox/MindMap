@@ -74,6 +74,7 @@ export function NotebookPage() {
     remove,
     moveToFolder,
     addFolder,
+    removeFolder,
     sendToPool,
     restoreFromCard,
   } = useNotebookStore()
@@ -485,7 +486,8 @@ export function NotebookPage() {
               onCreate={() => { void handleCreate() }}
               onOpen={(id) => navigate(`/notebook/${id}`)}
               onCollapse={toggleSidebar}
-              onAddFolder={(name) => { void addFolder(name) }}
+              onAddFolder={(name, parentId) => { void addFolder(name, parentId) }}
+              onDeleteFolder={(id) => { void removeFolder(id) }}
               onMoveToFolder={(id, folderId) => { void moveToFolder(id, folderId) }}
               onDelete={(id) => { void handleDeleteById(id) }}
             />

@@ -172,7 +172,7 @@ describe('左栏收纳动作', () => {
 
     fireEvent.click(screen.getByLabelText('新建文件夹'))
 
-    await waitFor(() => expect(api.createManuscriptFolder).toHaveBeenCalledWith({ name: '新想法' }))
+    await waitFor(() => expect(api.createManuscriptFolder).toHaveBeenCalledWith({ name: '新想法', parentId: null }))
     promptSpy.mockRestore()
   })
 })
