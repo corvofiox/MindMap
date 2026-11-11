@@ -2166,16 +2166,19 @@ export function CanvasPage() {
       if ((e.ctrlKey || e.metaKey) && (e.key === 'e' || e.key === 'E')) {
         e.preventDefault()
         const canvasState = useCanvasStore.getState()
-        const jsonString = exportCanvas(
-          canvasState.nodes,
-          canvasState.connections,
-          canvasState.groups,
-          canvasState.domains,
-          { zoom: canvasState.zoom, panX: canvasState.panX, panY: canvasState.panY },
-        )
-        const filename = `mindmap-${new Date().toISOString().slice(0, 10)}.json`
-        downloadJsonFile(jsonString, filename)
-        addToast({ type: 'success', title: '导出成功', message: '画布数据已导出为 JSON 文件', duration: 3000 })
+        // 导出要把图片取回来内联（自包含 JSON），是异步的；快捷键回调本身保持同步。
+        void (async () => {
+          const jsonString = await exportCanvas(
+            canvasState.nodes,
+            canvasState.connections,
+            canvasState.groups,
+            canvasState.domains,
+            { zoom: canvasState.zoom, panX: canvasState.panX, panY: canvasState.panY },
+          )
+          const filename = `mindmap-${new Date().toISOString().slice(0, 10)}.json`
+          downloadJsonFile(jsonString, filename)
+          addToast({ type: 'success', title: '导出成功', message: '画布数据已导出为 JSON 文件', duration: 3000 })
+        })()
         return
       }
 

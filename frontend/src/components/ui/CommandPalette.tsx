@@ -74,9 +74,9 @@ const commands: PaletteCommand[] = [
     label: 'Export',
     shortcut: 'Ctrl+E',
     requiresCanvas: true,
-    action: () => {
+    action: async () => {
       const state = useCanvasStore.getState()
-      const jsonString = exportCanvas(state.nodes, state.connections, state.groups, state.domains, {
+      const jsonString = await exportCanvas(state.nodes, state.connections, state.groups, state.domains, {
         zoom: state.zoom,
         panX: state.panX,
         panY: state.panY,

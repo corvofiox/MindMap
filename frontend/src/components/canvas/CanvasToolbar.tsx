@@ -196,8 +196,9 @@ export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToo
   }, [])
 
   // 处理导出
-  const handleExport = useCallback(() => {
-    const jsonString = exportCanvas(nodes, connections, groups, domains, { zoom, panX, panY })
+  const handleExport = useCallback(async () => {
+    // 导出要把图片取回来内联（自包含 JSON），因此是异步的。
+    const jsonString = await exportCanvas(nodes, connections, groups, domains, { zoom, panX, panY })
     const filename = `mindmap-${new Date().toISOString().slice(0, 10)}.json`
     downloadJsonFile(jsonString, filename)
     addToast({

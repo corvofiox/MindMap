@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { exportCanvas, importCanvas, EXPORT_VERSION, EXPORT_APP } from '../utils/canvasExport'
 import { compareNodeZIndex, NODE_Z_STEP } from '@shared/z-order'
 import type { Node, Connection, NodeGroup, Domain } from '../types'
@@ -67,13 +67,13 @@ function createDomain(id: string): Domain {
 }
 
 describe('exportCanvas', () => {
-  it('should export canvas data with metadata', () => {
+  it('should export canvas data with metadata', async () => {
     const nodes = new Map([['n1', createNode('n1')]])
     const connections = new Map<string, Connection>()
     const groups = new Map<string, NodeGroup>()
     const domains = new Map<string, Domain>()
 
-    const json = exportCanvas(nodes, connections, groups, domains)
+    const json = await exportCanvas(nodes, connections, groups, domains)
     const parsed = JSON.parse(json)
 
     expect(parsed.version).toBe(EXPORT_VERSION)
@@ -85,8 +85,8 @@ describe('exportCanvas', () => {
     expect(parsed.data.domains).toHaveLength(0)
   })
 
-  it('should include viewState when provided', () => {
-    const json = exportCanvas(
+  it('should include viewState when provided', async () => {
+    const json = await exportCanvas(
       new Map(),
       new Map(),
       new Map(),
@@ -340,5 +340,52 @@ describe('importCanvas', () => {
 
     expect(result.success).toBe(true)
     expect(result.viewState!.zoom).toBe(5)
+  })
+})
+
+describe('exportCanvas 自包含（内联图片）', () => {
+  const SHA = 'e'.repeat(64)
+
+  it('把 /api/files 引用取回来换成 base64，并保留 cover', async () => {
+    const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3])
+    // jsdom 的 Blob 没有 arrayBuffer()（真实浏览器有），这里给一个等价的最小桩。
+    const fakeBlob = {
+      type: 'image/png',
+      arrayBuffer: async () => pngBytes.buffer,
+    } as unknown as Blob
+    const fetchMock = vi.fn(async () => ({ ok: true, blob: async () => fakeBlob }))
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    try {
+      const node = createNode('n1', {
+        content: `<p>x</p><img src="/api/files/${SHA}">`,
+        cover: `/api/files/${SHA}`,
+      })
+      const json = await exportCanvas(new Map([['n1', node]]), new Map(), new Map(), new Map())
+      const parsed = JSON.parse(json)
+
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      expect(JSON.stringify(parsed)).not.toContain('/api/files/')
+      expect(parsed.data.nodes[0].content).toContain('data:image/png;base64,')
+      expect(parsed.data.nodes[0].cover).toContain('data:image/png;base64,')
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  it('图片取不到时保留原 URL，导出不整体失败', async () => {
+    const fetchMock = vi.fn(async () => ({ ok: false, blob: async () => ({}) }))
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    try {
+      const node = createNode('n1', { content: `<img src="/api/files/${SHA}">` })
+      const json = await exportCanvas(new Map([['n1', node]]), new Map(), new Map(), new Map())
+
+      expect(json).toContain(`/api/files/${SHA}`)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   })
 })

@@ -240,19 +240,79 @@ function validateExportData(data: ExportData['data']): string | null {
   return null
 }
 
-export function exportCanvas(
+const FILE_REF = /\/api\/files\/([a-f0-9]{64})/g
+
+/**
+ * Blob → data URL。
+ *
+ * 不用 FileReader：它在 jsdom 里对 Node 的 Blob 行为不一致，测试拿不到结果；
+ * arrayBuffer + btoa 在浏览器与测试环境里语义一致。
+ */
+async function blobToDataUrl(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer())
+  let binary = ''
+  const chunk = 0x8000
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk))
+  }
+  return `data:${blob.type || 'image/png'};base64,${btoa(binary)}`
+}
+
+/**
+ * 把 `/api/files/<sha>` 引用换成内联 base64。
+ *
+ * 导出文件要能脱离本实例使用：只带短 URL 的话，换一台机器导入就全是裂图。
+ * 同一张图只取一次（去重后的 sha 天然相同）；取不到时保留原 URL 并继续，
+ * 宁可少内联一张，也不让整个导出失败。
+ */
+async function inlineFileRefs(value: string, cache: Map<string, string>): Promise<string> {
+  if (!value || !value.includes('/api/files/')) return value
+  const shas = new Set(Array.from(value.matchAll(FILE_REF)).map((m) => m[1]))
+  let out = value
+  for (const sha of shas) {
+    let dataUrl = cache.get(sha)
+    if (!dataUrl) {
+      try {
+        const response = await fetch(`/api/files/${sha}`)
+        if (!response.ok) continue
+        dataUrl = await blobToDataUrl(await response.blob())
+        cache.set(sha, dataUrl)
+      } catch {
+        continue
+      }
+    }
+    out = out.split(`/api/files/${sha}`).join(dataUrl)
+  }
+  return out
+}
+
+/**
+ * 导出为自包含 JSON。
+ *
+ * 异步是因为要把图片取回来内联（见 inlineFileRefs）。调用方需要 await。
+ */
+export async function exportCanvas(
   nodes: Map<string, Node>,
   connections: Map<string, Connection>,
   groups: Map<string, NodeGroup>,
   domains: Map<string, Domain>,
   viewState?: { zoom: number; panX: number; panY: number },
-): string {
+): Promise<string> {
+  const cache = new Map<string, string>()
+  const exportNodes = await Promise.all(
+    Array.from(nodes.values()).map(async (node) => {
+      const content = await inlineFileRefs(node.content ?? '', cache)
+      const cover = node.cover ? await inlineFileRefs(node.cover, cache) : node.cover
+      return { ...node, content, ...(cover ? { cover } : {}) }
+    }),
+  )
+
   const exportData: ExportData = {
     version: EXPORT_VERSION,
     exportedAt: new Date().toISOString(),
     app: EXPORT_APP,
     data: {
-      nodes: Array.from(nodes.values()),
+      nodes: exportNodes,
       connections: Array.from(connections.values()),
       groups: Array.from(groups.values()),
       domains: Array.from(domains.values()),

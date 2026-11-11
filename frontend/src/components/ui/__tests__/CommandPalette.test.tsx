@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, screen, fireEvent, act, cleanup } from '@testing-library/react'
+import { render, screen, fireEvent, act, cleanup, waitFor } from '@testing-library/react'
 import { CommandPalette, SAVE_COMMAND_EVENT } from '../CommandPalette'
 import { useUIStore } from '@/store/useUIStore'
 import { useCanvasStore } from '@/store/useCanvasStore'
@@ -123,10 +123,14 @@ describe('CommandPalette 命令真实 action', () => {
     window.removeEventListener(SAVE_COMMAND_EVENT, listener)
   })
 
-  it('Export 命令导出画布 JSON 并下载', () => {
+  it('Export 命令导出画布 JSON 并下载', async () => {
     useCanvasStore.setState({ zoom: 2, panX: 10, panY: 20, nodes: new Map() })
     openPalette()
     fireEvent.click(screen.getByText('Export'))
+    // 导出要内联图片，action 变成异步的——下载发生在微任务之后
+    await waitFor(() =>
+      expect(downloadJsonFile).toHaveBeenCalledWith('{}', expect.stringMatching(/^mindmap-\d{4}-\d{2}-\d{2}\.json$/)),
+    )
     expect(exportCanvas).toHaveBeenCalledWith(
       expect.any(Map),
       expect.any(Map),
@@ -134,7 +138,6 @@ describe('CommandPalette 命令真实 action', () => {
       expect.any(Map),
       { zoom: 2, panX: 10, panY: 20 }
     )
-    expect(downloadJsonFile).toHaveBeenCalledWith('{}', expect.stringMatching(/^mindmap-\d{4}-\d{2}-\d{2}\.json$/))
   })
 
   it('快捷键提示与实际快捷键一致(Toggle Grid 为 H,G 是分组工具)', () => {
