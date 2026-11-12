@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { ChevronRight, FolderClosed, FolderPlus, FolderTree, Trash2 } from 'lucide-react'
+import { ChevronRight, Folder, FolderPlus, Inbox, LayoutGrid, Trash2 } from 'lucide-react'
 import type { ManuscriptFolder, ManuscriptSummary } from '@/services/api'
 
 export interface FolderNode {
@@ -76,8 +76,13 @@ interface NotebookFolderTreeProps {
 /**
  * 文件夹面板。
  *
- * 固定高度的窗口 + 竖向树形列表：文件夹多了就在这一块里滚动，不会把下面的
- * 手稿列表顶走；子文件夹按缩进展开，层级一眼能看出来。
+ * 迭代过一版很丑的：圆角外框 + 浅灰底 + 分隔线三层叠加，行高 46px，计数甩到
+ * 最右边，滚动条还把行切开。现在的取向是"紧凑导航"：
+ *   - 行高 28px、字号 13，计数紧跟在名字后面（视线不用横跨整行）
+ *   - 没有外框，只有 hover / 选中时的淡底色，滚动条与内容之间留出空隙
+ *   - 每行开头"箭头槽 + 文件夹图标"宽度固定：叶子节点的箭头槽留空但占位，
+ *     保证所有图标的竖向对齐线完全一致
+ *   - 高度用 max-h：文件夹少时不撑出一个空框，多了才滚动
  */
 export function NotebookFolderTree({
   folders,
@@ -102,11 +107,13 @@ export function NotebookFolderTree({
   }
 
   const rowClass = (active: boolean) =>
-    `group flex h-8 w-full items-center gap-1 rounded-md pr-1 text-left transition ${
+    `group/row relative flex h-[26px] w-full items-center gap-1.5 rounded-[5px] pl-1.5 pr-1 text-left transition-colors ${
       active
-        ? 'bg-blue-50 text-blue-700 dark:bg-blue-500/10 dark:text-blue-300'
-        : 'text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800/70'
+        ? 'bg-blue-50/70 text-blue-700 dark:bg-blue-500/10 dark:text-blue-300'
+        : 'text-zinc-600 hover:bg-zinc-100/70 dark:text-zinc-300 dark:hover:bg-zinc-800/60'
     }`
+
+  const countClass = 'ml-1.5 shrink-0 text-[10.5px] tabular-nums text-zinc-400 dark:text-zinc-500'
 
   const renderNode = (node: FolderNode, depth: number) => {
     const hasChildren = node.children.length > 0
@@ -117,12 +124,17 @@ export function NotebookFolderTree({
       <div key={node.folder.id} role="treeitem" aria-expanded={hasChildren ? !isCollapsed : undefined}>
         <div
           className={rowClass(active)}
-          style={{ paddingLeft: 4 + depth * 14 }}
+          style={{ paddingLeft: 6 + depth * 16 }}
           onClick={() => onSelect(active ? null : node.folder.id)}
           data-folder-row={node.folder.id}
           data-depth={depth}
           title={node.folder.name}
         >
+          {active && (
+            <span className="absolute left-0 top-1 bottom-1 w-[2px] rounded-full bg-blue-500" aria-hidden="true" />
+          )}
+
+          {/* 箭头槽：叶子节点也占位，保证文件夹图标同一竖线 */}
           <button
             type="button"
             aria-label={isCollapsed ? `展开 ${node.folder.name}` : `折叠 ${node.folder.name}`}
@@ -130,90 +142,108 @@ export function NotebookFolderTree({
               event.stopPropagation()
               if (hasChildren) toggle(node.folder.id)
             }}
-            className={`flex h-5 w-5 shrink-0 items-center justify-center rounded text-zinc-400 transition hover:text-zinc-700 dark:hover:text-zinc-100 ${
-              hasChildren ? '' : 'invisible'
-            }`}
             tabIndex={hasChildren ? 0 : -1}
+            className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded text-zinc-400 transition hover:text-zinc-700 dark:hover:text-zinc-100 ${
+              hasChildren ? '' : 'pointer-events-none opacity-0'
+            }`}
           >
-            <ChevronRight size={12} className={`transition-transform ${isCollapsed ? '' : 'rotate-90'}`} />
+            <ChevronRight size={11} className={`transition-transform ${isCollapsed ? '' : 'rotate-90'}`} />
           </button>
 
-          <FolderClosed size={13} className="shrink-0 text-zinc-400" />
-          <span className="min-w-0 flex-1 truncate text-[12.5px]">{node.folder.name}</span>
-          <span className="shrink-0 text-[11px] tabular-nums text-zinc-400">{node.count}</span>
+          <Folder
+            size={14}
+            className={`shrink-0 ${active ? 'text-blue-500 dark:text-blue-400' : 'text-zinc-400 dark:text-zinc-500'}`}
+          />
 
-          <button
-            type="button"
-            title="新建子文件夹"
-            aria-label={`在 ${node.folder.name} 下新建子文件夹`}
-            onClick={(event) => {
-              event.stopPropagation()
-              onCreate(node.folder.id)
-            }}
-            className="ml-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded text-zinc-400 opacity-0 transition hover:bg-white hover:text-zinc-700 group-hover:opacity-100 dark:hover:bg-zinc-700 dark:hover:text-zinc-100"
-          >
-            <FolderPlus size={12} />
-          </button>
-          <button
-            type="button"
-            title="删除文件夹"
-            aria-label={`删除文件夹 ${node.folder.name}`}
-            onClick={(event) => {
-              event.stopPropagation()
-              onDelete(node.folder.id)
-            }}
-            className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-zinc-400 opacity-0 transition hover:bg-white hover:text-red-600 group-hover:opacity-100 dark:hover:bg-zinc-700 dark:hover:text-red-400"
-          >
-            <Trash2 size={12} />
-          </button>
+          <span className="min-w-0 truncate text-[13px] leading-none">{node.folder.name}</span>
+          {node.count > 0 && <span className={countClass}>{node.count}</span>}
+
+          <span className="ml-auto flex shrink-0 items-center gap-0.5 opacity-0 transition group-hover/row:opacity-100">
+            <button
+              type="button"
+              title="新建子文件夹"
+              aria-label={`在 ${node.folder.name} 下新建子文件夹`}
+              onClick={(event) => {
+                event.stopPropagation()
+                onCreate(node.folder.id)
+              }}
+              className="flex h-5 w-5 items-center justify-center rounded text-zinc-400 transition hover:bg-white hover:text-zinc-700 dark:hover:bg-zinc-700 dark:hover:text-zinc-100"
+            >
+              <FolderPlus size={12} />
+            </button>
+            <button
+              type="button"
+              title="删除文件夹"
+              aria-label={`删除文件夹 ${node.folder.name}`}
+              onClick={(event) => {
+                event.stopPropagation()
+                onDelete(node.folder.id)
+              }}
+              className="flex h-5 w-5 items-center justify-center rounded text-zinc-400 transition hover:bg-white hover:text-red-600 dark:hover:bg-zinc-700 dark:hover:text-red-400"
+            >
+              <Trash2 size={12} />
+            </button>
+          </span>
         </div>
 
-        {hasChildren && !isCollapsed && node.children.map((child) => renderNode(child, depth + 1))}
+        {/* 子级整体包一层并画一条缩进引导线：没有它，层级只是"稍微右移"，看不出来 */}
+        {hasChildren && !isCollapsed && (
+          <div className="relative">
+            <span
+              className="pointer-events-none absolute top-0 bottom-0 w-px bg-zinc-200/70 dark:bg-zinc-700/60"
+              style={{ left: 6 + depth * 16 + 7 }}
+              aria-hidden="true"
+            />
+            {node.children.map((child) => renderNode(child, depth + 1))}
+          </div>
+        )}
       </div>
     )
   }
 
-  return (
-    <div
-      role="tree"
-      aria-label="文件夹"
-      data-testid="folder-tree"
-      className="notebook-scroll mt-1 h-48 overflow-y-auto rounded-lg border border-zinc-200/80 bg-zinc-50/40 p-1 dark:border-zinc-800 dark:bg-zinc-900/40"
+  const shortcut = (id: 'all' | 'unfiled', label: string, count: number, Icon: typeof LayoutGrid, active: boolean, onClick: () => void) => (
+    <button
+      type="button"
+      onClick={onClick}
+      data-folder-row={id}
+      data-depth="0"
+      className={rowClass(active)}
     >
-      <div
-        className={rowClass(selectedId === null)}
-        onClick={() => onSelect(null)}
-        data-folder-row="all"
-        data-depth="0"
-      >
-        <span className="flex h-5 w-5 shrink-0 items-center justify-center text-zinc-400">
-          <FolderTree size={12} />
-        </span>
-        <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium">全部手稿</span>
-        <span className="shrink-0 pr-1 text-[11px] tabular-nums text-zinc-400">{total}</span>
-      </div>
-
-      <div
-        className={`${rowClass(false)} cursor-default`}
-        data-folder-row="unfiled"
-        data-depth="0"
-      >
-        <span className="flex h-5 w-5 shrink-0 items-center justify-center text-zinc-400">
-          <FolderClosed size={12} />
-        </span>
-        <span className="min-w-0 flex-1 truncate text-[12.5px]">未归档</span>
-        <span className="shrink-0 pr-1 text-[11px] tabular-nums text-zinc-400">{unfiled}</span>
-      </div>
-
-      <div className="my-1 h-px bg-zinc-200/80 dark:bg-zinc-800" aria-hidden="true" />
-
-      {tree.length === 0 ? (
-        <p className="px-2 py-3 text-[11.5px] leading-5 text-zinc-400">
-          还没有文件夹。点右上角 + 新建，或把鼠标移到文件夹上用 ⧉ 建子文件夹。
-        </p>
-      ) : (
-        tree.map((node) => renderNode(node, 0))
+      {active && (
+        <span className="absolute left-0 top-1 bottom-1 w-[2px] rounded-full bg-blue-500" aria-hidden="true" />
       )}
+      <span className="w-3.5 shrink-0" aria-hidden="true" />
+      <Icon
+        size={14}
+        className={`shrink-0 ${active ? 'text-blue-500 dark:text-blue-400' : 'text-zinc-400 dark:text-zinc-500'}`}
+      />
+      <span className="min-w-0 truncate text-[13px] leading-none">{label}</span>
+      <span className={countClass}>{count}</span>
+    </button>
+  )
+
+  return (
+    <div className="mt-1" data-testid="folder-tree" role="tree" aria-label="文件夹">
+      <div className="space-y-0.5">
+        {shortcut('all', '全部手稿', total, LayoutGrid, selectedId === null, () => onSelect(null))}
+        {shortcut('unfiled', '未归档', unfiled, Inbox, false, () => onSelect(null))}
+      </div>
+
+      <div className="my-1.5 h-px bg-zinc-100 dark:bg-zinc-800/80" aria-hidden="true" />
+
+      {/* 文件夹少时按内容高度，多了才在这个窗口里滚动 */}
+      <div
+        className="folder-scroll max-h-[240px] overflow-y-auto pr-2"
+        data-testid="folder-scroll"
+      >
+        {tree.length === 0 ? (
+          <p className="px-1.5 py-1.5 text-[11.5px] leading-5 text-zinc-400">
+            还没有文件夹，点右上角 + 新建一个。
+          </p>
+        ) : (
+          tree.map((node) => renderNode(node, 0))
+        )}
+      </div>
     </div>
   )
 }

@@ -177,7 +177,7 @@ export function NotebookSidebar({
       </div>
 
       {/* 列表 */}
-      <div className="notebook-scroll mt-1 flex-1 overflow-y-auto px-2 pb-3">
+      <div className="notebook-scroll mt-2 flex-1 overflow-y-auto border-t border-zinc-100 px-2 pb-3 pt-1.5 dark:border-zinc-800">
         {loading && (
           <div className="space-y-1 px-1">
             {[0, 1, 2].map((key) => (
