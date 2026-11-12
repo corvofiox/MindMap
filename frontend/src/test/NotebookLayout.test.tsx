@@ -52,6 +52,7 @@ vi.mock('@/services/api', async () => {
 const api = await import('@/services/api')
 const { NotebookPage } = await import('@/pages/NotebookPage')
 const { useNotebookStore } = await import('@/store/useNotebookStore')
+const { useUIStore } = await import('@/store/useUIStore')
 
 function seed() {
   useNotebookStore.setState({
@@ -129,12 +130,38 @@ describe('动作位置', () => {
 
     const scope = within(paper as HTMLElement)
     expect(scope.queryByText('送入节点池')).toBeNull()
-    expect(scope.queryByLabelText('删除手稿')).toBeNull()
     expect(scope.queryByText('从节点池导入')).toBeNull()
+    // 删除入口只允许在左侧抽屉里，正文/纸张不允许出现
+    expect(scope.queryByText('删除')).toBeNull()
+    expect(scope.queryByLabelText('删除手稿')).toBeNull()
 
-    // 它们应该在纸张之外（顶部工具栏）
+    const header = document.querySelector('header')
+    expect(header).not.toBeNull()
+    expect(within(header as HTMLElement).queryByLabelText('删除手稿')).toBeNull()
+    expect(within(header as HTMLElement).getByLabelText('设置')).toBeTruthy()
+    expect(within(header as HTMLElement).getByLabelText('账号菜单')).toBeTruthy()
+
+    // 页面级动作在顶部工具栏；删除只在左侧抽屉里
     expect(screen.getByText('送入节点池')).toBeTruthy()
-    expect(screen.getByLabelText('删除手稿')).toBeTruthy()
+    expect(screen.getByText('思维导图')).toBeTruthy()
+  })
+
+  it('设置与账号入口在顶栏最右侧', () => {
+    renderPage()
+
+    const settingsButton = screen.getByLabelText('设置')
+    const accountButton = screen.getByLabelText('账号菜单')
+    expect(settingsButton).toBeTruthy()
+    expect(accountButton).toBeTruthy()
+
+    // 点设置 → 打开设置弹窗（笔记本不在 MainLayout 里，弹窗要自己挂）
+    fireEvent.click(settingsButton)
+    expect(useUIStore.getState().settingsOpen).toBe(true)
+
+    // 账号菜单里的"账号设置"
+    fireEvent.click(accountButton)
+    fireEvent.click(screen.getByText('账号设置'))
+    expect(useUIStore.getState().accountSettingsOpen).toBe(true)
   })
 })
 

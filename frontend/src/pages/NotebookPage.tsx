@@ -4,13 +4,19 @@ import {
   ChevronDown,
   ChevronRight,
   LayoutGrid,
+  LogOut,
   PanelLeft,
-  Trash2,
+  Settings,
   Upload,
+  User as UserIcon,
 } from 'lucide-react'
 import { useNotebookStore } from '@/store/useNotebookStore'
 import { useNodePoolStore } from '@/features/node-pool/stores/useNodePoolStore'
 import { useUIStore } from '@/store/useUIStore'
+import { useAuthStore } from '@/store/useAuthStore'
+import { DropdownMenu } from '@/components/ui/DropdownMenu'
+import { SettingsDialog } from '@/components/ui/SettingsDialog'
+import { AccountSettingsDialog } from '@/components/ui/AccountSettingsDialog'
 import { sanitizeHTML } from '@/utils/sanitizeHTML'
 import { NotebookSidebar } from '@/features/notebook/NotebookSidebar'
 import { NotebookEditor } from '@/features/notebook/NotebookEditor'
@@ -39,7 +45,8 @@ function computeStats(html: string): { chars: number; images: number } {
  * 的地方，混进画布的工具条只会制造干扰。
  *
  * 布局约定：
- *   - 顶部工具栏只放"页面级动作"（导入 / 送入节点池 / 删除 / 思维导图）；
+ *   - 顶部工具栏只放"页面级动作"（导入 / 送入节点池 / 思维导图）与最右侧的设置、账号；
+ *   - 删除手稿只从左侧抽屉的"更多操作 → 删除"走，顶栏不提供删除；
  *   - 纸张（.notebook-paper）里只有标题、元信息与正文，不放任何破坏性操作；
  *   - 左栏可收纳，状态记在 localStorage，刷新后保持。
  */
@@ -47,6 +54,7 @@ export function NotebookPage() {
   const navigate = useNavigate()
   const { id: routeId } = useParams<{ id?: string }>()
   const { addToast } = useUIStore()
+  const { user, logout } = useAuthStore()
 
   const {
     manuscripts,
@@ -182,12 +190,12 @@ export function NotebookPage() {
     if (manuscript) navigate(`/notebook/${manuscript.id}`)
   }
 
-  const handleDelete = async () => {
-    if (!active) return
-    if (!window.confirm(`删除手稿「${active.title || '未命名'}」？`)) return
-    await remove(active.id)
-    navigate('/notebook')
+  const handleLogout = async () => {
+    await logout()
+    navigate('/login')
   }
+
+  /** 删除手稿只有一条路径：左侧抽屉里那篇的「更多操作 → 删除」。 */
 
   /** 列表里的删除：删的不是当前打开的那篇时不要跳走。 */
   const handleDeleteById = async (id: number) => {
@@ -372,19 +380,6 @@ export function NotebookPage() {
             </button>
           )}
 
-          {/* 删除：图标按钮，红 hover，和主操作拉开距离 */}
-          {active && (
-            <button
-              type="button"
-              onClick={() => { void handleDelete() }}
-              title="删除手稿"
-              aria-label="删除手稿"
-              className="flex h-8 w-8 items-center justify-center rounded-lg text-zinc-400 transition hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-500/10 dark:hover:text-red-400"
-            >
-              <Trash2 size={15} />
-            </button>
-          )}
-
           <span className="mx-0.5 h-5 w-px bg-zinc-200 dark:bg-zinc-800" aria-hidden="true" />
 
           <button
@@ -395,6 +390,47 @@ export function NotebookPage() {
             <LayoutGrid size={14} />
             思维导图
           </button>
+
+          <span className="mx-0.5 h-5 w-px bg-zinc-200 dark:bg-zinc-800" aria-hidden="true" />
+
+          {/* 设置与账号：与思维导图页保持同一套入口位置（最右侧） */}
+          <button
+            type="button"
+            onClick={() => useUIStore.getState().setSettingsOpen(true)}
+            title="设置"
+            aria-label="设置"
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+          >
+            <Settings size={16} />
+          </button>
+
+          <DropdownMenu
+            trigger={
+              <button
+                type="button"
+                aria-label="账号菜单"
+                title="账号菜单"
+                className="ml-0.5 flex h-8 w-8 items-center justify-center rounded-full"
+              >
+                {user?.avatar ? (
+                  <img
+                    src={user.avatar}
+                    alt={user.nickname || user.email || '用户'}
+                    className="h-8 w-8 rounded-full object-cover transition hover:ring-2 hover:ring-blue-500"
+                  />
+                ) : (
+                  <span className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-500 text-[13px] font-medium text-white transition hover:ring-2 hover:ring-blue-500">
+                    {(user?.nickname || user?.email || 'U').charAt(0).toUpperCase()}
+                  </span>
+                )}
+              </button>
+            }
+            items={[
+              { label: '账号设置', action: () => useUIStore.getState().setAccountSettingsOpen(true), icon: UserIcon },
+              { divider: true },
+              { label: '退出登录', action: handleLogout, icon: LogOut },
+            ]}
+          />
         </div>
       </header>
 
@@ -462,6 +498,10 @@ export function NotebookPage() {
         className="hidden"
         onChange={(event) => { void handleImagePicked(event) }}
       />
+
+      {/* 笔记本不在 MainLayout 里，设置/账号弹窗要自己挂一份 */}
+      <SettingsDialog />
+      <AccountSettingsDialog />
     </div>
   )
 }
