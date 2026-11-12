@@ -266,3 +266,36 @@ describe('新建手稿的落点', () => {
     expect(vi.mocked(api.createManuscript).mock.calls[0][0]).toMatchObject({ folderId: null })
   })
 })
+
+describe('移动到子菜单的鼠标路径', () => {
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+  it('鼠标从「移动到」移到子菜单不会被中途关掉', async () => {
+    vi.mocked(api.getManuscriptFolders).mockResolvedValueOnce([
+      { id: 7, userId: 1, name: '素材', parentId: null, sortOrder: 0, collapsed: false, createdAt: 0 },
+    ])
+    renderPage()
+
+    await screen.findByText('素材')
+    fireEvent.click(screen.getAllByLabelText('更多操作')[0])
+    const moveItem = (await screen.findByText('移动到')).parentElement as HTMLElement
+
+    // 悬停到「移动到」→ 子菜单出现
+    fireEvent.mouseEnter(moveItem)
+    const submenu = await screen.findByTestId('notebook-move-menu')
+
+    // 离开「移动到」→ 立刻判定的话就会关闭；这里给 180ms 缓冲
+    fireEvent.mouseLeave(moveItem)
+    await sleep(90)
+    expect(screen.queryByTestId('notebook-move-menu')).not.toBeNull()
+
+    // 进入子菜单 → 缓冲被取消，停留一会也不该关
+    fireEvent.mouseEnter(submenu)
+    await sleep(260)
+    expect(screen.queryByTestId('notebook-move-menu')).not.toBeNull()
+
+    // 真正离开子菜单后才会关
+    fireEvent.mouseLeave(submenu)
+    await waitFor(() => expect(screen.queryByTestId('notebook-move-menu')).toBeNull(), { timeout: 1200 })
+  })
+})

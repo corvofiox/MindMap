@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ChevronRight,
   FileText,
@@ -90,6 +90,9 @@ export function NotebookSidebar({
 }: NotebookSidebarProps) {
   const [menu, setMenu] = useState<{ itemId: number; x: number; y: number; up: boolean } | null>(null)
   const [moveOpen, setMoveOpen] = useState(false)
+  // 从「移动到」斜向移到子菜单时会经过 4px 空隙，立刻关闭会永远点不到子菜单；
+  // 用一点关闭延迟 + 透明桥接来解决
+  const submenuTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // 选中父文件夹时，它下面（所有层级）的手稿都要列出来
   const visible = useMemo(() => {
@@ -147,6 +150,28 @@ export function NotebookSidebar({
     setMenu({ itemId, x: left, y: top, up })
     setMoveOpen(false)
   }
+
+  const cancelSubmenuClose = () => {
+    if (submenuTimer.current) {
+      clearTimeout(submenuTimer.current)
+      submenuTimer.current = null
+    }
+  }
+
+  const openSubmenu = () => {
+    cancelSubmenuClose()
+    setMoveOpen(true)
+  }
+
+  const scheduleSubmenuClose = () => {
+    cancelSubmenuClose()
+    submenuTimer.current = setTimeout(() => {
+      setMoveOpen(false)
+      submenuTimer.current = null
+    }, 180)
+  }
+
+  useEffect(() => () => cancelSubmenuClose(), [])
 
   // Esc 关闭菜单：浮层挡住了整页，只靠点空白关闭对键盘用户不友好
   useEffect(() => {
@@ -335,8 +360,8 @@ export function NotebookSidebar({
           >
             <div
               className="relative"
-              onMouseEnter={() => setMoveOpen(true)}
-              onMouseLeave={() => setMoveOpen(false)}
+              onMouseEnter={openSubmenu}
+              onMouseLeave={scheduleSubmenuClose}
             >
               <button
                 type="button"
@@ -355,7 +380,9 @@ export function NotebookSidebar({
                 <div
                   data-testid="notebook-move-menu"
                   role="menu"
-                  className={`folder-scroll absolute left-full ${menu.up ? 'bottom-0' : 'top-0'} ml-1 max-h-64 w-44 overflow-y-auto rounded-lg border border-zinc-200/80 bg-white p-1 shadow-xl shadow-zinc-900/5 dark:border-zinc-700 dark:bg-zinc-800 dark:shadow-black/40`}
+                  onMouseEnter={openSubmenu}
+                  onMouseLeave={scheduleSubmenuClose}
+                  className={`folder-scroll absolute left-full ${menu.up ? 'bottom-0' : 'top-0'} ml-1 max-h-64 w-44 overflow-y-auto rounded-lg before:absolute before:-left-1 before:top-0 before:h-full before:w-1 before:content-[''] border border-zinc-200/80 bg-white p-1 shadow-xl shadow-zinc-900/5 dark:border-zinc-700 dark:bg-zinc-800 dark:shadow-black/40`}
                 >
                   <button
                     type="button"
