@@ -1,4 +1,4 @@
-﻿/**
+/**
  * NodeCardItem 真实行为测试
  *
  * 只 mock 网络层(@/services/api)——组件本体、useNodePoolStore、useUIStore、
@@ -214,20 +214,20 @@ afterEach(() => {
 })
 
 describe('卡片内容解析(parseCardContent → 预览渲染)', () => {
-  it('合法 JSON 内容:预览标题/正文取内容里的值,类型标签来自内容', () => {
-    renderCard(makeCard({ content: '{"title":"来自内容","content":"来自正文","type":"text"}' }), { showPreview: true })
+  it('合法 JSON 内容:预览标题/正文取内容里的值（不再有类型标签）', () => {
+    renderCard(makeCard({ content: '{"title":"来自内容","content":"来自正文"}' }), { showPreview: true })
 
     expect(screen.getByText('来自内容')).toBeInTheDocument()
     expect(screen.getByText('来自正文')).toBeInTheDocument()
-    expect(screen.getByText('类型: text')).toBeInTheDocument()
+    expect(screen.queryByText(/类型:/)).toBeNull()
   })
 
-  it('内容 type=image 且带 imageUrl:预览渲染 img,类型标签为 image', () => {
-    renderCard(makeCard({ content: '{"title":"图卡","imageUrl":"https://cdn.test/a.png","type":"image"}' }), { showPreview: true })
+  it('老的图片卡片（正文为空、只有 imageUrl）:退化成单张图预览', () => {
+    renderCard(makeCard({ content: '{"title":"图卡","imageUrl":"https://cdn.test/a.png"}' }), { showPreview: true })
 
-    const img = screen.getByRole('img', { name: '图卡' }) as HTMLImageElement
+    const img = screen.getByRole('img') as HTMLImageElement
     expect(img.getAttribute('src')).toBe('https://cdn.test/a.png')
-    expect(screen.getByText('类型: image')).toBeInTheDocument()
+    expect(screen.queryByText(/类型:/)).toBeNull()
   })
 
   it('卡片 thumbnail 优先于内容里的 imageUrl', () => {
@@ -239,15 +239,16 @@ describe('卡片内容解析(parseCardContent → 预览渲染)', () => {
       { showPreview: true },
     )
 
-    expect((screen.getByRole('img', { name: 'T' }) as HTMLImageElement).getAttribute('src')).toBe(
+    expect((screen.getByRole('img') as HTMLImageElement).getAttribute('src')).toBe(
       'https://cdn.test/thumb.png',
     )
   })
 
-  it('内容缺 type 时回退到 card.type', () => {
+  it('卡片带 type=image 但正文没图时，也不特殊渲染', () => {
     renderCard(makeCard({ type: 'image', content: '{"title":"只有标题"}' }), { showPreview: true })
 
-    expect(screen.getByText('类型: image')).toBeInTheDocument()
+    expect(screen.getByText('只有标题')).toBeInTheDocument()
+    expect(screen.queryByRole('img')).toBeNull()
   })
 
   it('内容缺 title 时回退到 card.name', () => {
@@ -257,11 +258,11 @@ describe('卡片内容解析(parseCardContent → 预览渲染)', () => {
     expect(screen.getByText('只有正文')).toBeInTheDocument()
   })
 
-  it('畸形 JSON 内容:原文当正文展示,类型回退 card.type', () => {
+  it('畸形 JSON 内容:原文当正文展示，不再有类型标签', () => {
     renderCard(makeCard({ content: '这不是 JSON' }), { showPreview: true })
 
     expect(screen.getByText('这不是 JSON')).toBeInTheDocument()
-    expect(screen.getByText('类型: text')).toBeInTheDocument()
+    expect(screen.queryByText(/类型:/)).toBeNull()
   })
 
   it('正文为空时不渲染正文块', () => {

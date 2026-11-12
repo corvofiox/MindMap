@@ -6,7 +6,7 @@
  */
 
 import { useState, useCallback, memo, useRef, useEffect } from 'react'
-import { Trash2, FileText, Image as ImageIcon } from 'lucide-react'
+import { Trash2, FileText } from 'lucide-react'
 import { clsx } from 'clsx'
 import type { NodeCardItemProps } from '../types/node-pool'
 import { containsHTML, safeHTML } from '@/utils/sanitizeHTML'
@@ -407,7 +407,6 @@ export const NodeCardItem = memo(function NodeCardItem({
     try {
       const nodeData = JSON.parse(card.content)
       return {
-        type: nodeData.type || card.type || 'text',
         title: nodeData.title || card.name,
         content: nodeData.content || '',
         imageUrl: card.thumbnail || nodeData.imageUrl || null,
@@ -415,7 +414,6 @@ export const NodeCardItem = memo(function NodeCardItem({
       }
     } catch {
       return {
-        type: card.type || 'text',
         title: card.name,
         content: card.content,
         imageUrl: card.thumbnail || null,
@@ -444,15 +442,9 @@ export const NodeCardItem = memo(function NodeCardItem({
       >
         <div className="flex items-start justify-between">
           <div className="flex-1 min-w-0 flex items-start gap-2">
-            <div className={clsx(
-              'mt-0.5 flex-shrink-0',
-              contentData.type === 'image' ? 'text-purple-500 dark:text-purple-400' : 'text-blue-500 dark:text-blue-400'
-            )}>
-              {contentData.type === 'image' ? (
-                <ImageIcon className="w-4 h-4" />
-              ) : (
-                <FileText className="w-4 h-4" />
-              )}
+            {/* 统一节点：卡片只有一种，不再按"文本/图片"分图标 */}
+            <div className="mt-0.5 flex-shrink-0 text-blue-500 dark:text-blue-400">
+              <FileText className="w-4 h-4" />
             </div>
             <div className="flex-1 min-w-0">
               {isEditing ? (
@@ -534,28 +526,29 @@ export const NodeCardItem = memo(function NodeCardItem({
                 </button>
               </div>
 
-              {contentData.imageUrl && (
-                <div className="mb-3 rounded-lg overflow-hidden bg-gray-100 dark:bg-gray-900">
-                  <img
-                    src={contentData.imageUrl}
-                    alt={contentData.title}
-                    className="w-full max-h-64 object-contain"
-                  />
-                </div>
-              )}
-
-              {contentData.content && (
-                <div className="text-sm text-gray-600 dark:text-gray-400 break-words max-h-48 overflow-y-auto prose prose-sm dark:prose-invert max-w-none">
-                  {containsHTML(contentData.content) ? (
-                    <div dangerouslySetInnerHTML={{ __html: safeHTML(contentData.content) }} />
+              {/*
+                统一节点：图片是正文的一部分，跟着文字一起排版，
+                不再"图片常驻上半部分 + 文字在下"。只有老卡片（正文为空、
+                仅存了缩略图）才退化成单张图。
+              */}
+              {(contentData.content || contentData.imageUrl) && (
+                <div
+                  className="rich-text-content break-words max-h-64 overflow-y-auto pr-1 text-gray-600 dark:text-gray-400"
+                  style={{ fontSize: 13, lineHeight: 1.7 }}
+                >
+                  {contentData.content ? (
+                    containsHTML(contentData.content) ? (
+                      <div dangerouslySetInnerHTML={{ __html: safeHTML(contentData.content) }} />
+                    ) : (
+                      <div className="whitespace-pre-wrap">{contentData.content}</div>
+                    )
                   ) : (
-                    <div className="whitespace-pre-wrap">{contentData.content}</div>
+                    <img src={contentData.imageUrl || ''} alt={contentData.title} className="w-full rounded-lg" />
                   )}
                 </div>
               )}
 
               <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700 flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
-                <span>类型: {contentData.type}</span>
                 <span>添加于 {new Date(card.createdAt).toLocaleDateString()}</span>
               </div>
             </div>
