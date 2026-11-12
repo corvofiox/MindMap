@@ -152,7 +152,7 @@ export function NotebookEditor({
               onInput={onContentInput}
               onPaste={onPaste}
               onBlur={onBlur}
-              className="notebook-prose min-h-[52vh]"
+              className="rich-text-content min-h-[52vh]"
             />
           </div>
         </article>

@@ -10,7 +10,8 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { CanvasToolbar } from '@/components/canvas/CanvasToolbar'
-import { RichTextToolbar } from '@/components/canvas/RichTextToolbar'
+import { RichTextToolbar } from '@/features/rich-text/RichTextToolbar'
+import { EMPTY_EDITOR_STATE } from '@/features/rich-text/editorCommands'
 
 describe('统一节点入口', () => {
   it('画布工具栏里没有独立的"图片"工具', () => {
@@ -27,8 +28,10 @@ describe('统一节点入口', () => {
     const onInsertImage = vi.fn()
     render(
       <RichTextToolbar
+        variant="floating"
         visible
         position={{ x: 10, y: 10 }}
+        state={EMPTY_EDITOR_STATE}
         onCommand={() => {}}
         onInsertImage={onInsertImage}
         onClose={() => {}}
@@ -42,8 +45,10 @@ describe('统一节点入口', () => {
   it('没传 onInsertImage 时不渲染该按钮（避免空按钮）', () => {
     render(
       <RichTextToolbar
+        variant="floating"
         visible
         position={{ x: 10, y: 10 }}
+        state={EMPTY_EDITOR_STATE}
         onCommand={() => {}}
         onClose={() => {}}
       />,

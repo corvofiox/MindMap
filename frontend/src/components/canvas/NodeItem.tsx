@@ -1808,6 +1808,7 @@ export const NodeItem = memo(function NodeItem({ node, isSelected, zoom, onDragS
                 {isEditingContent ? (
                   <div
                     ref={contentRef}
+                    className="rich-text-content"
                     contentEditable
                     suppressContentEditableWarning
                     style={{
@@ -1837,6 +1838,7 @@ export const NodeItem = memo(function NodeItem({ node, isSelected, zoom, onDragS
                   </div>
                 ) : (
                   <div
+                    className="rich-text-content"
                     style={contentPreviewStyle}
                     onDoubleClick={(e) => handleDoubleClick(e, 'content')}
                     dangerouslySetInnerHTML={{ __html: highlightState?.keywords ? safeHighlightHtml(cleanHtmlContent(displayContent), highlightState.keywords) : cleanHtmlContent(displayContent) }}

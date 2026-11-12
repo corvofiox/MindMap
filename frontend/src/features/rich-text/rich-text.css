@@ -1,0 +1,150 @@
+/**
+ * 富文本正文的排版样式——画布节点与笔记本正文共用。
+ *
+ * 放在 rich-text 目录并由 RichTextToolbar 引入：凡是挂了这个工具栏的地方，
+ * 排版就一定一致（以前只有笔记本有 h1-h3/列表/引用的样式，画布节点里
+ * 设了标题看起来还是普通文字）。
+ */
+.rich-text-content {
+  font-size: 16px;
+  line-height: 1.85;
+  color: rgb(39 39 42); /* zinc-800 */
+  word-break: break-word;
+  outline: none;
+}
+
+.dark .rich-text-content {
+  color: rgb(228 228 231); /* zinc-200 */
+}
+
+/* 空文档占位符：:empty 在真实浏览器里对 contentEditable 有效 */
+.rich-text-content:empty::before {
+  content: attr(data-placeholder);
+  color: rgb(161 161 170); /* zinc-400 */
+  pointer-events: none;
+}
+
+.dark .rich-text-content:empty::before {
+  color: rgb(82 82 91); /* zinc-600 */
+}
+
+/* 段落与标题 */
+.rich-text-content p {
+  margin: 0 0 1.1em;
+}
+
+.rich-text-content p:last-child {
+  margin-bottom: 0;
+}
+
+.rich-text-content h1,
+.rich-text-content h2,
+.rich-text-content h3 {
+  margin: 1.8em 0 0.6em;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.35;
+  color: rgb(24 24 27); /* zinc-900 */
+}
+
+.rich-text-content h1 { font-size: 1.6em; }
+.rich-text-content h2 { font-size: 1.32em; }
+.rich-text-content h3 { font-size: 1.12em; }
+
+.rich-text-content h1:first-child,
+.rich-text-content h2:first-child,
+.rich-text-content h3:first-child {
+  margin-top: 0;
+}
+
+.dark .rich-text-content h1,
+.dark .rich-text-content h2,
+.dark .rich-text-content h3 {
+  color: rgb(250 250 250); /* zinc-50 */
+}
+
+/* 列表 */
+.rich-text-content ul,
+.rich-text-content ol {
+  margin: 0 0 1.1em;
+  padding-left: 1.45em;
+}
+
+.rich-text-content ul { list-style: disc; }
+.rich-text-content ol { list-style: decimal; }
+
+.rich-text-content li {
+  margin: 0.25em 0;
+}
+
+.rich-text-content li > p {
+  margin-bottom: 0.35em;
+}
+
+/* 引用 */
+.rich-text-content blockquote {
+  margin: 1.4em 0;
+  padding: 0.2em 0 0.2em 1.1em;
+  border-left: 3px solid rgb(212 212 216); /* zinc-300 */
+  color: rgb(82 82 91); /* zinc-600 */
+  font-style: normal;
+}
+
+.dark .rich-text-content blockquote {
+  border-left-color: rgb(63 63 70); /* zinc-700 */
+  color: rgb(161 161 170); /* zinc-400 */
+}
+
+/* 代码 */
+.rich-text-content code {
+  padding: 0.15em 0.4em;
+  border-radius: 6px;
+  background: rgb(244 244 245); /* zinc-100 */
+  font-size: 0.9em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.dark .rich-text-content code {
+  background: rgb(39 39 42); /* zinc-800 */
+}
+
+/* 链接 */
+.rich-text-content a {
+  color: rgb(37 99 235); /* blue-600 */
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+}
+
+.dark .rich-text-content a {
+  color: rgb(96 165 250); /* blue-400 */
+}
+
+/* 图片：笔记本里的图通常是截图/网页配图，给圆角与一点阴影，避免"贴上去"的感觉 */
+.rich-text-content img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 1.5em 0;
+  border-radius: 12px;
+  box-shadow:
+    0 1px 2px rgba(24, 24, 27, 0.06),
+    0 8px 24px -12px rgba(24, 24, 27, 0.18);
+}
+
+.dark .rich-text-content img {
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.4),
+    0 8px 24px -12px rgba(0, 0, 0, 0.6);
+}
+
+/* 分隔线 */
+.rich-text-content hr {
+  margin: 2.2em 0;
+  border: 0;
+  border-top: 1px solid rgb(228 228 231); /* zinc-200 */
+}
+
+.dark .rich-text-content hr {
+  border-top-color: rgb(39 39 42); /* zinc-800 */
+}

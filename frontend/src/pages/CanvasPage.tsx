@@ -21,14 +21,14 @@ import { ConnectionStylePanel } from '@/components/canvas/ConnectionStylePanel'
 import { DomainContextMenu } from '@/components/canvas/DomainContextMenu'
 import { DomainStylePanel } from '@/components/canvas/DomainStylePanel'
 import { ContextMenuWrapper } from '@/components/ContextMenuWrapper'
-import { RichTextToolbar } from '@/components/canvas/RichTextToolbar'
+import { RichTextToolbar } from '@/features/rich-text/RichTextToolbar'
+import { useRichTextEditor } from '@/features/rich-text/useRichTextEditor'
 import { ConnectionLine } from '@/components/canvas/ConnectionLine'
 import { CONNECTION_DEFAULTS, Z_INDEX } from '@/constants'
 import { generateId, colorToHex, hexToRgba, calculateSmartPortPosition, buildConnectionInfoMap, getPortOffsetVector, type PortDirection, type ConnectionInfo } from '@/utils/canvas'
 import { calculateOptimalBendPoint, findBendPointInsertIndex } from '@/utils/connectionBendPoints'
 import { saveToCache, loadFromCache } from '@/utils/nodeCache'
 import { logger } from '@/utils/logger'
-import { execFormatCommand } from '@/utils/richTextCommands'
 import { exportCanvas, downloadJsonFile } from '@/utils/canvasExport'
 import { resolveCanvasIsCollaborative } from '@/utils/collaboration'
 import { SAVE_COMMAND_EVENT } from '@/components/ui/CommandPalette'
@@ -783,6 +783,15 @@ export function CanvasPage() {
 
   // Save/restore selection for rich text editing
   const savedSelectionRef = useRef<Range | null>(null)
+
+  // 富文本状态与命令：与笔记本共用同一个 hook；编辑器按当前正在编辑的节点定位
+  const { state: richTextState, run: canvasFormatCommand } = useRichTextEditor({
+    getEditor: () => {
+      if (!editingId) return null
+      const node = document.querySelector(`[data-node-id="${editingId}"]`)
+      return (node?.querySelector('[contenteditable="true"]') as HTMLElement | null) ?? null
+    },
+  })
 
   // Helper to close all context menus
   const closeAllContextMenus = useCallback(() => {
@@ -5684,15 +5693,13 @@ export function CanvasPage() {
         </div>
       )}
 
-      {/* Rich Text Toolbar */}
+      {/* Rich Text Toolbar：与笔记本共用同一个组件，只是形态为悬浮 */}
       <RichTextToolbar
+        variant="floating"
         visible={richTextToolbarVisible}
         position={richTextToolbarPosition}
-        onCommand={(command, value) => {
-          if (!['fontSize', 'justifyLeft', 'justifyCenter', 'justifyRight'].includes(command)) {
-            execFormatCommand(command, value)
-          }
-        }}
+        state={richTextState}
+        onCommand={(command, value) => { canvasFormatCommand(command, value) }}
         onInsertImage={() => {
           // 统一节点：这张图会插入到正在编辑的节点正文里，而不是新建"图片节点"。
           const targetNodeId = editingId ?? selectedIdsRef.current[0]
@@ -5702,20 +5709,6 @@ export function CanvasPage() {
           )
         }}
         onClose={() => setRichTextToolbarVisible(false)}
-        onFocus={() => {
-          if (editingId) {
-            const nodeElement = document.querySelector(`[data-node-id="${editingId}"]`)
-            if (nodeElement) {
-              const contentEditable = nodeElement.querySelector('[contenteditable="true"]') as HTMLElement
-              if (contentEditable) {
-                const selection = window.getSelection()
-                if (selection && selection.rangeCount > 0) {
-                  savedSelectionRef.current = selection.getRangeAt(0).cloneRange()
-                }
-              }
-            }
-          }
-        }}
       />
     </div>
   )

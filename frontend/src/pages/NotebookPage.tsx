@@ -14,25 +14,14 @@ import { useUIStore } from '@/store/useUIStore'
 import { sanitizeHTML } from '@/utils/sanitizeHTML'
 import { NotebookSidebar } from '@/features/notebook/NotebookSidebar'
 import { NotebookEditor } from '@/features/notebook/NotebookEditor'
-import {
-  NotebookFormatToolbar,
-  type BlockFormat,
-  type InlineFormats,
-} from '@/features/notebook/NotebookFormatToolbar'
+import { RichTextToolbar } from '@/features/rich-text/RichTextToolbar'
+import { insertHtmlAtCaret as insertHtmlIntoEditor } from '@/features/rich-text/editorCommands'
+import { useRichTextEditor } from '@/features/rich-text/useRichTextEditor'
 import { uploadFile } from '@/services/api'
 import '@/features/notebook/notebook.css'
 
 const AUTOSAVE_DELAY = 800
 const SIDEBAR_STORAGE_KEY = 'notebook:sidebar-collapsed'
-
-const EMPTY_FORMATS: InlineFormats = {
-  bold: false,
-  italic: false,
-  underline: false,
-  strikeThrough: false,
-  insertUnorderedList: false,
-  insertOrderedList: false,
-}
 
 /** 字数与图片数：从 HTML 里算，避免依赖后端额外字段。 */
 function computeStats(html: string): { chars: number; images: number } {
@@ -84,8 +73,6 @@ export function NotebookPage() {
   const [titleDraft, setTitleDraft] = useState('')
   const [importOpen, setImportOpen] = useState(false)
   const [stats, setStats] = useState({ chars: 0, images: 0 })
-  const [formats, setFormats] = useState<InlineFormats>(EMPTY_FORMATS)
-  const [block, setBlock] = useState<BlockFormat>('p')
   const imageInputRef = useRef<HTMLInputElement | null>(null)
   // 选中的文件夹由页面持有：侧栏用它筛选，新建手稿也用它决定落点
   const [folderFilter, setFolderFilter] = useState<number | null>(null)
@@ -123,15 +110,11 @@ export function NotebookPage() {
     if (!active) {
       setTitleDraft('')
       setStats({ chars: 0, images: 0 })
-      setFormats(EMPTY_FORMATS)
-      setBlock('p')
       if (editorRef.current) editorRef.current.innerHTML = ''
       return
     }
     setTitleDraft(active.title)
     setStats(computeStats(active.contentHtml || ''))
-    setFormats(EMPTY_FORMATS)
-    setBlock('p')
     if (editorRef.current) {
       editorRef.current.innerHTML = sanitizeHTML(active.contentHtml || '')
     }
@@ -246,86 +229,31 @@ export function NotebookPage() {
   }, [scheduleSave])
 
   /**
-   * 把 HTML 插到光标处（没有光标就追加）。
-   * 粘贴采集与"插入图片"共用这一段，避免两处各写一份插入逻辑后行为跑偏。
+   * 粘贴采集与插图共用同一段插入逻辑（来自富文本模块），
+   * 保证画布与笔记本的插入语义一致。
    */
   const insertHtmlAtCaret = useCallback((markup: string) => {
     const editor = editorRef.current
     if (!editor) return
-    const holder = document.createElement('div')
-    holder.innerHTML = markup
-
-    const selection = window.getSelection()
-    const hasCaret = selection !== null
-      && selection.rangeCount > 0
-      && selection.anchorNode !== null
-      && editor.contains(selection.anchorNode)
-
-    if (hasCaret && selection !== null) {
-      const range = selection.getRangeAt(0)
-      range.deleteContents()
-      const fragment = document.createDocumentFragment()
-      while (holder.firstChild) fragment.appendChild(holder.firstChild)
-      range.insertNode(fragment)
-      range.collapse(false)
-    } else {
-      editor.appendChild(holder)
-    }
+    insertHtmlIntoEditor(editor, markup)
     handleContentInput()
   }, [handleContentInput])
 
-  /** 工具栏状态：只在选区位于编辑器内时刷新，避免点到侧栏时状态乱跳。 */
-  const refreshFormatState = useCallback(() => {
-    const editor = editorRef.current
-    if (!editor) return
-    const selection = window.getSelection()
-    const inside = selection !== null
-      && selection.rangeCount > 0
-      && selection.anchorNode !== null
-      && editor.contains(selection.anchorNode)
-    if (!inside) return
+  // 富文本状态与命令：与画布节点共用同一个 hook
+  const { state: editorState, refresh: refreshEditorState, run: runFormatCommand } = useRichTextEditor({
+    getEditor: () => editorRef.current,
+  })
 
-    const state = (command: string) => {
-      try {
-        return document.queryCommandState(command)
-      } catch {
-        return false
-      }
-    }
-    setFormats({
-      bold: state('bold'),
-      italic: state('italic'),
-      underline: state('underline'),
-      strikeThrough: state('strikeThrough'),
-      insertUnorderedList: state('insertUnorderedList'),
-      insertOrderedList: state('insertOrderedList'),
-    })
-
-    try {
-      const raw = String(document.queryCommandValue('formatBlock') || '').toLowerCase().replace(/[<>]/g, '')
-      setBlock(raw === 'h1' || raw === 'h2' || raw === 'h3' || raw === 'blockquote' ? raw : 'p')
-    } catch {
-      setBlock('p')
-    }
-  }, [])
-
-  useEffect(() => {
-    document.addEventListener('selectionchange', refreshFormatState)
-    return () => document.removeEventListener('selectionchange', refreshFormatState)
-  }, [refreshFormatState])
-
-  const runFormatCommand = useCallback((command: string, value?: string) => {
-    const editor = editorRef.current
-    if (!editor) return
-    editor.focus()
-    try {
-      document.execCommand(command, false, value)
-    } catch {
-      // 某些环境（jsdom / 极旧浏览器）没有 execCommand，静默降级
-    }
+  /** 命令执行后要落盘（自动保存），所以包一层；激活态由 hook 内部刷新。 */
+  const applyFormat = useCallback((command: Parameters<typeof runFormatCommand>[0], value?: string) => {
+    runFormatCommand(command, value)
     handleContentInput()
-    refreshFormatState()
-  }, [handleContentInput, refreshFormatState])
+  }, [runFormatCommand, handleContentInput])
+
+  // 切换手稿后编辑器内容被替换，激活态要跟着重置
+  useEffect(() => {
+    refreshEditorState()
+  }, [active?.id, refreshEditorState])
 
   const handleImagePicked = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
@@ -507,10 +435,10 @@ export function NotebookPage() {
           stats={stats}
           onCreate={() => { void handleCreate() }}
           toolbar={active ? (
-            <NotebookFormatToolbar
-              block={block}
-              formats={formats}
-              onCommand={runFormatCommand}
+            <RichTextToolbar
+              variant="docked"
+              state={editorState}
+              onCommand={applyFormat}
               onInsertImage={() => imageInputRef.current?.click()}
             />
           ) : null}

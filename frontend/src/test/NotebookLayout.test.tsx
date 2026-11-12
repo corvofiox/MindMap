@@ -190,13 +190,15 @@ describe('左栏收纳动作', () => {
 describe('编辑区工具栏', () => {
   it('打开手稿时显示格式工具栏', () => {
     renderPage()
-    expect(screen.getByTestId('notebook-format-toolbar')).toBeTruthy()
+    // 与画布共用同一个富文本工具栏组件，docked 形态吸顶在纸张上方
+    const toolbar = document.querySelector('[data-rich-text-toolbar="true"][data-variant="docked"]')
+    expect(toolbar).not.toBeNull()
   })
 
   it('没有打开手稿时不显示', () => {
     useNotebookStore.setState({ active: null })
     renderPage()
-    expect(screen.queryByTestId('notebook-format-toolbar')).toBeNull()
+    expect(document.querySelector('[data-rich-text-toolbar="true"]')).toBeNull()
   })
 
   it('点「加粗」会在编辑器上执行 bold 命令', () => {
@@ -206,7 +208,7 @@ describe('编辑区工具栏', () => {
 
     fireEvent.click(screen.getByLabelText('加粗 (Ctrl+B)'))
 
-    expect(execCommand).toHaveBeenCalledWith('bold', false, undefined)
+    expect(execCommand).toHaveBeenCalledWith('bold', false)
   })
 
   it('点「标题 2」执行 formatBlock H2', () => {
@@ -216,7 +218,8 @@ describe('编辑区工具栏', () => {
 
     fireEvent.click(screen.getByLabelText('标题 2'))
 
-    expect(execCommand).toHaveBeenCalledWith('formatBlock', false, 'H2')
+    // 统一命令层使用 "<h2>" 形式：Chrome 认裸标签，Firefox 只认带尖括号的
+    expect(execCommand).toHaveBeenCalledWith('formatBlock', false, '<h2>')
   })
 })
 
