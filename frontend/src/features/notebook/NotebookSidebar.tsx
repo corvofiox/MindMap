@@ -1,8 +1,8 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
-  ChevronDown,
+  ChevronRight,
   FileText,
-  FolderClosed,
+  FolderInput,
   FolderPlus,
   Image as ImageIcon,
   MoreHorizontal,
@@ -12,7 +12,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import type { ManuscriptFolder, ManuscriptSummary } from '@/services/api'
-import { NotebookFolderTree, collectSubtreeIds } from './NotebookFolderTree'
+import { NotebookFolderTree, buildFolderTree } from './NotebookFolderTree'
 
 interface NotebookSidebarProps {
   manuscripts: ManuscriptSummary[]
@@ -20,6 +20,9 @@ interface NotebookSidebarProps {
   activeId?: number
   query: string
   loading: boolean
+  /** 当前选中的文件夹（null = 全部手稿）。由页面持有，新建手稿时要带进这个文件夹。 */
+  selectedFolderId: number | null
+  onSelectFolder: (id: number | null) => void
   onSearch: (query: string) => void
   onCreate: () => void
   onOpen: (id: number) => void
@@ -61,8 +64,12 @@ export function formatRelativeTime(value: number | string | null | undefined): s
 /**
  * 笔记本左侧栏。
  *
- * 结构：搜索 → 新建 → 文件夹（可建/可筛）→ 手稿列表（可移动/可删）。
- * 折叠由父级控制（宽度动画在父级），这里只负责"收起"按钮，避免两处各存一份状态。
+ * 结构：搜索 → 新建 → 文件夹树（固定高度窗口）→ 手稿列表。
+ *
+ * 两个容易做错的地方：
+ *   1. 选中文件夹时新建手稿，必须落在这个文件夹里（之前建到了"未归档"）；
+ *   2. 手稿的"移动到"菜单必须是浮层 + 二级展开，不能内联展开——文件夹一多，
+ *      内联展开会把下面的手稿列表整片往下挤。
  */
 export function NotebookSidebar({
   manuscripts,
@@ -70,6 +77,8 @@ export function NotebookSidebar({
   activeId,
   query,
   loading,
+  selectedFolderId,
+  onSelectFolder,
   onSearch,
   onCreate,
   onOpen,
@@ -79,15 +88,38 @@ export function NotebookSidebar({
   onMoveToFolder,
   onDelete,
 }: NotebookSidebarProps) {
-  const [folderFilter, setFolderFilter] = useState<number | null>(null)
-  const [menuFor, setMenuFor] = useState<number | null>(null)
+  const [menu, setMenu] = useState<{ itemId: number; x: number; y: number; up: boolean } | null>(null)
+  const [moveOpen, setMoveOpen] = useState(false)
 
   // 选中父文件夹时，它下面（所有层级）的手稿都要列出来
   const visible = useMemo(() => {
-    if (folderFilter === null) return manuscripts
-    const ids = collectSubtreeIds(folders, folderFilter)
+    if (selectedFolderId === null) return manuscripts
+    const ids = new Set<number>([selectedFolderId])
+    let changed = true
+    while (changed) {
+      changed = false
+      for (const folder of folders) {
+        if (folder.parentId !== null && ids.has(folder.parentId) && !ids.has(folder.id)) {
+          ids.add(folder.id)
+          changed = true
+        }
+      }
+    }
     return manuscripts.filter((m) => m.folderId !== null && m.folderId !== undefined && ids.has(m.folderId))
-  }, [manuscripts, folders, folderFilter])
+  }, [manuscripts, folders, selectedFolderId])
+
+  // "移动到"子菜单：按树的顺序拍平，带层级缩进
+  const flatFolders = useMemo(() => {
+    const out: { id: number; name: string; depth: number }[] = []
+    const walk = (nodes: ReturnType<typeof buildFolderTree>, depth: number) => {
+      for (const node of nodes) {
+        out.push({ id: node.folder.id, name: node.folder.name, depth })
+        walk(node.children, depth + 1)
+      }
+    }
+    walk(buildFolderTree(folders, manuscripts), 0)
+    return out
+  }, [folders, manuscripts])
 
   const handleAddFolder = (parentId: number | null) => {
     const parentName = parentId === null ? null : folders.find((f) => f.id === parentId)?.name
@@ -99,8 +131,34 @@ export function NotebookSidebar({
     const target = folders.find((f) => f.id === id)
     if (!window.confirm(`删除文件夹「${target?.name || ''}」？里面的手稿会变成未归档，子文件夹会上移一层。`)) return
     onDeleteFolder(id)
-    if (folderFilter === id) setFolderFilter(null)
+    if (selectedFolderId === id) onSelectFolder(null)
   }
+
+  const openMenu = (itemId: number, event: React.MouseEvent<HTMLButtonElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect()
+    const width = 176
+    const menuHeight = 80
+    const left = Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8))
+    // 靠近屏幕底部时向上翻，并且最终位置要夹在视口内——否则列表滚到下方时
+    // 菜单会飘到屏幕外面去
+    const up = rect.bottom + 4 + menuHeight > window.innerHeight
+    const rawTop = up ? rect.top - menuHeight - 4 : rect.bottom + 4
+    const top = Math.max(8, Math.min(rawTop, window.innerHeight - menuHeight - 8))
+    setMenu({ itemId, x: left, y: top, up })
+    setMoveOpen(false)
+  }
+
+  // Esc 关闭菜单：浮层挡住了整页，只靠点空白关闭对键盘用户不友好
+  useEffect(() => {
+    if (!menu) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMenu(null)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [menu])
+
+  const menuItem = manuscripts.find((item) => item.id === menu?.itemId) ?? null
 
   return (
     <div className="flex h-full flex-col bg-white dark:bg-zinc-900">
@@ -137,7 +195,7 @@ export function NotebookSidebar({
         </div>
       </div>
 
-      {/* 新建 */}
+      {/* 新建：落在当前选中的文件夹里 */}
       <div className="px-3 pt-2.5">
         <button
           type="button"
@@ -149,7 +207,7 @@ export function NotebookSidebar({
         </button>
       </div>
 
-      {/* 文件夹：固定高度的树形列表，超出就滚动 */}
+      {/* 文件夹：固定高度窗口，超出滚动 */}
       <div className="px-3 pt-3">
         <div className="flex items-center gap-1">
           <span className="px-1 py-1 text-[11px] font-medium uppercase tracking-wider text-zinc-400">
@@ -169,8 +227,8 @@ export function NotebookSidebar({
         <NotebookFolderTree
           folders={folders}
           manuscripts={manuscripts}
-          selectedId={folderFilter}
-          onSelect={setFolderFilter}
+          selectedId={selectedFolderId}
+          onSelect={onSelectFolder}
           onCreate={(parentId) => handleAddFolder(parentId)}
           onDelete={handleDeleteFolder}
         />
@@ -214,7 +272,6 @@ export function NotebookSidebar({
 
         {visible.map((item) => {
           const isActive = activeId === item.id
-          const menuOpen = menuFor === item.id
           return (
             <div key={item.id} className="group relative mb-0.5">
               <button
@@ -254,72 +311,109 @@ export function NotebookSidebar({
 
               <button
                 type="button"
-                onClick={() => setMenuFor((current) => (current === item.id ? null : item.id))}
+                onClick={(event) => openMenu(item.id, event)}
                 title="更多操作"
                 aria-label="更多操作"
-                className={`absolute right-1.5 top-2 flex h-6 w-6 items-center justify-center rounded-md text-zinc-400 transition hover:bg-zinc-200/70 hover:text-zinc-700 dark:hover:bg-zinc-700 dark:hover:text-zinc-100 ${
-                  menuOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus:opacity-100'
-                }`}
+                className="absolute right-1.5 top-2 flex h-6 w-6 items-center justify-center rounded-md text-zinc-400 opacity-0 transition hover:bg-zinc-200/70 hover:text-zinc-700 focus:opacity-100 group-hover:opacity-100 dark:hover:bg-zinc-700 dark:hover:text-zinc-100"
               >
                 <MoreHorizontal size={14} />
               </button>
-
-              {menuOpen && (
-                <div
-                  data-testid="notebook-item-menu"
-                  className="mx-1 mb-1 rounded-lg border border-zinc-200/80 bg-white p-2 shadow-sm dark:border-zinc-700 dark:bg-zinc-800/60"
-                >
-                  <p className="px-1 pb-1 text-[10.5px] font-medium uppercase tracking-wider text-zinc-400">移动到</p>
-                  <div className="flex flex-wrap gap-1">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onMoveToFolder(item.id, null)
-                        setMenuFor(null)
-                      }}
-                      className={`rounded px-1.5 py-0.5 text-[11.5px] transition ${
-                        item.folderId === null
-                          ? 'bg-zinc-200 text-zinc-700 dark:bg-zinc-700 dark:text-zinc-100'
-                          : 'text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-700'
-                      }`}
-                    >
-                      未归档
-                    </button>
-                    {folders.map((folder) => (
-                      <button
-                        key={folder.id}
-                        type="button"
-                        onClick={() => {
-                          onMoveToFolder(item.id, folder.id)
-                          setMenuFor(null)
-                        }}
-                        className={`max-w-full truncate rounded px-1.5 py-0.5 text-[11.5px] transition ${
-                          item.folderId === folder.id
-                            ? 'bg-zinc-200 text-zinc-700 dark:bg-zinc-700 dark:text-zinc-100'
-                            : 'text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-700'
-                        }`}
-                      >
-                        {folder.name}
-                      </button>
-                    ))}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setMenuFor(null)
-                      onDelete(item.id)
-                    }}
-                    className="mt-2 flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-[11.5px] text-red-600 transition hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-500/10"
-                  >
-                    <Trash2 size={12} />
-                    删除这篇
-                  </button>
-                </div>
-              )}
             </div>
           )
         })}
       </div>
+
+      {/* 手稿操作菜单：浮层，不占布局；"移动到"再向右展开二级列表 */}
+      {menu && menuItem && (
+        <>
+          <div className="fixed inset-0 z-40" onMouseDown={() => setMenu(null)} aria-hidden="true" />
+          <div
+            data-testid="notebook-item-menu"
+            className="fixed z-50 w-44 rounded-lg border border-zinc-200/80 bg-white p-1 shadow-xl shadow-zinc-900/5 dark:border-zinc-700 dark:bg-zinc-800 dark:shadow-black/40"
+            style={{ left: menu.x, top: menu.y }}
+            role="menu"
+          >
+            <div
+              className="relative"
+              onMouseEnter={() => setMoveOpen(true)}
+              onMouseLeave={() => setMoveOpen(false)}
+            >
+              <button
+                type="button"
+                role="menuitem"
+                aria-haspopup="menu"
+                aria-expanded={moveOpen}
+                onClick={() => setMoveOpen((open) => !open)}
+                className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-[12.5px] text-zinc-700 transition hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-700"
+              >
+                <FolderInput size={13} className="text-zinc-400" />
+                移动到
+                <ChevronRight size={12} className="ml-auto text-zinc-400" />
+              </button>
+
+              {moveOpen && (
+                <div
+                  data-testid="notebook-move-menu"
+                  role="menu"
+                  className={`folder-scroll absolute left-full ${menu.up ? 'bottom-0' : 'top-0'} ml-1 max-h-64 w-44 overflow-y-auto rounded-lg border border-zinc-200/80 bg-white p-1 shadow-xl shadow-zinc-900/5 dark:border-zinc-700 dark:bg-zinc-800 dark:shadow-black/40`}
+                >
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      onMoveToFolder(menu.itemId, null)
+                      setMenu(null)
+                    }}
+                    className={`flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-[12.5px] transition hover:bg-zinc-100 dark:hover:bg-zinc-700 ${
+                      menuItem.folderId === null ? 'text-blue-600 dark:text-blue-400' : 'text-zinc-700 dark:text-zinc-200'
+                    }`}
+                  >
+                    未归档
+                  </button>
+                  {flatFolders.length > 0 && (
+                    <div className="my-1 h-px bg-zinc-100 dark:bg-zinc-700" aria-hidden="true" />
+                  )}
+                  {flatFolders.map((folder) => (
+                    <button
+                      key={folder.id}
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        onMoveToFolder(menu.itemId, folder.id)
+                        setMenu(null)
+                      }}
+                      className={`flex w-full items-center gap-1.5 truncate rounded py-1.5 pr-2 text-left text-[12.5px] transition hover:bg-zinc-100 dark:hover:bg-zinc-700 ${
+                        menuItem.folderId === folder.id
+                          ? 'text-blue-600 dark:text-blue-400'
+                          : 'text-zinc-700 dark:text-zinc-200'
+                      }`}
+                      style={{ paddingLeft: 8 + folder.depth * 12 }}
+                      title={folder.name}
+                    >
+                      {folder.name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="my-1 h-px bg-zinc-100 dark:bg-zinc-700" aria-hidden="true" />
+
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setMenu(null)
+                onDelete(menu.itemId)
+              }}
+              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-[12.5px] text-red-600 transition hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-500/10"
+            >
+              <Trash2 size={13} />
+              删除
+            </button>
+          </div>
+        </>
+      )}
     </div>
   )
 }

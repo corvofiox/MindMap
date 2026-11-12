@@ -87,6 +87,8 @@ export function NotebookPage() {
   const [formats, setFormats] = useState<InlineFormats>(EMPTY_FORMATS)
   const [block, setBlock] = useState<BlockFormat>('p')
   const imageInputRef = useRef<HTMLInputElement | null>(null)
+  // 选中的文件夹由页面持有：侧栏用它筛选，新建手稿也用它决定落点
+  const [folderFilter, setFolderFilter] = useState<number | null>(null)
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     try {
       return localStorage.getItem(SIDEBAR_STORAGE_KEY) === '1'
@@ -192,7 +194,8 @@ export function NotebookPage() {
   }, [])
 
   const handleCreate = async () => {
-    const manuscript = await create()
+    // 在某个文件夹下点"新建手稿"，就应该建在那个文件夹里（之前固定建到未归档）
+    const manuscript = await create(folderFilter)
     if (manuscript) navigate(`/notebook/${manuscript.id}`)
   }
 
@@ -482,6 +485,8 @@ export function NotebookPage() {
               activeId={active?.id}
               query={query}
               loading={loading}
+              selectedFolderId={folderFilter}
+              onSelectFolder={setFolderFilter}
               onSearch={(value) => { void load({ q: value }) }}
               onCreate={() => { void handleCreate() }}
               onOpen={(id) => navigate(`/notebook/${id}`)}

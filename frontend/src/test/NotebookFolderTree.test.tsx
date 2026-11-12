@@ -82,7 +82,7 @@ describe('NotebookFolderTree', () => {
   it('固定高度 + 可滚动的窗口', () => {
     renderTree()
     const scroll = screen.getByTestId('folder-scroll')
-    expect(scroll.className).toContain('max-h-[240px]')
+    expect(scroll.className).toContain('max-h-[200px]')
     expect(scroll.className).toContain('overflow-y-auto')
   })
 

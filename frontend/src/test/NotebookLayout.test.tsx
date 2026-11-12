@@ -139,7 +139,7 @@ describe('动作位置', () => {
 })
 
 describe('左栏收纳动作', () => {
-  it('列表项可以移动到文件夹（调 updateManuscript 带 folderId）', async () => {
+  it('列表项可以移动到文件夹：菜单两级展开，先点「移动到」再选文件夹', async () => {
     // 页面挂载会真的拉一次文件夹列表，这里让它返回「素材」，
     // 否则 store 里的种子会被这次拉取覆盖（也就测不到菜单了）。
     vi.mocked(api.getManuscriptFolders).mockResolvedValueOnce([
@@ -149,8 +149,17 @@ describe('左栏收纳动作', () => {
 
     await screen.findByText('素材')
     fireEvent.click(screen.getAllByLabelText('更多操作')[0])
+
     const menu = await screen.findByTestId('notebook-item-menu')
-    fireEvent.click(within(menu).getByText('素材'))
+    // 一级菜单只有两个条目
+    expect(within(menu).getByText('移动到')).toBeTruthy()
+    expect(within(menu).getByText('删除')).toBeTruthy()
+
+    // 二级菜单才列文件夹
+    expect(screen.queryByTestId('notebook-move-menu')).toBeNull()
+    fireEvent.click(within(menu).getByText('移动到'))
+    const moveMenu = await screen.findByTestId('notebook-move-menu')
+    fireEvent.click(within(moveMenu).getByText('素材'))
 
     await waitFor(() => expect(api.updateManuscript).toHaveBeenCalledWith(1, { folderId: 7 }))
   })
@@ -160,7 +169,8 @@ describe('左栏收纳动作', () => {
     renderPage()
 
     fireEvent.click(screen.getAllByLabelText('更多操作')[0])
-    fireEvent.click(await screen.findByText('删除这篇'))
+    const menu = await screen.findByTestId('notebook-item-menu')
+    fireEvent.click(within(menu).getByText('删除'))
 
     await waitFor(() => expect(api.deleteManuscript).toHaveBeenCalledWith(1))
     confirmSpy.mockRestore()
@@ -207,5 +217,52 @@ describe('编辑区工具栏', () => {
     fireEvent.click(screen.getByLabelText('标题 2'))
 
     expect(execCommand).toHaveBeenCalledWith('formatBlock', false, 'H2')
+  })
+})
+
+describe('新建手稿的落点', () => {
+  it('选中文件夹后新建手稿，会带 folderId 建在该文件夹里', async () => {
+    vi.mocked(api.getManuscriptFolders).mockResolvedValueOnce([
+      { id: 7, userId: 1, name: '素材', parentId: null, sortOrder: 0, collapsed: false, createdAt: 0 },
+    ])
+    vi.mocked(api.createManuscript).mockResolvedValueOnce({
+      id: 42,
+      folderId: 7,
+      title: '未命名手稿',
+      previewText: '',
+      imageCount: 0,
+      createdAt: 0,
+      updatedAt: 0,
+      contentHtml: '',
+      sourceCardId: null,
+    } as never)
+    renderPage()
+
+    // 选中「素材」文件夹，再点新建
+    fireEvent.click(await screen.findByText('素材'))
+    fireEvent.click(screen.getAllByText('新建手稿')[0])
+
+    await waitFor(() => expect(api.createManuscript).toHaveBeenCalled())
+    expect(vi.mocked(api.createManuscript).mock.calls[0][0]).toMatchObject({ folderId: 7 })
+  })
+
+  it('未选文件夹时新建，落点是未归档', async () => {
+    vi.mocked(api.createManuscript).mockResolvedValueOnce({
+      id: 43,
+      folderId: null,
+      title: '未命名手稿',
+      previewText: '',
+      imageCount: 0,
+      createdAt: 0,
+      updatedAt: 0,
+      contentHtml: '',
+      sourceCardId: null,
+    } as never)
+    renderPage()
+
+    fireEvent.click(screen.getAllByText('新建手稿')[0])
+
+    await waitFor(() => expect(api.createManuscript).toHaveBeenCalled())
+    expect(vi.mocked(api.createManuscript).mock.calls[0][0]).toMatchObject({ folderId: null })
   })
 })

@@ -227,14 +227,14 @@
   display: none;
 }
 
+/* 常显但很淡：既然是"固定窗口 + 滚动"，得让用户看得见这里能滚 */
 .folder-scroll::-webkit-scrollbar-thumb {
-  background-color: transparent;
+  background-color: rgba(161, 161, 170, 0.45);
   border-radius: 999px;
 }
 
-/* 默认不画滚动条，鼠标移进这块才浮现——静态时它就是一条灰杠，很脏 */
 .folder-scroll:hover::-webkit-scrollbar-thumb {
-  background-color: rgba(113, 113, 122, 0.28);
+  background-color: rgba(113, 113, 122, 0.55);
 }
 
 .folder-scroll::-webkit-scrollbar-track {

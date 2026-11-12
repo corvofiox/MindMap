@@ -233,7 +233,7 @@ export function NotebookFolderTree({
 
       {/* 文件夹少时按内容高度，多了才在这个窗口里滚动 */}
       <div
-        className="folder-scroll max-h-[240px] overflow-y-auto pr-2"
+        className="folder-scroll max-h-[200px] overflow-y-auto pr-2"
         data-testid="folder-scroll"
       >
         {tree.length === 0 ? (
