@@ -1,4 +1,4 @@
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { Settings, LogOut, User as UserIcon, Users, Search, BookOpen } from 'lucide-react'
 import { useAuthStore } from '@/store/useAuthStore'
 import { useUIStore } from '@/store/useUIStore'
@@ -8,6 +8,7 @@ import { DropdownMenu } from '../ui/DropdownMenu'
 
 export function Header() {
   const navigate = useNavigate()
+  const location = useLocation()
   const { user, logout } = useAuthStore()
   const { sidebarOpen, nodePoolOpen, toggleSidebar, setNodePoolOpen, addErrorToast } = useUIStore()
   const { currentProject } = useProjectsStore()
@@ -100,6 +101,20 @@ export function Header() {
         >
           <Users className="w-5 h-5" />
         </button>
+
+        {/* 笔记本入口：只在项目页出现，位置与笔记本页保持一致——右上角那组
+            （设置 / 账号）的左侧，而不是夹在左右侧栏开关之间 */}
+        {location.pathname === '/projects' && (
+          <button
+            onClick={() => navigate('/notebook')}
+            title="打开笔记本"
+            aria-label="打开笔记本"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+          >
+            <BookOpen className="w-4 h-4" />
+            笔记本
+          </button>
+        )}
 
         {/* Settings */}
         <DropdownMenu

@@ -1,7 +1,8 @@
 /**
  * 顶栏的信息架构约束：
- *   中间那一段只放"左侧栏 / 右侧栏"的开关，不允许塞别的工作区入口。
- *   笔记本入口挪到账号菜单 + 项目页按钮，这里一并钉住，避免有人又塞回去。
+ *   - 左右侧栏开关那一组里，只允许放这两个开关（笔记本入口不许夹在中间）；
+ *   - 项目页的笔记本入口放在右上角"设置 / 账号"那一组的左侧；
+ *   - 画布页不显示笔记本入口（那里只留左右栏开关与工具）。
  */
 import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, fireEvent, within } from '@testing-library/react'
@@ -14,9 +15,9 @@ function LocationProbe() {
   return <span data-testid="location">{location.pathname}</span>
 }
 
-function renderHeader() {
+function renderHeader(path = '/projects') {
   return render(
-    <MemoryRouter initialEntries={['/projects']}>
+    <MemoryRouter initialEntries={[path]}>
       <Header />
       <Routes>
         <Route path="*" element={<LocationProbe />} />
@@ -32,25 +33,42 @@ beforeEach(() => {
 })
 
 describe('顶栏', () => {
-  it('只保留左右侧栏开关，没有笔记本入口', () => {
+  it('左右侧栏开关那一组里没有笔记本入口', () => {
     renderHeader()
 
-    expect(screen.getByTitle('切换侧边栏 (Ctrl+B)')).toBeTruthy()
-    expect(screen.getByTitle('切换节点池 (Ctrl+P)')).toBeTruthy()
-    expect(screen.queryByTitle('切换到笔记本')).toBeNull()
-
-    const header = document.querySelector('header')
-    expect(header).not.toBeNull()
-    expect(within(header as HTMLElement).queryByText('笔记本')).toBeNull()
+    const sidebarToggle = screen.getByTitle('切换侧边栏 (Ctrl+B)')
+    const toggleGroup = sidebarToggle.parentElement as HTMLElement
+    expect(within(toggleGroup).getByTitle('切换节点池 (Ctrl+P)')).toBeTruthy()
+    expect(within(toggleGroup).queryByText('笔记本')).toBeNull()
   })
 
-  it('笔记本入口在账号菜单里，点击后跳转 /notebook', () => {
-    renderHeader()
+  it('项目页：笔记本入口在右上角那组，位于设置左侧', () => {
+    renderHeader('/projects')
 
-    // 打开头像菜单
+    const notebook = screen.getByLabelText('打开笔记本')
+    const settings = screen.getByTitle('设置 (Ctrl+,)')
+
+    // 文档顺序：笔记本在设置之前（即左侧）
+    expect(notebook.compareDocumentPosition(settings) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+    // 与设置、账号同在顶栏右半部分
+    const header = document.querySelector('header') as HTMLElement
+    expect(within(header).getByLabelText('打开笔记本')).toBeTruthy()
+    expect(within(header).getByLabelText('账号菜单')).toBeTruthy()
+  })
+
+  it('画布页不显示笔记本入口', () => {
+    renderHeader('/canvas/1')
+    expect(screen.queryByLabelText('打开笔记本')).toBeNull()
+  })
+
+  it('账号菜单里仍有笔记本入口，点击后跳转 /notebook', () => {
+    renderHeader('/projects')
+
     fireEvent.click(screen.getByLabelText('账号菜单'))
-    const item = screen.getByText('笔记本')
-    fireEvent.click(item)
+    // 顶栏按钮与菜单项都叫「笔记本」，取最后一个（下拉项在 DOM 中后渲染）
+    const items = screen.getAllByText('笔记本')
+    fireEvent.click(items[items.length - 1])
 
     expect(screen.getByTestId('location').textContent).toBe('/notebook')
   })

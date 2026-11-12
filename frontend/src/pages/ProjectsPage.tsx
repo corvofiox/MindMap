@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, FolderOpen, Trash2, Edit3, Save, X, GitBranch, Users, Zap, ArrowUp, Crown, Eye, Edit2, Users2, Lock, Filter, SearchX, DownloadCloud, BookOpen } from 'lucide-react'
+import { Plus, FolderOpen, Trash2, Edit3, Save, X, GitBranch, Users, Zap, ArrowUp, Crown, Eye, Edit2, Users2, Lock, Filter, SearchX, DownloadCloud } from 'lucide-react'
 import { createPortal } from 'react-dom'
 import { useProjectsStore } from '@/store/useProjectsStore'
 import { useUIStore } from '@/store/useUIStore'
@@ -259,15 +259,6 @@ export function ProjectsPage() {
           </div>
 
           <div className="flex items-center gap-2">
-            <button
-              onClick={() => navigate('/notebook')}
-              className="flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
-              title="打开笔记本"
-            >
-              <BookOpen className="w-4 h-4" />
-              笔记本
-            </button>
-
             <button
               onClick={() => setShowNewProject(true)}
               className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors"
