@@ -83,3 +83,13 @@ describe('顶栏', () => {
     expect(screen.getByTestId('location').textContent).toBe('/notebook')
   })
 })
+
+describe('品牌图标', () => {
+  it('点击左上角 MindMap 回到项目入口，而不是笔记本', () => {
+    renderHeader('/canvas/1')
+
+    fireEvent.click(screen.getByRole('button', { name: 'MindMap' }))
+
+    expect(screen.getByTestId('location').textContent).toBe('/projects')
+  })
+})

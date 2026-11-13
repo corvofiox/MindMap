@@ -34,7 +34,8 @@ export function Header() {
         <button
           onClick={() => {
             setCanvasId(null)
-            navigate('/notebook')
+            // 品牌图标回"项目入口"，不是笔记本（笔记本有自己的入口，见右侧那批）
+            navigate('/projects')
           }}
           className="text-xl font-bold text-gray-800 dark:text-white hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
         >
