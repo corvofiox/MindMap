@@ -47,7 +47,8 @@
     "smoke:mcp:stdio": "node scripts/mcp-stdio-smoke.mjs",
     "e2e:ui": "node e2e/ui-smoke.mjs",
     "e2e:full": "node e2e/full-flow.mjs",
-    "e2e:folders": "node e2e/folder-delete.mjs"
+    "e2e:folders": "node e2e/folder-delete.mjs",
+    "e2e:drag": "node e2e/drag-sort.mjs"
   },
   "devDependencies": {
     "concurrently": "^8.2.2",

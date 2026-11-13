@@ -132,8 +132,79 @@ describe('manuscripts CRUD', () => {
     expect(res.body.data[0].title).toBe('香蕉笔记')
   })
 
-  it('隔离：别人的手稿在读取/保存/删除/转换上都返回 404', async () => {
-    const created = await createManuscript()
+  it('拖拽排序：批量写 sortOrder 后列表按手排顺序返回', async () => {
+    const c = await createManuscript({ title: 'C' })
+    const a = await createManuscript({ title: 'A' })
+    const b = await createManuscript({ title: 'B' })
+
+    // 想把顺序排成 A、B、C
+    const res = await supertest(app)
+      .put('/api/manuscripts/reorder')
+      .set(authA())
+      .send({
+        updates: [
+          { id: a.body.data.id, sortOrder: 0 },
+          { id: b.body.data.id, sortOrder: 10 },
+          { id: c.body.data.id, sortOrder: 20 },
+        ],
+      })
+
+    expect(res.status).toBe(200)
+    expect(res.body.data.updated).toHaveLength(3)
+
+    const list = await supertest(app).get('/api/manuscripts').set(authA())
+    expect(list.body.data.map((m: { title: string }) => m.title)).toEqual(['A', 'B', 'C'])
+  })
+
+  it('拖拽排序：别人的手稿不会被改动', async () => {
+    const theirs = await supertest(app)
+      .post('/api/manuscripts')
+      .set(authB())
+      .send({ title: '别人的稿', contentHtml: '<p>x</p>' })
+    const mine = await createManuscript({ title: '我的稿' })
+
+    const res = await supertest(app)
+      .put('/api/manuscripts/reorder')
+      .set(authA())
+      .send({
+        updates: [
+          { id: theirs.body.data.id, sortOrder: 99 },
+          { id: mine.body.data.id, sortOrder: 5 },
+        ],
+      })
+
+    expect(res.status).toBe(200)
+    // 只改到自己的那一篇
+    expect(res.body.data.updated).toEqual([mine.body.data.id])
+
+    const theirsAfter = await supertest(app)
+      .get(`/api/manuscripts/${theirs.body.data.id}`)
+      .set(authB())
+    expect(theirsAfter.body.data.sortOrder).toBe(0)
+  })
+
+  it('拖拽排序：缺数据或全是非法 id 时返回 400 / 空更新', async () => {
+    expect((await supertest(app).put('/api/manuscripts/reorder').set(authA()).send({})).status).toBe(400)
+    expect(
+      (await supertest(app).put('/api/manuscripts/reorder').set(authA()).send({ updates: [] })).status,
+    ).toBe(400)
+
+    const res = await supertest(app)
+      .put('/api/manuscripts/reorder')
+      .set(authA())
+      .send({ updates: [{ id: 'x', sortOrder: 'y' }] })
+    expect(res.status).toBe(200)
+    expect(res.body.data.updated).toEqual([])
+  })
+
+  it('拖拽排序：未登录 401', async () => {
+    const res = await supertest(app)
+      .put('/api/manuscripts/reorder')
+      .send({ updates: [{ id: 1, sortOrder: 0 }] })
+    expect(res.status).toBe(401)
+  })
+
+  it('隔离：别人的手稿在读取/保存/删除/转换上都返回 404', async () => {    const created = await createManuscript()
     const id = created.body.data.id
 
     expect((await supertest(app).get(`/api/manuscripts/${id}`).set(authB())).status).toBe(404)

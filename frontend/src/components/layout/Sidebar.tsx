@@ -9,6 +9,7 @@ import { createPortal } from 'react-dom'
 import { Z_INDEX } from '@/constants'
 import { getRecentProjects, formatRelativeTime, type RecentProject } from '@/utils/recentProjects'
 import { openProjectCanvas } from '@/utils/openProject'
+import { resolveDropPosition } from '@/features/drag-sort/reorder'
 
 interface SidebarProps {
   open: boolean
@@ -19,7 +20,7 @@ export function Sidebar({ open }: SidebarProps) {
   const location = useLocation()
   const canvasIdMatch = location.pathname.match(/\/canvas\/(\d+)/)
   const activeCanvasId = canvasIdMatch ? parseInt(canvasIdMatch[1]) : null
-  const { projects, projectFilters, setProjectFilters, getFilteredProjects, canvases, folders, currentProject, createCanvas, createFolder, updateProject, deleteProject, setCurrentProject, loadProjects, moveCanvasToFolder, isLoading, loadingMessage, currentMemberRole, loadCanvases, refreshCanvasesSilent } = useProjectsStore()
+  const { projects, projectFilters, setProjectFilters, getFilteredProjects, canvases, folders, currentProject, createCanvas, createFolder, updateProject, deleteProject, setCurrentProject, loadProjects, moveCanvasToFolder, reorderCanvases, isLoading, loadingMessage, currentMemberRole, loadCanvases, refreshCanvasesSilent } = useProjectsStore()
   const { addToast } = useUIStore()
   const { setCanvasId } = useCanvasStore()
 
@@ -32,6 +33,7 @@ export function Sidebar({ open }: SidebarProps) {
   const [draggedCanvasId, setDraggedCanvasId] = useState<number | null>(null)
   const [dragOverFolderId, setDragOverFolderId] = useState<number | null>(null)
   const [isRootDragOver, setIsRootDragOver] = useState(false)
+  const [rowDropHint, setRowDropHint] = useState<{ canvasId: number; position: 'before' | 'after' } | null>(null)
 
   const [editingProjectId, setEditingProjectId] = useState<number | null>(null)
   const [editProjectName, setEditProjectName] = useState('')
@@ -149,11 +151,18 @@ export function Sidebar({ open }: SidebarProps) {
     })
   }
 
+  // 拖拽源 id 用 ref 同步保存：dragstart 里 setState 是异步的，
+  // 紧接着到达的 dragover 读 state 会读到 null（真实浏览器跨帧没问题，
+  // 但合成事件的同一 tick 就会漏；用 ref 把这个时序依赖彻底去掉）。
+  const draggedCanvasIdRef = useRef<number | null>(null)
+
   // 拖拽结束
   const handleDragEnd = () => {
+    draggedCanvasIdRef.current = null
     setDraggedCanvasId(null)
     setDragOverFolderId(null)
     setIsRootDragOver(false)
+    setRowDropHint(null)
   }
 
   // 拖拽进入文件夹
@@ -231,7 +240,8 @@ export function Sidebar({ open }: SidebarProps) {
 
   // 检测拖拽释放位置并处理
   const handleGlobalDragEnd = useCallback((e: DragEvent) => {
-    if (!draggedCanvasId) return
+    const active = draggedCanvasIdRef.current ?? draggedCanvasId
+    if (!active) return
 
     // 移除全局监听器
     document.removeEventListener('dragend', handleGlobalDragEnd)
@@ -240,26 +250,32 @@ export function Sidebar({ open }: SidebarProps) {
     // 检查释放位置是否在 sidebar 内容区域内
     const target = e.target as HTMLElement
     const sidebar = document.querySelector('[data-sidebar-content]')
-    if (sidebar && sidebar.contains(target)) {
+    // 落在另一张画布上 = 已经由 handleDropOnRow 处理为"排序"，
+    // 不能再当成"拖到根目录"（以前这里会把刚排好的顺序又置成根目录归属）
+    const droppedOnCanvasRow = target?.closest?.('[data-canvas-id]')
+    if (sidebar && sidebar.contains(target) && !droppedOnCanvasRow) {
       // 释放在 sidebar 内但不是文件夹上，则移动到根目录
       const folderElement = target.closest('[data-folder-item]')
       if (!folderElement) {
-        const canvas = canvases.find(c => c.id === draggedCanvasId)
+        const canvas = canvases.find(c => c.id === active)
         if (canvas && canvas.folderId === null) {
           // 画布已经在根目录，不触发移动
+          draggedCanvasIdRef.current = null
           setDraggedCanvasId(null)
           setDragOverFolderId(null)
           setIsRootDragOver(false)
           return
         }
         // 乐观更新：立即更新UI状态
-        moveCanvasToFolder(draggedCanvasId, null, true)
+        moveCanvasToFolder(active, null, true)
       }
     }
 
+    draggedCanvasIdRef.current = null
     setDraggedCanvasId(null)
     setDragOverFolderId(null)
     setIsRootDragOver(false)
+    setRowDropHint(null)
   }, [draggedCanvasId, canvases])
 
   // 全局拖拽结束处理
@@ -269,9 +285,55 @@ export function Sidebar({ open }: SidebarProps) {
 
   // 包装拖拽开始以添加全局监听
   const handleDragStartWithGlobal = (canvasId: number) => {
+    draggedCanvasIdRef.current = canvasId
     setDraggedCanvasId(canvasId)
     document.addEventListener('dragend', handleGlobalDragEnd)
     document.addEventListener('dragover', handleGlobalDragOver)
+  }
+
+  /**
+   * 拖到另一张画布上方/下方 = 同组排序。
+   *
+   * 与"拖进文件夹"并存：文件夹命中时优先移动归属（那是更强的心智），
+   * 落在画布行上才是调顺序。两者都不做时不写库。
+   */
+  const handleDragOverRow = (event: React.DragEvent, canvasId: number) => {
+    const fromTransfer = Number(event.dataTransfer.getData('text/plain'))
+    const active = draggedCanvasIdRef.current
+      ?? (Number.isFinite(fromTransfer) && fromTransfer > 0 ? fromTransfer : null)
+    if (!active || active === canvasId) return
+    event.preventDefault()
+    event.stopPropagation()
+    event.dataTransfer.dropEffect = 'move'
+    setRowDropHint({ canvasId, position: resolveDropPosition(event.currentTarget.getBoundingClientRect(), event.clientY) })
+    // 落在画布行上就不再是"根目录高亮"
+    setIsRootDragOver(false)
+    setDragOverFolderId(null)
+  }
+
+  const handleDragLeaveRow = () => {
+    setRowDropHint(null)
+  }
+
+  const handleDropOnRow = (event: React.DragEvent, canvasId: number) => {
+    event.preventDefault()
+    event.stopPropagation()
+    // 拖拽源可能来自 ref（真实拖拽）或 dataTransfer（跨组件/合成事件），
+    // 都没有就忽略——但不能再拿 state 当第三来源，它在同一 tick 内是旧的。
+    const fromTransfer = Number(event.dataTransfer.getData('text/plain'))
+    const active = draggedCanvasIdRef.current
+      ?? (Number.isFinite(fromTransfer) && fromTransfer > 0 ? fromTransfer : null)
+    if (!active || active === canvasId) {
+      setRowDropHint(null)
+      return
+    }
+    const position = resolveDropPosition(event.currentTarget.getBoundingClientRect(), event.clientY)
+    void reorderCanvases(active, canvasId, position)
+    setRowDropHint(null)
+    draggedCanvasIdRef.current = null
+    setDraggedCanvasId(null)
+    setDragOverFolderId(null)
+    setIsRootDragOver(false)
   }
 
   // 加载项目列表
@@ -689,6 +751,9 @@ export function Sidebar({ open }: SidebarProps) {
                       onDropOnFolder={handleDropOnFolder}
                       onDragStart={handleDragStartWithGlobal}
                       onDragEnd={handleDragEnd}
+                      onDragOverRow={handleDragOverRow}
+                      onDragLeaveRow={handleDragLeaveRow}
+                      onDropOnRow={handleDropOnRow}
                       isViewer={isViewer}
                     />
                   ))}
@@ -698,15 +763,25 @@ export function Sidebar({ open }: SidebarProps) {
                   rootCanvases
                     .sort((a, b) => a.sortOrder - b.sortOrder)
                     .map((canvas) => (
-                      <CanvasItem
-                        key={canvas.id}
-                        canvas={canvas}
-                        isActive={activeCanvasId === canvas.id}
-                        isDragging={draggedCanvasId === canvas.id}
-                        onDragStart={handleDragStartWithGlobal}
-                        onDragEnd={handleDragEnd}
-                        isViewer={isViewer}
-                      />
+                      <div key={canvas.id} className="relative">
+                        {rowDropHint?.canvasId === canvas.id && rowDropHint.position === 'before' && (
+                          <span className="pointer-events-none absolute inset-x-1 -top-0.5 z-10 h-0.5 rounded-full bg-blue-500" aria-hidden="true" />
+                        )}
+                        <CanvasItem
+                          canvas={canvas}
+                          isActive={activeCanvasId === canvas.id}
+                          isDragging={draggedCanvasId === canvas.id}
+                          onDragStart={handleDragStartWithGlobal}
+                          onDragEnd={handleDragEnd}
+                          onDragOverRow={handleDragOverRow}
+                          onDragLeaveRow={handleDragLeaveRow}
+                          onDropOnRow={handleDropOnRow}
+                          isViewer={isViewer}
+                        />
+                        {rowDropHint?.canvasId === canvas.id && rowDropHint.position === 'after' && (
+                          <span className="pointer-events-none absolute inset-x-1 -bottom-0.5 z-10 h-0.5 rounded-full bg-blue-500" aria-hidden="true" />
+                        )}
+                      </div>
                     ))
                 ) : (
                   <div className={clsx(
@@ -740,6 +815,9 @@ function FolderItem({
   onDropOnFolder,
   onDragStart,
   onDragEnd,
+  onDragOverRow,
+  onDragLeaveRow,
+  onDropOnRow,
   isViewer,
 }: {
   folder: any
@@ -754,6 +832,9 @@ function FolderItem({
   onDropOnFolder: (e: React.DragEvent, folderId: number) => void
   onDragStart: (canvasId: number) => void
   onDragEnd: () => void
+  onDragOverRow?: (event: React.DragEvent, canvasId: number) => void
+  onDragLeaveRow?: () => void
+  onDropOnRow?: (event: React.DragEvent, canvasId: number) => void
   isViewer: boolean
 }) {
   const { updateFolder, deleteFolder } = useProjectsStore()
@@ -1007,6 +1088,9 @@ function FolderItem({
                   isDragging={draggedCanvasId === canvas.id}
                   onDragStart={onDragStart}
                   onDragEnd={onDragEnd}
+                  onDragOverRow={onDragOverRow}
+                  onDragLeaveRow={onDragLeaveRow}
+                  onDropOnRow={onDropOnRow}
                   isViewer={isViewer}
                 />
               ))}
@@ -1069,6 +1153,9 @@ function CanvasItem({
   isDragging,
   onDragStart,
   onDragEnd,
+  onDragOverRow,
+  onDragLeaveRow,
+  onDropOnRow,
   isViewer,
 }: {
   canvas: any
@@ -1076,6 +1163,10 @@ function CanvasItem({
   isDragging?: boolean
   onDragStart?: (canvasId: number) => void
   onDragEnd?: () => void
+  /** 拖到本行上方/下方 → 同组排序 */
+  onDragOverRow?: (event: React.DragEvent, canvasId: number) => void
+  onDragLeaveRow?: () => void
+  onDropOnRow?: (event: React.DragEvent, canvasId: number) => void
   isViewer?: boolean
 }) {
   // 协作判定与 CanvasPage 同源：仅协作项目画布显示在线人数徽标
@@ -1233,8 +1324,17 @@ function CanvasItem({
         <>
           <div
             draggable={!!onDragStart && !isViewer}
-            onDragStart={() => onDragStart?.(canvas.id)}
+            data-canvas-id={canvas.id}
+            onDragStart={(event) => {
+              // 载荷必须是画布 id：拖到别的画布上时靠它算"谁移到谁前面"
+              event.dataTransfer.effectAllowed = 'move'
+              event.dataTransfer.setData('text/plain', String(canvas.id))
+              onDragStart?.(canvas.id)
+            }}
             onDragEnd={onDragEnd}
+            onDragOver={(event) => onDragOverRow?.(event, canvas.id)}
+            onDragLeave={() => onDragLeaveRow?.()}
+            onDrop={(event) => onDropOnRow?.(event, canvas.id)}
             onContextMenu={handleContextMenu}
             className={clsx(
               'relative rounded-lg border bg-white dark:bg-gray-800 hover:shadow-lg transition-all cursor-pointer group overflow-hidden',

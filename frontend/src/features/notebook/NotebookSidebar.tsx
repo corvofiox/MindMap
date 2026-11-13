@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 import type { ManuscriptFolder, ManuscriptSummary } from '@/services/api'
 import { NotebookFolderTree, buildFolderTree, collectSubtreeIds, type FolderSelection } from './NotebookFolderTree'
+import { SortableRow } from '@/features/drag-sort/SortableRow'
 
 interface NotebookSidebarProps {
   manuscripts: ManuscriptSummary[]
@@ -29,10 +30,12 @@ interface NotebookSidebarProps {
   onCollapse: () => void
   /** 收纳：新建手稿夹；parentId 非空时建子文件夹 */
   onAddFolder: (name: string, parentId?: number | null) => void
-  /** 删除文件夹（子文件夹会上移到上一层） */
+  /** 删除文件夹（整棵子树，连里面的手稿一起删） */
   onDeleteFolder: (id: number) => void
   /** 收纳：把手稿移入某个夹（null = 未归档） */
   onMoveToFolder: (id: number, folderId: number | null) => void
+  /** 拖拽排序：把 movedId 放到 targetId 的前/后 */
+  onReorder: (movedId: number, targetId: number, position: 'before' | 'after') => void
   onDelete: (id: number) => void
 }
 
@@ -86,6 +89,7 @@ export function NotebookSidebar({
   onAddFolder,
   onDeleteFolder,
   onMoveToFolder,
+  onReorder,
   onDelete,
 }: NotebookSidebarProps) {
   const [menu, setMenu] = useState<{ itemId: number; x: number; y: number; up: boolean } | null>(null)
@@ -318,7 +322,13 @@ export function NotebookSidebar({
         {visible.map((item) => {
           const isActive = activeId === item.id
           return (
-            <div key={item.id} className="group relative mb-0.5">
+            <SortableRow
+              key={item.id}
+              rowId={item.id}
+              disabled={loading}
+              onDropRow={(draggedId, position) => onReorder(draggedId, item.id, position)}
+              className="group mb-0.5"
+            >
               <button
                 type="button"
                 onClick={() => onOpen(item.id)}
@@ -363,7 +373,7 @@ export function NotebookSidebar({
               >
                 <MoreHorizontal size={14} />
               </button>
-            </div>
+            </SortableRow>
           )
         })}
       </div>

@@ -566,6 +566,59 @@ describe('指针拖拽与落点判定', () => {
     ))
   })
 
+  it('落到另一张卡片上:同一分组内重排（写 sortOrder，不动 folderId）', async () => {
+    // 目标卡片占位
+    const target = document.createElement('div')
+    target.setAttribute('data-pool-card-id', '9')
+    target.setAttribute('data-rect', 'card-9')
+    document.body.appendChild(target)
+    setRect('card-9', { left: 600, top: 200, width: 160, height: 40 })
+
+    useNodePoolStore.getState().setCards([
+      makeCard({ id: 3, folderId: null, sortOrder: 0 }),
+      makeCard({ id: 9, folderId: null, sortOrder: 10 }),
+    ])
+    mockApi.updateNodeCard.mockImplementation((id: number, data: object) =>
+      Promise.resolve(makeCard({ id, ...(data as object) })),
+    )
+
+    renderCard(useNodePoolStore.getState().getCard(3)!, {}, { canvas: true })
+    // 落在目标卡片的下半部分 → 插到它后面
+    dragTo(650, 235)
+
+    await waitFor(() => expect(mockApi.updateNodeCard).toHaveBeenCalled())
+    const calls = mockApi.updateNodeCard.mock.calls
+    const appliedIds = calls.map((call) => call[0])
+    expect(appliedIds).toContain(3)
+    // 卡片只是换位置，不能顺手改归属
+    for (const call of calls) {
+      expect(call[1]).not.toHaveProperty('folderId')
+      expect(call[1]).toHaveProperty('sortOrder')
+    }
+    expect(useUIStore.getState().addToast).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'success', title: '排序成功' }),
+    )
+  })
+
+  it('跨文件夹拖到卡片上:不重排（归属不同不能混序）', async () => {
+    const target = document.createElement('div')
+    target.setAttribute('data-pool-card-id', '9')
+    target.setAttribute('data-rect', 'card-9')
+    document.body.appendChild(target)
+    setRect('card-9', { left: 600, top: 200, width: 160, height: 40 })
+
+    useNodePoolStore.getState().setCards([
+      makeCard({ id: 3, folderId: 5, sortOrder: 0 }),
+      makeCard({ id: 9, folderId: 6, sortOrder: 10 }),
+    ])
+
+    renderCard(useNodePoolStore.getState().getCard(3)!, {}, { canvas: true })
+    dragTo(650, 235)
+
+    await waitFor(() => expect(useUIStore.getState().draggingCardFromPool).toBeNull())
+    expect(mockApi.updateNodeCard).not.toHaveBeenCalled()
+  })
+
   it('落到池根目录:清空 folderId 并弹移出成功 toast', async () => {
     mockApi.updateNodeCard.mockResolvedValue(makeCard({ id: 4, folderId: null }))
     // updateCard is a no-op for cards absent from the store's cardsMap — seed it.

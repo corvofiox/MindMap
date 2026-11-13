@@ -17,8 +17,10 @@ import {
   getManuscripts,
   manuscriptToNodeCard,
   nodeCardToManuscript,
+  reorderManuscripts,
   updateManuscript,
 } from '@/services/api'
+import { computeReorder } from '@/features/drag-sort/reorder'
 import { logger } from '@/utils/logger'
 
 export type SaveState = 'idle' | 'dirty' | 'saving' | 'saved' | 'error'
@@ -42,6 +44,8 @@ interface NotebookState {
   remove: (id: number) => Promise<void>
   /** 收纳：把手稿移到某个文件夹（null = 未归档）。 */
   moveToFolder: (id: number, folderId: number | null) => Promise<void>
+  /** 拖拽排序：把 movedId 放到 targetId 的前/后，并落库 */
+  reorder: (movedId: number, targetId: number, position: 'before' | 'after') => Promise<void>
   sendToPool: (id: number, folderId?: number | null) => Promise<NodeCard | null>
   restoreFromCard: (cardId: number) => Promise<Manuscript | null>
   /** 收纳：新建手稿夹；parentId 非空时建成子文件夹。 */
@@ -174,6 +178,43 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
     } catch (error) {
       logger.error('[notebook] 移动到手稿夹失败', error)
       set({ error: error instanceof Error ? error.message : '移动失败' })
+    }
+  },
+
+  reorder: async (movedId, targetId, position) => {
+    const { manuscripts } = get()
+    const moved = manuscripts.find((item) => item.id === movedId)
+    const target = manuscripts.find((item) => item.id === targetId)
+    if (!moved || !target) return
+    // 只在同一分组内重排：跨文件夹的拖拽走 moveToFolder，混在一起会让顺序无意义
+    if (moved.folderId !== target.folderId) return
+
+    const siblings = manuscripts.filter((item) => item.folderId === target.folderId)
+    const updates = computeReorder(
+      siblings.map((item) => ({ id: item.id, sortOrder: item.sortOrder ?? 0 })),
+      movedId,
+      targetId,
+      position,
+    )
+    if (updates.length === 0) return
+
+    const previous = manuscripts
+    const orderOf = new Map(updates.map((update) => [update.id, update.sortOrder]))
+    const next = manuscripts
+      .map((item) => (orderOf.has(item.id) ? { ...item, sortOrder: orderOf.get(item.id) } : item))
+      // 本地立刻按新顺序排好，不等服务端
+      .sort((a, b) => {
+        if (a.folderId !== b.folderId) return 0
+        return (a.sortOrder ?? 0) - (b.sortOrder ?? 0)
+      })
+    set({ manuscripts: next })
+
+    try {
+      await reorderManuscripts(updates)
+    } catch (error) {
+      logger.error('[notebook] 手稿排序失败', error)
+      // 回滚：顺序是可见状态，写库失败还留着新顺序会误导
+      set({ manuscripts: previous, error: error instanceof Error ? error.message : '排序失败' })
     }
   },
 

@@ -3,6 +3,7 @@ import { persist } from 'zustand/middleware'
 import type { Project, Canvas, Folder, NodeCard, NodePoolFolder, NodePoolSortOption, NodePoolSortOrder } from '@/types'
 import * as api from '@/services/api'
 import { ApiError } from '@/services/apiClient'
+import { computeReorder } from '@/features/drag-sort/reorder'
 
 // 项目筛选状态
 export interface ProjectFilters {
@@ -48,6 +49,8 @@ interface ProjectsState {
   updateCanvas: (id: number, data: Partial<Canvas> & { clientVersion?: number }, silent?: boolean) => Promise<void>
   deleteCanvas: (id: number) => Promise<void>
   moveCanvasToFolder: (canvasId: number, folderId: number | null, silent?: boolean) => Promise<void>
+  /** 拖拽排序：把 movedId 放到 targetId 的前/后（同分组内） */
+  reorderCanvases: (movedId: number, targetId: number, position: 'before' | 'after') => Promise<void>
 
   // Folder actions
   createFolder: (projectId: number, data: Omit<Folder, 'id' | 'createdAt'>) => Promise<void>
@@ -438,8 +441,54 @@ export const useProjectsStore = create<ProjectsState>()(
           }
         },
 
-        createFolder: async (projectId, data) => {
-          // 生成临时ID
+        /**
+         * 画布拖拽排序：只改 sortOrder，不动 folderId。
+         *
+         * 跨文件夹的拖拽走 moveCanvasToFolder；这里只处理同组重排，
+         * 否则"拖到别人下面"会变成一个既改归属又改顺序的复合动作，
+         * 失败时无法只回滚其中一半。
+         */
+        reorderCanvases: async (movedId, targetId, position) => {
+          const canvases = get().canvases
+          const moved = canvases.find((c) => c.id === movedId)
+          const target = canvases.find((c) => c.id === targetId)
+          if (!moved || !target) return
+          if ((moved.folderId ?? null) !== (target.folderId ?? null)) return
+
+          const siblings = canvases
+            .filter((c) => (c.folderId ?? null) === (target.folderId ?? null) && c.id > 0)
+            .map((c) => ({ id: c.id, sortOrder: c.sortOrder ?? 0 }))
+
+          const updates = computeReorder(siblings, movedId, targetId, position)
+          if (updates.length === 0) return
+
+          const previous = canvases
+          const orderOf = new Map(updates.map((u) => [u.id, u.sortOrder]))
+          set({
+            canvases: canvases
+              .map((c) => (orderOf.has(c.id) ? { ...c, sortOrder: orderOf.get(c.id)! } : c))
+              .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)),
+          })
+
+          const settled = await Promise.allSettled(
+            updates.map((u) => api.updateCanvas(u.id, { sortOrder: u.sortOrder })),
+          )
+          const failed = settled.filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+          if (failed.length > 0) {
+            // 部分成功时只回退失败项：全量回退会与服务端已成功的顺序打架
+            const failedIds = new Set(
+              updates.filter((_, index) => settled[index].status === 'rejected').map((u) => u.id),
+            )
+            set((state) => ({
+              canvases: state.canvases.map((c) =>
+                failedIds.has(c.id) ? previous.find((p) => p.id === c.id) ?? c : c,
+              ),
+            }))
+            handleError(failed[0].reason, '画布排序失败')
+          }
+        },
+
+        createFolder: async (projectId, data) => {          // 生成临时ID
           const tempId = -Date.now()
 
           // 创建临时文件夹对象

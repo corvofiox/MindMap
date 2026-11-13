@@ -3,7 +3,39 @@ import { createPortal } from 'react-dom'
 import { useUIStore } from '@/store/useUIStore'
 import { Z_INDEX } from '@/constants'
 import { stripHTML } from '@/utils/sanitizeHTML'
+import { describeGhostContent } from '@/features/drag-sort/ghostContent'
 import type { Node, NodeCard } from '@/types'
+
+/** 从卡片里取出影子需要的那几个字段（卡片 content 是节点的 JSON 快照）。 */
+function ghostFromCard(card: NodeCard) {
+  let data: Record<string, unknown> = {}
+  try {
+    const parsed = JSON.parse(card.content) as unknown
+    if (parsed && typeof parsed === 'object') data = parsed as Record<string, unknown>
+  } catch {
+    // 不是 JSON：整串当正文
+    return describeGhostContent({
+      content: card.content,
+      cover: card.thumbnail,
+    })
+  }
+
+  const asString = (value: unknown) => (typeof value === 'string' ? value : null)
+  return describeGhostContent({
+    content: asString(data.content),
+    cover: asString(data.cover) ?? card.thumbnail,
+    imageUrl: asString(data.imageUrl),
+  })
+}
+
+/** 从画布节点取出影子的内容（节点已经是统一形态）。 */
+function ghostFromNode(node: Node) {
+  return describeGhostContent({
+    content: node.content,
+    cover: node.cover,
+    imageUrl: node.imageUrl,
+  })
+}
 
 export function DragGhost() {
   const { draggingNodeFromCanvas, canvasDragGhostPosition, isOverNodePool, draggingCardFromPool, isOverCanvas, poolDragGhostPosition } = useUIStore()
@@ -67,25 +99,20 @@ export function DragGhost() {
 
   // 处理从节点池拖拽但尚未进入画布时的幽灵效果（节点池内样式）
   if (draggingCardFromPoolLocal && !isOverCanvas && draggingCardPoolPosition) {
-    let nodeData
+    let nodeData: Record<string, unknown> = {}
     try {
-      nodeData = JSON.parse(draggingCardFromPoolLocal.content)
+      const parsed = JSON.parse(draggingCardFromPoolLocal.content) as unknown
+      if (parsed && typeof parsed === 'object') nodeData = parsed as Record<string, unknown>
     } catch {
-      nodeData = {
-        type: draggingCardFromPoolLocal.type || 'text',
-        title: draggingCardFromPoolLocal.name || '未知节点',
-        content: draggingCardFromPoolLocal.content || '',
-        imageUrl: draggingCardFromPoolLocal.thumbnail || null,
-        color: draggingCardFromPoolLocal.color || '#ffffff',
-        fontSize: 14,
-      }
+      nodeData = {}
     }
-
-    const isImageNode = Boolean(nodeData.cover || nodeData.imageUrl || draggingCardFromPoolLocal.thumbnail)
+    const ghost = ghostFromCard(draggingCardFromPoolLocal)
     const nodeWidth = 160
-    const nodeHeight = isImageNode ? 100 : 80
-    const nodeColor = nodeData.color || draggingCardFromPoolLocal.color || '#ffffff'
-    const fontSize = nodeData.fontSize || 14
+    const nodeHeight = ghost.isImageOnly ? 100 : 80
+    const nodeColor = (typeof nodeData.color === 'string' ? nodeData.color : null)
+      || draggingCardFromPoolLocal.color
+      || '#ffffff'
+    const fontSize = typeof nodeData.fontSize === 'number' ? nodeData.fontSize : 14
 
     return createPortal(
       <div
@@ -119,16 +146,16 @@ export function DragGhost() {
                 color: '#111827',
               }}
             >
-              {stripHTML(nodeData.title || draggingCardFromPoolLocal.name || '未知节点')}
+              {stripHTML(draggingCardFromPoolLocal.name || '未知节点')}
             </div>
           </div>
 
           <div className="flex-1 overflow-hidden p-2">
-            {isImageNode ? (
+            {ghost.isImageOnly ? (
               <div className="w-full h-full flex items-center justify-center bg-gray-50 dark:bg-gray-800/50 rounded">
                 <img
-                  src={nodeData.cover || nodeData.imageUrl || draggingCardFromPoolLocal.thumbnail}
-                  alt={nodeData.title}
+                  src={ghost.imageSrc ?? undefined}
+                  alt={draggingCardFromPoolLocal.name}
                   className="w-full h-full object-cover rounded"
                 />
               </div>
@@ -140,7 +167,7 @@ export function DragGhost() {
                   lineHeight: '1.4',
                 }}
               >
-                {stripHTML(nodeData.content || '')}
+                {ghost.text}
               </div>
             )}
           </div>
@@ -152,27 +179,22 @@ export function DragGhost() {
 
   // 处理从节点池拖拽到画布的幽灵效果（画布样式）
   if (draggingCardFromPool && isOverCanvas && poolDragGhostPosition) {
-    let nodeData
+    let nodeData: Record<string, unknown> = {}
     try {
-      nodeData = JSON.parse(draggingCardFromPool.content)
+      const parsed = JSON.parse(draggingCardFromPool.content) as unknown
+      if (parsed && typeof parsed === 'object') nodeData = parsed as Record<string, unknown>
     } catch {
-      nodeData = {
-        type: draggingCardFromPool.type || 'text',
-        title: draggingCardFromPool.name || '未知节点',
-        content: draggingCardFromPool.content || '',
-        imageUrl: draggingCardFromPool.thumbnail || null,
-        width: 200,
-        height: 120,
-        color: draggingCardFromPool.color || '#ffffff',
-        fontSize: 14,
-      }
+      nodeData = {}
     }
-
-    const isImageNode = Boolean(nodeData.cover || nodeData.imageUrl || draggingCardFromPool.thumbnail)
-    const nodeWidth = nodeData.width || 200
-    const nodeHeight = nodeData.height || (isImageNode ? nodeWidth * 0.75 : 120)
-    const nodeColor = nodeData.color || draggingCardFromPool.color || '#ffffff'
-    const fontSize = nodeData.fontSize || 14
+    const ghost = ghostFromCard(draggingCardFromPool)
+    const widthValue = typeof nodeData.width === 'number' ? nodeData.width : 200
+    const heightValue = typeof nodeData.height === 'number' ? nodeData.height : null
+    const nodeWidth = widthValue
+    const nodeHeight = heightValue ?? (ghost.isImageOnly ? nodeWidth * 0.75 : 120)
+    const nodeColor = (typeof nodeData.color === 'string' ? nodeData.color : null)
+      || draggingCardFromPool.color
+      || '#ffffff'
+    const fontSize = typeof nodeData.fontSize === 'number' ? nodeData.fontSize : 14
 
     return createPortal(
       <div
@@ -207,16 +229,16 @@ export function DragGhost() {
                 minHeight: '24px',
               }}
             >
-              {stripHTML(nodeData.title || draggingCardFromPool.name || '图片节点')}
+              {stripHTML(draggingCardFromPool.name || '未命名节点')}
             </div>
           </div>
 
           <div className="flex-1 overflow-hidden">
-            {isImageNode ? (
+            {ghost.isImageOnly ? (
               <div className="w-full h-full flex items-center justify-center bg-gray-50 dark:bg-gray-800/50">
                 <img
-                  src={nodeData.cover || nodeData.imageUrl || draggingCardFromPool.thumbnail}
-                  alt={nodeData.title}
+                  src={ghost.imageSrc ?? undefined}
+                  alt={draggingCardFromPool.name}
                   className="w-full h-full object-contain"
                 />
               </div>
@@ -230,7 +252,7 @@ export function DragGhost() {
                   lineHeight: '1.6',
                 }}
               >
-                {stripHTML(nodeData.content || draggingCardFromPool.description || '双击添加内容')}
+                {ghost.text || '双击添加内容'}
               </div>
             )}
           </div>
@@ -243,9 +265,9 @@ export function DragGhost() {
   // 处理从画布拖拽节点到节点池的幽灵效果
   if (draggingNodeFromCanvas && isOverNodePool && canvasDragGhostPosition) {
     const node = draggingNodeFromCanvas.nodeData as Node
-    const isImageNode = Boolean(node.cover || node.imageUrl)
+    const ghost = ghostFromNode(node)
     const nodeWidth = 160
-    const nodeHeight = isImageNode ? 100 : 80
+    const nodeHeight = ghost.isImageOnly ? 100 : 80
     const nodeColor = node.color || '#ffffff'
     const fontSize = node.fontSize || 14
 
@@ -286,10 +308,10 @@ export function DragGhost() {
           </div>
 
           <div className="flex-1 overflow-hidden p-2">
-            {isImageNode ? (
+            {ghost.isImageOnly ? (
               <div className="w-full h-full flex items-center justify-center bg-gray-50 dark:bg-gray-800/50 rounded">
                 <img
-                  src={node.cover || node.imageUrl}
+                  src={ghost.imageSrc ?? undefined}
                   alt={node.title}
                   className="w-full h-full object-cover rounded"
                 />
@@ -302,7 +324,7 @@ export function DragGhost() {
                   lineHeight: '1.4',
                 }}
               >
-                {stripHTML(node.content || '')}
+                {ghost.text}
               </div>
             )}
           </div>

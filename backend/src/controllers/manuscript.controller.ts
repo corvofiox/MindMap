@@ -8,7 +8,7 @@
  *     影响另一边。统一节点之后不再需要"判断类型"——手稿 HTML 原样搬进卡片。
  */
 import { Router } from 'express'
-import { and, desc, eq, inArray, isNull, like, or } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, isNull, like, or } from 'drizzle-orm'
 import { db } from '../database/connection.js'
 import { manuscriptFolders, manuscripts, nodeCards, nodePoolFolders } from '../database/schema.js'
 import { authenticate, type AuthRequest } from '../middleware/auth.middleware.js'
@@ -150,15 +150,51 @@ router.get(
         title: manuscripts.title,
         previewText: manuscripts.previewText,
         imageCount: manuscripts.imageCount,
+        sortOrder: manuscripts.sortOrder,
         updatedAt: manuscripts.updatedAt,
         createdAt: manuscripts.createdAt,
       })
       .from(manuscripts)
       .where(and(...conditions))
-      .orderBy(desc(manuscripts.updatedAt))
+      // 拖过顺序就按手排（sortOrder 升序）；没拖过的都是 0，自然按更新时间倒序
+      .orderBy(asc(manuscripts.sortOrder), desc(manuscripts.updatedAt))
       .limit(200)
 
     return res.json({ success: true, data: rows })
+  }),
+)
+
+// ---- 批量排序（拖拽） ---------------------------------------------------
+// 只改 sortOrder，不碰内容；只允许改自己的手稿。
+router.put(
+  '/reorder',
+  authenticate,
+  asyncHandler(async (req: AuthRequest, res) => {
+    const userId = req.user?.id
+    if (!userId) return res.status(401).json({ success: false, error: '未提供令牌' })
+
+    const updates = Array.isArray(req.body?.updates) ? req.body.updates : []
+    if (updates.length === 0) {
+      return res.status(400).json({ success: false, error: '缺少排序数据' })
+    }
+
+    const userId_ = userId
+    const applied: number[] = []
+    for (const update of updates as Array<{ id?: unknown; sortOrder?: unknown }>) {
+      const id = toPositiveInt(update?.id)
+      const sortOrder = typeof update?.sortOrder === 'number' && Number.isFinite(update.sortOrder)
+        ? Math.trunc(update.sortOrder)
+        : null
+      if (id === null || sortOrder === null) continue
+
+      const owned = await findOwnedManuscript(userId_, id)
+      if (!owned) continue
+
+      await db.update(manuscripts).set({ sortOrder }).where(eq(manuscripts.id, id))
+      applied.push(id)
+    }
+
+    return res.json({ success: true, data: { updated: applied } })
   }),
 )
 

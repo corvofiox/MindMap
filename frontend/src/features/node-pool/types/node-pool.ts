@@ -89,6 +89,8 @@ export interface TemporaryCard {
   removeCard: (id: number) => Promise<void>
   useCard: (card: NodeCard, addNodeToCanvas: (node: any) => void) => Promise<void>
   reorderCards: (updates: Array<{ id: number; sortOrder: number }>) => Promise<void>
+  /** 拖拽排序：把 movedId 放到 targetId 的前/后（同组内） */
+  reorderCardsTo: (movedId: number, targetId: number, position: 'before' | 'after') => Promise<void>
 
   // Folder actions
   getFolder: (id: number) => NodePoolFolder | undefined

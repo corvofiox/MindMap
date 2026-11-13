@@ -43,6 +43,7 @@ function SearchHighlighter({ text, query }: { text: string; query: string }) {
 type DropTarget =
   | { type: 'canvas'; clientX: number; clientY: number }
   | { type: 'folder'; folderId: number }
+  | { type: 'card'; cardId: number; position: 'before' | 'after' }
   | { type: 'pool-root' }
   | { type: 'none' }
 
@@ -52,6 +53,24 @@ type DropTarget =
  * mousemove and mouseup do not cause incorrect drops.
  */
 function computeDropTarget(clientX: number, clientY: number): DropTarget {
+  // 落在另一张卡片上 = 拖拽排序。卡片比文件夹更靠内，所以先判断；
+  // 但只认"同一张面板里的卡片"，避免和画布节点混淆。
+  const cardElements = document.querySelectorAll('[data-pool-card-id]')
+  for (const el of cardElements) {
+    const rect = el.getBoundingClientRect()
+    if (clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom) {
+      const raw = el.getAttribute('data-pool-card-id')
+      const parsed = raw ? parseInt(raw, 10) : NaN
+      if (!isNaN(parsed)) {
+        return {
+          type: 'card',
+          cardId: parsed,
+          position: clientY < rect.top + rect.height / 2 ? 'before' : 'after',
+        }
+      }
+    }
+  }
+
   // Folders take priority (they live inside the node pool panel).
   const folderElements = document.querySelectorAll('[data-folder-id]')
   for (const el of folderElements) {
@@ -334,6 +353,19 @@ export const NodeCardItem = memo(function NodeCardItem({
             }
           }
           cleanup()
+        } else if (dropTarget.type === 'card') {
+          // 拖到另一张卡片上：同一分组内重排
+          const { reorderCardsTo, cardsMap } = useNodePoolStore.getState()
+          const target = cardsMap.get(dropTarget.cardId)
+          if (target && target.id !== card.id && (target.folderId ?? null) === (card.folderId ?? null)) {
+            try {
+              await reorderCardsTo(card.id, target.id, dropTarget.position)
+              addToast({ type: 'success', title: '排序成功', message: '卡片顺序已更新' })
+            } catch (error) {
+              addToast({ type: 'error', title: '排序失败', message: '无法调整卡片顺序' })
+            }
+          }
+          cleanup()
         } else if (dropTarget.type === 'pool-root') {
           if (card.folderId !== null) {
             const { updateCard } = useNodePoolStore.getState()
@@ -429,6 +461,7 @@ export const NodeCardItem = memo(function NodeCardItem({
       {/* Card */}
       <div
         ref={cardRef}
+        data-pool-card-id={card.id}
         style={{
           backgroundColor: card.color || '#ffffff',
           opacity: isDragging ? 0 : 1,

@@ -80,6 +80,7 @@ export function NotebookPage() {
     save,
     remove,
     moveToFolder,
+    reorder,
     addFolder,
     removeFolder,
     sendToPool,
@@ -560,6 +561,7 @@ export function NotebookPage() {
               onAddFolder={(name, parentId) => { void addFolder(name, parentId) }}
               onDeleteFolder={(id) => { void handleDeleteFolder(id) }}
               onMoveToFolder={(id, folderId) => { void moveToFolder(id, folderId) }}
+              onReorder={(movedId, targetId, position) => { void reorder(movedId, targetId, position) }}
               onDelete={(id) => { void handleDeleteById(id) }}
             />
           </div>

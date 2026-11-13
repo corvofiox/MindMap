@@ -151,6 +151,8 @@ export const manuscripts = sqliteTable('manuscripts', {
   imageCount: integer('image_count').notNull().default(0),
   /** 从节点池卡片还原而来时记录来源，便于提示"这张稿子从哪来" */
   sourceCardId: integer('source_card_id'),
+  /** 手动拖拽排序（同一文件夹内）；越小越靠前。与 updatedAt 排序互斥使用 */
+  sortOrder: integer('sort_order').notNull().default(0),
   createdAt: integer('created_at').default(sql`strftime('%s', 'now')`),
   updatedAt: integer('updated_at').default(sql`strftime('%s', 'now')`),
   deletedAt: integer('deleted_at'),

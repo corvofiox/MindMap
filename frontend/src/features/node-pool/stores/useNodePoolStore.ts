@@ -18,6 +18,7 @@ import type {
 } from '../types/node-pool'
 import * as api from '@/services/api'
 import { createNodeFromCard, parseCardNodeData } from '../utils/createNodeFromCard'
+import { computeReorder } from '@/features/drag-sort/reorder'
 
 /**
  * Node pool store with operation queue system
@@ -879,6 +880,29 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => {
         }
       })
     }
+  },
+
+  /**
+   * 拖拽排序：把 movedId 放到 targetId 的前/后。
+   *
+   * 与 reorderCards 的分工：那个接收"要写哪些 sortOrder"，这个负责
+   * "按拖拽意图算出该写哪些" —— 计算走共用纯函数，三处列表口径一致。
+   */
+  reorderCardsTo: async (movedId: number, targetId: number, position: 'before' | 'after') => {
+    const { cardsMap, reorderCards: applyOrder } = get()
+    const moved = cardsMap.get(movedId)
+    const target = cardsMap.get(targetId)
+    if (!moved || !target) return
+    // 跨文件夹的拖拽交给 updateCard({ folderId })，这里只处理同组重排
+    if ((moved.folderId ?? null) !== (target.folderId ?? null)) return
+
+    const siblings = Array.from(cardsMap.values())
+      .filter((item) => (item.folderId ?? null) === (target.folderId ?? null))
+      .map((item) => ({ id: item.id, sortOrder: item.sortOrder ?? 0 }))
+
+    const updates = computeReorder(siblings, movedId, targetId, position)
+    if (updates.length === 0) return
+    await applyOrder(updates)
   },
 
   // ========== Folder Actions ==========

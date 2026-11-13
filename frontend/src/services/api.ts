@@ -367,6 +367,8 @@ export interface ManuscriptSummary {
   title: string
   previewText: string | null
   imageCount: number
+  /** 手动拖拽排序（同一文件夹内，越小越靠前） */
+  sortOrder?: number
   createdAt: number | null
   updatedAt: number | null
 }
@@ -408,9 +410,16 @@ export async function createManuscript(data: {
 
 export async function updateManuscript(
   id: number,
-  data: { title?: string; contentHtml?: string; folderId?: number | null },
+  data: { title?: string; contentHtml?: string; folderId?: number | null; sortOrder?: number },
 ): Promise<Manuscript> {
   return await apiClient.put<Manuscript>(`${API_ENDPOINTS.MANUSCRIPTS}/${id}`, data)
+}
+
+/** 批量写手稿排序（拖拽后一次提交，避免逐个请求造成的中间态） */
+export async function reorderManuscripts(
+  updates: Array<{ id: number; sortOrder: number }>,
+): Promise<{ updated: number[] }> {
+  return await apiClient.put<{ updated: number[] }>(`${API_ENDPOINTS.MANUSCRIPTS}/reorder`, { updates })
 }
 
 export async function deleteManuscript(id: number): Promise<{ id: number }> {

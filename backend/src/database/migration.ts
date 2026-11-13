@@ -310,6 +310,7 @@ export async function runMigrations(sqlite: Database.Database) {
           preview_text TEXT,
           image_count INTEGER NOT NULL DEFAULT 0,
           source_card_id INTEGER,
+          sort_order INTEGER NOT NULL DEFAULT 0,
           created_at INTEGER DEFAULT (strftime('%s', 'now')),
           updated_at INTEGER DEFAULT (strftime('%s', 'now')),
           deleted_at INTEGER
@@ -319,6 +320,14 @@ export async function runMigrations(sqlite: Database.Database) {
         'CREATE INDEX IF NOT EXISTS manuscripts_user_updated_idx ON manuscripts (user_id, updated_at DESC)',
       )
       sqlite.exec('CREATE INDEX IF NOT EXISTS manuscripts_user_folder_idx ON manuscripts (user_id, folder_id)')
+    }
+
+    // 手稿的手动排序：老库补齐 sort_order（拖拽排序依赖它）
+    {
+      const columns = getColumns(sqlite, 'manuscripts')
+      if (columns.length > 0 && !columns.includes('sort_order')) {
+        sqlite.exec('ALTER TABLE manuscripts ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0')
+      }
     }
 
     // Create project_invitations table if it doesn't exist
