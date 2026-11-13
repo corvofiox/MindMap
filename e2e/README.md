@@ -7,6 +7,7 @@
 | `full-flow.mjs` | **全量模拟用户**：注册 → 项目 → 画布 → 节点池 → 笔记本 → 退出/再登录，24 个检查点 |
 | `folder-delete.mjs` | **删文件夹专项**：确认框文案、取消/确认、级联范围、手稿一起删、刷新一致性，11 个检查点 |
 | `drag-sort.mjs` | **拖拽专项**：手稿/画布列表排序（含刷新后保持）、卡片拖入画布的影子内容，4 个检查点 |
+| `legacy-upgrade.mjs` | **老库升级专项**：拿真实旧库副本启动服务，验证自动补列、数据零丢失、新功能可用，7 个检查点 |
 | `ui-smoke.mjs` | 更早的冒烟：登录、手稿、图片粘贴与持久化 |
 
 ## full-flow.mjs 覆盖什么
@@ -58,6 +59,40 @@
 | 卡片拖入画布 | 「文字在上、图片在下」的卡片拖进画布后，正文里**文字和图片都在** |
 
 最后一条是这个脚本的重点：它钉住的是"拖拽影子/落点只显示图片、丢掉文字"的回归。
+
+## legacy-upgrade.mjs 覆盖什么
+
+验证「生产旧库能不能被新版本直接接管」。做法是拿一份**真实的老库副本**启动服务，
+让 `runMigrations` 自己跑，然后从接口侧检查：
+
+| 检查点 | 断言 |
+|---|---|
+| 旧数据可读 | 43 篇手稿、23 张卡片全部读得到 |
+| 新列已补 | 每篇手稿都返回 `sortOrder`，老数据默认 0 |
+| 排序可用 | `PUT /api/manuscripts/reorder` 返回 200，三篇相对顺序与写入一致 |
+| 可写入 | 升级后能新建手稿（说明表不只是读得动） |
+
+### 怎么复现
+
+```bash
+# 1. 复制一份真实老库（连同 -wal / -shm，否则会看到空表）
+cp .e2e/e2e.db .e2e/legacy-real.db
+cp .e2e/e2e.db-wal .e2e/legacy-real.db-wal
+cp .e2e/e2e.db-shm .e2e/legacy-real.db-shm
+
+# 2. 用这份库启动服务（迁移会自动执行）
+NODE_ENV=production PORT=8123 WS_PORT=8123 \
+  DB_FILE=.e2e/legacy-real.db JWT_SECRET=legacy-test-secret-0123456789abcdef \
+  CSRF_SECRET=legacy-test-csrf-0123456789abcdef \
+  ALLOWED_ORIGINS=http://127.0.0.1:8123 \
+  node --import tsx backend/src/index.ts
+
+# 3. 校验
+npm run e2e:legacy
+```
+
+> ⚠️ **SQLite 的 `-wal` / `-shm` 必须一起复制**。只拷 `.db` 会看到空表——
+> 数据还在 WAL 里没落盘。做真实备份时同理，这是最容易踩的坑。
 
 ## 前置条件
 

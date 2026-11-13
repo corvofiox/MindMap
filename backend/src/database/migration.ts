@@ -54,13 +54,25 @@ function hasForeignKeyAction(
 // Function to run migrations on an existing sqlite instance
 export async function runMigrations(sqlite: Database.Database) {
   try {
-    // Check if users table exists, if not create all tables
-    if (!tableExists(sqlite, 'users')) {
-      log('Creating database tables')
+    // 建表块必须覆盖「任意老库」：原先只看 users 表在不在，
+    // 于是"有 users、但还没有 node_cards / manuscripts 这些后加的表"的老库
+    // 会跳过整块建表，紧接着的 ALTER TABLE node_cards 直接抛
+    // "no such table: node_cards"，升级彻底失败。
+    // 改成逐表判断：缺哪张补哪张，已存在的不动（不覆盖线上数据）。
+    const REQUIRED_TABLES = [
+      'users', 'groups', 'group_members', 'projects', 'project_members',
+      'folders', 'canvases', 'canvas_recycle_bin', 'node_pool_folders',
+      'node_cards', 'settings', 'files',
+    ] as const
+    const missingTables = REQUIRED_TABLES.filter((name) => !tableExists(sqlite, name))
+    const needsBaseSchema = missingTables.length > 0
+
+    if (needsBaseSchema) {
+      log(`Creating missing database tables: ${missingTables.join(', ')}`)
 
       // Create users table
       sqlite.exec(`
-        CREATE TABLE users (
+        CREATE TABLE IF NOT EXISTS users (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           email TEXT NOT NULL UNIQUE,
           password TEXT NOT NULL,
@@ -73,7 +85,7 @@ export async function runMigrations(sqlite: Database.Database) {
 
       // Create groups table
       sqlite.exec(`
-        CREATE TABLE groups (
+        CREATE TABLE IF NOT EXISTS groups (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           name TEXT NOT NULL,
           description TEXT,
@@ -85,7 +97,7 @@ export async function runMigrations(sqlite: Database.Database) {
 
       // Create group_members table
       sqlite.exec(`
-        CREATE TABLE group_members (
+        CREATE TABLE IF NOT EXISTS group_members (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
           user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -96,7 +108,7 @@ export async function runMigrations(sqlite: Database.Database) {
 
       // Create projects table
       sqlite.exec(`
-        CREATE TABLE projects (
+        CREATE TABLE IF NOT EXISTS projects (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           name TEXT NOT NULL,
           description TEXT,
@@ -112,7 +124,7 @@ export async function runMigrations(sqlite: Database.Database) {
 
       // Create project_members table
       sqlite.exec(`
-        CREATE TABLE project_members (
+        CREATE TABLE IF NOT EXISTS project_members (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
           user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -123,7 +135,7 @@ export async function runMigrations(sqlite: Database.Database) {
 
       // Create folders table
       sqlite.exec(`
-        CREATE TABLE folders (
+        CREATE TABLE IF NOT EXISTS folders (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           name TEXT NOT NULL,
           project_id INTEGER NOT NULL REFERENCES projects(id),
@@ -135,7 +147,7 @@ export async function runMigrations(sqlite: Database.Database) {
 
       // Create canvases table
       sqlite.exec(`
-        CREATE TABLE canvases (
+        CREATE TABLE IF NOT EXISTS canvases (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           name TEXT NOT NULL,
           project_id INTEGER NOT NULL REFERENCES projects(id),
@@ -152,7 +164,7 @@ export async function runMigrations(sqlite: Database.Database) {
 
       // Create canvas_recycle_bin table
       sqlite.exec(`
-        CREATE TABLE canvas_recycle_bin (
+        CREATE TABLE IF NOT EXISTS canvas_recycle_bin (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           canvas_id INTEGER NOT NULL REFERENCES canvases(id) ON DELETE CASCADE,
           project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -164,7 +176,7 @@ export async function runMigrations(sqlite: Database.Database) {
 
       // Create node_cards table (user-specific)
       sqlite.exec(`
-        CREATE TABLE node_cards (
+        CREATE TABLE IF NOT EXISTS node_cards (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
           name TEXT NOT NULL,
@@ -184,7 +196,7 @@ export async function runMigrations(sqlite: Database.Database) {
 
       // Create node_pool_folders table (user-specific)
       sqlite.exec(`
-        CREATE TABLE node_pool_folders (
+        CREATE TABLE IF NOT EXISTS node_pool_folders (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
           name TEXT NOT NULL,
@@ -197,7 +209,7 @@ export async function runMigrations(sqlite: Database.Database) {
 
       // Create settings table
       sqlite.exec(`
-        CREATE TABLE settings (
+        CREATE TABLE IF NOT EXISTS settings (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
           key TEXT NOT NULL,
@@ -208,7 +220,7 @@ export async function runMigrations(sqlite: Database.Database) {
 
       // Create files table
       sqlite.exec(`
-        CREATE TABLE files (
+        CREATE TABLE IF NOT EXISTS files (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           filename TEXT NOT NULL,
           path TEXT NOT NULL,

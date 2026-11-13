@@ -48,7 +48,8 @@
     "e2e:ui": "node e2e/ui-smoke.mjs",
     "e2e:full": "node e2e/full-flow.mjs",
     "e2e:folders": "node e2e/folder-delete.mjs",
-    "e2e:drag": "node e2e/drag-sort.mjs"
+    "e2e:drag": "node e2e/drag-sort.mjs",
+    "e2e:legacy": "node e2e/legacy-upgrade.mjs"
   },
   "devDependencies": {
     "concurrently": "^8.2.2",
