@@ -103,8 +103,10 @@ export const useProjectsStore = create<ProjectsState>()(
         folders: [],
         nodePool: [],
         nodePoolFolders: [],
-        nodePoolSortBy: 'createdAt',
-        nodePoolSortOrder: 'desc',
+        // 默认按手动顺序（拖拽出来的），不是按创建时间——
+        // 否则用户拖完顺序，列表却仍按时间排，看起来就像"拖了没用"。
+        nodePoolSortBy: 'manual',
+        nodePoolSortOrder: 'asc',
         isLoading: false,
         loadingMessage: '',
         error: null,

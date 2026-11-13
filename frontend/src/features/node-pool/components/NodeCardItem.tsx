@@ -159,6 +159,9 @@ export const NodeCardItem = memo(function NodeCardItem({
   const isDraggingRef = useRef(false)
   const dragStartRef = useRef<{ x: number; y: number } | null>(null)
   const [dragSession, setDragSession] = useState(0) // 用于强制 useEffect 重新执行
+  // 落点提示（共享状态：别的卡片也要读到"是否该在我身上画线"）
+  const poolCardDropHint = useUIStore(state => state.poolCardDropHint)
+  const dropHint = poolCardDropHint?.cardId === card.id ? poolCardDropHint.position : null
 
   // 同步 isDragging 到 ref
   useEffect(() => {
@@ -271,15 +274,44 @@ export const NodeCardItem = memo(function NodeCardItem({
             }
           }
         }
-        const { setOverFolderId } = useUIStore.getState()
+        const { setOverFolderId, setPoolDragGhostPosition, setPoolCardDropHint } = useUIStore.getState()
         setOverFolderId(foundFolderId)
+
+        // 影子跟着鼠标走，不管在池内还是画布上。
+        //
+        // 之前只在"鼠标在画布上"时才设位置，于是池内拖动时卡片被设成
+        // visibility:hidden 却没有影子来接替——用户拖起来看到的就是
+        // "卡片凭空消失"，自然以为不能拖。
+        setPoolDragGhostPosition({ x: e.clientX, y: e.clientY })
+
+        // 落点提示：落在别的卡片上时，在那张卡上画一条插入线，
+        // 让"会插到哪"在松手前就能看见（松手后 computeDropTarget 用同一套规则）。
+        if (foundFolderId === null) {
+          let hint: { cardId: number; position: 'before' | 'after' } | null = null
+          const cardElements = document.querySelectorAll('[data-pool-card-id]')
+          for (const el of cardElements) {
+            const rect = el.getBoundingClientRect()
+            if (e.clientX >= rect.left && e.clientX <= rect.right &&
+              e.clientY >= rect.top && e.clientY <= rect.bottom) {
+              const raw = el.getAttribute('data-pool-card-id')
+              const parsed = raw ? parseInt(raw, 10) : NaN
+              if (!isNaN(parsed) && parsed !== card.id) {
+                hint = { cardId: parsed, position: e.clientY < rect.top + rect.height / 2 ? 'before' : 'after' }
+              }
+              break
+            }
+          }
+          setPoolCardDropHint(hint)
+        } else {
+          setPoolCardDropHint(null)
+        }
 
         if (canvasElement) {
           const rect = canvasElement.getBoundingClientRect()
           const isOver = e.clientX >= rect.left && e.clientX <= rect.right &&
             e.clientY >= rect.top && e.clientY <= rect.bottom
 
-          const { setIsOverCanvas, setPoolDragGhostPosition, isOverCanvas } = useUIStore.getState()
+          const { setIsOverCanvas, isOverCanvas } = useUIStore.getState()
 
           let isActuallyOverCanvas = isOver
 
@@ -300,12 +332,6 @@ export const NodeCardItem = memo(function NodeCardItem({
           if (isActuallyOverCanvas !== isOverCanvas) {
             setIsOverCanvas(isActuallyOverCanvas)
           }
-
-          if (isActuallyOverCanvas) {
-            setPoolDragGhostPosition({ x: e.clientX, y: e.clientY })
-          } else {
-            setPoolDragGhostPosition(null)
-          }
         }
       }
     }
@@ -314,11 +340,12 @@ export const NodeCardItem = memo(function NodeCardItem({
       if (!dragStartRef.current) return
 
       const cleanup = () => {
-        const { setDraggingCardFromPool, setOverFolderId, setIsOverCanvas, setPoolDragGhostPosition } = useUIStore.getState()
+        const { setDraggingCardFromPool, setOverFolderId, setIsOverCanvas, setPoolDragGhostPosition, setPoolCardDropHint } = useUIStore.getState()
         setDraggingCardFromPool(null)
         setOverFolderId(null)
         setIsOverCanvas(false)
         setPoolDragGhostPosition(null)
+        setPoolCardDropHint(null)
 
         const dragEndEvent = new CustomEvent('nodePoolDragEnd')
         document.dispatchEvent(dragEndEvent)
@@ -357,12 +384,23 @@ export const NodeCardItem = memo(function NodeCardItem({
           // 拖到另一张卡片上：同一分组内重排
           const { reorderCardsTo, cardsMap } = useNodePoolStore.getState()
           const target = cardsMap.get(dropTarget.cardId)
-          if (target && target.id !== card.id && (target.folderId ?? null) === (card.folderId ?? null)) {
-            try {
-              await reorderCardsTo(card.id, target.id, dropTarget.position)
-              addToast({ type: 'success', title: '排序成功', message: '卡片顺序已更新' })
-            } catch (error) {
-              addToast({ type: 'error', title: '排序失败', message: '无法调整卡片顺序' })
+          if (target && target.id !== card.id) {
+            if ((target.folderId ?? null) === (card.folderId ?? null)) {
+              try {
+                await reorderCardsTo(card.id, target.id, dropTarget.position)
+                addToast({ type: 'success', title: '排序成功', message: '卡片顺序已更新' })
+              } catch (error) {
+                addToast({ type: 'error', title: '排序失败', message: '无法调整卡片顺序' })
+              }
+            } else {
+              // 跨分组：排序在两组之间没有意义（顺序不共享），必须说清楚，
+              // 否则用户看到的是"拖了完全没反应"。要把卡放进那个文件夹，
+              // 应该拖到文件夹行上，或者用右键"移动到"。
+              addToast({
+                type: 'info',
+                title: '不能跨分组排序',
+                message: '把卡片拖到文件夹那一行，才能把它移到该文件夹里',
+              })
             }
           }
           cleanup()
@@ -462,17 +500,25 @@ export const NodeCardItem = memo(function NodeCardItem({
       <div
         ref={cardRef}
         data-pool-card-id={card.id}
+        data-pool-drop-hint={dropHint ?? undefined}
         style={{
           backgroundColor: card.color || '#ffffff',
           opacity: isDragging ? 0 : 1,
           visibility: isDragging ? 'hidden' : 'visible',
         }}
         className={clsx(
-          'p-4 rounded-lg border hover:border-blue-400 dark:hover:border-blue-500 cursor-pointer group relative transition-all duration-200 hover:shadow-md'
+          'relative p-4 rounded-lg border hover:border-blue-400 dark:hover:border-blue-500 cursor-pointer group transition-all duration-200 hover:shadow-md'
         )}
         onContextMenu={(e) => onContextMenu?.(e, card)}
         onMouseDown={handleMouseDown}
       >
+        {/* 插入位置提示线：松手前就能看见会插到哪 */}
+        {dropHint === 'before' && (
+          <span className="pointer-events-none absolute inset-x-0 -top-px z-10 h-0.5 rounded-full bg-blue-500" aria-hidden="true" />
+        )}
+        {dropHint === 'after' && (
+          <span className="pointer-events-none absolute inset-x-0 -bottom-px z-10 h-0.5 rounded-full bg-blue-500" aria-hidden="true" />
+        )}
         <div className="flex items-start justify-between">
           <div className="flex-1 min-w-0 flex items-start gap-2">
             {/* 统一节点：卡片只有一种，不再按"文本/图片"分图标 */}

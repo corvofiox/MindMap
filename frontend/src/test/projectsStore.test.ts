@@ -166,8 +166,10 @@ describe('useProjectsStore', () => {
       expect(state.folders).toEqual([])
       expect(state.nodePool).toEqual([])
       expect(state.nodePoolFolders).toEqual([])
-      expect(state.nodePoolSortBy).toBe('createdAt')
-      expect(state.nodePoolSortOrder).toBe('desc')
+      // 默认按「手动」：拖拽写下的 sortOrder 才是用户看到的顺序。
+      // 若默认是 createdAt，用户拖完顺序列表仍按时间排，会以为拖拽没生效。
+      expect(state.nodePoolSortBy).toBe('manual')
+      expect(state.nodePoolSortOrder).toBe('asc')
       expect(state.isLoading).toBe(false)
       expect(state.loadingMessage).toBe('')
       expect(state.error).toBeNull()

@@ -515,7 +515,7 @@ describe('指针拖拽与落点判定', () => {
     expect(useNodePoolStore.getState().getCard(3)?.folderId).toBe(77)
   })
 
-  it('移动悬停文件夹时画布高亮被压回 false 且 ghost 清空', () => {
+  it('移动悬停文件夹时画布高亮被压回 false，但影子仍然跟着鼠标（不是消失）', () => {
     setRect('folder-77', { left: 600, top: 200, width: 200, height: 40 })
     renderCard(makeCard({ id: 3 }), {}, { canvas: true, folder: 77 })
 
@@ -524,7 +524,9 @@ describe('指针拖拽与落点判定', () => {
 
     expect(useUIStore.getState().overFolderId).toBe(77)
     expect(useUIStore.getState().isOverCanvas).toBe(false)
-    expect(useUIStore.getState().poolDragGhostPosition).toBeNull()
+    // 影子必须跟着鼠标：此前只在"鼠标在画布上"时才写位置，导致池内拖拽时
+    // 原卡片被 visibility:hidden 藏掉、又没有影子接替，看起来就是"拖不动"。
+    expect(useUIStore.getState().poolDragGhostPosition).toEqual({ x: 650, y: 220 })
   })
 
   it('文件夹 id 非数字时忽略该落点(不按文件夹处理)', () => {
@@ -600,7 +602,71 @@ describe('指针拖拽与落点判定', () => {
     )
   })
 
-  it('跨文件夹拖到卡片上:不重排（归属不同不能混序）', async () => {
+  /**
+   * 落点指示线：松手前就要能看出"会插到哪"。
+   *
+   * 之前只有拖到画布上才更新影子/提示，池内拖动时除了原卡片被隐藏之外
+   * 没有任何视觉反馈，用户以为功能坏了。
+   */
+  it('拖到池内另一张卡上时，给出插入位置提示（上半 → before）', () => {
+    const target = document.createElement('div')
+    target.setAttribute('data-pool-card-id', '9')
+    target.setAttribute('data-rect', 'card-9')
+    document.body.appendChild(target)
+    setRect('card-9', { left: 600, top: 200, width: 160, height: 40 })
+
+    useNodePoolStore.getState().setCards([makeCard({ id: 3 }), makeCard({ id: 9 })])
+    renderCard(useNodePoolStore.getState().getCard(3)!, {}, { canvas: true, pool: true })
+
+    press(100, 100)
+    // y=205 落在目标卡片（200~240）的上半部分
+    move(650, 205)
+
+    expect(useUIStore.getState().poolCardDropHint).toEqual({ cardId: 9, position: 'before' })
+  })
+
+  it('拖到池内另一张卡的下半部分时提示 after；拖到空白处则清空提示', () => {
+    const target = document.createElement('div')
+    target.setAttribute('data-pool-card-id', '9')
+    target.setAttribute('data-rect', 'card-9')
+    document.body.appendChild(target)
+    setRect('card-9', { left: 600, top: 200, width: 160, height: 40 })
+
+    useNodePoolStore.getState().setCards([makeCard({ id: 3 }), makeCard({ id: 9 })])
+    renderCard(useNodePoolStore.getState().getCard(3)!, {}, { canvas: true, pool: true })
+
+    press(100, 100)
+    move(650, 235)
+    expect(useUIStore.getState().poolCardDropHint).toEqual({ cardId: 9, position: 'after' })
+
+    // 移到空白（没有任何卡片/文件夹）→ 提示必须清掉，不能留着一条错位的线
+    move(5000, 5000)
+    expect(useUIStore.getState().poolCardDropHint).toBeNull()
+  })
+
+  it('松手后落点提示被清空', async () => {
+    const target = document.createElement('div')
+    target.setAttribute('data-pool-card-id', '9')
+    target.setAttribute('data-rect', 'card-9')
+    document.body.appendChild(target)
+    setRect('card-9', { left: 600, top: 200, width: 160, height: 40 })
+
+    useNodePoolStore.getState().setCards([
+      makeCard({ id: 3, folderId: null, sortOrder: 0 }),
+      makeCard({ id: 9, folderId: null, sortOrder: 10 }),
+    ])
+    mockApi.updateNodeCard.mockImplementation((id: number, data: object) =>
+      Promise.resolve(makeCard({ id, ...(data as object) })),
+    )
+
+    renderCard(useNodePoolStore.getState().getCard(3)!, {}, { canvas: true, pool: true })
+    dragTo(650, 235)
+
+    await waitFor(() => expect(useUIStore.getState().draggingCardFromPool).toBeNull())
+    expect(useUIStore.getState().poolCardDropHint).toBeNull()
+  })
+
+  it('跨文件夹拖到卡片上:不重排，并且要给出明确提示（不能静默）', async () => {
     const target = document.createElement('div')
     target.setAttribute('data-pool-card-id', '9')
     target.setAttribute('data-rect', 'card-9')
@@ -617,6 +683,10 @@ describe('指针拖拽与落点判定', () => {
 
     await waitFor(() => expect(useUIStore.getState().draggingCardFromPool).toBeNull())
     expect(mockApi.updateNodeCard).not.toHaveBeenCalled()
+    // 关键：不能静默。用户拖了没反应会以为功能坏了，必须说清"跨分组不能排序"
+    expect(useUIStore.getState().addToast).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'info', title: '不能跨分组排序' }),
+    )
   })
 
   it('落到池根目录:清空 folderId 并弹移出成功 toast', async () => {
@@ -689,14 +759,15 @@ describe('指针拖拽与落点判定', () => {
     expect(drops).toEqual([])
   })
 
-  it('拖拽中无画布容器时不写 isOverCanvas/ghost', () => {
+  it('拖拽中即使没有画布容器，影子也要跟着鼠标走', () => {
     renderCard(makeCard(), {}, {})
 
     press(100, 100)
     move(500, 300)
 
     expect(useUIStore.getState().isOverCanvas).toBe(false)
-    expect(useUIStore.getState().poolDragGhostPosition).toBeNull()
+    // 没有画布也要有影子：池内拖拽全靠它，否则卡片被隐藏后什么都看不见
+    expect(useUIStore.getState().poolDragGhostPosition).toEqual({ x: 500, y: 300 })
   })
 
   it('越过阈值时派发 nodePoolDragStart(带卡片与坐标)', () => {

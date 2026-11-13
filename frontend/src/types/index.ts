@@ -195,7 +195,9 @@ export interface NodePoolFolder {
 }
 
 // Node Pool sorting types
-export type NodePoolSortOption = 'name' | 'createdAt' | 'useCount'
+// 'manual' = 按用户拖拽出来的顺序（默认）；其余三种是按字段自动排。
+// 自动排会覆盖手动顺序，所以界面上必须能切回 manual，否则拖一次就再也回不去。
+export type NodePoolSortOption = 'manual' | 'name' | 'createdAt' | 'useCount'
 export type NodePoolSortOrder = 'asc' | 'desc'
 
 // Group (Organization) types

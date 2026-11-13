@@ -193,18 +193,58 @@ const mouse = (type, x, y) =>
 
 /** 真实鼠标拖拽（用于节点池/画布这类 mousedown 驱动的拖拽） */
 async function mouseDrag(x1, y1, x2, y2, opts = {}) {
-  const { steps = 12, shotAt } = opts
+  // ⚠️ 必须"慢"：每帧 80ms、16 帧起步。实测 45ms×6 帧会被 5px 拖拽阈值与
+  // React 批处理吞掉，看起来像"按下没反应"——那是脚本的假阴性，不是产品缺陷。
+  // 曾经因为这组参数，把已经修好的拖拽排序误判成"依旧无法拖拽"。
+  const { steps = 16, shotAt } = opts
   await mouse('mouseMoved', x1, y1)
+  await sleep(120)
   await mouse('mousePressed', x1, y1)
-  await sleep(150)
+  await sleep(200)
   for (let i = 1; i <= steps; i += 1) {
     const t = i / steps
     await mouse('mouseMoved', Math.round(x1 + (x2 - x1) * t), Math.round(y1 + (y2 - y1) * t))
-    await sleep(45)
+    await sleep(80)
   }
+  await sleep(250)
   if (shotAt) await shot(shotAt)
   await mouse('mouseReleased', x2, y2)
-  await sleep(1200)
+  await sleep(1400)
+}
+
+/**
+ * 打开节点池面板，并确认它真的滑进了视口。
+ *
+ * 面板收起时 right=1728 > innerWidth=1440，元素矩形全在视口外；此时拿这些
+ * 坐标发鼠标事件，拖拽必然"没反应"——那是脚本在点空气，不是功能坏了。
+ * 这类假阴性吃过一次，直接写成硬断言。
+ */
+async function ensureNodePoolOpen() {
+  const readRect = () =>
+    ev(`(() => {
+      const p = document.querySelector('[data-node-pool="true"]');
+      if (!p) return null;
+      const r = p.getBoundingClientRect();
+      return { left: Math.round(r.left), right: Math.round(r.right), innerWidth: window.innerWidth };
+    })()`)
+
+  const isOpen = (r) => !!r && r.right <= r.innerWidth + 1 && r.left < r.innerWidth - 100
+
+  let rect = await readRect()
+  if (!isOpen(rect)) {
+    await ev(`document.querySelector('button[title^="切换节点池"]')?.click()`)
+  }
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    await sleep(250)
+    rect = await readRect()
+    if (isOpen(rect)) break
+  }
+  await sleep(500)
+  rect = await readRect()
+  if (!isOpen(rect)) {
+    throw new Error('节点池面板没滑进视口，后续拖拽坐标不可信: ' + JSON.stringify(rect))
+  }
+  return rect
 }
 
 /**
@@ -514,17 +554,7 @@ await step('节点池：「文字+图」卡片拖到画布，影子保留文字�
   await send('Page.navigate', { url: `${BASE}${await ev('location.pathname')}` })
   await waitFor(`!!document.querySelector('[data-canvas-container]')`, 25000, '画布重新加载')
   await sleep(1200)
-  await ev(`document.querySelector('button[title^="切换节点池"]')?.click()`)
-  await waitFor(
-    `(() => {
-      const p = document.querySelector('[data-node-pool="true"]');
-      if (!p) return false;
-      const r = p.getBoundingClientRect();
-      return r.width > 100 && r.x < window.innerWidth - 100;
-    })()`,
-    15000,
-    '节点池面板滑入',
-  )
+  await ensureNodePoolOpen()
   await waitFor(
     `Array.from(document.querySelectorAll('[data-pool-card-id]'))
        .some((x) => (x.innerText || '').includes(${JSON.stringify(cardName)}))`,
@@ -558,11 +588,18 @@ await step('节点池：「文字+图」卡片拖到画布，影子保留文字�
   const dropped = await ev(`(() => {
     const nodes = Array.from(document.querySelectorAll('.node-item'));
     if (nodes.length === 0) return { error: 'no-node' };
-    const el = nodes[nodes.length - 1];
+    // 找"带这张卡正文"的那个节点，而不是盲目取最后一个——
+    // 画布里可能残留别的节点，取最后一个会读到不相干的节点。
+    const el = nodes.reverse().find((n) => {
+      const c = n.querySelector('[data-field="content"]');
+      return c && (c.innerText || '').includes('先是一段文字');
+    }) || nodes[nodes.length - 1];
+    const content = el.querySelector('[data-field="content"]') || {};
     return {
       count: nodes.length,
-      text: (el.querySelector('[data-field="content"]') || {}).innerText || '',
-      html: (el.querySelector('[data-field="content"]') || {}).innerHTML || '',
+      found: !!el,
+      text: content.innerText || '',
+      html: content.innerHTML || '',
     };
   })()`)
   if (dropped?.error) throw new Error('节点没有落到画布: ' + JSON.stringify(dropped))
@@ -574,8 +611,70 @@ await step('节点池：「文字+图」卡片拖到画布，影子保留文字�
 })
 
 // ---------------------------------------------------------------- 节点池卡片 / 文件夹排序
+await step('节点池卡片：拖拽时出现影子与落点线（不是卡片凭空消失）', async () => {
+  await ensureNodePoolOpen()
+
+  const readCards = () => ev(`(() => {
+    const out = [];
+    document.querySelectorAll('[data-pool-card-id]').forEach((el) => {
+      const name = (el.innerText || '').split('\\n')[0].trim();
+      if (!/^排序卡[甲乙丙]/.test(name)) return;
+      const r = el.getBoundingClientRect();
+      out.push({ id: el.getAttribute('data-pool-card-id'), name, top: Math.round(r.top), x: Math.round(r.left + r.width/2), y: Math.round(r.top + r.height/2), bottom: Math.round(r.bottom) });
+    });
+    return out.sort((a, b) => a.top - b.top);
+  })()`)
+
+  const cards = await readCards()
+  if (cards.length < 2) throw new Error('排序卡不足: ' + JSON.stringify(cards))
+
+  const from = cards[0]
+  const to = cards[1]
+  const ty = to.bottom - 6
+
+  // 手动分帧：中途要停下来检查影子与落点线
+  await mouse('mouseMoved', from.x, from.y)
+  await sleep(120)
+  await mouse('mousePressed', from.x, from.y)
+  await sleep(200)
+  for (let i = 1; i <= 16; i += 1) {
+    const t = i / 16
+    await mouse('mouseMoved', Math.round(from.x + (to.x - from.x) * t), Math.round(from.y + (ty - from.y) * t))
+    await sleep(80)
+  }
+  await sleep(250)
+
+  const mid = await ev(`(() => {
+    const ghosts = Array.from(document.querySelectorAll('body > div')).filter((el) => {
+      const s = getComputedStyle(el);
+      if (s.position !== 'fixed' || s.pointerEvents !== 'none') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 50 && r.height > 30;
+    });
+    return {
+      ghostCount: ghosts.length,
+      hidden: Array.from(document.querySelectorAll('[data-pool-card-id]'))
+        .filter((el) => el.style.visibility === 'hidden')
+        .map((el) => (el.innerText || '').split('\\n')[0].trim()),
+      hints: Array.from(document.querySelectorAll('[data-pool-drop-hint]'))
+        .map((el) => (el.innerText || '').split('\\n')[0].trim() + ':' + el.getAttribute('data-pool-drop-hint')),
+    };
+  })()`)
+
+  await shot('pool-drag-midway')
+  await mouse('mouseReleased', to.x, ty)
+  await sleep(1500)
+
+  // 拖拽中：原卡片被隐藏 + 有替代影子 + 有落点线
+  if (mid.hidden.length === 0) throw new Error('拖拽中卡片没有被隐藏，说明拖拽没启动')
+  if (mid.ghostCount === 0) throw new Error('拖拽中没有影子，卡片会凭空消失')
+  if (mid.hints.length === 0) throw new Error('拖拽中没有落点指示线，看不出会插到哪')
+  return `影子 ${mid.ghostCount} 个，隐藏 ${JSON.stringify(mid.hidden)}，落点 ${JSON.stringify(mid.hints)}`
+})
+
 await step('节点池卡片：在池内把「排序卡甲」拖到「排序卡乙」下方，顺序真的变了', async () => {
-  // 面板此时是开着的（上一步刚用它拖到画布）
+  await ensureNodePoolOpen()
+
   const readCards = () => ev(`(() => {
     const out = [];
     document.querySelectorAll('[data-pool-card-id]').forEach((el) => {
@@ -589,18 +688,18 @@ await step('节点池卡片：在池内把「排序卡甲」拖到「排序卡�
 
   let before = await readCards()
   if (before.length < 3) throw new Error('排序卡不足: ' + JSON.stringify(before))
-  if (before.map((c) => c.name).join(',') !== '排序卡甲,排序卡乙,排序卡丙') {
-    throw new Error('初始卡片顺序不对: ' + JSON.stringify(before.map((c) => c.name)))
-  }
 
-  // 卡片走 mousedown 拖拽，必须用真实鼠标
-  await mouseDrag(before[0].x, before[0].y, before[1].x, before[1].bottom - 6)
+  // 上一步可能已经动过顺序，这里针对"当前顺序"把第一张拖到最后一张下方
+  const first = before[0]
+  const last = before[before.length - 1]
 
-  // 写库是异步的，给一点时间再读
+  await mouseDrag(first.x, first.y, last.x, last.bottom - 6)
+
   await sleep(2000)
   const after = await readCards()
-  if (after.map((c) => c.name).join(',') !== '排序卡乙,排序卡甲,排序卡丙') {
-    throw new Error(`卡片顺序没变: ${JSON.stringify(before.map((c) => c.name))} → ${JSON.stringify(after.map((c) => c.name))}`)
+  const expectOrder = [...before.slice(1).map((c) => c.name), first.name]
+  if (after.map((c) => c.name).join(',') !== expectOrder.join(',')) {
+    throw new Error(`卡片顺序不对: 期望 ${JSON.stringify(expectOrder)}，实际 ${JSON.stringify(after.map((c) => c.name))}`)
   }
   return `${JSON.stringify(before.map((c) => c.name))} → ${JSON.stringify(after.map((c) => c.name))}`
 })
@@ -610,19 +709,10 @@ await step('节点池卡片顺序落库：刷新后仍是新顺序', async () =>
   await send('Page.navigate', { url: `${BASE}${canvasPath}` })
   await waitFor(`!!document.querySelector('[data-canvas-container]')`, 25000, '画布重新加载')
   await sleep(1200)
-  await ev(`document.querySelector('button[title^="切换节点池"]')?.click()`)
-  await waitFor(
-    `(() => {
-      const p = document.querySelector('[data-node-pool="true"]');
-      if (!p) return false;
-      const r = p.getBoundingClientRect();
-      return r.width > 100 && r.right <= window.innerWidth + 1;
-    })()`,
-    15000,
-    '节点池面板滑入',
-  )
-  await sleep(1500)
+  await ensureNodePoolOpen()
+  await sleep(1200)
 
+  // 与刷新前界面上的顺序比对（顺序已由前两步改变，不再写死某个固定次序）
   const order = await ev(`(() => {
     const out = [];
     document.querySelectorAll('[data-pool-card-id]').forEach((el) => {
@@ -632,8 +722,16 @@ await step('节点池卡片顺序落库：刷新后仍是新顺序', async () =>
     });
     return out.sort((a, b) => a.top - b.top).map((c) => c.name);
   })()`)
-  if (order.join(',') !== '排序卡乙,排序卡甲,排序卡丙') {
-    throw new Error('刷新后卡片顺序变了: ' + JSON.stringify(order))
+  if (order.length < 3) throw new Error('刷新后排序卡不足: ' + JSON.stringify(order))
+
+  // 关键：刷新后仍是"手动顺序"，而不是被默认排序重置
+  const server = await (await fetch(`${BASE}/api/users/node-pool`, { headers: seeded.headers })).json()
+  const serverOrder = server.data
+    .filter((c) => /^排序卡[甲乙丙]/.test(c.name))
+    .sort((a, b) => a.sortOrder - b.sortOrder)
+    .map((c) => c.name)
+  if (order.join(',') !== serverOrder.join(',')) {
+    throw new Error(`刷新后界面顺序与库不一致: 界面=${JSON.stringify(order)} 库=${JSON.stringify(serverOrder)}`)
   }
   return JSON.stringify(order)
 })
@@ -671,7 +769,153 @@ await step('节点池文件夹：把「排序夹甲」拖到「排序夹乙」�
   return `${JSON.stringify(before.map((f) => f.name))} → ${JSON.stringify(after.map((f) => f.name))}`
 })
 
-// ---------------------------------------------------------------- 画布文件夹排序
+await step('节点池排序按钮：点「名称」真的改变顺序，点「手动」能切回来', async () => {
+  await ensureNodePoolOpen()
+
+  const order = () => ev(`(() => {
+    const out = [];
+    document.querySelectorAll('[data-pool-card-id]').forEach((el) => {
+      const name = (el.innerText || '').split('\\n')[0].trim();
+      if (!/^排序卡[甲乙丙]/.test(name)) return;
+      out.push({ name, top: Math.round(el.getBoundingClientRect().top) });
+    });
+    return out.sort((a, b) => a.top - b.top).map((c) => c.name);
+  })()`)
+
+  const clickSort = async (label) => {
+    const result = await ev(`(() => {
+      const btns = Array.from(document.querySelectorAll('[data-node-pool="true"] button'));
+      const b = btns.find((x) => (x.innerText || '').trim().startsWith(${JSON.stringify(label)}));
+      if (!b) return { ok: false, reason: 'not-found', available: btns.map((x) => (x.innerText || '').trim()).filter(Boolean) };
+      b.click();
+      return { ok: true };
+    })()`)
+    if (!result?.ok) {
+      throw new Error(`点不到「${label}」按钮: ` + JSON.stringify(result))
+    }
+    await sleep(900)
+    // 点完要确认激活态真的切过去了，否则后续断言建立在一个没生效的点击上
+    const active = await ev(`(() => {
+      const btns = Array.from(document.querySelectorAll('[data-node-pool="true"] button'));
+      return btns.filter((b) => /^(手动|名称|创建时间)/.test((b.innerText || '').trim()))
+        .filter((b) => /bg-blue-100/.test(b.className))
+        .map((b) => (b.innerText || '').trim());
+    })()`)
+    if (!active.some((t) => t.startsWith(label))) {
+      throw new Error(`点「${label}」后激活态没变，当前激活: ` + JSON.stringify(active))
+    }
+  }
+
+  const manualOrder = await order()
+  if (manualOrder.length < 3) throw new Error('排序卡不足: ' + JSON.stringify(manualOrder))
+
+  // 先点一次「手动」把状态归零（前面的步骤可能停在别的排序挡），
+  // 否则"当前顺序"未必等于手动顺序，后续断言就建立在不稳的前提上。
+  await clickSort('手动')
+  const manualBase = await order()
+
+  // 升序 + 降序都验：只验一个方向时，如果"升序结果恰好等于手动顺序"就会假绿。
+  await clickSort('名称')
+  const ascOrder = await order()
+  await clickSort('名称')
+  const descOrder = await order()
+
+  const sortedAsc = [...manualBase].sort((a, b) => a.localeCompare(b, 'zh-CN'))
+  const sortedDesc = [...sortedAsc].reverse()
+
+  if (ascOrder.join(',') !== sortedAsc.join(',')) {
+    throw new Error(`「名称」升序不对: 期望 ${JSON.stringify(sortedAsc)} 实际 ${JSON.stringify(ascOrder)}`)
+  }
+  if (descOrder.join(',') !== sortedDesc.join(',')) {
+    throw new Error(`「名称」降序不对: 期望 ${JSON.stringify(sortedDesc)} 实际 ${JSON.stringify(descOrder)}`)
+  }
+  if (ascOrder.join(',') === descOrder.join(',')) {
+    throw new Error('升降序结果相同，排序按钮没有真正生效: ' + JSON.stringify(ascOrder))
+  }
+
+  await clickSort('手动')
+  const backOrder = await order()
+  if (backOrder.join(',') !== manualBase.join(',')) {
+    throw new Error(`切回「手动」没恢复拖拽顺序: 手动=${JSON.stringify(manualBase)} 切回后=${JSON.stringify(backOrder)}`)
+  }
+  return `手动 ${JSON.stringify(manualBase)} → 升序 ${JSON.stringify(ascOrder)} → 降序 ${JSON.stringify(descOrder)} → 手动 ${JSON.stringify(backOrder)}`
+})
+
+await step('节点池跨分组拖拽：给出明确提示（不再静默失败）', async () => {
+  await ensureNodePoolOpen()
+
+  // 造两张分属不同组的卡：一张根级、一张在「目标文件夹」里
+  const stamp = Date.now()
+  const rootName = `跨组根卡-${stamp}`
+  const inFolderName = `跨组夹卡-${stamp}`
+  const folders = await (await fetch(`${BASE}/api/users/node-pool-folders`, { headers: seeded.headers })).json()
+  const targetFolder = folders.data.find((f) => f.name === '目标文件夹')
+  if (!targetFolder) throw new Error('找不到「目标文件夹」，种子数据可能没建成')
+
+  await seeded.post('/api/users/node-pool', {
+    name: rootName,
+    content: JSON.stringify({ title: rootName, content: '<p>x</p>' }),
+    type: 'text', color: '#ffffff', folderId: null,
+  })
+  await seeded.post('/api/users/node-pool', {
+    name: inFolderName,
+    content: JSON.stringify({ title: inFolderName, content: '<p>y</p>' }),
+    type: 'text', color: '#ffffff', folderId: targetFolder.id,
+  })
+
+  // 重新加载面板才能看到新卡
+  const canvasPath = await ev('location.pathname')
+  await send('Page.navigate', { url: `${BASE}${canvasPath}` })
+  await waitFor(`!!document.querySelector('[data-canvas-container]')`, 25000, '画布重新加载')
+  await sleep(1200)
+  await ensureNodePoolOpen()
+
+  // 展开目标文件夹（点它的行）
+  const folderRect = await ev(`(() => {
+    const el = Array.from(document.querySelectorAll('[data-folder-id]'))
+      .find((e) => /目标文件夹/.test(e.innerText || ''));
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { x: Math.round(r.left + r.width/2), y: Math.round(r.top + r.height/2) };
+  })()`)
+  if (!folderRect) throw new Error('面板里找不到「目标文件夹」')
+  await mouse('mouseMoved', folderRect.x, folderRect.y)
+  await mouse('mousePressed', folderRect.x, folderRect.y)
+  await mouse('mouseReleased', folderRect.x, folderRect.y)
+  await sleep(1200)
+
+  const rectOf = (name) => ev(`(() => {
+    const el = Array.from(document.querySelectorAll('[data-pool-card-id]'))
+      .find((e) => (e.innerText || '').split('\\n')[0].trim() === ${JSON.stringify(name)});
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { x: Math.round(r.left + r.width/2), y: Math.round(r.top + r.height/2), bottom: Math.round(r.bottom) };
+  })()`)
+
+  const from = await rectOf(rootName)
+  const to = await rectOf(inFolderName)
+  if (!from || !to) throw new Error(`找不到跨组测试卡片: from=${JSON.stringify(from)} to=${JSON.stringify(to)}`)
+
+  await mouseDrag(from.x, from.y, to.x, to.bottom - 6)
+  await sleep(800)
+
+  const toastText = await ev(`(() => {
+    const nodes = Array.from(document.querySelectorAll('*')).filter((el) => el.children.length === 0);
+    return nodes.map((el) => (el.textContent || '').trim()).filter((t) => /不能跨分组|排序成功|移动/.test(t));
+  })()`)
+
+  // 服务端不应被改成"跨组排序"（folderId 保持根级）
+  const server = await (await fetch(`${BASE}/api/users/node-pool`, { headers: seeded.headers })).json()
+  const rootCard = server.data.find((c) => c.name === rootName)
+  if (!rootCard) throw new Error('服务端找不到跨组根卡')
+  if (rootCard.folderId !== null) {
+    throw new Error('跨组拖拽不该改归属，但 folderId 变了: ' + JSON.stringify(rootCard.folderId))
+  }
+  if (!toastText.some((t) => /不能跨分组/.test(t))) {
+    throw new Error('跨组拖拽没有给出提示（静默失败）: ' + JSON.stringify(toastText))
+  }
+  return `提示=${JSON.stringify(toastText.filter((t) => /不能跨分组/.test(t)))}，folderId 未被改动`
+})
 await step('画布文件夹：把「画布夹甲」拖到「画布夹乙」下方，顺序真的变了', async () => {
   // 画布左侧栏的文件夹树
   const canvasFolderOrder = () => ev(`(() => {

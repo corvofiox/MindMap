@@ -62,8 +62,10 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
 
   // Local state
   const [searchQuery, setSearchQuery] = useState('')
-  const [sortBy, setSortBy] = useState<NodePoolSortOption>('createdAt')
-  const [sortOrder, setSortOrder] = useState<NodePoolSortOrder>('desc')
+  // 默认按手动顺序（拖拽出来的）。初始值要是 'createdAt' 的话，
+  // 用户拖完顺序界面却仍按时间排，会以为"拖拽没生效"。
+  const [sortBy, setSortBy] = useState<NodePoolSortOption>('manual')
+  const [sortOrder, setSortOrder] = useState<NodePoolSortOrder>('asc')
   const [showNewFolderInput, setShowNewFolderInput] = useState(false)
   const [newFolderName, setNewFolderName] = useState('')
   const [previewCardId, setPreviewCardId] = useState<number | null>(null)
@@ -216,10 +218,14 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
   // Handle sort change
   const handleSortChange = useCallback((newSortBy: NodePoolSortOption) => {
     if (sortBy === newSortBy) {
+      // 「手动」没有升/降可言，重复点保持升序不变
+      if (newSortBy === 'manual') return
       setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')
     } else {
       setSortBy(newSortBy)
-      setSortOrder('desc')
+      // 换挡一律从升序开始，符合"点击就按最直观的正序看"的预期；
+      // 之前这里固定 desc，导致第一次点「名称」看到的是倒序，像点错了。
+      setSortOrder('asc')
     }
   }, [sortBy, sortOrder])
 
@@ -333,6 +339,36 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
     })
   }, [addToast])
 
+  /**
+   * 分组 + 排序。
+   *
+   * 排序规则由 sortBy 决定：
+   *   - manual（默认）：按拖拽写下的 sortOrder；
+   *   - name / createdAt：按字段自动排。
+   * 之前这个 hook 的返回值被直接丢掉，于是点「名称/创建时间」按钮完全没反应。
+   */
+  const sortGroup = useCallback((list: NodeCard[]) => {
+    if (sortBy === 'manual') {
+      // 老数据全是 0，靠 Array.sort 的稳定性保持原样，不会因加了排序就整片重排
+      list.sort(byManualOrder)
+      return list
+    }
+    const dir = sortOrder === 'asc' ? 1 : -1
+    list.sort((a, b) => {
+      let cmp = 0
+      if (sortBy === 'name') {
+        cmp = a.name.localeCompare(b.name, 'zh-CN')
+      } else if (sortBy === 'createdAt') {
+        cmp = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+      } else {
+        cmp = (a.useCount ?? 0) - (b.useCount ?? 0)
+      }
+      // 同值时退回手动顺序，避免每次渲染顺序抖动
+      return cmp * dir || byManualOrder(a, b)
+    })
+    return list
+  }, [sortBy, sortOrder])
+
   // Handle folder collapse toggle
   const filteredCardsByFolder = useMemo(() => {
     if (!searchQuery.trim()) {
@@ -347,9 +383,7 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
         }
         result.get(folderId)!.push(card)
       })
-      // 每组按手动顺序排：拖拽排序写的就是 sortOrder，这里不认它的话
-      // 服务端已经改对了、界面却一动不动（老数据全是 0，靠稳定排序保持原样）。
-      result.forEach((list) => list.sort(byManualOrder))
+      result.forEach(sortGroup)
       return result
     }
 
@@ -381,9 +415,11 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
       }
     })
 
-    result.forEach((list) => list.sort(byManualOrder))
+    result.forEach(sortGroup)
     return result
-  }, [cardsMap, pendingCardIds, searchQuery])
+    // sortGroup 必须在依赖里：漏了它，点「名称/手动」时 useMemo 不会重算，
+    // 按钮高亮变了但列表纹丝不动（实测就是这个症状）。
+  }, [cardsMap, pendingCardIds, searchQuery, sortGroup])
 
   // Get folders that have matching cards
   const filteredFolderIds = useMemo(() => {
@@ -543,6 +579,18 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
 
         {/* Sort buttons */}
         <div className="flex gap-1">
+          <button
+            onClick={() => handleSortChange('manual')}
+            title="按拖拽出来的顺序"
+            className={clsx(
+              'flex-1 px-2 py-1 text-xs rounded flex items-center justify-center gap-1',
+              sortBy === 'manual'
+                ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
+                : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'
+            )}
+          >
+            手动
+          </button>
           <button
             onClick={() => handleSortChange('name')}
             className={clsx(

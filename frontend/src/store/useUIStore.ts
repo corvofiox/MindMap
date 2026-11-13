@@ -59,10 +59,13 @@ interface UIState {
   isOverCanvas: boolean
   poolDragGhostPosition: { x: number; y: number } | null
   overFolderId: number | null
+  /** 节点池内拖拽时的落点提示：会插到哪张卡的前面/后面（松手前就能看见） */
+  poolCardDropHint: { cardId: number; position: 'before' | 'after' } | null
   setDraggingCardFromPool: (card: NodeCard | null) => void
   setIsOverCanvas: (isOver: boolean) => void
   setPoolDragGhostPosition: (position: { x: number; y: number } | null) => void
   setOverFolderId: (folderId: number | null) => void
+  setPoolCardDropHint: (hint: { cardId: number; position: 'before' | 'after' } | null) => void
 
   // Minimap
   minimapVisible: boolean
@@ -226,10 +229,12 @@ export const useUIStore = create<UIState>()(
         isOverCanvas: false,
         poolDragGhostPosition: null,
         overFolderId: null,
+        poolCardDropHint: null,
         setDraggingCardFromPool: (card) => set({ draggingCardFromPool: card }),
         setIsOverCanvas: (isOver) => set({ isOverCanvas: isOver }),
         setPoolDragGhostPosition: (position) => set({ poolDragGhostPosition: position }),
         setOverFolderId: (folderId) => set({ overFolderId: folderId }),
+        setPoolCardDropHint: (hint) => set({ poolCardDropHint: hint }),
 
         // Minimap
         minimapVisible: true,
