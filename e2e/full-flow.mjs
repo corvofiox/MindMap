@@ -519,8 +519,8 @@ await step('搜索：输入关键词后只剩匹配的手稿', async () => {
   return '空态 + 命中都对'
 })
 
-await step('删文件夹：子文件夹上移一层，里面的手稿变未归档', async () => {
-  // 先把当前手稿移回「素材」，再删「素材」——验证手稿不会跟着消失
+await step('删文件夹：整棵子树一起删，里面的手稿退回未归档', async () => {
+  // 先把当前手稿移进「素材」，再删「素材」——验证手稿不会跟着消失
   await clickEl('[aria-label="更多操作"]')
   await waitFor(`!!document.querySelector('[data-testid="notebook-item-menu"]')`, 8000, '列表项菜单')
   await clickText('移动到', '[data-testid="notebook-item-menu"] button, [data-testid="notebook-item-menu"] div[role="button"]')
@@ -545,8 +545,14 @@ await step('删文件夹：子文件夹上移一层，里面的手稿变未归�
     };
   })()`)
   if (state.folders.includes('素材')) throw new Error('「素材」没被删掉: ' + JSON.stringify(state.folders))
-  if (!state.folders.includes('配色')) throw new Error('子文件夹「配色」丢了（应该上移一层）: ' + JSON.stringify(state.folders))
-  if (!/E2E 全流程手稿/.test(state.text)) throw new Error('里面的手稿不见了: ' + state.text.slice(0, 200))
+  if (state.folders.includes('配色')) throw new Error('子文件夹「配色」没有跟着删掉: ' + JSON.stringify(state.folders))
+  if (!/E2E 全流程手稿/.test(state.text)) throw new Error('里面的手稿被一起删了（应该退回未归档）: ' + state.text.slice(0, 200))
+  // 手稿确实落到「未归档」
+  const unfiledCount = await ev(`(() => {
+    const row = Array.from(document.querySelectorAll('aside [data-folder-row]')).find((r) => r.getAttribute('data-folder-row') === 'unfiled');
+    return row ? row.innerText.replace(/\\s+/g, ' ').trim() : '';
+  })()`)
+  if (!/未归档 1/.test(unfiledCount)) throw new Error('手稿没有退回未归档: ' + unfiledCount)
   return JSON.stringify(state.folders)
 })
 await shot('09-notebook-after-delete')

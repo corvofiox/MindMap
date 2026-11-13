@@ -424,20 +424,11 @@ manuscriptFolderRouter.delete(
     })
     if (!existing) return res.status(404).json({ success: false, error: '文件夹不存在' })
 
-    // 删除一个文件夹不能连带毁掉它下面的东西：
-    //   - 子文件夹上移一层（挂到被删文件夹原来的父级）；
-    //   - 里面的手稿变成未归档。
-    // 表上虽然有 ON DELETE CASCADE / SET NULL，但级联会把整棵子树删掉，
-    // 与界面上"子文件夹会上移一层"的承诺相反，所以先改关系再删。
-    await db
-      .update(manuscriptFolders)
-      .set({ parentId: existing.parentId })
-      .where(and(eq(manuscriptFolders.parentId, id), eq(manuscriptFolders.userId, userId)))
-    await db
-      .update(manuscripts)
-      .set({ folderId: null })
-      .where(and(eq(manuscripts.folderId, id), eq(manuscripts.userId, userId)))
-
+    // 删文件夹 = 删这棵子树：子文件夹由 manuscript_folders.parent_id 上的
+    // ON DELETE CASCADE 一并删除，里面的手稿由 manuscripts.folder_id 上的
+    // ON DELETE SET NULL 退回「未归档」——目录没了，内容不陪葬。
+    // （曾经为了迁就一句写错的确认文案，在这里把子文件夹改成"上移一层"，
+    //  那是把行为改去凑文案：级联删除本来就是文件夹该有的语义。）
     await db.delete(manuscriptFolders).where(eq(manuscriptFolders.id, id))
     return res.json({ success: true, data: { id } })
   }),

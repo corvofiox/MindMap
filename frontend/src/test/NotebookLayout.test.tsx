@@ -377,8 +377,68 @@ describe('未归档的筛选与落点', () => {
   })
 })
 
-describe('笔记本侧的「从节点池导入」', () => {
-  it('按节点池文件夹分组展示卡片，文件夹默认收起', async () => {
+describe('删除文件夹：级联删子树，手稿退回未归档', () => {
+  const seedTree = () => {
+    vi.mocked(api.getManuscriptFolders).mockResolvedValueOnce([
+      { id: 7, userId: 1, name: '素材', parentId: null, sortOrder: 0, collapsed: false, createdAt: 0 },
+      { id: 8, userId: 1, name: '配色', parentId: 7, sortOrder: 0, collapsed: false, createdAt: 0 },
+    ])
+    vi.mocked(api.getManuscripts).mockResolvedValueOnce([
+      { id: 1, folderId: 8, title: '深层手稿', previewText: '', imageCount: 0, createdAt: 0, updatedAt: 0 },
+    ])
+  }
+
+  it('确认框把后果说准：子文件夹一起删，手稿退回未归档（以前写成"上移一层"）', async () => {
+    seedTree()
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    renderPage()
+
+    await screen.findByText('配色')
+    fireEvent.click(screen.getByLabelText('删除文件夹 素材'))
+
+    expect(confirmSpy).toHaveBeenCalled()
+    const question = String(confirmSpy.mock.calls[0][0])
+    expect(question).toContain('删除文件夹「素材」')
+    expect(question).toContain('1 个子文件夹会一起删除')
+    expect(question).toContain('1 篇手稿会退回「未归档」')
+    expect(question).not.toContain('上移')
+
+    await waitFor(() => expect(api.deleteManuscriptFolder).toHaveBeenCalledWith(7))
+    confirmSpy.mockRestore()
+  })
+
+  it('取消确认就不删', async () => {
+    seedTree()
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    renderPage()
+
+    await screen.findByText('配色')
+    fireEvent.click(screen.getByLabelText('删除文件夹 素材'))
+
+    expect(confirmSpy).toHaveBeenCalled()
+    expect(api.deleteManuscriptFolder).not.toHaveBeenCalled()
+    confirmSpy.mockRestore()
+  })
+
+  it('选中项落在被删的子树里时，选中回落到「全部手稿」', async () => {
+    seedTree()
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    renderPage()
+
+    // 先选中子文件夹「配色」，再删它的父级「素材」
+    fireEvent.click(await screen.findByText('配色'))
+    expect(document.querySelector('[data-folder-row="8"]')?.className).toContain('bg-blue-50')
+
+    fireEvent.click(screen.getByLabelText('删除文件夹 素材'))
+
+    await waitFor(() =>
+      expect(document.querySelector('[data-folder-row="all"]')?.className).toContain('bg-blue-50'),
+    )
+    confirmSpy.mockRestore()
+  })
+})
+
+describe('笔记本侧的「从节点池导入」', () => {  it('按节点池文件夹分组展示卡片，文件夹默认收起', async () => {
     const { useNodePoolStore } = await import('@/features/node-pool/stores/useNodePoolStore')
     useNodePoolStore.setState({
       foldersMap: new Map([

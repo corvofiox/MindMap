@@ -1,4 +1,4 @@
-﻿import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, fireEvent, act, cleanup, waitFor } from '@testing-library/react'
 import { CommandPalette, SAVE_COMMAND_EVENT } from '../CommandPalette'
 import { useUIStore } from '@/store/useUIStore'

@@ -355,7 +355,7 @@ describe('手稿文件夹', () => {
     expect(unfiled.body.data.folderId).toBeNull()
   })
 
-  it('删除文件夹只删它自己：子文件夹上移一层，里面的手稿变未归档', async () => {
+  it('删除文件夹连带子文件夹一起删；里面的手稿退回未归档（内容不陪葬）', async () => {
     const root = await supertest(app).post('/api/manuscript-folders').set(authA()).send({ name: '项目' })
     const rootId = root.body.data.id
     const mid = await supertest(app)
@@ -368,28 +368,30 @@ describe('手稿文件夹', () => {
       .set(authA())
       .send({ name: '配色', parentId: midId })
     const leafId = leaf.body.data.id
+    // 另一棵树，确认不会被误删
+    const other = await supertest(app).post('/api/manuscript-folders').set(authA()).send({ name: '素材' })
+    const otherId = other.body.data.id
 
     const inRoot = await createManuscript({ title: '在 root', folderId: rootId })
     const inLeaf = await createManuscript({ title: '在 leaf', folderId: leafId })
 
     expect((await supertest(app).delete(`/api/manuscript-folders/${rootId}`).set(authA())).status).toBe(200)
 
-    const folders = (await supertest(app).get('/api/manuscript-folders').set(authA())).body.data as Array<{
+    const ids = ((await supertest(app).get('/api/manuscript-folders').set(authA())).body.data as Array<{
       id: number
-      parentId: number | null
-    }>
-    const ids = folders.map((f) => f.id)
-    // 子树没有被级联毁掉，父级「项目」没了，子级挂到原来父级的位置（根）
+    }>).map((f) => f.id)
+    // 整棵子树（父 + 子 + 孙）一起没了，别的树不受影响
     expect(ids).not.toContain(rootId)
-    expect(ids).toContain(midId)
-    expect(ids).toContain(leafId)
-    expect(folders.find((f) => f.id === midId)?.parentId).toBeNull()
-    expect(folders.find((f) => f.id === leafId)?.parentId).toBe(midId)
+    expect(ids).not.toContain(midId)
+    expect(ids).not.toContain(leafId)
+    expect(ids).toContain(otherId)
 
-    // root 里的手稿变未归档；仍在 leaf 里的不动
+    // 手稿不跟着删：在 root 与更深的 leaf 里的都退回未归档
     expect((await supertest(app).get(`/api/manuscripts/${inRoot.body.data.id}`).set(authA())).body.data.folderId)
       .toBeNull()
     expect((await supertest(app).get(`/api/manuscripts/${inLeaf.body.data.id}`).set(authA())).body.data.folderId)
-      .toBe(leafId)
+      .toBeNull()
+    // 手稿本身依然可读（不是软删除）
+    expect((await supertest(app).get(`/api/manuscripts/${inLeaf.body.data.id}`).set(authA())).status).toBe(200)
   })
 })

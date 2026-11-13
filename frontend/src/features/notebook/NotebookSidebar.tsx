@@ -12,7 +12,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import type { ManuscriptFolder, ManuscriptSummary } from '@/services/api'
-import { NotebookFolderTree, buildFolderTree, type FolderSelection } from './NotebookFolderTree'
+import { NotebookFolderTree, buildFolderTree, collectSubtreeIds, type FolderSelection } from './NotebookFolderTree'
 
 interface NotebookSidebarProps {
   manuscripts: ManuscriptSummary[]
@@ -135,9 +135,26 @@ export function NotebookSidebar({
 
   const handleDeleteFolder = (id: number) => {
     const target = folders.find((f) => f.id === id)
-    if (!window.confirm(`删除文件夹「${target?.name || ''}」？里面的手稿会变成未归档，子文件夹会上移一层。`)) return
+    // 删文件夹 = 删这棵子树（子文件夹跟着走），里面的手稿退回「未归档」不丢内容。
+    // 确认框必须把这个后果说准：以前它写的是"子文件夹会上移一层"，与实际行为相反。
+    const subtree = collectSubtreeIds(folders, id)
+    const subFolders = subtree.size - 1
+    const manuscriptsInside = manuscripts.filter(
+      (m) => m.folderId !== null && m.folderId !== undefined && subtree.has(m.folderId),
+    ).length
+    const consequences = [
+      subFolders > 0 ? `${subFolders} 个子文件夹会一起删除` : '',
+      manuscriptsInside > 0 ? `${manuscriptsInside} 篇手稿会退回「未归档」（内容不会删）` : '',
+    ]
+      .filter(Boolean)
+      .join('，')
+
+    const question = `删除文件夹「${target?.name || ''}」？${consequences ? `${consequences}。` : '这个文件夹是空的。'}`
+    if (!window.confirm(question)) return
+
     onDeleteFolder(id)
-    if (folderSelection === id) onSelectFolder('all')
+    // 选中的文件夹可能正好在被删的子树里：一起清掉选中，避免停在一个已不存在的目录上
+    if (typeof folderSelection === 'number' && subtree.has(folderSelection)) onSelectFolder('all')
   }
 
   const openMenu = (itemId: number, event: React.MouseEvent<HTMLButtonElement>) => {
