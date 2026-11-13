@@ -1,9 +1,8 @@
 /**
  * 节点池「删除文件夹」的确认文案。
  *
- * 回归背景（2026-11-13 真机实操）：池侧以前只在子树里有卡片时才 confirm，
- * 空文件夹点一下就直接删；文案还写着「N 个节点卡片也将被删除」，
- * 而真实行为是卡片退回未归档、活得好好的。两头都必须和实际情况一致。
+ * 这句话必须和真实行为同步：现在是真删——子文件夹与里面的卡片一起没。
+ * 历史上它写错过两次（先说卡片会被删、其实没删；后来改成卡片退回未归档）。
  */
 import { describe, it, expect } from 'vitest'
 import { describeFolderDelete } from '../describeFolderDelete'
@@ -21,7 +20,7 @@ describe('节点池删文件夹的确认文案', () => {
     expect(message).toBe('删除文件夹「空箱」？这个文件夹是空的。')
   })
 
-  it('有子孙文件夹与卡片：数量说对，且明说卡片只是退回未归档', () => {
+  it('有子孙文件夹与卡片：数量说对，且明说会一起删除', () => {
     const folders = [
       folder(1, '父级'),
       folder(2, '子级', 1),
@@ -32,17 +31,15 @@ describe('节点池删文件夹的确认文案', () => {
 
     const message = describeFolderDelete(folder(1, '父级'), folders, cards)
 
-    expect(message).toContain('删除文件夹「父级」')
-    expect(message).toContain('2 个子文件夹会一起删除')
-    expect(message).toContain('2 个节点卡片会退回「未归档」（不会删除）')
-    // 原来的错误说法（卡片会被删）不能再出现
-    expect(message).not.toContain('将被删除')
+    expect(message).toBe('删除文件夹「父级」？2 个子文件夹、2 个节点卡片会一起删除。')
+    // 不能再说卡片只是退回未归档（那是上一版的行为）
+    expect(message).not.toContain('未归档')
   })
 
   it('只有卡片没有子文件夹：只提卡片，不提子文件夹', () => {
     const folders = [folder(1, '单层')]
     const message = describeFolderDelete(folder(1, '单层'), folders, [card(100, 1), card(101, null)])
-    expect(message).toContain('1 个节点卡片会退回「未归档」')
+    expect(message).toContain('1 个节点卡片会一起删除')
     expect(message).not.toContain('子文件夹')
   })
 
@@ -51,6 +48,6 @@ describe('节点池删文件夹的确认文案', () => {
     const b = { id: 2, name: 'B', parentId: 1 } as unknown as NodePoolFolder
     const message = describeFolderDelete(a, [a, b], [card(1, 2)])
     expect(message).toContain('删除文件夹「A」')
-    expect(message).toContain('1 个子文件夹会一起删除')
+    expect(message).toContain('1 个子文件夹')
   })
 })

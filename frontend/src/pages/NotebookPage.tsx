@@ -32,7 +32,7 @@ import { insertHtmlAtCaret as insertHtmlIntoEditor } from '@/features/rich-text/
 import { useRichTextEditor } from '@/features/rich-text/useRichTextEditor'
 import { uploadFile } from '@/services/api'
 import type { NodeCard } from '@/types'
-import { buildFolderTree } from '@/features/notebook/NotebookFolderTree'
+import { buildFolderTree, collectSubtreeIds } from '@/features/notebook/NotebookFolderTree'
 import { ImportMenuFolderRow } from '@/features/import-menu/ImportMenu'
 import '@/features/notebook/notebook.css'
 
@@ -209,6 +209,17 @@ export function NotebookPage() {
   }
 
   /** 删除手稿只有一条路径：左侧抽屉里那篇的「更多操作 → 删除」。 */
+
+  /** 删文件夹：整棵子树连手稿一起删；正在编辑的那篇若在其中，退出编辑区。 */
+  const handleDeleteFolder = async (id: number) => {
+    const subtree = collectSubtreeIds(folders, id)
+    const activeInside = active?.folderId !== null && active?.folderId !== undefined && subtree.has(active.folderId)
+    await removeFolder(id)
+    if (activeInside) {
+      navigate('/notebook')
+      addToast({ type: 'info', title: '手稿已随文件夹删除', message: '正在编辑的这篇在被删的文件夹里' })
+    }
+  }
 
   /** 列表里的删除：删的不是当前打开的那篇时不要跳走。 */
   const handleDeleteById = async (id: number) => {
@@ -547,7 +558,7 @@ export function NotebookPage() {
               onOpen={(id) => navigate(`/notebook/${id}`)}
               onCollapse={toggleSidebar}
               onAddFolder={(name, parentId) => { void addFolder(name, parentId) }}
-              onDeleteFolder={(id) => { void removeFolder(id) }}
+              onDeleteFolder={(id) => { void handleDeleteFolder(id) }}
               onMoveToFolder={(id, folderId) => { void moveToFolder(id, folderId) }}
               onDelete={(id) => { void handleDeleteById(id) }}
             />

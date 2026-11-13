@@ -293,8 +293,17 @@ const deletePoolFolder = async (name, accept) => {
   return message
 }
 
-const poolFolders = () =>
+/** 服务端看到的手稿标题列表（软删除的不出现） */
+const apiManuscripts = () =>
   ev(`(async () => {
+    const res = await fetch('/api/manuscripts', {
+      headers: { authorization: 'Bearer ' + localStorage.getItem('mindmap_token') },
+    });
+    const body = await res.json();
+    return (body.data || []).map((m) => m.title);
+  })()`)
+
+const poolFolders = () =>  ev(`(async () => {
     const res = await fetch('/api/users/node-pool-folders', {
       headers: { authorization: 'Bearer ' + localStorage.getItem('mindmap_token') },
     });
@@ -336,8 +345,9 @@ await step('空文件夹：弹框说明它是空的，取消后原样保留', as
 await step('有子文件夹与手稿：弹框给出准确数字，取消后一点都不动', async () => {
   const before = await uiFolders()
   const message = await deleteFolder('父级', false)
-  if (!message.includes('2 个子文件夹会一起删除')) throw new Error('子文件夹数量没写对: ' + message)
-  if (!message.includes('1 篇手稿会退回「未归档」')) throw new Error('手稿数量没写对: ' + message)
+  if (!message.includes('2 个子文件夹')) throw new Error('子文件夹数量没写对: ' + message)
+  if (!message.includes('1 篇手稿会一起删除')) throw new Error('手稿说法没写对: ' + message)
+  if (message.includes('未归档')) throw new Error('还在说手稿退回未归档: ' + message)
   const after = await uiFolders()
   if (JSON.stringify(before) !== JSON.stringify(after)) {
     throw new Error(`取消后树变了: ${JSON.stringify(before)} → ${JSON.stringify(after)}`)
@@ -345,7 +355,7 @@ await step('有子文件夹与手稿：弹框给出准确数字，取消后一�
   return message
 })
 
-await step('确认删除：整棵子树消失、旁系不动、手稿进未归档、选中回落到全部', async () => {
+await step('确认删除：整棵子树消失、旁系不动、里面的手稿一起删、选中回落到全部', async () => {
   // 先选中孙级，验证"选中项落在被删子树里"时的回落
   await ev(`(() => {
     const rows = Array.from(document.querySelectorAll('aside [data-folder-row]'));
@@ -363,8 +373,14 @@ await step('确认删除：整棵子树消失、旁系不动、手稿进未归�
   if (!folders.includes('旁系')) throw new Error('旁系文件夹被误删: ' + JSON.stringify(folders))
   if (!folders.includes('单层')) throw new Error('兄弟文件夹被误删: ' + JSON.stringify(folders))
 
+  // 手稿跟着删：既不在未归档里，也不在列表里
   const unfiled = await shortcutCount('unfiled')
-  if (unfiled !== 1) throw new Error('手稿没有退回未归档，未归档计数=' + unfiled)
+  if (unfiled !== 0) throw new Error('子树里的手稿没有被删掉，未归档计数=' + unfiled)
+  if (await ev(`document.querySelector('aside').innerText.includes('深层手稿')`)) {
+    throw new Error('被删文件夹里的手稿还留在列表里')
+  }
+  const titles = await apiManuscripts()
+  if (titles.includes('深层手稿')) throw new Error('服务端还能看到「深层手稿」: ' + JSON.stringify(titles))
 
   const active = await activeRow()
   if (active !== 'all') throw new Error('选中项没有回落到全部手稿，当前选中=' + active)
@@ -373,25 +389,27 @@ await step('确认删除：整棵子树消失、旁系不动、手稿进未归�
 })
 await shot('after-cascade')
 
-await step('退回未归档的手稿能打开，正文原样', async () => {
-  if (!(await openManuscript('深层手稿'))) throw new Error('列表里找不到「深层手稿」')
+await step('同一批里别的手稿不受影响：没被删的还在、能打开', async () => {
+  const titles = await apiManuscripts()
+  if (!titles.includes('单层手稿')) throw new Error('旁系文件夹里的手稿被误删: ' + JSON.stringify(titles))
+  if (!(await openManuscript('单层手稿'))) throw new Error('列表里找不到「单层手稿」')
   await waitFor(`!!document.querySelector('[data-testid="manuscript-editor"]')`, 10000, '编辑器')
-  await sleep(900)
+  await sleep(800)
   const content = await ev(`document.querySelector('[data-testid="manuscript-editor"]').innerText`)
-  if (!content.includes('深层正文还在')) throw new Error('正文丢了: ' + content.slice(0, 120))
+  if (!content.includes('单层正文还在')) throw new Error('正文丢了: ' + content.slice(0, 120))
   return content.trim().slice(0, 20)
 })
-await shot('unfiled-manuscript')
+await shot('other-manuscript-intact')
 
-await step('单层文件夹：删掉后手稿同样退回未归档', async () => {
+await step('单层文件夹：删掉后里面的手稿也一起没了', async () => {
   const message = await deleteFolder('单层', true)
   await sleep(1500)
   const folders = await uiFolders()
   if (folders.includes('单层')) throw new Error('「单层」没被删掉')
-  const unfiled = await shortcutCount('unfiled')
-  if (unfiled !== 2) throw new Error('未归档数量应为 2，实际=' + unfiled)
-  if (!message.includes('1 篇手稿会退回「未归档」')) throw new Error('弹框没提手稿: ' + message)
+  if (!message.includes('1 篇手稿会一起删除')) throw new Error('弹框没提手稿会一起删: ' + message)
   if (message.includes('子文件夹')) throw new Error('没有子文件夹却提了子文件夹: ' + message)
+  const titles = await apiManuscripts()
+  if (titles.includes('单层手稿')) throw new Error('「单层手稿」没被删: ' + JSON.stringify(titles))
   return message
 })
 
@@ -407,7 +425,11 @@ await step('刷新页面：树与列表跟服务端完全一致，没有幽灵�
     throw new Error(`界面 ${JSON.stringify(ui)} ≠ 服务端 ${JSON.stringify(apiNames)}`)
   }
   const unfiled = await shortcutCount('unfiled')
-  if (unfiled !== 2) throw new Error('刷新后未归档数量不对=' + unfiled)
+  if (unfiled !== 0) throw new Error('刷新后未归档数量不对=' + unfiled)
+  const titles = await apiManuscripts()
+  for (const gone of ['深层手稿', '单层手稿']) {
+    if (titles.includes(gone)) throw new Error(`刷新后「${gone}」又出现了`)
+  }
   return JSON.stringify(ui)
 })
 await shot('after-reload')
@@ -433,22 +455,24 @@ await step('删完立刻建同名文件夹：正常创建，旧子树不会回�
 })
 await shot('recreated')
 
-await step('正在编辑的手稿，删掉它所在的文件夹：编辑不中断、手稿进未归档', async () => {
+await step('正在编辑的手稿，删掉它所在的文件夹：编辑区退出、手稿一起删', async () => {
   if (!(await openManuscript('打开中的手稿'))) throw new Error('列表里找不到「打开中的手稿」')
   await waitFor(`!!document.querySelector('[data-testid="manuscript-editor"]')`, 10000, '编辑器')
   await sleep(900)
+  const beforePath = await ev('location.pathname')
 
   const message = await deleteFolder('打开着', true)
   await sleep(1800)
 
   const folders = await uiFolders()
   if (folders.includes('打开着')) throw new Error('「打开着」没被删掉')
-  const content = await ev(`document.querySelector('[data-testid="manuscript-editor"]').innerText`)
-  if (!content.includes('打开时删它的文件夹')) throw new Error('正在编辑的正文被清掉了: ' + content.slice(0, 120))
-  const unfiled = await shortcutCount('unfiled')
-  if (unfiled !== 3) throw new Error('这篇手稿没有进未归档，未归档计数=' + unfiled)
-  if (await ev(`location.pathname.startsWith('/notebook/')`) !== true) {
-    throw new Error('删文件夹把当前手稿页面也跳走了: ' + (await ev('location.pathname')))
+  const titles = await apiManuscripts()
+  if (titles.includes('打开中的手稿')) throw new Error('正在编辑的手稿没跟着删: ' + JSON.stringify(titles))
+  // 当前这篇已经不存在了：应该退回 /notebook，而不是把编辑器留在一个幽灵手稿上
+  const afterPath = await ev('location.pathname')
+  if (afterPath !== '/notebook') throw new Error(`删完应停在 /notebook，实际=${afterPath}（之前 ${beforePath}）`)
+  if (!(await ev(`document.body.innerText.includes('手稿已随文件夹删除')`))) {
+    throw new Error('没有提示"手稿已随文件夹删除"')
   }
   return message
 })
@@ -480,15 +504,15 @@ await step('节点池：空文件夹删除也要问（以前没有卡片就直�
   return message
 })
 
-await step('节点池：有子文件夹与卡片时，文案说卡片只是退回未归档', async () => {
+await step('节点池：有子文件夹与卡片时，文案说两样都会一起删', async () => {
   const message = await deletePoolFolder('池父级', false)
-  if (!message.includes('1 个子文件夹会一起删除')) throw new Error('子文件夹数量没写对: ' + message)
-  if (!message.includes('1 个节点卡片会退回「未归档」（不会删除）')) throw new Error('卡片说法不对: ' + message)
-  if (message.includes('将被删除')) throw new Error('还在说卡片会被删: ' + message)
+  if (!message.includes('1 个子文件夹')) throw new Error('子文件夹数量没写对: ' + message)
+  if (!message.includes('1 个节点卡片会一起删除')) throw new Error('卡片说法不对: ' + message)
+  if (message.includes('未归档')) throw new Error('还在说卡片退回未归档: ' + message)
   return message
 })
 
-await step('节点池：确认删除后子树消失、卡片退回未归档且内容还在', async () => {
+await step('节点池：确认删除后子树与卡片一起消失', async () => {
   const message = await deletePoolFolder('池父级', true)
   await sleep(1800)
 
@@ -497,11 +521,11 @@ await step('节点池：确认删除后子树消失、卡片退回未归档且�
     throw new Error('池子树没删干净: ' + JSON.stringify(folders))
   }
   const cards = await poolCards()
-  const card = cards.find((c) => c.name === '池卡片')
-  if (!card) throw new Error('卡片被一起删了（应该退回未归档）: ' + JSON.stringify(cards))
-  if (card.folderId !== null) throw new Error('卡片没有退回未归档，folderId=' + card.folderId)
-  if (!(await ev(`document.querySelector('[data-node-pool="true"]').innerText.includes('池卡片')`))) {
-    throw new Error('卡片没出现在界面上（本地状态没重新对齐）')
+  if (cards.some((c) => c.name === '池卡片')) {
+    throw new Error('卡片没跟着删: ' + JSON.stringify(cards))
+  }
+  if (await ev(`document.querySelector('[data-node-pool="true"]').innerText.includes('池卡片')`)) {
+    throw new Error('界面上还留着已删的卡片（本地状态没重新对齐）')
   }
   return message
 })

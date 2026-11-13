@@ -519,8 +519,8 @@ await step('搜索：输入关键词后只剩匹配的手稿', async () => {
   return '空态 + 命中都对'
 })
 
-await step('删文件夹：整棵子树一起删，里面的手稿退回未归档', async () => {
-  // 先把当前手稿移进「素材」，再删「素材」——验证手稿不会跟着消失
+await step('删文件夹：整棵子树连手稿一起删', async () => {
+  // 先把当前手稿移进「素材」，再删「素材」——手稿应该跟着一起没
   await clickEl('[aria-label="更多操作"]')
   await waitFor(`!!document.querySelector('[data-testid="notebook-item-menu"]')`, 8000, '列表项菜单')
   await clickText('移动到', '[data-testid="notebook-item-menu"] button, [data-testid="notebook-item-menu"] div[role="button"]')
@@ -546,18 +546,29 @@ await step('删文件夹：整棵子树一起删，里面的手稿退回未归�
   })()`)
   if (state.folders.includes('素材')) throw new Error('「素材」没被删掉: ' + JSON.stringify(state.folders))
   if (state.folders.includes('配色')) throw new Error('子文件夹「配色」没有跟着删掉: ' + JSON.stringify(state.folders))
-  if (!/E2E 全流程手稿/.test(state.text)) throw new Error('里面的手稿被一起删了（应该退回未归档）: ' + state.text.slice(0, 200))
-  // 手稿确实落到「未归档」
+  if (/E2E 全流程手稿/.test(state.text)) throw new Error('里面的手稿没跟着删: ' + state.text.slice(0, 200))
+  // 未归档里也不该出现它（那是"退回未归档"的旧行为）
   const unfiledCount = await ev(`(() => {
     const row = Array.from(document.querySelectorAll('aside [data-folder-row]')).find((r) => r.getAttribute('data-folder-row') === 'unfiled');
     return row ? row.innerText.replace(/\\s+/g, ' ').trim() : '';
   })()`)
-  if (!/未归档 1/.test(unfiledCount)) throw new Error('手稿没有退回未归档: ' + unfiledCount)
+  if (/未归档 [1-9]/.test(unfiledCount)) throw new Error('手稿被放进了未归档（应一起删）: ' + unfiledCount)
   return JSON.stringify(state.folders)
 })
 await shot('09-notebook-after-delete')
 
 // ---------------------------------------------------------------- 9. 双向导入
+await step('重新建一篇手稿（上一篇随文件夹删了）', async () => {
+  await clickText('新建手稿')
+  await waitFor(`location.pathname.match(/\\/notebook\\/\\d+/)`, 15000, '新开一篇手稿')
+  await waitFor(`!!document.querySelector('[data-testid="manuscript-editor"]')`, 10000, '编辑器')
+  await setInput('input[placeholder="手稿标题"]', 'E2E 送池手稿')
+  await clickEl('[data-testid="manuscript-editor"]')
+  await typeText('这篇要送去节点池。')
+  await sleep(2200)
+  return 'E2E 送池手稿'
+})
+
 await step('「送入节点池」把手稿转成卡片', async () => {
   await clickText('送入节点池')
   await waitFor(`document.body.innerText.includes('已送入节点池')`, 20000, '成功提示')

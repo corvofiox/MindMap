@@ -8,7 +8,7 @@
  *     影响另一边。统一节点之后不再需要"判断类型"——手稿 HTML 原样搬进卡片。
  */
 import { Router } from 'express'
-import { and, desc, eq, isNull, like, or } from 'drizzle-orm'
+import { and, desc, eq, inArray, isNull, like, or } from 'drizzle-orm'
 import { db } from '../database/connection.js'
 import { manuscriptFolders, manuscripts, nodeCards, nodePoolFolders } from '../database/schema.js'
 import { authenticate, type AuthRequest } from '../middleware/auth.middleware.js'
@@ -424,12 +424,36 @@ manuscriptFolderRouter.delete(
     })
     if (!existing) return res.status(404).json({ success: false, error: '文件夹不存在' })
 
-    // 删文件夹 = 删这棵子树：子文件夹由 manuscript_folders.parent_id 上的
-    // ON DELETE CASCADE 一并删除，里面的手稿由 manuscripts.folder_id 上的
-    // ON DELETE SET NULL 退回「未归档」——目录没了，内容不陪葬。
-    // （曾经为了迁就一句写错的确认文案，在这里把子文件夹改成"上移一层"，
-    //  那是把行为改去凑文案：级联删除本来就是文件夹该有的语义。）
+    // 删文件夹 = 删这棵子树，手稿跟着一起走：
+    //   1. 先收集子树里的所有文件夹（含自己）；
+    //   2. 把这些文件夹里的手稿软删除（deleted_at）——列表/详情都拿不到，
+    //      行还在，留给数据保留策略；
+    //   3. 再删文件夹，子文件夹由 parent_id 上的 ON DELETE CASCADE 一并删除。
+    // 顺序不能反：先删文件夹的话，手稿的 folder_id 会被 SET NULL 置空，
+    // 就再也认不出哪些手稿属于这棵子树了。
+    const allFolders = await db
+      .select({ id: manuscriptFolders.id, parentId: manuscriptFolders.parentId })
+      .from(manuscriptFolders)
+      .where(eq(manuscriptFolders.userId, userId))
+    const subtree = new Set<number>([id])
+    let changed = true
+    while (changed) {
+      changed = false
+      for (const folder of allFolders) {
+        if (folder.parentId !== null && subtree.has(folder.parentId) && !subtree.has(folder.id)) {
+          subtree.add(folder.id)
+          changed = true
+        }
+      }
+    }
+
+    const doomed = await db
+      .update(manuscripts)
+      .set({ deletedAt: Math.floor(Date.now() / 1000) })
+      .where(and(eq(manuscripts.userId, userId), isNull(manuscripts.deletedAt), inArray(manuscripts.folderId, [...subtree])))
+      .returning({ id: manuscripts.id })
+
     await db.delete(manuscriptFolders).where(eq(manuscriptFolders.id, id))
-    return res.json({ success: true, data: { id } })
+    return res.json({ success: true, data: { id, deletedManuscripts: doomed.length } })
   }),
 )

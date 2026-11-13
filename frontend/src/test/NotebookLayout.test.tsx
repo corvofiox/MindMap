@@ -377,7 +377,7 @@ describe('未归档的筛选与落点', () => {
   })
 })
 
-describe('删除文件夹：级联删子树，手稿退回未归档', () => {
+describe('删除文件夹：整棵子树连手稿一起删', () => {
   const seedTree = () => {
     vi.mocked(api.getManuscriptFolders).mockResolvedValueOnce([
       { id: 7, userId: 1, name: '素材', parentId: null, sortOrder: 0, collapsed: false, createdAt: 0 },
@@ -388,7 +388,7 @@ describe('删除文件夹：级联删子树，手稿退回未归档', () => {
     ])
   }
 
-  it('确认框把后果说准：子文件夹一起删，手稿退回未归档（以前写成"上移一层"）', async () => {
+  it('确认框把后果说准：子文件夹与手稿一起删（不再说"上移一层"或"退回未归档"）', async () => {
     seedTree()
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
     renderPage()
@@ -399,9 +399,10 @@ describe('删除文件夹：级联删子树，手稿退回未归档', () => {
     expect(confirmSpy).toHaveBeenCalled()
     const question = String(confirmSpy.mock.calls[0][0])
     expect(question).toContain('删除文件夹「素材」')
-    expect(question).toContain('1 个子文件夹会一起删除')
-    expect(question).toContain('1 篇手稿会退回「未归档」')
+    expect(question).toContain('1 个子文件夹')
+    expect(question).toContain('1 篇手稿会一起删除')
     expect(question).not.toContain('上移')
+    expect(question).not.toContain('未归档')
 
     await waitFor(() => expect(api.deleteManuscriptFolder).toHaveBeenCalledWith(7))
     confirmSpy.mockRestore()
@@ -417,6 +418,24 @@ describe('删除文件夹：级联删子树，手稿退回未归档', () => {
 
     expect(confirmSpy).toHaveBeenCalled()
     expect(api.deleteManuscriptFolder).not.toHaveBeenCalled()
+    confirmSpy.mockRestore()
+  })
+
+  it('正在编辑的手稿在被删的子树里：删完提示并退出编辑区', async () => {
+    seedTree()
+    useNotebookStore.setState((state) => ({
+      active: state.active ? { ...state.active, folderId: 8 } : null,
+    }))
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    useUIStore.setState({ toasts: [] })
+    renderPage()
+
+    await screen.findByText('配色')
+    fireEvent.click(screen.getByLabelText('删除文件夹 素材'))
+
+    await waitFor(() => expect(api.deleteManuscriptFolder).toHaveBeenCalledWith(7))
+    const titles = useUIStore.getState().toasts.map((t) => t.title)
+    expect(titles).toContain('手稿已随文件夹删除')
     confirmSpy.mockRestore()
   })
 

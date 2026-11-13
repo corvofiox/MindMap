@@ -1355,19 +1355,27 @@ describe('user.controller (integration, real router + real DB)', () => {
       expect(countRows(t.raw, 'node_pool_folders', 'id = ?', childId)).toBe(0)
     })
 
-    it('moves cards in the deleted folder back to the root', async () => {
-      const folderId = seedNodePoolFolder(t, userId, 'Doomed')
-      const nodeId = seedNodeCard(t, userId, 'Card', { folderId })
+    it('deletes cards inside the whole subtree (不留在池里当孤儿)', async () => {
+      const parentId = seedNodePoolFolder(t, userId, 'Doomed')
+      const childId = seedNodePoolFolder(t, userId, 'Doomed child', parentId)
+      const otherId = seedNodePoolFolder(t, userId, 'Survivor')
+      const inParent = seedNodeCard(t, userId, 'Card in parent', { folderId: parentId })
+      const inChild = seedNodeCard(t, userId, 'Card in child', { folderId: childId })
+      const inOther = seedNodeCard(t, userId, 'Card elsewhere', { folderId: otherId })
 
-      await supertest(app)
-        .delete(`/api/users/node-pool-folders/${folderId}`)
+      const res = await supertest(app)
+        .delete(`/api/users/node-pool-folders/${parentId}`)
         .set(authHeader(userId))
 
-      expect(countRows(t.raw, 'node_pool_folders', 'id = ?', folderId)).toBe(0)
-      expect(countRows(t.raw, 'node_cards', 'id = ?', nodeId)).toBe(1)
-      expect(
-        readColumn<number | null>(t.raw, 'SELECT folder_id FROM node_cards WHERE id = ?', nodeId),
-      ).toBeNull()
+      expect(res.status).toBe(200)
+      expect(res.body.data.deletedCards).toBe(2)
+      expect(countRows(t.raw, 'node_pool_folders', 'id = ?', parentId)).toBe(0)
+      expect(countRows(t.raw, 'node_pool_folders', 'id = ?', childId)).toBe(0)
+      // 子树里的卡片一起删；旁的文件夹与卡片原样
+      expect(countRows(t.raw, 'node_cards', 'id = ?', inParent)).toBe(0)
+      expect(countRows(t.raw, 'node_cards', 'id = ?', inChild)).toBe(0)
+      expect(countRows(t.raw, 'node_cards', 'id = ?', inOther)).toBe(1)
+      expect(countRows(t.raw, 'node_pool_folders', 'id = ?', otherId)).toBe(1)
     })
 
     it('returns 403 for another user folder and keeps it', async () => {

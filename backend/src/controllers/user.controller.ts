@@ -914,12 +914,38 @@ userRouter.delete('/node-pool-folders/:id', authenticate, asyncHandler(async (re
     })
   }
 
-  // Schema-level CASCADE on parent_id deletes subfolders automatically;
-  // folder_id ON DELETE SET NULL moves affected cards to the root.
+  // 删文件夹 = 删这棵子树，卡片跟着一起走：
+  //   1. 先收集子树里的所有文件夹（含自己）；
+  //   2. 删掉这些文件夹里的卡片（node_cards 没有软删除列，这里是物理删除）；
+  //   3. 再删文件夹，子文件夹由 parent_id 上的 ON DELETE CASCADE 一并删除。
+  // 顺序不能反：先删文件夹的话，卡片的 folder_id 会被 SET NULL 置空，
+  // 就再也认不出哪些卡片属于这棵子树了。
+  const allFolders = await db
+    .select({ id: nodePoolFolders.id, parentId: nodePoolFolders.parentId })
+    .from(nodePoolFolders)
+    .where(eq(nodePoolFolders.userId, userId))
+  const subtree = new Set<number>([folderId])
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const item of allFolders) {
+      if (item.parentId !== null && subtree.has(item.parentId) && !subtree.has(item.id)) {
+        subtree.add(item.id)
+        changed = true
+      }
+    }
+  }
+
+  const doomed = await db
+    .delete(nodeCards)
+    .where(and(eq(nodeCards.userId, userId), inArray(nodeCards.folderId, [...subtree])))
+    .returning({ id: nodeCards.id })
+
+  // 子文件夹由 parent_id 上的 CASCADE 一并删除
   await db.delete(nodePoolFolders).where(eq(nodePoolFolders.id, folderId))
 
   res.json({
     success: true,
-    data: { message: 'Folder deleted' },
+    data: { message: 'Folder deleted', deletedCards: doomed.length },
   })
 }))

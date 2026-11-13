@@ -135,21 +135,21 @@ export function NotebookSidebar({
 
   const handleDeleteFolder = (id: number) => {
     const target = folders.find((f) => f.id === id)
-    // 删文件夹 = 删这棵子树（子文件夹跟着走），里面的手稿退回「未归档」不丢内容。
-    // 确认框必须把这个后果说准：以前它写的是"子文件夹会上移一层"，与实际行为相反。
+    // 删文件夹 = 删这棵子树：子文件夹、以及里面的手稿一起删（手稿走软删除）。
+    // 确认框必须把这个后果说准——这里既不"上移一层"，也不"手稿退回未归档"。
     const subtree = collectSubtreeIds(folders, id)
     const subFolders = subtree.size - 1
     const manuscriptsInside = manuscripts.filter(
       (m) => m.folderId !== null && m.folderId !== undefined && subtree.has(m.folderId),
     ).length
-    const consequences = [
-      subFolders > 0 ? `${subFolders} 个子文件夹会一起删除` : '',
-      manuscriptsInside > 0 ? `${manuscriptsInside} 篇手稿会退回「未归档」（内容不会删）` : '',
-    ]
-      .filter(Boolean)
-      .join('，')
+    const doomed = [
+      subFolders > 0 ? `${subFolders} 个子文件夹` : '',
+      manuscriptsInside > 0 ? `${manuscriptsInside} 篇手稿` : '',
+    ].filter(Boolean)
 
-    const question = `删除文件夹「${target?.name || ''}」？${consequences ? `${consequences}。` : '这个文件夹是空的。'}`
+    const question = `删除文件夹「${target?.name || ''}」？${
+      doomed.length > 0 ? `${doomed.join('、')}会一起删除。` : '这个文件夹是空的。'
+    }`
     if (!window.confirm(question)) return
 
     onDeleteFolder(id)

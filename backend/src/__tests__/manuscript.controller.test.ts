@@ -355,7 +355,7 @@ describe('手稿文件夹', () => {
     expect(unfiled.body.data.folderId).toBeNull()
   })
 
-  it('删除文件夹连带子文件夹一起删；里面的手稿退回未归档（内容不陪葬）', async () => {
+  it('删除文件夹连带子文件夹与里面的手稿；旁系不受影响（手稿是软删除：行还在、接口拿不到）', async () => {
     const root = await supertest(app).post('/api/manuscript-folders').set(authA()).send({ name: '项目' })
     const rootId = root.body.data.id
     const mid = await supertest(app)
@@ -374,8 +374,11 @@ describe('手稿文件夹', () => {
 
     const inRoot = await createManuscript({ title: '在 root', folderId: rootId })
     const inLeaf = await createManuscript({ title: '在 leaf', folderId: leafId })
+    const inOther = await createManuscript({ title: '在别的树', folderId: otherId })
 
-    expect((await supertest(app).delete(`/api/manuscript-folders/${rootId}`).set(authA())).status).toBe(200)
+    const deleted = await supertest(app).delete(`/api/manuscript-folders/${rootId}`).set(authA())
+    expect(deleted.status).toBe(200)
+    expect(deleted.body.data.deletedManuscripts).toBe(2)
 
     const ids = ((await supertest(app).get('/api/manuscript-folders').set(authA())).body.data as Array<{
       id: number
@@ -386,12 +389,18 @@ describe('手稿文件夹', () => {
     expect(ids).not.toContain(leafId)
     expect(ids).toContain(otherId)
 
-    // 手稿不跟着删：在 root 与更深的 leaf 里的都退回未归档
-    expect((await supertest(app).get(`/api/manuscripts/${inRoot.body.data.id}`).set(authA())).body.data.folderId)
-      .toBeNull()
-    expect((await supertest(app).get(`/api/manuscripts/${inLeaf.body.data.id}`).set(authA())).body.data.folderId)
-      .toBeNull()
-    // 手稿本身依然可读（不是软删除）
-    expect((await supertest(app).get(`/api/manuscripts/${inLeaf.body.data.id}`).set(authA())).status).toBe(200)
+    // 子树里的手稿跟着删：列表里看不到、按 id 也打不开
+    const list = (await supertest(app).get('/api/manuscripts').set(authA())).body.data as Array<{ id: number }>
+    expect(list.map((m) => m.id)).not.toContain(inRoot.body.data.id)
+    expect(list.map((m) => m.id)).not.toContain(inLeaf.body.data.id)
+    expect((await supertest(app).get(`/api/manuscripts/${inLeaf.body.data.id}`).set(authA())).status).toBe(404)
+
+    // 但行还在（软删除），且别的树里的手稿完好
+    expect(
+      testDb.raw.prepare('SELECT deleted_at FROM manuscripts WHERE id = ?').get(inLeaf.body.data.id) as {
+        deleted_at: number | null
+      },
+    ).toMatchObject({ deleted_at: expect.any(Number) })
+    expect((await supertest(app).get(`/api/manuscripts/${inOther.body.data.id}`).set(authA())).status).toBe(200)
   })
 })
