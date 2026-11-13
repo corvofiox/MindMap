@@ -982,6 +982,10 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => {
 
     try {
       await api.deleteNodePoolFolder(id)
+      // 删文件夹是删整棵子树：子文件夹跟着没、里面的卡片退回未归档。
+      // 只从本地 foldersMap 抹掉一条会留下幽灵子文件夹和被"藏起来"的卡片，
+      // 这里按服务端重新对齐一次。
+      await get().loadNodePool()
     } catch (error) {
       set({ foldersMap: originalFoldersMap })
 

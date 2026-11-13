@@ -758,13 +758,19 @@ describe('文件夹动作', () => {
     expect(state().isLoading).toBe(false)
   })
 
-  it('removeFolder:乐观删除 + 调用删除接口', async () => {
+  it('removeFolder:乐观删除 + 调用删除接口 + 按服务端重新对齐', async () => {
     useNodePoolStore.getState().setFolders([makeFolder({ id: 10 }), makeFolder({ id: 11 })])
     mockApi.deleteNodePoolFolder.mockResolvedValue(undefined)
+    // 服务端删完之后的世界：10 没了，11 还在
+    mockApi.getNodePool.mockResolvedValue([])
+    mockApi.getNodePoolFolders.mockResolvedValue([makeFolder({ id: 11 })])
 
     await state().removeFolder(10)
 
     expect(mockApi.deleteNodePoolFolder).toHaveBeenCalledWith(10)
+    // 删文件夹是删整棵子树，子文件夹与卡片的归属会变——必须按服务端对齐，
+    // 只在本地抹掉一条会留下幽灵子文件夹和被藏起来的卡片
+    expect(mockApi.getNodePoolFolders).toHaveBeenCalled()
     expect(state().getFolder(10)).toBeUndefined()
     expect(state().getFolder(11)?.id).toBe(11)
   })

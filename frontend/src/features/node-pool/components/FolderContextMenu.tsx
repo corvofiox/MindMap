@@ -7,6 +7,7 @@ import {
 import { useNodePoolStore } from '../stores/useNodePoolStore'
 import { useUIStore } from '@/store/useUIStore'
 import { useContextMenu, MenuItem, MenuDivider } from '../hooks/useContextMenu'
+import { describeFolderDelete } from '../utils/describeFolderDelete'
 import { Z_INDEX } from '@/constants'
 import type { NodePoolFolder } from '@/types'
 
@@ -31,22 +32,15 @@ export function FolderContextMenu({ folder, position, onClose, onRename }: Folde
     const cardsMap = useNodePoolStore.getState().cardsMap
     const foldersMap = useNodePoolStore.getState().foldersMap
 
-    const countCardsInFolderTree = (folderId: number): number => {
-      let count = Array.from(cardsMap.values()).filter((c) => c.folderId === folderId).length
-      const children = Array.from(foldersMap.values()).filter((f) => f.parentId === folderId)
-      for (const child of children) {
-        count += countCardsInFolderTree(child.id)
-      }
-      return count
-    }
-
-    const cardCount = countCardsInFolderTree(folder.id)
-
-    if (cardCount > 0) {
-      const confirmMessage = `确定要删除文件夹"${folder.name}"吗？文件夹内的 ${cardCount} 个节点卡片也将被删除。此操作不可恢复。`
-      if (!confirm(confirmMessage)) {
-        return
-      }
+    // 删文件夹必须每次都问一次：以前只在这个子树里有卡片时才 confirm，
+    // 空文件夹（或只含空子文件夹）点一下就直接没了；而且文案说卡片"将被删除"，
+    // 实际只是退回未归档。
+    const question = describeFolderDelete(folder, foldersMap.values(), cardsMap.values())
+    if (!confirm(question)) {
+      // 取消也要收起菜单：留着不关的话，下一次右键会先被遮罩吃掉，
+      // 用户点到的是上一次的菜单项（实测踩过：取消后菜单还挂在屏幕上）
+      onClose()
+      return
     }
 
     try {
