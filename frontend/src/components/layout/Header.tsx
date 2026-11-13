@@ -82,8 +82,21 @@ export function Header() {
         </button>
       </div>
 
-      {/* Right - User and Settings */}
+      {/* Right - 笔记本入口 + 搜索 / 协作 / 设置 / 账号（"那一批"） */}
       <div className="flex items-center gap-2">
+        {/* 笔记本入口：放在这一批按钮的最左侧，只在项目页出现 */}
+        {location.pathname === '/projects' && (
+          <button
+            onClick={() => navigate('/notebook')}
+            title="打开笔记本"
+            aria-label="打开笔记本"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+          >
+            <BookOpen className="w-4 h-4" />
+            笔记本
+          </button>
+        )}
+
         {/* Node Search */}
         <button
           onClick={() => useUIStore.getState().setNodeSearchOpen(true)}
@@ -102,19 +115,6 @@ export function Header() {
           <Users className="w-5 h-5" />
         </button>
 
-        {/* 笔记本入口：只在项目页出现，位置与笔记本页保持一致——右上角那组
-            （设置 / 账号）的左侧，而不是夹在左右侧栏开关之间 */}
-        {location.pathname === '/projects' && (
-          <button
-            onClick={() => navigate('/notebook')}
-            title="打开笔记本"
-            aria-label="打开笔记本"
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
-          >
-            <BookOpen className="w-4 h-4" />
-            笔记本
-          </button>
-        )}
 
         {/* Settings */}
         <DropdownMenu

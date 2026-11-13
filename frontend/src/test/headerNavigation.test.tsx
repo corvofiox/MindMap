@@ -42,13 +42,15 @@ describe('顶栏', () => {
     expect(within(toggleGroup).queryByText('笔记本')).toBeNull()
   })
 
-  it('项目页：笔记本入口在右上角那组，位于设置左侧', () => {
+  it('项目页：笔记本入口是右上角那一批按钮里最左边的一个', () => {
     renderHeader('/projects')
 
     const notebook = screen.getByLabelText('打开笔记本')
+    const search = screen.getByTitle('搜索节点 (Ctrl+F)')
     const settings = screen.getByTitle('设置 (Ctrl+,)')
 
-    // 文档顺序：笔记本在设置之前（即左侧）
+    // 排在这批按钮的最左侧：在搜索之前，自然也在设置之前
+    expect(notebook.compareDocumentPosition(search) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(notebook.compareDocumentPosition(settings) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
 
     // 与设置、账号同在顶栏右半部分
