@@ -12,7 +12,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import type { ManuscriptFolder, ManuscriptSummary } from '@/services/api'
-import { NotebookFolderTree, buildFolderTree } from './NotebookFolderTree'
+import { NotebookFolderTree, buildFolderTree, type FolderSelection } from './NotebookFolderTree'
 
 interface NotebookSidebarProps {
   manuscripts: ManuscriptSummary[]
@@ -20,9 +20,9 @@ interface NotebookSidebarProps {
   activeId?: number
   query: string
   loading: boolean
-  /** 当前选中的文件夹（null = 全部手稿）。由页面持有，新建手稿时要带进这个文件夹。 */
-  selectedFolderId: number | null
-  onSelectFolder: (id: number | null) => void
+  /** 当前选中的范围：全部 / 未归档 / 某个文件夹。由页面持有，新建手稿时要带进对应文件夹。 */
+  folderSelection: FolderSelection
+  onSelectFolder: (selection: FolderSelection) => void
   onSearch: (query: string) => void
   onCreate: () => void
   onOpen: (id: number) => void
@@ -77,7 +77,7 @@ export function NotebookSidebar({
   activeId,
   query,
   loading,
-  selectedFolderId,
+  folderSelection,
   onSelectFolder,
   onSearch,
   onCreate,
@@ -94,10 +94,13 @@ export function NotebookSidebar({
   // 用一点关闭延迟 + 透明桥接来解决
   const submenuTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // 选中父文件夹时，它下面（所有层级）的手稿都要列出来
+  // 全部 / 未归档 / 某个文件夹（选中父级时连同所有子孙一起列出）
   const visible = useMemo(() => {
-    if (selectedFolderId === null) return manuscripts
-    const ids = new Set<number>([selectedFolderId])
+    if (folderSelection === 'all') return manuscripts
+    if (folderSelection === 'unfiled') {
+      return manuscripts.filter((m) => m.folderId === null || m.folderId === undefined)
+    }
+    const ids = new Set<number>([folderSelection])
     let changed = true
     while (changed) {
       changed = false
@@ -109,7 +112,7 @@ export function NotebookSidebar({
       }
     }
     return manuscripts.filter((m) => m.folderId !== null && m.folderId !== undefined && ids.has(m.folderId))
-  }, [manuscripts, folders, selectedFolderId])
+  }, [manuscripts, folders, folderSelection])
 
   // "移动到"子菜单：按树的顺序拍平，带层级缩进
   const flatFolders = useMemo(() => {
@@ -134,7 +137,7 @@ export function NotebookSidebar({
     const target = folders.find((f) => f.id === id)
     if (!window.confirm(`删除文件夹「${target?.name || ''}」？里面的手稿会变成未归档，子文件夹会上移一层。`)) return
     onDeleteFolder(id)
-    if (selectedFolderId === id) onSelectFolder(null)
+    if (folderSelection === id) onSelectFolder('all')
   }
 
   const openMenu = (itemId: number, event: React.MouseEvent<HTMLButtonElement>) => {
@@ -252,7 +255,7 @@ export function NotebookSidebar({
         <NotebookFolderTree
           folders={folders}
           manuscripts={manuscripts}
-          selectedId={selectedFolderId}
+          selectedId={folderSelection}
           onSelect={onSelectFolder}
           onCreate={(parentId) => handleAddFolder(parentId)}
           onDelete={handleDeleteFolder}

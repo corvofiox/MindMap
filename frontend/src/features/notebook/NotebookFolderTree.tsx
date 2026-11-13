@@ -2,6 +2,9 @@ import { useMemo, useState } from 'react'
 import { ChevronRight, Folder, FolderPlus, Inbox, LayoutGrid, Trash2 } from 'lucide-react'
 import type { ManuscriptFolder, ManuscriptSummary } from '@/services/api'
 
+/** 左栏的选中项：全部 / 未归档 / 某个具体文件夹 */
+export type FolderSelection = number | 'all' | 'unfiled'
+
 export interface FolderNode {
   folder: ManuscriptFolder
   children: FolderNode[]
@@ -67,8 +70,8 @@ interface NotebookFolderTreeProps {
   folders: ManuscriptFolder[]
   manuscripts: ManuscriptSummary[]
   /** null = 全部手稿 */
-  selectedId: number | null
-  onSelect: (id: number | null) => void
+  selectedId: FolderSelection
+  onSelect: (selection: FolderSelection) => void
   onCreate: (parentId: number | null) => void
   onDelete: (id: number) => void
 }
@@ -125,7 +128,7 @@ export function NotebookFolderTree({
         <div
           className={rowClass(active)}
           style={{ paddingLeft: 6 + depth * 16 }}
-          onClick={() => onSelect(active ? null : node.folder.id)}
+          onClick={() => onSelect(active ? 'all' : node.folder.id)}
           data-folder-row={node.folder.id}
           data-depth={depth}
           title={node.folder.name}
@@ -225,8 +228,8 @@ export function NotebookFolderTree({
   return (
     <div className="mt-1" data-testid="folder-tree" role="tree" aria-label="文件夹">
       <div className="space-y-0.5">
-        {shortcut('all', '全部手稿', total, LayoutGrid, selectedId === null, () => onSelect(null))}
-        {shortcut('unfiled', '未归档', unfiled, Inbox, false, () => onSelect(null))}
+        {shortcut('all', '全部手稿', total, LayoutGrid, selectedId === 'all', () => onSelect('all'))}
+        {shortcut('unfiled', '未归档', unfiled, Inbox, selectedId === 'unfiled', () => onSelect('unfiled'))}
       </div>
 
       <div className="my-1.5 h-px bg-zinc-100 dark:bg-zinc-800/80" aria-hidden="true" />

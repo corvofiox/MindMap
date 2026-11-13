@@ -329,3 +329,50 @@ describe('移动到子菜单的鼠标路径', () => {
     await waitFor(() => expect(screen.queryByTestId('notebook-move-menu')).toBeNull(), { timeout: 1200 })
   })
 })
+
+describe('未归档的筛选与落点', () => {
+  it('点「未归档」只列出未归档手稿', async () => {
+    vi.mocked(api.getManuscriptFolders).mockResolvedValueOnce([
+      { id: 7, userId: 1, name: '素材', parentId: null, sortOrder: 0, collapsed: false, createdAt: 0 },
+    ])
+    vi.mocked(api.getManuscripts).mockResolvedValueOnce([
+      { id: 1, folderId: null, title: '未归一篇', previewText: '', imageCount: 0, createdAt: 0, updatedAt: 0 },
+      { id: 2, folderId: 7, title: '文件夹里的', previewText: '', imageCount: 0, createdAt: 0, updatedAt: 0 },
+    ])
+    renderPage()
+
+    await screen.findByText('素材')
+    expect(screen.getByText('文件夹里的')).toBeTruthy()
+
+    fireEvent.click(screen.getByText('未归档'))
+
+    expect(screen.getByText('未归一篇')).toBeTruthy()
+    expect(screen.queryByText('文件夹里的')).toBeNull()
+  })
+
+  it('在「未归档」下新建手稿，落点仍是未归档（不会被上一个文件夹带走）', async () => {
+    vi.mocked(api.getManuscriptFolders).mockResolvedValueOnce([
+      { id: 7, userId: 1, name: '素材', parentId: null, sortOrder: 0, collapsed: false, createdAt: 0 },
+    ])
+    vi.mocked(api.createManuscript).mockResolvedValueOnce({
+      id: 44,
+      folderId: null,
+      title: '未命名手稿',
+      previewText: '',
+      imageCount: 0,
+      createdAt: 0,
+      updatedAt: 0,
+      contentHtml: '',
+      sourceCardId: null,
+    } as never)
+    renderPage()
+
+    await screen.findByText('素材')
+    fireEvent.click(screen.getByText('素材'))
+    fireEvent.click(screen.getByText('未归档'))
+    fireEvent.click(screen.getAllByText('新建手稿')[0])
+
+    await waitFor(() => expect(api.createManuscript).toHaveBeenCalled())
+    expect(vi.mocked(api.createManuscript).mock.calls[0][0]).toMatchObject({ folderId: null })
+  })
+})

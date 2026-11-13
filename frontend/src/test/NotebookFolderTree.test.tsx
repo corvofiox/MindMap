@@ -6,9 +6,10 @@
  * 选中父文件夹时其子文件夹里的手稿也要出现。
  */
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import {
   NotebookFolderTree,
+  type FolderSelection,
   buildFolderTree,
   collectSubtreeIds,
 } from '@/features/notebook/NotebookFolderTree'
@@ -41,7 +42,7 @@ function renderTree(overrides: Partial<React.ComponentProps<typeof NotebookFolde
   const props = {
     folders: FOLDERS,
     manuscripts: MANUSCRIPTS,
-    selectedId: null as number | null,
+    selectedId: 'all' as FolderSelection,
     onSelect: vi.fn(),
     onCreate: vi.fn(),
     onDelete: vi.fn(),
@@ -108,14 +109,28 @@ describe('NotebookFolderTree', () => {
     expect(screen.getByText('设计')).toBeTruthy()
   })
 
-  it('点文件夹行触发筛选，点「全部手稿」回到不筛选', () => {
+  it('点文件夹行触发筛选，点「全部手稿」回到全部', () => {
     const props = renderTree()
 
     fireEvent.click(screen.getByText('设计'))
     expect(props.onSelect).toHaveBeenCalledWith(2)
 
     fireEvent.click(screen.getByText('全部手稿'))
-    expect(props.onSelect).toHaveBeenCalledWith(null)
+    expect(props.onSelect).toHaveBeenCalledWith('all')
+  })
+
+  it('「未归档」是可选中项，不会被当成「全部手稿」', () => {
+    const props = renderTree()
+
+    fireEvent.click(screen.getByText('未归档'))
+    expect(props.onSelect).toHaveBeenCalledWith('unfiled')
+    expect(props.onSelect).not.toHaveBeenCalledWith('all')
+
+    // 选中态要能回显在「未归档」这一行上
+    cleanup()
+    renderTree({ selectedId: 'unfiled' })
+    const row = document.querySelector('[data-folder-row="unfiled"]') as HTMLElement
+    expect(row.className).toContain('bg-blue-50')
   })
 
   it('行内 + 新建的是子文件夹（带上 parentId）', () => {

@@ -19,6 +19,7 @@ import { SettingsDialog } from '@/components/ui/SettingsDialog'
 import { AccountSettingsDialog } from '@/components/ui/AccountSettingsDialog'
 import { sanitizeHTML } from '@/utils/sanitizeHTML'
 import { NotebookSidebar } from '@/features/notebook/NotebookSidebar'
+import type { FolderSelection } from '@/features/notebook/NotebookFolderTree'
 import { NotebookEditor } from '@/features/notebook/NotebookEditor'
 import { RichTextToolbar } from '@/features/rich-text/RichTextToolbar'
 import { insertHtmlAtCaret as insertHtmlIntoEditor } from '@/features/rich-text/editorCommands'
@@ -83,7 +84,7 @@ export function NotebookPage() {
   const [stats, setStats] = useState({ chars: 0, images: 0 })
   const imageInputRef = useRef<HTMLInputElement | null>(null)
   // 选中的文件夹由页面持有：侧栏用它筛选，新建手稿也用它决定落点
-  const [folderFilter, setFolderFilter] = useState<number | null>(null)
+  const [folderSelection, setFolderSelection] = useState<FolderSelection>('all')
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     try {
       return localStorage.getItem(SIDEBAR_STORAGE_KEY) === '1'
@@ -186,7 +187,8 @@ export function NotebookPage() {
 
   const handleCreate = async () => {
     // 在某个文件夹下点"新建手稿"，就应该建在那个文件夹里（之前固定建到未归档）
-    const manuscript = await create(folderFilter)
+    const targetFolder = typeof folderSelection === 'number' ? folderSelection : null
+    const manuscript = await create(targetFolder)
     if (manuscript) navigate(`/notebook/${manuscript.id}`)
   }
 
@@ -449,8 +451,8 @@ export function NotebookPage() {
               activeId={active?.id}
               query={query}
               loading={loading}
-              selectedFolderId={folderFilter}
-              onSelectFolder={setFolderFilter}
+              folderSelection={folderSelection}
+              onSelectFolder={setFolderSelection}
               onSearch={(value) => { void load({ q: value }) }}
               onCreate={() => { void handleCreate() }}
               onOpen={(id) => navigate(`/notebook/${id}`)}
