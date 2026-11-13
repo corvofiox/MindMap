@@ -29,6 +29,7 @@ import { useNodePoolStore } from '../stores/useNodePoolStore'
 import { useNodePoolSort, useFolderTree } from '../hooks/useNodePoolSort'
 import { FolderItem } from './FolderItem'
 import { NodeCardItem } from './NodeCardItem'
+import { NotebookImportMenu } from './NotebookImportMenu'
 import { FolderContextMenu } from './FolderContextMenu'
 import { NodeCardContextMenu } from './NodeCardContextMenu'
 import { ContextMenuErrorBoundary } from './ContextMenuErrorBoundary'
@@ -465,6 +466,7 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
       <div className="h-12 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-4 flex-shrink-0">
         <h2 className="font-semibold text-gray-800 dark:text-white">节点池</h2>
         <div className="flex items-center gap-1">
+          <NotebookImportMenu onImported={() => { void loadNodePool() }} />
           <button
             onClick={() => setShowNewFolderInput(!showNewFolderInput)}
             className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400"
