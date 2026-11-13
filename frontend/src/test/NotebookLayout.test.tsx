@@ -376,3 +376,31 @@ describe('未归档的筛选与落点', () => {
     expect(vi.mocked(api.createManuscript).mock.calls[0][0]).toMatchObject({ folderId: null })
   })
 })
+
+describe('笔记本侧的「从节点池导入」', () => {
+  it('按节点池文件夹分组展示卡片，文件夹默认收起', async () => {
+    const { useNodePoolStore } = await import('@/features/node-pool/stores/useNodePoolStore')
+    useNodePoolStore.setState({
+      foldersMap: new Map([
+        [3, { id: 3, userId: 1, name: '灵感', parentId: null, sortOrder: 0, collapsed: false, createdAt: '' }],
+      ]),
+      cardsMap: new Map([
+        [11, { id: 11, userId: 1, name: '卡片一', content: '', type: 'text', color: '#fff', folderId: 3, createdAt: '', updatedAt: '' }],
+        [12, { id: 12, userId: 1, name: '未归档卡片', content: '', type: 'text', color: '#fff', folderId: null, createdAt: '', updatedAt: '' }],
+      ]),
+    } as never)
+
+    renderPage()
+    fireEvent.click(screen.getByText('从节点池导入'))
+
+    // 文件夹行出现，里面的卡片默认收起
+    expect(await screen.findByTestId('pool-folder-3')).toBeTruthy()
+    expect(screen.queryByTestId('pool-card-11')).toBeNull()
+    // 未归档卡片始终展示
+    expect(screen.getByTestId('pool-card-12')).toBeTruthy()
+
+    // 展开后出现文件夹内的卡片
+    fireEvent.click(screen.getByTestId('pool-folder-3'))
+    expect(await screen.findByTestId('pool-card-11')).toBeTruthy()
+  })
+})

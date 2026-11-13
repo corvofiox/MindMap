@@ -5,10 +5,22 @@ import type { ManuscriptFolder, ManuscriptSummary } from '@/services/api'
 /** 左栏的选中项：全部 / 未归档 / 某个具体文件夹 */
 export type FolderSelection = number | 'all' | 'unfiled'
 
-export interface FolderNode {
-  folder: ManuscriptFolder
-  children: FolderNode[]
-  /** 含所有子孙文件夹里的手稿数 */
+/** 只要求树需要的四个字段：手稿文件夹与节点池文件夹都满足 */
+export interface FolderLike {
+  id: number
+  name: string
+  parentId: number | null
+  sortOrder: number
+}
+
+interface CountableItem {
+  folderId?: number | null
+}
+
+export interface FolderNode<F extends FolderLike = ManuscriptFolder> {
+  folder: F
+  children: FolderNode<F>[]
+  /** 含所有子孙文件夹里的条目数 */
   count: number
 }
 
@@ -18,12 +30,12 @@ export interface FolderNode {
  * 容错：父节点不存在（被删了/数据不干净）时把它当根节点，不要让它从界面上
  * 消失——用户看不到自己的文件夹比看到层级错乱更糟。
  */
-export function buildFolderTree(
-  folders: ManuscriptFolder[],
-  manuscripts: ManuscriptSummary[] = [],
-): FolderNode[] {
+export function buildFolderTree<F extends FolderLike>(
+  folders: F[],
+  manuscripts: CountableItem[] = [],
+): FolderNode<F>[] {
   const ids = new Set(folders.map((folder) => folder.id))
-  const byParent = new Map<number | null, ManuscriptFolder[]>()
+  const byParent = new Map<number | null, F[]>()
   for (const folder of folders) {
     const parent = folder.parentId !== null && ids.has(folder.parentId) ? folder.parentId : null
     const list = byParent.get(parent) ?? []
@@ -37,7 +49,7 @@ export function buildFolderTree(
     directCount.set(manuscript.folderId, (directCount.get(manuscript.folderId) ?? 0) + 1)
   }
 
-  const build = (parent: number | null): FolderNode[] =>
+  const build = (parent: number | null): FolderNode<F>[] =>
     (byParent.get(parent) ?? [])
       .slice()
       .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name))

@@ -32,6 +32,8 @@ import { insertHtmlAtCaret as insertHtmlIntoEditor } from '@/features/rich-text/
 import { useRichTextEditor } from '@/features/rich-text/useRichTextEditor'
 import { uploadFile } from '@/services/api'
 import type { NodeCard } from '@/types'
+import { buildFolderTree } from '@/features/notebook/NotebookFolderTree'
+import { ImportMenuFolderRow } from '@/features/import-menu/ImportMenu'
 import '@/features/notebook/notebook.css'
 
 const AUTOSAVE_DELAY = 800
@@ -84,11 +86,12 @@ export function NotebookPage() {
     restoreFromCard,
   } = useNotebookStore()
 
-  const { cardsMap, loadNodePool } = useNodePoolStore()
+  const { cardsMap, foldersMap, loadNodePool } = useNodePoolStore()
 
   const [titleDraft, setTitleDraft] = useState('')
   const [importOpen, setImportOpen] = useState(false)
   const [cardPreview, setCardPreview] = useState<{ card: NodeCard; top: number; left: number } | null>(null)
+  const [expandedPoolFolders, setExpandedPoolFolders] = useState<Set<number>>(new Set())
   const [stats, setStats] = useState({ chars: 0, images: 0 })
   const imageInputRef = useRef<HTMLInputElement | null>(null)
   // 选中的文件夹由页面持有：侧栏用它筛选，新建手稿也用它决定落点
@@ -303,7 +306,39 @@ export function NotebookPage() {
     insertHtmlAtCaret(safe)
   }
 
-  const cards = useMemo(() => Array.from(cardsMap.values()).slice(0, 50), [cardsMap])
+  const cards = useMemo(() => Array.from(cardsMap.values()), [cardsMap])
+  const poolFolders = useMemo(() => Array.from(foldersMap.values()), [foldersMap])
+
+  /**
+   * 节点池卡片分组：和「从笔记本导入」同一套结构——文件夹默认收起、
+   * 展开才露出里面的卡片，未归档放最后。
+   */
+  const importRows = useMemo(() => {
+    const byFolder = new Map<number | null, NodeCard[]>()
+    for (const card of cards) {
+      const key = card.folderId ?? null
+      const list = byFolder.get(key) ?? []
+      list.push(card)
+      byFolder.set(key, list)
+    }
+
+    type Row =
+      | { kind: 'folder'; id: number; label: string; depth: number; count: number }
+      | { kind: 'card'; card: NodeCard; depth: number }
+
+    const out: Row[] = []
+    const walk = (nodes: ReturnType<typeof buildFolderTree>, depth: number) => {
+      for (const node of nodes) {
+        out.push({ kind: 'folder', id: node.folder.id, label: node.folder.name, depth, count: node.count })
+        if (!expandedPoolFolders.has(node.folder.id)) continue
+        for (const card of byFolder.get(node.folder.id) ?? []) out.push({ kind: 'card', card, depth: depth + 1 })
+        walk(node.children, depth + 1)
+      }
+    }
+    walk(buildFolderTree(poolFolders, cards), 0)
+    for (const card of byFolder.get(null) ?? []) out.push({ kind: 'card', card, depth: 0 })
+    return out
+  }, [cards, poolFolders, expandedPoolFolders])
 
   return (
     <div className="flex h-screen w-screen flex-col bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
@@ -356,23 +391,45 @@ export function NotebookPage() {
               {cards.length === 0 && (
                 <p className="px-2 py-6 text-center text-[12px] text-zinc-400">节点池还是空的</p>
               )}
-              {cards.map((card) => (
-                <ImportMenuRow
-                  key={card.id}
-                  label={card.name}
-                  badge={(card.name || '未').slice(0, 1)}
-                  onClick={() => { void handleRestore(card.id) }}
-                  onHover={(event) => {
-                    const rect = event.currentTarget.getBoundingClientRect()
-                    setCardPreview({
-                      card,
-                      left: Math.max(8, rect.left - 296),
-                      top: Math.max(8, Math.min(rect.top - 8, window.innerHeight - 220)),
-                    })
-                  }}
-                  onLeave={() => setCardPreview(null)}
-                />
-              ))}
+              {importRows.map((row) =>
+                row.kind === 'folder' ? (
+                  <ImportMenuFolderRow
+                    key={`pool-folder-${row.id}`}
+                    testId={`pool-folder-${row.id}`}
+                    name={row.label}
+                    count={row.count}
+                    depth={row.depth}
+                    open={expandedPoolFolders.has(row.id)}
+                    onToggle={() =>
+                      setExpandedPoolFolders((previous) => {
+                        const next = new Set(previous)
+                        if (next.has(row.id)) next.delete(row.id)
+                        else next.add(row.id)
+                        return next
+                      })
+                    }
+                  />
+                ) : (
+                  <ImportMenuRow
+                    key={`pool-card-${row.card.id}`}
+                    testId={`pool-card-${row.card.id}`}
+                    label={row.card.name}
+                    badge={(row.card.name || '未').slice(0, 1)}
+                    depth={row.depth}
+                    meta={row.card.thumbnail ? '有图' : undefined}
+                    onClick={() => { void handleRestore(row.card.id) }}
+                    onHover={(event) => {
+                      const rect = event.currentTarget.getBoundingClientRect()
+                      setCardPreview({
+                        card: row.card,
+                        left: Math.max(8, rect.left - 296),
+                        top: Math.max(8, Math.min(rect.top - 8, window.innerHeight - 220)),
+                      })
+                    }}
+                    onLeave={() => setCardPreview(null)}
+                  />
+                ),
+              )}
             </ImportMenuShell>
 
             {cardPreview && (

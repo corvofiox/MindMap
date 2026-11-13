@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom'
 import type { ReactNode } from 'react'
 
 /**
@@ -131,9 +132,15 @@ interface ImportMenuPreviewProps {
   testId?: string
 }
 
-/** 悬浮预览：固定定位在菜单左侧，夹在视口内 */
+/**
+ * 悬浮预览：固定定位在菜单左侧，夹在视口内。
+ *
+ * 必须走 portal：节点池面板自身带 `transform`（开合动画），会让内部的
+ * `position: fixed` 以面板为参照，坐标全错、预览跑到屏幕外——这就是
+ * "节点池这边没有悬浮预览"的原因。挂到 body 上就不受祖先变换影响。
+ */
 export function ImportMenuPreview({ top, left, title, lines, hint, testId }: ImportMenuPreviewProps) {
-  return (
+  return createPortal(
     <div
       data-testid={testId}
       className="fixed z-[60] w-72 rounded-xl border border-zinc-200/80 bg-white p-3 shadow-xl shadow-zinc-900/10 dark:border-zinc-700 dark:bg-zinc-800 dark:shadow-black/50"
@@ -144,6 +151,7 @@ export function ImportMenuPreview({ top, left, title, lines, hint, testId }: Imp
         {lines || '空白内容'}
       </p>
       <p className="mt-2 text-[10.5px] text-zinc-400">{hint}</p>
-    </div>
+    </div>,
+    document.body,
   )
 }
