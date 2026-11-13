@@ -96,12 +96,55 @@ describe('富文本工具栏（两处共用）', () => {
   })
 
   it('floating 形态有关闭按钮，docked 形态没有', () => {
-    const { unmount } = renderToolbar({ variant: 'floating' })
+    const { onClose, unmount } = renderToolbar({ variant: 'floating' })
     fireEvent.click(screen.getByLabelText('关闭'))
+    expect(onClose).toHaveBeenCalled()
     unmount()
 
     renderToolbar({ variant: 'docked' })
     expect(screen.queryByLabelText('关闭')).toBeNull()
+  })
+
+  it('floating 形态按 position 定位（跟着节点走）', () => {
+    render(
+      <RichTextToolbar
+        variant="floating"
+        state={EMPTY_EDITOR_STATE}
+        onCommand={vi.fn()}
+        position={{ x: 240, y: 96 }}
+      />,
+    )
+
+    const toolbar = document.querySelector('[data-rich-text-toolbar="true"]') as HTMLElement
+    expect(toolbar.dataset.variant).toBe('floating')
+    expect(toolbar.style.left).toBe('240px')
+    expect(toolbar.style.top).toBe('96px')
+    expect(toolbar.style.transform).toBe('translateX(-50%)')
+  })
+
+  it('floating 且 visible=false 时整条不渲染', () => {
+    render(
+      <RichTextToolbar variant="floating" visible={false} state={EMPTY_EDITOR_STATE} onCommand={vi.fn()} />,
+    )
+    expect(document.querySelector('[data-rich-text-toolbar="true"]')).toBeNull()
+  })
+
+  it('只有 docked 形态带"也可以直接粘贴"的提示', () => {
+    const { unmount } = renderToolbar({ variant: 'docked' })
+    expect(screen.getByText('也可以直接粘贴网页内容或图片')).toBeTruthy()
+    unmount()
+
+    renderToolbar({ variant: 'floating' })
+    expect(screen.queryByText('也可以直接粘贴网页内容或图片')).toBeNull()
+  })
+
+  it('颜色面板点外面会收起来', () => {
+    renderToolbar()
+    fireEvent.click(screen.getByLabelText('文字颜色'))
+    expect(screen.getByLabelText('颜色 #2563eb')).toBeTruthy()
+
+    fireEvent.mouseDown(document.body)
+    expect(screen.queryByLabelText('颜色 #2563eb')).toBeNull()
   })
 
   it('按下按钮不抢焦点（mousedown 默认行为被阻止）', () => {

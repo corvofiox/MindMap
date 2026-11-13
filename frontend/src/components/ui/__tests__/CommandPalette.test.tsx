@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+﻿import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, fireEvent, act, cleanup, waitFor } from '@testing-library/react'
 import { CommandPalette, SAVE_COMMAND_EVENT } from '../CommandPalette'
 import { useUIStore } from '@/store/useUIStore'
@@ -67,28 +67,28 @@ describe('CommandPalette 命令真实 action', () => {
   it('Toggle Grid 命令翻转 gridVisible 状态', () => {
     expect(useUIStore.getState().gridVisible).toBe(true)
     openPalette()
-    fireEvent.click(screen.getByText('Toggle Grid'))
+    fireEvent.click(screen.getByText('切换网格'))
     expect(useUIStore.getState().gridVisible).toBe(false)
   })
 
   it('Zoom In 命令放大画布', () => {
     useCanvasStore.setState({ zoom: 1, panX: 50, panY: 50 })
     openPalette()
-    fireEvent.click(screen.getByText('Zoom In'))
+    fireEvent.click(screen.getByText('放大'))
     expect(useCanvasStore.getState().zoom).toBeCloseTo(1.1)
   })
 
   it('Zoom Out 命令缩小画布', () => {
     useCanvasStore.setState({ zoom: 1, panX: 50, panY: 50 })
     openPalette()
-    fireEvent.click(screen.getByText('Zoom Out'))
+    fireEvent.click(screen.getByText('缩小'))
     expect(useCanvasStore.getState().zoom).toBeCloseTo(0.9)
   })
 
   it('Reset View 命令复位缩放与平移(原点居中)', () => {
     useCanvasStore.setState({ zoom: 2, panX: 50, panY: 50 })
     openPalette()
-    fireEvent.click(screen.getByText('Reset View'))
+    fireEvent.click(screen.getByText('复位视图'))
     const state = useCanvasStore.getState()
     expect(state.zoom).toBe(1)
     // jsdom 无 [data-canvas-container],回退 window 尺寸 → 画布原点居中
@@ -98,14 +98,14 @@ describe('CommandPalette 命令真实 action', () => {
 
   it('Settings 命令打开设置对话框', () => {
     openPalette()
-    fireEvent.click(screen.getByText('Settings'))
+    fireEvent.click(screen.getByText('打开设置'))
     expect(useUIStore.getState().settingsOpen).toBe(true)
   })
 
   it('New Canvas 命令触发 useProjectsStore 创建画布(乐观更新落地)', async () => {
     useProjectsStore.setState({ currentProject: mockProject, currentProjectId: 1 })
     openPalette()
-    fireEvent.click(screen.getByText('New Canvas'))
+    fireEvent.click(screen.getByText('新建画布'))
 
     // 乐观更新:临时画布立即进入 canvases
     expect(useProjectsStore.getState().canvases.length).toBe(1)
@@ -118,7 +118,7 @@ describe('CommandPalette 命令真实 action', () => {
     const listener = vi.fn()
     window.addEventListener(SAVE_COMMAND_EVENT, listener)
     openPalette()
-    fireEvent.click(screen.getByText('Save'))
+    fireEvent.click(screen.getByText('保存画布'))
     expect(listener).toHaveBeenCalledTimes(1)
     window.removeEventListener(SAVE_COMMAND_EVENT, listener)
   })
@@ -126,7 +126,7 @@ describe('CommandPalette 命令真实 action', () => {
   it('Export 命令导出画布 JSON 并下载', async () => {
     useCanvasStore.setState({ zoom: 2, panX: 10, panY: 20, nodes: new Map() })
     openPalette()
-    fireEvent.click(screen.getByText('Export'))
+    fireEvent.click(screen.getByText('导出画布 JSON'))
     // 导出要内联图片，action 变成异步的——下载发生在微任务之后
     await waitFor(() =>
       expect(downloadJsonFile).toHaveBeenCalledWith('{}', expect.stringMatching(/^mindmap-\d{4}-\d{2}-\d{2}\.json$/)),
@@ -175,14 +175,14 @@ describe('M-2 画布上下文守卫 / m-3 面板快捷键', () => {
   it('非画布页:画布类命令灰置禁用,全局命令(New Canvas/Settings)保持可用', () => {
     useUIStore.setState({ commandPaletteOpen: true })
     render(<CommandPalette />)
-    expect(screen.getByText('Save').closest('button')).toBeDisabled()
-    expect(screen.getByText('Export').closest('button')).toBeDisabled()
-    expect(screen.getByText('Zoom In').closest('button')).toBeDisabled()
-    expect(screen.getByText('Zoom Out').closest('button')).toBeDisabled()
-    expect(screen.getByText('Toggle Grid').closest('button')).toBeDisabled()
-    expect(screen.getByText('Reset View').closest('button')).toBeDisabled()
-    expect(screen.getByText('New Canvas').closest('button')).not.toBeDisabled()
-    expect(screen.getByText('Settings').closest('button')).not.toBeDisabled()
+    expect(screen.getByText('保存画布').closest('button')).toBeDisabled()
+    expect(screen.getByText('导出画布 JSON').closest('button')).toBeDisabled()
+    expect(screen.getByText('放大').closest('button')).toBeDisabled()
+    expect(screen.getByText('缩小').closest('button')).toBeDisabled()
+    expect(screen.getByText('切换网格').closest('button')).toBeDisabled()
+    expect(screen.getByText('复位视图').closest('button')).toBeDisabled()
+    expect(screen.getByText('新建画布').closest('button')).not.toBeDisabled()
+    expect(screen.getByText('打开设置').closest('button')).not.toBeDisabled()
   })
 
   it('非画布页:Enter 执行 Save 被拦截——不派发保存事件,给出"请先打开画布"提示', () => {
@@ -190,7 +190,7 @@ describe('M-2 画布上下文守卫 / m-3 面板快捷键', () => {
     window.addEventListener(SAVE_COMMAND_EVENT, listener)
     useUIStore.setState({ commandPaletteOpen: true })
     render(<CommandPalette />)
-    const input = screen.getByPlaceholderText('Type a command or search...')
+    const input = screen.getByPlaceholderText('输入命令名称…')
     // selectedIndex 初始 0 = New Canvas(全局命令);ArrowDown 移到 Save
     fireEvent.keyDown(input, { key: 'ArrowDown' })
     fireEvent.keyDown(input, { key: 'Enter' })
@@ -204,7 +204,7 @@ describe('M-2 画布上下文守卫 / m-3 面板快捷键', () => {
   it('非画布页:Export 被拦截——不导出空 JSON,不弹成功 toast', () => {
     useUIStore.setState({ commandPaletteOpen: true })
     render(<CommandPalette />)
-    const input = screen.getByPlaceholderText('Type a command or search...')
+    const input = screen.getByPlaceholderText('输入命令名称…')
     fireEvent.keyDown(input, { key: 'ArrowDown' })
     fireEvent.keyDown(input, { key: 'ArrowDown' })
     fireEvent.keyDown(input, { key: 'Enter' })
@@ -221,7 +221,7 @@ describe('M-2 画布上下文守卫 / m-3 面板快捷键', () => {
     window.addEventListener(SAVE_COMMAND_EVENT, listener)
     useUIStore.setState({ commandPaletteOpen: true })
     render(<CommandPalette />)
-    const input = screen.getByPlaceholderText('Type a command or search...')
+    const input = screen.getByPlaceholderText('输入命令名称…')
     fireEvent.keyDown(input, { key: 's', ctrlKey: true })
     expect(listener).toHaveBeenCalledTimes(1)
     // 与 Enter 执行后行为一致:执行完关闭面板
@@ -234,7 +234,7 @@ describe('M-2 画布上下文守卫 / m-3 面板快捷键', () => {
     useProjectsStore.setState({ currentProject: mockProject, currentProjectId: 1 })
     useUIStore.setState({ commandPaletteOpen: true })
     render(<CommandPalette />)
-    const input = screen.getByPlaceholderText('Type a command or search...')
+    const input = screen.getByPlaceholderText('输入命令名称…')
     fireEvent.keyDown(input, { key: 'n', ctrlKey: true })
     // 乐观更新:临时画布立即进入 canvases
     expect(useProjectsStore.getState().canvases.length).toBe(1)
@@ -245,7 +245,7 @@ describe('M-2 画布上下文守卫 / m-3 面板快捷键', () => {
   it('m-3:面板打开时再次 Ctrl+K 关闭面板', () => {
     useUIStore.setState({ commandPaletteOpen: true })
     render(<CommandPalette />)
-    const input = screen.getByPlaceholderText('Type a command or search...')
+    const input = screen.getByPlaceholderText('输入命令名称…')
     fireEvent.keyDown(input, { key: 'k', ctrlKey: true })
     expect(useUIStore.getState().commandPaletteOpen).toBe(false)
   })

@@ -299,4 +299,97 @@ describe('手稿文件夹', () => {
     const res = await supertest(app).post('/api/manuscript-folders').set(authA()).send({ name: '   ' })
     expect(res.status).toBe(400)
   })
+
+  it('可以改名与记住折叠状态', async () => {
+    const created = await supertest(app).post('/api/manuscript-folders').set(authA()).send({ name: '灵感' })
+    const id = created.body.data.id
+
+    const renamed = await supertest(app)
+      .put(`/api/manuscript-folders/${id}`)
+      .set(authA())
+      .send({ name: '灵感库', collapsed: true })
+    expect(renamed.status).toBe(200)
+
+    const list = await supertest(app).get('/api/manuscript-folders').set(authA())
+    const row = list.body.data.find((f: { id: number }) => f.id === id)
+    expect(row.name).toBe('灵感库')
+    expect(row.collapsed).toBe(true)
+
+    // 改名同样要挡空名字，且不能跨账号改
+    expect(
+      (await supertest(app).put(`/api/manuscript-folders/${id}`).set(authA()).send({ name: '  ' })).status,
+    ).toBe(400)
+    expect(
+      (await supertest(app).put(`/api/manuscript-folders/${id}`).set(authB()).send({ name: '抢' })).status,
+    ).toBe(404)
+  })
+
+  it('新建手稿时目标文件夹必须是自己且存在', async () => {
+    const mine = await supertest(app).post('/api/manuscript-folders').set(authA()).send({ name: '我的' })
+    const myFolderId = mine.body.data.id
+    const theirs = await supertest(app).post('/api/manuscript-folders').set(authB()).send({ name: '别人的' })
+    const theirFolderId = theirs.body.data.id
+
+    expect((await createManuscript({ folderId: 999999 })).status).toBe(404)
+    expect((await createManuscript({ folderId: theirFolderId })).status).toBe(404)
+
+    const ok = await createManuscript({ folderId: myFolderId })
+    expect(ok.status).toBe(201)
+    expect(ok.body.data.folderId).toBe(myFolderId)
+  })
+
+  it('移动手稿到别人的文件夹被拒绝，移到 null 表示未归档', async () => {
+    const mine = await supertest(app).post('/api/manuscript-folders').set(authA()).send({ name: '我的' })
+    const theirs = await supertest(app).post('/api/manuscript-folders').set(authB()).send({ name: '别人的' })
+    const id = (await createManuscript()).body.data.id
+
+    expect(
+      (await supertest(app).put(`/api/manuscripts/${id}`).set(authA()).send({ folderId: theirs.body.data.id }))
+        .status,
+    ).toBe(404)
+
+    const moved = await supertest(app).put(`/api/manuscripts/${id}`).set(authA()).send({ folderId: mine.body.data.id })
+    expect(moved.body.data.folderId).toBe(mine.body.data.id)
+
+    const unfiled = await supertest(app).put(`/api/manuscripts/${id}`).set(authA()).send({ folderId: null })
+    expect(unfiled.body.data.folderId).toBeNull()
+  })
+
+  it('删除文件夹只删它自己：子文件夹上移一层，里面的手稿变未归档', async () => {
+    const root = await supertest(app).post('/api/manuscript-folders').set(authA()).send({ name: '项目' })
+    const rootId = root.body.data.id
+    const mid = await supertest(app)
+      .post('/api/manuscript-folders')
+      .set(authA())
+      .send({ name: '技术', parentId: rootId })
+    const midId = mid.body.data.id
+    const leaf = await supertest(app)
+      .post('/api/manuscript-folders')
+      .set(authA())
+      .send({ name: '配色', parentId: midId })
+    const leafId = leaf.body.data.id
+
+    const inRoot = await createManuscript({ title: '在 root', folderId: rootId })
+    const inLeaf = await createManuscript({ title: '在 leaf', folderId: leafId })
+
+    expect((await supertest(app).delete(`/api/manuscript-folders/${rootId}`).set(authA())).status).toBe(200)
+
+    const folders = (await supertest(app).get('/api/manuscript-folders').set(authA())).body.data as Array<{
+      id: number
+      parentId: number | null
+    }>
+    const ids = folders.map((f) => f.id)
+    // 子树没有被级联毁掉，父级「项目」没了，子级挂到原来父级的位置（根）
+    expect(ids).not.toContain(rootId)
+    expect(ids).toContain(midId)
+    expect(ids).toContain(leafId)
+    expect(folders.find((f) => f.id === midId)?.parentId).toBeNull()
+    expect(folders.find((f) => f.id === leafId)?.parentId).toBe(midId)
+
+    // root 里的手稿变未归档；仍在 leaf 里的不动
+    expect((await supertest(app).get(`/api/manuscripts/${inRoot.body.data.id}`).set(authA())).body.data.folderId)
+      .toBeNull()
+    expect((await supertest(app).get(`/api/manuscripts/${inLeaf.body.data.id}`).set(authA())).body.data.folderId)
+      .toBe(leafId)
+  })
 })

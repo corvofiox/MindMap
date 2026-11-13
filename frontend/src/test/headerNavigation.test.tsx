@@ -9,6 +9,7 @@ import { render, screen, fireEvent, within } from '@testing-library/react'
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom'
 import { Header } from '@/components/layout/Header'
 import { useAuthStore } from '@/store/useAuthStore'
+import { useUIStore } from '@/store/useUIStore'
 
 function LocationProbe() {
   const location = useLocation()
@@ -79,8 +80,19 @@ describe('顶栏', () => {
 
     // 顶栏那个「笔记本」按钮还在（唯一的），菜单里只留账号设置与退出登录
     expect(screen.getAllByText('笔记本')).toHaveLength(1)
-    expect(screen.getByText('测试同学')).toBeTruthy()
+    expect(screen.getByText('账号设置')).toBeTruthy()
     expect(screen.getByText('退出登录')).toBeTruthy()
+  })
+
+  it('账号菜单与笔记本页那一套一致：账号设置 / 退出登录，不拿昵称当菜单项', () => {
+    renderHeader('/projects')
+
+    fireEvent.click(screen.getByLabelText('账号菜单'))
+
+    fireEvent.click(screen.getByText('账号设置'))
+    expect(useUIStore.getState().accountSettingsOpen).toBe(true)
+    // 昵称不再被塞进菜单项（头像上已有首字母）
+    expect(screen.queryByText('测试同学')).toBeNull()
   })
 })
 

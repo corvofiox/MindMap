@@ -48,4 +48,26 @@ describe('cleanHtmlContent（提交期清洗）', () => {
     expect(out).not.toContain('script')
     expect(out).not.toContain('onclick')
   })
+
+  it('保留标题 / 引用 / 列表——工具栏提供的块级格式不能在保存时被拆成纯文本', () => {
+    for (const [tag, html] of [
+      ['h1', '<h1>大标题</h1>'],
+      ['h2', '<h2>中标题</h2>'],
+      ['h3', '<h3>小标题</h3>'],
+      ['blockquote', '<blockquote>引用一句</blockquote>'],
+      ['ul', '<ul><li>一</li><li>二</li></ul>'],
+      ['ol', '<ol><li>甲</li></ol>'],
+    ] as const) {
+      const out = cleanHtmlContent(html)
+      expect(out, tag).toContain(`<${tag}`)
+      expect(out, tag).not.toMatch(new RegExp(`</?${tag}>.*<br>.*</${tag}>`, 'i'))
+    }
+  })
+
+  it('标题里的行内格式与颜色一起保留', () => {
+    const out = cleanHtmlContent('<h2><b>粗</b><span style="color: #dc2626">红</span></h2>')
+    expect(out).toContain('<h2')
+    expect(out).toContain('<b>粗</b>')
+    expect(out).toContain('color: #dc2626')
+  })
 })
