@@ -60,23 +60,23 @@ function App() {
       <DragGhost />
       <ToastContainer />
       <Routes>
-        <Route path="/login" element={!isAuthenticated ? <LoginPage /> : <Navigate to="/notebook" />} />
-        <Route path="/register" element={!isAuthenticated ? <RegisterPage /> : <Navigate to="/notebook" />} />
+        <Route path="/login" element={!isAuthenticated ? <LoginPage /> : <Navigate to="/projects" />} />
+        <Route path="/register" element={!isAuthenticated ? <RegisterPage /> : <Navigate to="/projects" />} />
         {/* 笔记本：独立 shell（左列表 + 中编辑区），不套画布的侧栏与节点池面板 */}
         <Route element={<ProtectedRoute />}>
           <Route path="/notebook" element={<NotebookPage />} />
           <Route path="/notebook/:id" element={<NotebookPage />} />
         </Route>
 
-        {/* 思维导图：地址保持不变（/projects、/canvas/:id），只是根路径落点改了 */}
+        {/* 思维导图：地址保持不变（/projects、/canvas/:id），根路径落点为项目列表 */}
         <Route path="/" element={<MainLayout />}>
-          <Route index element={<Navigate to="/notebook" replace />} />
+          <Route index element={<Navigate to="/projects" replace />} />
           <Route element={<ProtectedRoute />}>
             <Route path="projects" element={<ProjectsPage />} />
             <Route path="canvas/:canvasId" element={<CanvasPage />} />
           </Route>
         </Route>
-        <Route path="*" element={<Navigate to={isAuthenticated ? "/notebook" : "/login"} replace />} />
+        <Route path="*" element={<Navigate to={isAuthenticated ? "/projects" : "/login"} replace />} />
       </Routes>
     </>
   )

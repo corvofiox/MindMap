@@ -19,8 +19,8 @@ export function LoginPage() {
     try {
       await login({ email, password })
       addToast({ type: 'success', title: '欢迎回来！', message: '您已成功登录' })
-      // 主页已是笔记本：登录/注册成功后落到 /notebook
-      navigate('/notebook')
+      // 主页是项目列表：登录成功后落到 /projects
+      navigate('/projects')
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : '登录失败，请检查邮箱和密码'
       addToast({ type: 'error', title: '登录失败', message: errorMessage })
