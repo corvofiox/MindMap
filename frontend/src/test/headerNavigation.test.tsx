@@ -72,15 +72,15 @@ describe('顶栏', () => {
     expect(notebook.compareDocumentPosition(search) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
-  it('账号菜单里仍有笔记本入口，点击后跳转 /notebook', () => {
+  it('账号菜单里不再重复放笔记本入口', () => {
     renderHeader('/projects')
 
     fireEvent.click(screen.getByLabelText('账号菜单'))
-    // 顶栏按钮与菜单项都叫「笔记本」，取最后一个（下拉项在 DOM 中后渲染）
-    const items = screen.getAllByText('笔记本')
-    fireEvent.click(items[items.length - 1])
 
-    expect(screen.getByTestId('location').textContent).toBe('/notebook')
+    // 顶栏那个「笔记本」按钮还在（唯一的），菜单里只留账号设置与退出登录
+    expect(screen.getAllByText('笔记本')).toHaveLength(1)
+    expect(screen.getByText('测试同学')).toBeTruthy()
+    expect(screen.getByText('退出登录')).toBeTruthy()
   })
 })
 

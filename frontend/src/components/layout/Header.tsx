@@ -157,9 +157,6 @@ export function Header() {
             </button>
           }
           items={[
-            // 笔记本入口放在账号菜单里：顶部那一排只留给左右侧栏的开关按钮
-            { label: '笔记本', action: () => navigate('/notebook'), icon: BookOpen },
-            { divider: true },
             { label: user?.nickname || user?.email || '用户', action: () => useUIStore.getState().setAccountSettingsOpen(true), icon: UserIcon },
             { divider: true },
             { label: '退出登录', action: handleLogout, icon: LogOut },
