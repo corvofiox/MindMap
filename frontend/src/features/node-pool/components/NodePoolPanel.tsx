@@ -34,6 +34,7 @@ import { FolderContextMenu } from './FolderContextMenu'
 import { NodeCardContextMenu } from './NodeCardContextMenu'
 import { ContextMenuErrorBoundary } from './ContextMenuErrorBoundary'
 import { Z_INDEX } from '@/constants'
+import { byManualOrder } from '@/features/drag-sort/reorder'
 import type { NodePoolSortOption, NodePoolSortOrder, Node } from '@/types'
 import type { NodeCard, NodePoolFolder } from '../types/node-pool'
 
@@ -321,6 +322,17 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
     updateCard(card.id, { folderId })
   }, [updateCard])
 
+  // 文件夹拖拽排序：同一父级内重排，写失败有 store 侧回滚
+  const handleReorderFolder = useCallback((movedId: number, targetId: number, position: 'before' | 'after') => {
+    const { reorderFoldersTo } = useNodePoolStore.getState()
+    void reorderFoldersTo(movedId, targetId, position).then(() => {
+      const { error } = useNodePoolStore.getState()
+      if (error) {
+        addToast({ type: 'error', title: '排序失败', message: '无法调整文件夹顺序' })
+      }
+    })
+  }, [addToast])
+
   // Handle folder collapse toggle
   const filteredCardsByFolder = useMemo(() => {
     if (!searchQuery.trim()) {
@@ -335,6 +347,9 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
         }
         result.get(folderId)!.push(card)
       })
+      // 每组按手动顺序排：拖拽排序写的就是 sortOrder，这里不认它的话
+      // 服务端已经改对了、界面却一动不动（老数据全是 0，靠稳定排序保持原样）。
+      result.forEach((list) => list.sort(byManualOrder))
       return result
     }
 
@@ -366,6 +381,7 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
       }
     })
 
+    result.forEach((list) => list.sort(byManualOrder))
     return result
   }, [cardsMap, pendingCardIds, searchQuery])
 
@@ -389,7 +405,7 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
     const buildFilteredTree = (parentId: number | null): (NodePoolFolder & { children?: NodePoolFolder[] })[] => {
       const folders = Array.from(foldersMap.values())
         .filter(folder => folder.parentId === parentId)
-        .sort((a, b) => a.sortOrder - b.sortOrder)
+        .sort(byManualOrder)
 
       return folders
         .filter(folder => {
@@ -452,9 +468,10 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
         onRemoveCard={handleRemoveCard}
         onSaveCardName={handleSaveCardName}
         editingCardId={editingCardId}
+        onReorderFolder={handleReorderFolder}
       />
     )
-  }, [filteredCardsByFolder, handleToggleFolder, handleFolderContextMenu, handleCardContextMenu, previewCardId, handleStartFolderEdit, handleSaveFolderName, handleCancelFolderEdit, editingFolderId, handleUseCard, handleRemoveCard, handleSaveCardName, editingCardId, searchQuery])
+  }, [filteredCardsByFolder, handleToggleFolder, handleFolderContextMenu, handleCardContextMenu, previewCardId, handleStartFolderEdit, handleSaveFolderName, handleCancelFolderEdit, editingFolderId, handleUseCard, handleRemoveCard, handleSaveCardName, editingCardId, searchQuery, handleReorderFolder])
 
   return (
     <aside

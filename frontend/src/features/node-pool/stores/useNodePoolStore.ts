@@ -1062,6 +1062,29 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => {
     }
   },
 
+  /**
+   * 拖拽排序：把文件夹 movedId 放到 targetId 的前/后。
+   *
+   * 与 reorderCardsTo 同一套口径（计算走共用的纯函数）。跨父级的拖拽
+   * 由 updateFolder({ parentId }) 负责，这里只处理同一层级内重排——
+   * 否则"拖到别人下面"会变成既改归属又改顺序的复合动作，失败时无法只回滚一半。
+   */
+  reorderFoldersTo: async (movedId: number, targetId: number, position: 'before' | 'after') => {
+    const { foldersMap, reorderFolders: applyOrder } = get()
+    const moved = foldersMap.get(movedId)
+    const target = foldersMap.get(targetId)
+    if (!moved || !target) return
+    if ((moved.parentId ?? null) !== (target.parentId ?? null)) return
+
+    const siblings = Array.from(foldersMap.values())
+      .filter((item) => (item.parentId ?? null) === (target.parentId ?? null))
+      .map((item) => ({ id: item.id, sortOrder: item.sortOrder ?? 0 }))
+
+    const updates = computeReorder(siblings, movedId, targetId, position)
+    if (updates.length === 0) return
+    await applyOrder(updates)
+  },
+
   toggleFolderCollapsed: (id: number) => {
     set((state) => {
       const folder = state.foldersMap.get(id)

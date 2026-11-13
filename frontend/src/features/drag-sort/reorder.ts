@@ -24,6 +24,36 @@ export interface ReorderUpdate {
 const STEP = 10
 
 /**
+ * 文件夹行拖拽载荷的前缀。
+ *
+ * 画布行/卡片行往 dataTransfer 里写的是纯数字 id，文件夹行要是也写纯数字，
+ * 两边的 dragover 处理器就会互相把对方认成自己人——把画布拖到文件夹上会变成
+ * "把文件夹挪走"。加前缀让两类拖拽在载荷层就分得清。
+ */
+export const FOLDER_DRAG_PREFIX = 'folder:'
+
+export function encodeFolderDragId(id: number): string {
+  return `${FOLDER_DRAG_PREFIX}${id}`
+}
+
+/** 解析文件夹拖拽载荷；不是文件夹就返回 null（调用方据此放行其他拖拽）。 */
+export function parseFolderDragId(raw: string | null | undefined): number | null {
+  if (!raw || !raw.startsWith(FOLDER_DRAG_PREFIX)) return null
+  const id = Number(raw.slice(FOLDER_DRAG_PREFIX.length))
+  return Number.isFinite(id) && id > 0 ? id : null
+}
+
+/**
+ * 手动顺序比较器：sortOrder 升序，相等时保持原顺序。
+ *
+ * 老数据里一堆 sortOrder = 0，此时 Array.prototype.sort 的稳定性保证了
+ * "没拖过的条目还是原来那样"，不会因为加了排序就整片重排。
+ */
+export function byManualOrder<T extends { sortOrder?: number | null }>(a: T, b: T): number {
+  return (a.sortOrder ?? 0) - (b.sortOrder ?? 0)
+}
+
+/**
  * 把 `movedId` 移到 `targetId` 的前面或后面，返回需要更新的条目。
  *
  * 规则：

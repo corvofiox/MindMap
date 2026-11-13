@@ -83,6 +83,7 @@ export function NotebookPage() {
     reorder,
     addFolder,
     removeFolder,
+    reorderFolders,
     sendToPool,
     restoreFromCard,
   } = useNotebookStore()
@@ -562,6 +563,7 @@ export function NotebookPage() {
               onDeleteFolder={(id) => { void handleDeleteFolder(id) }}
               onMoveToFolder={(id, folderId) => { void moveToFolder(id, folderId) }}
               onReorder={(movedId, targetId, position) => { void reorder(movedId, targetId, position) }}
+              onReorderFolder={(movedId, targetId, position) => { void reorderFolders(movedId, targetId, position) }}
               onDelete={(id) => { void handleDeleteById(id) }}
             />
           </div>

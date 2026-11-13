@@ -446,6 +446,14 @@ export async function createManuscriptFolder(data: { name: string; parentId?: nu
   return await apiClient.post<ManuscriptFolder>(API_ENDPOINTS.MANUSCRIPT_FOLDERS, data)
 }
 
+/** 手稿文件夹排序（拖拽后用）。后端只回 { id }，本地顺序按提交值自己排。 */
+export async function updateManuscriptFolder(
+  id: number,
+  data: { name?: string; collapsed?: boolean; sortOrder?: number },
+): Promise<{ id: number }> {
+  return await apiClient.put<{ id: number }>(`${API_ENDPOINTS.MANUSCRIPT_FOLDERS}/${id}`, data)
+}
+
 export async function deleteManuscriptFolder(id: number): Promise<{ id: number }> {
   return await apiClient.delete<{ id: number }>(`${API_ENDPOINTS.MANUSCRIPT_FOLDERS}/${id}`)
 }

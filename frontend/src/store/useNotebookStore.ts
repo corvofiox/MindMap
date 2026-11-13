@@ -19,6 +19,7 @@ import {
   nodeCardToManuscript,
   reorderManuscripts,
   updateManuscript,
+  updateManuscriptFolder,
 } from '@/services/api'
 import { computeReorder } from '@/features/drag-sort/reorder'
 import { logger } from '@/utils/logger'
@@ -51,6 +52,8 @@ interface NotebookState {
   /** 收纳：新建手稿夹；parentId 非空时建成子文件夹。 */
   addFolder: (name: string, parentId?: number | null) => Promise<void>
   removeFolder: (id: number) => Promise<void>
+  /** 拖拽排序：把文件夹 movedId 放到 targetId 的前/后（同一父级内），并落库 */
+  reorderFolders: (movedId: number, targetId: number, position: 'before' | 'after') => Promise<void>
 }
 
 export const useNotebookStore = create<NotebookState>((set, get) => ({
@@ -265,5 +268,47 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
     // 只在本地删掉这一条会留下过期的层级与落点，直接按服务端重新对齐。
     await get().loadFolders()
     await get().load()
+  },
+
+  /**
+   * 文件夹拖拽排序：同一父级内重排。
+   *
+   * 跨父级的拖拽不该走这里（那会变成"既改归属又改顺序"，失败时没法只回滚一半）；
+   * 这里遇到不同父级直接返回，不做任何写库。
+   */
+  reorderFolders: async (movedId, targetId, position) => {
+    const folders = get().folders
+    const moved = folders.find((item) => item.id === movedId)
+    const target = folders.find((item) => item.id === targetId)
+    if (!moved || !target) return
+    if ((moved.parentId ?? null) !== (target.parentId ?? null)) return
+
+    const siblings = folders.filter((item) => (item.parentId ?? null) === (target.parentId ?? null))
+    const updates = computeReorder(
+      siblings.map((item) => ({ id: item.id, sortOrder: item.sortOrder ?? 0 })),
+      movedId,
+      targetId,
+      position,
+    )
+    if (updates.length === 0) return
+
+    const previous = folders
+    const orderOf = new Map(updates.map((update) => [update.id, update.sortOrder]))
+    set((state) => ({
+      folders: state.folders.map((item) =>
+        orderOf.has(item.id) ? { ...item, sortOrder: orderOf.get(item.id)! } : item,
+      ),
+    }))
+
+    try {
+      await Promise.all(
+        updates.map((update) => updateManuscriptFolder(update.id, { sortOrder: update.sortOrder })),
+      )
+    } catch (error) {
+      // 部分成功时只回退失败项：全量回退会与服务端已写入的顺序打架
+      set({ folders: previous, error: error instanceof Error ? error.message : '文件夹排序失败' })
+      logger.error('[notebook] 文件夹排序失败', error)
+      throw error
+    }
   },
 }))

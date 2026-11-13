@@ -1,6 +1,13 @@
 import { useMemo, useState } from 'react'
 import { ChevronRight, Folder, FolderPlus, Inbox, LayoutGrid, Trash2 } from 'lucide-react'
 import type { ManuscriptFolder, ManuscriptSummary } from '@/services/api'
+import {
+  byManualOrder,
+  encodeFolderDragId,
+  parseFolderDragId,
+  resolveDropPosition,
+  type DropPosition,
+} from '@/features/drag-sort/reorder'
 
 /** 左栏的选中项：全部 / 未归档 / 某个具体文件夹 */
 export type FolderSelection = number | 'all' | 'unfiled'
@@ -52,7 +59,7 @@ export function buildFolderTree<F extends FolderLike>(
   const build = (parent: number | null): FolderNode<F>[] =>
     (byParent.get(parent) ?? [])
       .slice()
-      .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name))
+      .sort((a, b) => byManualOrder(a, b) || a.name.localeCompare(b.name))
       .map((folder) => {
         const children = build(folder.id)
         const count = (directCount.get(folder.id) ?? 0) + children.reduce((sum, child) => sum + child.count, 0)
@@ -86,6 +93,8 @@ interface NotebookFolderTreeProps {
   onSelect: (selection: FolderSelection) => void
   onCreate: (parentId: number | null) => void
   onDelete: (id: number) => void
+  /** 拖拽排序：把文件夹拖到另一个文件夹的前/后 */
+  onReorder?: (movedId: number, targetId: number, position: 'before' | 'after') => void
 }
 
 /**
@@ -106,11 +115,13 @@ export function NotebookFolderTree({
   onSelect,
   onCreate,
   onDelete,
+  onReorder,
 }: NotebookFolderTreeProps) {
   const tree = useMemo(() => buildFolderTree(folders, manuscripts), [folders, manuscripts])
   const total = manuscripts.length
   const unfiled = manuscripts.filter((item) => item.folderId === null || item.folderId === undefined).length
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set())
+  const [dropHint, setDropHint] = useState<{ id: number; position: DropPosition } | null>(null)
 
   const toggle = (id: number) => {
     setCollapsed((previous) => {
@@ -144,7 +155,40 @@ export function NotebookFolderTree({
           data-folder-row={node.folder.id}
           data-depth={depth}
           title={node.folder.name}
+          draggable={!!onReorder}
+          onDragStart={(event) => {
+            if (!onReorder) return
+            event.dataTransfer.effectAllowed = 'move'
+            event.dataTransfer.setData('text/plain', encodeFolderDragId(node.folder.id))
+          }}
+          onDragEnd={() => setDropHint(null)}
+          onDragOver={(event) => {
+            if (!onReorder) return
+            const dragged = parseFolderDragId(event.dataTransfer.getData('text/plain'))
+            if (dragged === null || dragged === node.folder.id) return
+            event.preventDefault()
+            event.stopPropagation()
+            event.dataTransfer.dropEffect = 'move'
+            setDropHint({
+              id: node.folder.id,
+              position: resolveDropPosition(event.currentTarget.getBoundingClientRect(), event.clientY),
+            })
+          }}
+          onDragLeave={() => setDropHint(null)}
+          onDrop={(event) => {
+            if (!onReorder) return
+            const dragged = parseFolderDragId(event.dataTransfer.getData('text/plain'))
+            setDropHint(null)
+            if (dragged === null || dragged === node.folder.id) return
+            event.preventDefault()
+            event.stopPropagation()
+            const position = resolveDropPosition(event.currentTarget.getBoundingClientRect(), event.clientY)
+            onReorder(dragged, node.folder.id, position)
+          }}
         >
+          {dropHint?.id === node.folder.id && dropHint.position === 'before' && (
+            <span className="pointer-events-none absolute inset-x-1 top-0 z-10 h-0.5 rounded-full bg-blue-500" aria-hidden="true" />
+          )}
           {active && (
             <span className="absolute left-0 top-1 bottom-1 w-[2px] rounded-full bg-blue-500" aria-hidden="true" />
           )}
@@ -199,6 +243,9 @@ export function NotebookFolderTree({
               <Trash2 size={12} />
             </button>
           </span>
+          {dropHint?.id === node.folder.id && dropHint.position === 'after' && (
+            <span className="pointer-events-none absolute inset-x-1 bottom-0 z-10 h-0.5 rounded-full bg-blue-500" aria-hidden="true" />
+          )}
         </div>
 
         {/* 子级整体包一层并画一条缩进引导线：没有它，层级只是"稍微右移"，看不出来 */}

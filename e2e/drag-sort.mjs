@@ -80,6 +80,38 @@ async function seed() {
   })
   await post('/api/users/node-pool-folders', { name: '目标文件夹' })
 
+  // 拖拽排序要用：三张卡（甲乙丙）+ 两个文件夹
+  await post('/api/users/node-pool', {
+    name: '排序卡甲',
+    content: JSON.stringify({ title: '排序卡甲', content: '<p>甲</p>' }),
+    type: 'text',
+    color: '#ffffff',
+    folderId: null,
+  })
+  await post('/api/users/node-pool', {
+    name: '排序卡乙',
+    content: JSON.stringify({ title: '排序卡乙', content: '<p>乙</p>' }),
+    type: 'text',
+    color: '#ffffff',
+    folderId: null,
+  })
+  await post('/api/users/node-pool', {
+    name: '排序卡丙',
+    content: JSON.stringify({ title: '排序卡丙', content: '<p>丙</p>' }),
+    type: 'text',
+    color: '#ffffff',
+    folderId: null,
+  })
+  await post('/api/users/node-pool-folders', { name: '排序夹甲' })
+  await post('/api/users/node-pool-folders', { name: '排序夹乙' })
+  await post('/api/users/node-pool-folders', { name: '排序夹丙' })
+
+  // 画布/手稿的文件夹树（拖拽排序对象）
+  await post(`/api/canvases/${projectId}/folders`, { name: '画布夹甲', parentId: null })
+  await post(`/api/canvases/${projectId}/folders`, { name: '画布夹乙', parentId: null })
+  await post('/api/manuscript-folders', { name: '手稿夹甲' })
+  await post('/api/manuscript-folders', { name: '手稿夹乙' })
+
   return { token, projectId, headers, post }
 }
 
@@ -175,7 +207,9 @@ async function mouseDrag(x1, y1, x2, y2, opts = {}) {
   await sleep(1200)
 }
 
-/** HTML5 拖放（列表行用的是 draggable） */
+/**
+ * HTML5 拖放（列表行用的是 draggable）
+ */
 const html5Drag = (fromSelector, toSelector, position = 'before') =>
   ev(`(() => {
     const from = document.querySelector(${JSON.stringify(fromSelector)});
@@ -195,6 +229,42 @@ const html5Drag = (fromSelector, toSelector, position = 'before') =>
     fire(to, 'drop');
     fire(from, 'dragend');
     return { ok: true };
+  })()`)
+
+/**
+ * 按"文本匹配"把 A 拖到 B 的上/下半部（HTML5 拖放）。
+ *
+ * 比 html5Drag 多一步：按 textContent 过滤——同一个选择器会命中一堆行，
+ * 只有其中两行是本次要动的（文件夹树就是这样）。
+ *
+ * 载荷**不预先灌进去**：让组件自己的 onDragStart 去 setData，
+ * 这样顺带验证了拖拽载荷的编码是对的（文件夹带 `folder:` 前缀，画布是纯数字）。
+ */
+const html5DragByText = (selector, fromText, toText, position = 'after') =>
+  ev(`(() => {
+    const all = Array.from(document.querySelectorAll(${JSON.stringify(selector)}));
+    const pick = (needle) => all.find((el) => (el.innerText || '').includes(needle));
+    const from = pick(${JSON.stringify(fromText)});
+    const to = pick(${JSON.stringify(toText)});
+    if (!from || !to) return { error: 'missing', from: !!from, to: !!to, texts: all.map((e) => (e.innerText || '').split('\\n')[0]) };
+    if (from === to) return { error: 'same-element' };
+    const dt = new DataTransfer();
+    const fire = (el, type, clientY) => {
+      const rect = el.getBoundingClientRect();
+      el.dispatchEvent(new DragEvent(type, {
+        bubbles: true, cancelable: true, dataTransfer: dt,
+        clientX: rect.left + rect.width / 2,
+        clientY: clientY ?? (rect.top + rect.height / 2),
+      }));
+    };
+    fire(from, 'dragstart');
+    const payload = dt.getData('text/plain');
+    const rect = to.getBoundingClientRect();
+    const y = ${JSON.stringify(position)} === 'before' ? rect.top + rect.height * 0.25 : rect.top + rect.height * 0.75;
+    fire(to, 'dragover', y);
+    fire(to, 'drop', y);
+    fire(from, 'dragend');
+    return { ok: true, payload };
   })()`)
 
 const rowRect = (selector) =>
@@ -293,6 +363,52 @@ await step('手稿顺序落库：刷新后仍是新顺序', async () => {
     throw new Error(`刷新后顺序变了: ${JSON.stringify(beforeReload)} → ${JSON.stringify(afterReload)}`)
   }
   return JSON.stringify(afterReload)
+})
+
+// ---------------------------------------------------------------- 手稿文件夹排序
+await send('Page.navigate', { url: `${BASE}/notebook` })
+await waitFor(`document.body.innerText.includes('手稿夹甲')`, 20000, '手稿文件夹树')
+await sleep(1200)
+
+const folderRowOrder = (prefix) =>
+  ev(`(() => {
+    const out = [];
+    document.querySelectorAll('[data-folder-row]').forEach((el) => {
+      const t = (el.innerText || '').split('\\n')[0].trim();
+      if (new RegExp('^' + ${JSON.stringify(prefix)}).test(t)) out.push({ id: el.getAttribute('data-folder-row'), name: t });
+    });
+    return out;
+  })()`)
+
+await step('手稿文件夹：把「手稿夹甲」拖到「手稿夹乙」下方，顺序真的变了', async () => {
+  const before = await folderRowOrder('手稿夹')
+  if (before.map((f) => f.name).join(',') !== '手稿夹甲,手稿夹乙') {
+    throw new Error('初始文件夹顺序不对: ' + JSON.stringify(before))
+  }
+
+  const dragResult = await html5DragByText('[data-folder-row]', '手稿夹甲', '手稿夹乙', 'after')
+  if (dragResult?.error) throw new Error('拖放失败: ' + JSON.stringify(dragResult))
+  if (!/^folder:/.test(String(dragResult.payload || ''))) {
+    throw new Error('文件夹拖拽载荷没有前缀: ' + JSON.stringify(dragResult.payload))
+  }
+
+  await sleep(1800)
+  const after = await folderRowOrder('手稿夹')
+  if (after.map((f) => f.name).join(',') !== '手稿夹乙,手稿夹甲') {
+    throw new Error('文件夹顺序没变: ' + JSON.stringify(after))
+  }
+  return `${JSON.stringify(before.map((f) => f.name))} → ${JSON.stringify(after.map((f) => f.name))}`
+})
+
+await step('手稿文件夹顺序落库：刷新后仍是新顺序', async () => {
+  await send('Page.navigate', { url: `${BASE}/notebook` })
+  await waitFor(`document.body.innerText.includes('手稿夹乙')`, 20000, '刷新后的文件夹树')
+  await sleep(1500)
+  const after = await folderRowOrder('手稿夹')
+  if (after.map((f) => f.name).join(',') !== '手稿夹乙,手稿夹甲') {
+    throw new Error('刷新后文件夹顺序变了: ' + JSON.stringify(after))
+  }
+  return JSON.stringify(after.map((f) => f.name))
 })
 
 // ---------------------------------------------------------------- 画布列表
@@ -455,6 +571,184 @@ await step('节点池：「文字+图」卡片拖到画布，影子保留文字�
   }
   if (!dropped.html.includes('<img')) throw new Error('落下来的节点丢了图片')
   return `文字与图片都在（节点数 ${beforeNodes} → ${dropped.count}）`
+})
+
+// ---------------------------------------------------------------- 节点池卡片 / 文件夹排序
+await step('节点池卡片：在池内把「排序卡甲」拖到「排序卡乙」下方，顺序真的变了', async () => {
+  // 面板此时是开着的（上一步刚用它拖到画布）
+  const readCards = () => ev(`(() => {
+    const out = [];
+    document.querySelectorAll('[data-pool-card-id]').forEach((el) => {
+      const name = (el.innerText || '').split('\\n')[0].trim();
+      if (!/^排序卡[甲乙丙]/.test(name)) return;
+      const r = el.getBoundingClientRect();
+      out.push({ id: el.getAttribute('data-pool-card-id'), name, top: Math.round(r.top), x: Math.round(r.left + r.width/2), y: Math.round(r.top + r.height/2), bottom: Math.round(r.bottom) });
+    });
+    return out.sort((a, b) => a.top - b.top);
+  })()`)
+
+  let before = await readCards()
+  if (before.length < 3) throw new Error('排序卡不足: ' + JSON.stringify(before))
+  if (before.map((c) => c.name).join(',') !== '排序卡甲,排序卡乙,排序卡丙') {
+    throw new Error('初始卡片顺序不对: ' + JSON.stringify(before.map((c) => c.name)))
+  }
+
+  // 卡片走 mousedown 拖拽，必须用真实鼠标
+  await mouseDrag(before[0].x, before[0].y, before[1].x, before[1].bottom - 6)
+
+  // 写库是异步的，给一点时间再读
+  await sleep(2000)
+  const after = await readCards()
+  if (after.map((c) => c.name).join(',') !== '排序卡乙,排序卡甲,排序卡丙') {
+    throw new Error(`卡片顺序没变: ${JSON.stringify(before.map((c) => c.name))} → ${JSON.stringify(after.map((c) => c.name))}`)
+  }
+  return `${JSON.stringify(before.map((c) => c.name))} → ${JSON.stringify(after.map((c) => c.name))}`
+})
+
+await step('节点池卡片顺序落库：刷新后仍是新顺序', async () => {
+  const canvasPath = await ev('location.pathname')
+  await send('Page.navigate', { url: `${BASE}${canvasPath}` })
+  await waitFor(`!!document.querySelector('[data-canvas-container]')`, 25000, '画布重新加载')
+  await sleep(1200)
+  await ev(`document.querySelector('button[title^="切换节点池"]')?.click()`)
+  await waitFor(
+    `(() => {
+      const p = document.querySelector('[data-node-pool="true"]');
+      if (!p) return false;
+      const r = p.getBoundingClientRect();
+      return r.width > 100 && r.right <= window.innerWidth + 1;
+    })()`,
+    15000,
+    '节点池面板滑入',
+  )
+  await sleep(1500)
+
+  const order = await ev(`(() => {
+    const out = [];
+    document.querySelectorAll('[data-pool-card-id]').forEach((el) => {
+      const name = (el.innerText || '').split('\\n')[0].trim();
+      if (!/^排序卡[甲乙丙]/.test(name)) return;
+      out.push({ name, top: Math.round(el.getBoundingClientRect().top) });
+    });
+    return out.sort((a, b) => a.top - b.top).map((c) => c.name);
+  })()`)
+  if (order.join(',') !== '排序卡乙,排序卡甲,排序卡丙') {
+    throw new Error('刷新后卡片顺序变了: ' + JSON.stringify(order))
+  }
+  return JSON.stringify(order)
+})
+
+await step('节点池文件夹：把「排序夹甲」拖到「排序夹乙」下方，顺序真的变了', async () => {
+  const folderOrder = () => ev(`(() => {
+    const seen = new Set();
+    const out = [];
+    document.querySelectorAll('[data-folder-id]').forEach((el) => {
+      const name = (el.innerText || '').split('\\n')[0].trim();
+      if (!/^排序夹[甲乙丙]/.test(name)) return;
+      if (seen.has(name)) return;
+      seen.add(name);
+      out.push({ id: el.getAttribute('data-folder-id'), name, top: Math.round(el.getBoundingClientRect().top) });
+    });
+    return out.sort((a, b) => a.top - b.top);
+  })()`)
+
+  const before = await folderOrder()
+  if (before.map((f) => f.name).join(',') !== '排序夹甲,排序夹乙,排序夹丙') {
+    throw new Error('初始文件夹顺序不对: ' + JSON.stringify(before))
+  }
+
+  const dragResult = await html5DragByText('[data-folder-id]', '排序夹甲', '排序夹乙', 'after')
+  if (dragResult?.error) throw new Error('拖放失败: ' + JSON.stringify(dragResult))
+  if (!/^folder:/.test(String(dragResult.payload || ''))) {
+    throw new Error('文件夹拖拽载荷没有前缀: ' + JSON.stringify(dragResult.payload))
+  }
+
+  await sleep(2000)
+  const after = await folderOrder()
+  if (after.map((f) => f.name).join(',') !== '排序夹乙,排序夹甲,排序夹丙') {
+    throw new Error(`文件夹顺序没变: ${JSON.stringify(before.map((f) => f.name))} → ${JSON.stringify(after.map((f) => f.name))}`)
+  }
+  return `${JSON.stringify(before.map((f) => f.name))} → ${JSON.stringify(after.map((f) => f.name))}`
+})
+
+// ---------------------------------------------------------------- 画布文件夹排序
+await step('画布文件夹：把「画布夹甲」拖到「画布夹乙」下方，顺序真的变了', async () => {
+  // 画布左侧栏的文件夹树
+  const canvasFolderOrder = () => ev(`(() => {
+    const out = [];
+    document.querySelectorAll('[data-folder-item]').forEach((el) => {
+      const t = (el.innerText || '').split('\\n')[0].trim();
+      if (!/^画布夹[甲乙]/.test(t)) return;
+      out.push({ name: t, top: Math.round(el.getBoundingClientRect().top) });
+    });
+    return out.sort((a, b) => a.top - b.top).map((f) => f.name);
+  })()`)
+
+  let before = await canvasFolderOrder()
+  if (before.length < 2) {
+    // 侧栏可能被收起：展开再读
+    await ev(`document.querySelector('button[title^="切换侧边栏"]')?.click()`)
+    await sleep(1500)
+    before = await canvasFolderOrder()
+  }
+  if (before.join(',') !== '画布夹甲,画布夹乙') {
+    throw new Error('初始画布文件夹顺序不对: ' + JSON.stringify(before))
+  }
+
+  const dragResult = await html5DragByText('[data-folder-item] > div[draggable]', '画布夹甲', '画布夹乙', 'after')
+  if (dragResult?.error) {
+    // 兜底：选择器命不中时退回按 data-folder-item 找
+    const retry = await ev(`(() => {
+      const els = Array.from(document.querySelectorAll('[data-folder-item]')).filter((el) => /^画布夹[甲乙]/.test((el.innerText || '').trim()));
+      if (els.length < 2) return { error: 'insufficient', n: els.length };
+      const from = els[0], to = els[1];
+      const dt = new DataTransfer();
+      const fire = (node, type, clientY) => {
+        const r = node.getBoundingClientRect();
+        node.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt, clientX: r.left + r.width/2, clientY: clientY ?? (r.top + r.height/2) }));
+      };
+      fire(from, 'dragstart');
+      const payload = dt.getData('text/plain');
+      const r2 = to.getBoundingClientRect();
+      fire(to, 'dragover', r2.top + r2.height * 0.75);
+      fire(to, 'drop', r2.top + r2.height * 0.75);
+      fire(from, 'dragend');
+      return { ok: true, payload };
+    })()`)
+    if (retry?.error) throw new Error('画布文件夹拖放失败: ' + JSON.stringify(retry) + ' / ' + JSON.stringify(dragResult))
+    if (!/^folder:/.test(String(retry.payload || ''))) {
+      throw new Error('画布文件夹拖拽载荷没有前缀: ' + JSON.stringify(retry.payload))
+    }
+  } else if (!/^folder:/.test(String(dragResult.payload || ''))) {
+    throw new Error('画布文件夹拖拽载荷没有前缀: ' + JSON.stringify(dragResult.payload))
+  }
+
+  await sleep(2000)
+  const after = await canvasFolderOrder()
+  if (after.join(',') !== '画布夹乙,画布夹甲') {
+    throw new Error(`画布文件夹顺序没变: ${JSON.stringify(before)} → ${JSON.stringify(after)}`)
+  }
+  return `${JSON.stringify(before)} → ${JSON.stringify(after)}`
+})
+
+await step('画布文件夹顺序落库：刷新后仍是新顺序', async () => {
+  const canvasPath = await ev('location.pathname')
+  await send('Page.navigate', { url: `${BASE}${canvasPath}` })
+  await waitFor(`!!document.querySelector('[data-canvas-container]')`, 25000, '画布重新加载')
+  await sleep(2000)
+  const after = await ev(`(() => {
+    const out = [];
+    document.querySelectorAll('[data-folder-item]').forEach((el) => {
+      const t = (el.innerText || '').split('\\n')[0].trim();
+      if (!/^画布夹[甲乙]/.test(t)) return;
+      out.push({ name: t, top: Math.round(el.getBoundingClientRect().top) });
+    });
+    return out.sort((a, b) => a.top - b.top).map((f) => f.name);
+  })()`)
+  if (after.join(',') !== '画布夹乙,画布夹甲') {
+    throw new Error('刷新后画布文件夹顺序变了: ' + JSON.stringify(after))
+  }
+  return JSON.stringify(after)
 })
 
 const failed = results.filter((r) => !r.ok)

@@ -19,6 +19,7 @@ vi.mock('@/services/api', async () => {
     manuscriptToNodeCard: vi.fn(),
     nodeCardToManuscript: vi.fn(),
     getManuscriptFolders: vi.fn(),
+    updateManuscriptFolder: vi.fn(),
   }
 })
 
@@ -170,5 +171,65 @@ describe('与节点池的双向转换', () => {
     expect(created?.id).toBe(21)
     expect(useNotebookStore.getState().active?.title).toBe('从卡片来的')
     expect(useNotebookStore.getState().manuscripts[0].id).toBe(21)
+  })
+})
+
+describe('文件夹拖拽排序', () => {
+  const folder = (id: number, sortOrder: number, parentId: number | null = null) => ({
+    id,
+    userId: 1,
+    name: `夹 ${id}`,
+    parentId,
+    sortOrder,
+    collapsed: false,
+    createdAt: 0,
+  })
+
+  it('把第一个文件夹拖到第二个下面：写库并让 2 排到 1 前面', async () => {
+    useNotebookStore.setState({ folders: [folder(1, 10), folder(2, 20), folder(3, 30)] })
+    vi.mocked(api.updateManuscriptFolder).mockResolvedValue({ id: 1 })
+
+    await useNotebookStore.getState().reorderFolders(1, 2, 'after')
+
+    // store 只负责写 sortOrder；展示顺序由文件夹树按 sortOrder 排出来
+    const order = useNotebookStore
+      .getState()
+      .folders.slice()
+      .sort((a, b) => a.sortOrder - b.sortOrder)
+      .map((f) => f.id)
+    expect(order).toEqual([2, 1, 3])
+    expect(api.updateManuscriptFolder).toHaveBeenCalledWith(1, { sortOrder: 10 })
+    expect(api.updateManuscriptFolder).toHaveBeenCalledWith(2, { sortOrder: 0 })
+    expect(api.updateManuscriptFolder).toHaveBeenCalledWith(3, { sortOrder: 20 })
+  })
+
+  it('拖到自己身上不写库', async () => {
+    useNotebookStore.setState({ folders: [folder(1, 10), folder(2, 20)] })
+
+    await useNotebookStore.getState().reorderFolders(1, 1, 'before')
+
+    expect(api.updateManuscriptFolder).not.toHaveBeenCalled()
+  })
+
+  it('跨父级拖拽只返回、不写库（那要同时改 parentId，不能只吞掉一半）', async () => {
+    useNotebookStore.setState({
+      folders: [folder(1, 10, null), folder(2, 20, 99)],
+    })
+
+    await useNotebookStore.getState().reorderFolders(1, 2, 'before')
+
+    expect(api.updateManuscriptFolder).not.toHaveBeenCalled()
+    expect(useNotebookStore.getState().folders.map((f) => f.id)).toEqual([1, 2])
+  })
+
+  it('写库失败时回滚本地顺序并记录错误', async () => {
+    useNotebookStore.setState({ folders: [folder(1, 10), folder(2, 20)] })
+    vi.mocked(api.updateManuscriptFolder).mockRejectedValue(new Error('文件夹排序失败'))
+
+    await expect(useNotebookStore.getState().reorderFolders(1, 2, 'after')).rejects.toThrow('文件夹排序失败')
+
+    // 顺序回到原样，不能让界面停留在"看起来成功"的状态
+    expect(useNotebookStore.getState().folders.map((f) => f.sortOrder)).toEqual([10, 20])
+    expect(useNotebookStore.getState().error).toBe('文件夹排序失败')
   })
 })

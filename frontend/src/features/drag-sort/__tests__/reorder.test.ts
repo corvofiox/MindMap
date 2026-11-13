@@ -6,7 +6,7 @@
  * 每一种都不能写出"顺序看起来变了但库没变"或反之的结果。
  */
 import { describe, it, expect } from 'vitest'
-import { computeReorder, resolveDropPosition, type SortableItem } from '@/features/drag-sort/reorder'
+import { computeReorder, resolveDropPosition, encodeFolderDragId, parseFolderDragId, byManualOrder, type SortableItem } from '@/features/drag-sort/reorder'
 
 const item = (id: number, sortOrder: number): SortableItem => ({ id, sortOrder })
 
@@ -131,5 +131,52 @@ describe('resolveDropPosition', () => {
 
   it('正好在中线按"后面"处理（避免抖动）', () => {
     expect(resolveDropPosition(rect, 120)).toBe('after')
+  })
+})
+
+/**
+ * 文件夹拖拽载荷。
+ *
+ * 画布行写进 dataTransfer 的是纯数字 id，文件夹行要是也写纯数字，
+ * 两边的 dragover 就会互相把对方认成自己人——把画布拖到文件夹上会
+ * 变成"把文件夹挪走"。加前缀就是为了在载荷层分清。
+ */
+describe('文件夹拖拽载荷', () => {
+  it('编码后能原样解出 id', () => {
+    expect(parseFolderDragId(encodeFolderDragId(42))).toBe(42)
+  })
+
+  it('画布载荷（纯数字）不会被当成文件夹', () => {
+    expect(parseFolderDragId('42')).toBeNull()
+  })
+
+  it('空值 / 空串 / 非数字 / 非正数都返回 null', () => {
+    expect(parseFolderDragId(null)).toBeNull()
+    expect(parseFolderDragId(undefined)).toBeNull()
+    expect(parseFolderDragId('')).toBeNull()
+    expect(parseFolderDragId('folder:')).toBeNull()
+    expect(parseFolderDragId('folder:abc')).toBeNull()
+    expect(parseFolderDragId('folder:0')).toBeNull()
+    expect(parseFolderDragId('folder:-3')).toBeNull()
+  })
+})
+
+describe('byManualOrder', () => {
+  it('按 sortOrder 升序', () => {
+    const list = [{ sortOrder: 30 }, { sortOrder: 10 }, { sortOrder: 20 }]
+    expect([...list].sort(byManualOrder).map((x) => x.sortOrder)).toEqual([10, 20, 30])
+  })
+
+  it('老数据 sortOrder 全是 0 时保持原顺序（不能因为加了排序就整片重排）', () => {
+    const list = [{ id: 'a', sortOrder: 0 }, { id: 'b', sortOrder: 0 }, { id: 'c', sortOrder: 0 }]
+    expect([...list].sort(byManualOrder).map((x) => x.id)).toEqual(['a', 'b', 'c'])
+  })
+
+  it('缺字段按 0 处理，不产生 NaN', () => {
+    const list = [{ sortOrder: 10 }, {}, { sortOrder: 5 }]
+    const sorted = [...list].sort(byManualOrder)
+    expect(sorted[0].sortOrder).toBeUndefined()
+    expect(sorted[1].sortOrder).toBe(5)
+    expect(sorted[2].sortOrder).toBe(10)
   })
 })

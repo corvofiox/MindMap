@@ -474,4 +474,52 @@ describe('手稿文件夹', () => {
     ).toMatchObject({ deleted_at: expect.any(Number) })
     expect((await supertest(app).get(`/api/manuscripts/${inOther.body.data.id}`).set(authA())).status).toBe(200)
   })
+
+  /**
+   * 文件夹拖拽排序：PUT 必须真的认 sortOrder。
+   *
+   * 这一条是回归防线——之前这个 PUT 只处理 name/collapsed，前端把 sortOrder
+   * 发过来会被静默丢掉：界面看起来变了，刷新就打回原样。
+   */
+  it('PUT 能写 sortOrder，列表按它升序返回', async () => {
+    const a = await supertest(app).post('/api/manuscript-folders').set(authA()).send({ name: '甲' })
+    const b = await supertest(app).post('/api/manuscript-folders').set(authA()).send({ name: '乙' })
+    const idA = a.body.data.id
+    const idB = b.body.data.id
+
+    // 甲拖到乙后面：乙 100、甲 200（用大值避开别的用例留下的 0）
+    expect((await supertest(app).put(`/api/manuscript-folders/${idA}`).set(authA()).send({ sortOrder: 200 })).status).toBe(200)
+    expect((await supertest(app).put(`/api/manuscript-folders/${idB}`).set(authA()).send({ sortOrder: 100 })).status).toBe(200)
+
+    const list = (await supertest(app).get('/api/manuscript-folders').set(authA())).body.data as Array<{
+      id: number
+      sortOrder: number
+    }>
+    // 只看本次这两条：库里还有别的用例留下的文件夹
+    const mine = list.filter((f) => f.id === idA || f.id === idB)
+    expect(mine.map((f) => f.id)).toEqual([idB, idA])
+    expect(mine.find((f) => f.id === idA)?.sortOrder).toBe(200)
+  })
+
+  it('PUT 的 sortOrder 拒绝非数字（不能把 sort_order 写坏）', async () => {
+    const created = await supertest(app).post('/api/manuscript-folders').set(authA()).send({ name: '甲' })
+    const id = created.body.data.id
+
+    expect((await supertest(app).put(`/api/manuscript-folders/${id}`).set(authA()).send({ sortOrder: 'abc' })).status).toBe(400)
+    expect((await supertest(app).put(`/api/manuscript-folders/${id}`).set(authA()).send({ sortOrder: Infinity })).status).toBe(400)
+
+    // 失败之后原值不能被改动
+    const list = (await supertest(app).get('/api/manuscript-folders').set(authA())).body.data as Array<{
+      id: number
+      sortOrder: number
+    }>
+    expect(list.find((f) => f.id === id)?.sortOrder).toBe(0)
+  })
+
+  it('PUT 的 sortOrder 不能跨账号写别人的文件夹', async () => {
+    const mine = await supertest(app).post('/api/manuscript-folders').set(authA()).send({ name: '我的' })
+    const id = mine.body.data.id
+
+    expect((await supertest(app).put(`/api/manuscript-folders/${id}`).set(authB()).send({ sortOrder: 99 })).status).toBe(404)
+  })
 })

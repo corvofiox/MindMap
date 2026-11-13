@@ -56,6 +56,8 @@ interface ProjectsState {
   createFolder: (projectId: number, data: Omit<Folder, 'id' | 'createdAt'>) => Promise<void>
   updateFolder: (id: number, data: Partial<Folder>) => Promise<void>
   deleteFolder: (id: number) => Promise<void>
+  /** 拖拽排序：把文件夹 movedId 放到 targetId 的前/后（同父级内） */
+  reorderFolders: (movedId: number, targetId: number, position: 'before' | 'after') => Promise<void>
 
   // Node pool actions (User-specific)
   addToNodePool: (data: Omit<NodeCard, 'id' | 'createdAt' | 'useCount' | 'userId'>) => Promise<NodeCard>
@@ -536,6 +538,50 @@ export const useProjectsStore = create<ProjectsState>()(
             }))
           } catch (error) {
             handleError(error, '更新文件夹失败')
+          }
+        },
+
+        /**
+         * 文件夹拖拽排序：同一父级内重排，只写 sortOrder。
+         *
+         * 与画布排序同一套口径（算法走共用的 computeReorder）。
+         * 跨父级不在这里做——那需要同时改 parentId，失败时无法只回滚一半。
+         */
+        reorderFolders: async (movedId, targetId, position) => {
+          const folders = get().folders
+          const moved = folders.find((f) => f.id === movedId)
+          const target = folders.find((f) => f.id === targetId)
+          if (!moved || !target) return
+          if ((moved.parentId ?? null) !== (target.parentId ?? null)) return
+
+          const siblings = folders
+            .filter((f) => (f.parentId ?? null) === (target.parentId ?? null) && f.id > 0)
+            .map((f) => ({ id: f.id, sortOrder: f.sortOrder ?? 0 }))
+
+          const updates = computeReorder(siblings, movedId, targetId, position)
+          if (updates.length === 0) return
+
+          const previous = folders
+          const orderOf = new Map(updates.map((u) => [u.id, u.sortOrder]))
+          set({
+            folders: folders.map((f) => (orderOf.has(f.id) ? { ...f, sortOrder: orderOf.get(f.id)! } : f)),
+          })
+
+          const settled = await Promise.allSettled(
+            updates.map((u) => api.updateFolder(u.id, { sortOrder: u.sortOrder })),
+          )
+          const failed = settled.filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+          if (failed.length > 0) {
+            // 部分成功时只回退失败项：全量回退会与服务端已成功的顺序打架
+            const failedIds = new Set(
+              updates.filter((_, index) => settled[index].status === 'rejected').map((u) => u.id),
+            )
+            set((state) => ({
+              folders: state.folders.map((f) =>
+                failedIds.has(f.id) ? previous.find((p) => p.id === f.id) ?? f : f,
+              ),
+            }))
+            handleError(failed[0].reason, '文件夹排序失败')
           }
         },
 

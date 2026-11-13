@@ -886,6 +886,74 @@ describe('排序', () => {
     expect(state().getFolder(1)?.sortOrder).toBe(0)
     expect(state().getFolder(2)?.sortOrder).toBe(10)
   })
+
+  it('reorderCardsTo:把第一张卡拖到第二张下面，真的写进 sortOrder', async () => {
+    useNodePoolStore.getState().setCards([
+      makeCard({ id: 1, sortOrder: 0 }),
+      makeCard({ id: 2, sortOrder: 10 }),
+      makeCard({ id: 3, sortOrder: 20 }),
+    ])
+    mockApi.updateNodeCard.mockImplementation((id: number, d: Partial<NodeCard>) =>
+      Promise.resolve(makeCard({ id, sortOrder: d.sortOrder as number })),
+    )
+
+    await state().reorderCardsTo(1, 2, 'after')
+
+    expect(selectAllCards(state()).map((c) => c.id)).toEqual([2, 1, 3])
+    // 只写真正换了位置的：3 既没挪位 sortOrder 也没变，不必碰它。
+    // 请求顺序按"新顺序"发（computeReorder 的输出顺序），不是按 id 排。
+    expect(mockApi.updateNodeCard.mock.calls.map((c) => [c[0], c[1]])).toEqual([
+      [2, { sortOrder: 0 }],
+      [1, { sortOrder: 10 }],
+    ])
+  })
+
+  it('reorderCardsTo:跨文件夹拖拽不写库（改归属是 updateCard 的事）', async () => {
+    useNodePoolStore.getState().setCards([
+      makeCard({ id: 1, sortOrder: 0, folderId: 5 }),
+      makeCard({ id: 2, sortOrder: 10, folderId: 6 }),
+    ])
+
+    await state().reorderCardsTo(1, 2, 'before')
+
+    expect(mockApi.updateNodeCard).not.toHaveBeenCalled()
+  })
+
+  it('reorderFoldersTo:同一父级内把甲拖到乙下方', async () => {
+    useNodePoolStore.getState().setFolders([
+      makeFolder({ id: 1, sortOrder: 0 }),
+      makeFolder({ id: 2, sortOrder: 10 }),
+      makeFolder({ id: 3, sortOrder: 20 }),
+    ])
+    mockApi.updateNodePoolFolder.mockImplementation((id: number, d: Partial<NodePoolFolder>) =>
+      Promise.resolve(makeFolder({ id, sortOrder: d.sortOrder as number })),
+    )
+
+    await state().reorderFoldersTo(1, 2, 'after')
+
+    expect(selectAllFolders(state()).map((f) => f.id)).toEqual([2, 1, 3])
+    // 只写真正换了位置的两条
+    expect(mockApi.updateNodePoolFolder).toHaveBeenCalledTimes(2)
+  })
+
+  it('reorderFoldersTo:跨父级不写库', async () => {
+    useNodePoolStore.getState().setFolders([
+      makeFolder({ id: 1, sortOrder: 0, parentId: 9 }),
+      makeFolder({ id: 2, sortOrder: 10, parentId: 8 }),
+    ])
+
+    await state().reorderFoldersTo(1, 2, 'before')
+
+    expect(mockApi.updateNodePoolFolder).not.toHaveBeenCalled()
+  })
+
+  it('reorderFoldersTo:拖到自己身上不写库', async () => {
+    useNodePoolStore.getState().setFolders([makeFolder({ id: 1, sortOrder: 0 })])
+
+    await state().reorderFoldersTo(1, 1, 'before')
+
+    expect(mockApi.updateNodePoolFolder).not.toHaveBeenCalled()
+  })
 })
 
 describe('validateAndFixState:状态自愈', () => {

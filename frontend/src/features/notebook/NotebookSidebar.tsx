@@ -36,6 +36,8 @@ interface NotebookSidebarProps {
   onMoveToFolder: (id: number, folderId: number | null) => void
   /** 拖拽排序：把 movedId 放到 targetId 的前/后 */
   onReorder: (movedId: number, targetId: number, position: 'before' | 'after') => void
+  /** 文件夹拖拽排序（手稿夹） */
+  onReorderFolder: (movedId: number, targetId: number, position: 'before' | 'after') => void
   onDelete: (id: number) => void
 }
 
@@ -90,6 +92,7 @@ export function NotebookSidebar({
   onDeleteFolder,
   onMoveToFolder,
   onReorder,
+  onReorderFolder,
   onDelete,
 }: NotebookSidebarProps) {
   const [menu, setMenu] = useState<{ itemId: number; x: number; y: number; up: boolean } | null>(null)
@@ -280,6 +283,7 @@ export function NotebookSidebar({
           onSelect={onSelectFolder}
           onCreate={(parentId) => handleAddFolder(parentId)}
           onDelete={handleDeleteFolder}
+          onReorder={onReorderFolder}
         />
       </div>
 

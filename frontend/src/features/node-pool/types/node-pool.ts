@@ -99,6 +99,8 @@ export interface TemporaryCard {
   updateFolder: (id: number, data: Partial<NodePoolFolder>) => Promise<void>
   removeFolder: (id: number) => Promise<void>
   reorderFolders: (updates: Array<{ id: number; sortOrder: number }>) => Promise<void>
+  /** 拖拽排序：把文件夹 movedId 放到 targetId 的前/后（同一父级内） */
+  reorderFoldersTo: (movedId: number, targetId: number, position: 'before' | 'after') => Promise<void>
   toggleFolderCollapsed: (id: number) => void
 
   // Drag state actions
@@ -218,6 +220,8 @@ export interface FolderItemProps {
   editingCardId?: number | null
   /** Callback to start editing a card */
   onStartCardEdit?: (card: NodeCard) => void
+  /** 拖拽排序：把文件夹拖到另一个文件夹的前/后 */
+  onReorderFolder?: (movedId: number, targetId: number, position: 'before' | 'after') => void
 }
 
 /**

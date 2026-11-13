@@ -835,6 +835,50 @@ describe('useProjectsStore', () => {
       expect(state.canvases.map((c) => c.id).sort((a, b) => a - b)).toEqual([11, 13])
       expect(state.error).toBe('删除文件夹失败')
     })
+
+    it('reorderFolders 把第一个拖到第二个后面：写库并让 22 排到 21 前', async () => {
+      const { store } = await freshStore({
+        '/api/canvases/folders/21': () => ok({ ...FOLDER_ROOT, sortOrder: 10 }),
+        '/api/canvases/folders/22': () => ok({ ...FOLDER_CHILD, sortOrder: 0 }),
+      })
+      // 两个都放在根级，才构成"同父级可重排"
+      const sibling: Folder = { ...FOLDER_CHILD, id: 22, parentId: null, sortOrder: 10 }
+      store.setState({ folders: [{ ...FOLDER_ROOT, sortOrder: 0 }, sibling] })
+
+      await store.getState().reorderFolders(21, 22, 'after')
+
+      const order = store
+        .getState()
+        .folders.slice()
+        .sort((a, b) => a.sortOrder - b.sortOrder)
+        .map((f) => f.id)
+      expect(order).toEqual([22, 21])
+    })
+
+    it('reorderFolders 跨父级不写库', async () => {
+      const { store } = await freshStore()
+      store.setState({ folders: [FOLDER_ROOT, FOLDER_CHILD] })
+
+      // 21 在根级、22 挂在 21 下面：跨父级，不该当成同层重排
+      await store.getState().reorderFolders(21, 22, 'before')
+
+      expect(store.getState().folders.map((f) => f.sortOrder)).toEqual([0, 0])
+    })
+
+    it('reorderFolders 写库失败时回滚本地顺序', async () => {
+      const { store } = await freshStore({
+        '/api/canvases/folders/21': () => ok({ ...FOLDER_ROOT, sortOrder: 10 }),
+        '/api/canvases/folders/22': () => fail(500, '文件夹排序失败'),
+      })
+      const sibling: Folder = { ...FOLDER_CHILD, id: 22, parentId: null, sortOrder: 10 }
+      store.setState({ folders: [{ ...FOLDER_ROOT, sortOrder: 0 }, sibling] })
+
+      await expect(store.getState().reorderFolders(21, 22, 'after')).rejects.toThrow('文件夹排序失败')
+
+      // 失败项回到原值，不能让界面停在"看起来成功"的状态
+      expect(store.getState().folders.find((f) => f.id === 22)?.sortOrder).toBe(10)
+      expect(store.getState().error).toBe('文件夹排序失败')
+    })
   })
 
   describe('节点池', () => {

@@ -936,7 +936,7 @@ canvasRouter.put(
       })
     }
 
-    const { name } = req.body
+    const { name, sortOrder } = req.body
 
     const folder = await db.query.folders.findFirst({
       where: eq(folders.id, folderId),
@@ -960,11 +960,24 @@ canvasRouter.put(
       })
     }
 
+    // 拖拽排序：只收有限整数，避免 NaN/字符串把 sort_order 写坏
+    let nextSortOrder: number | undefined
+    if (sortOrder !== undefined) {
+      if (typeof sortOrder !== 'number' || !Number.isFinite(sortOrder)) {
+        return res.status(400).json({
+          success: false,
+          error: '排序值无效',
+        })
+      }
+      nextSortOrder = Math.trunc(sortOrder)
+    }
+
     const result = await db
       .update(folders)
       .set({
         // B13: nullish 合并——空字符串可正常清空文件夹名称
         name: name ?? folder.name,
+        sortOrder: nextSortOrder !== undefined ? nextSortOrder : folder.sortOrder,
       })
       .where(eq(folders.id, folderId))
       .returning()

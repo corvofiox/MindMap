@@ -837,6 +837,62 @@ describe('canvas.controller (integration, real router + real DB)', () => {
       )
     })
 
+    /**
+     * 文件夹拖拽排序：PUT 必须真的认 sortOrder。
+     *
+     * 回归防线——之前这个 PUT 只处理 name，前端发来的 sortOrder 被静默丢掉，
+     * 界面看起来动了、刷新就打回原样。
+     */
+    it('writes folder sortOrder and lists folders in that order', async () => {
+      const first = seedFolder(t.raw, projectId, 'FIRST')
+      const second = seedFolder(t.raw, projectId, 'SECOND')
+
+      const movedA = await supertest(app)
+        .put(`/api/canvases/folders/${first}`)
+        .set(authHeader(ownerId))
+        .send({ sortOrder: 200 })
+      expect(movedA.status).toBe(200)
+
+      const movedB = await supertest(app)
+        .put(`/api/canvases/folders/${second}`)
+        .set(authHeader(ownerId))
+        .send({ sortOrder: 100 })
+      expect(movedB.status).toBe(200)
+
+      expect(readColumn<number>(t.raw, 'SELECT sort_order FROM folders WHERE id = ?', first)).toBe(200)
+      expect(readColumn<number>(t.raw, 'SELECT sort_order FROM folders WHERE id = ?', second)).toBe(100)
+
+      const list = await supertest(app)
+        .get(`/api/canvases/${projectId}/folders`)
+        .set(authHeader(ownerId))
+      const ids = (list.body.data as Array<{ id: number }>).map((f) => f.id)
+      expect(ids).toEqual([second, first])
+    })
+
+    it('rejects a non-numeric folder sortOrder without touching the stored value', async () => {
+      const folderId = seedFolder(t.raw, projectId, 'KEEP')
+
+      const bad = await supertest(app)
+        .put(`/api/canvases/folders/${folderId}`)
+        .set(authHeader(ownerId))
+        .send({ sortOrder: 'abc' })
+      expect(bad.status).toBe(400)
+
+      expect(readColumn<number>(t.raw, 'SELECT sort_order FROM folders WHERE id = ?', folderId)).toBe(0)
+      expect(readColumn<string>(t.raw, 'SELECT name FROM folders WHERE id = ?', folderId)).toBe('KEEP')
+    })
+
+    it('rejects folder sortOrder updates from a non-member', async () => {
+      const folderId = seedFolder(t.raw, projectId, 'MINE')
+
+      const forbidden = await supertest(app)
+        .put(`/api/canvases/folders/${folderId}`)
+        .set(authHeader(outsiderId))
+        .send({ sortOrder: 999 })
+      expect(forbidden.status).toBe(403)
+      expect(readColumn<number>(t.raw, 'SELECT sort_order FROM folders WHERE id = ?', folderId)).toBe(0)
+    })
+
     it('deletes a folder', async () => {
       const folderId = seedFolder(t.raw, projectId, 'Doomed')
       const res = await supertest(app)

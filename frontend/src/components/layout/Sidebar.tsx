@@ -9,7 +9,7 @@ import { createPortal } from 'react-dom'
 import { Z_INDEX } from '@/constants'
 import { getRecentProjects, formatRelativeTime, type RecentProject } from '@/utils/recentProjects'
 import { openProjectCanvas } from '@/utils/openProject'
-import { resolveDropPosition } from '@/features/drag-sort/reorder'
+import { resolveDropPosition, encodeFolderDragId, parseFolderDragId, byManualOrder } from '@/features/drag-sort/reorder'
 
 interface SidebarProps {
   open: boolean
@@ -20,7 +20,7 @@ export function Sidebar({ open }: SidebarProps) {
   const location = useLocation()
   const canvasIdMatch = location.pathname.match(/\/canvas\/(\d+)/)
   const activeCanvasId = canvasIdMatch ? parseInt(canvasIdMatch[1]) : null
-  const { projects, projectFilters, setProjectFilters, getFilteredProjects, canvases, folders, currentProject, createCanvas, createFolder, updateProject, deleteProject, setCurrentProject, loadProjects, moveCanvasToFolder, reorderCanvases, isLoading, loadingMessage, currentMemberRole, loadCanvases, refreshCanvasesSilent } = useProjectsStore()
+  const { projects, projectFilters, setProjectFilters, getFilteredProjects, canvases, folders, currentProject, createCanvas, createFolder, updateProject, deleteProject, setCurrentProject, loadProjects, moveCanvasToFolder, reorderCanvases, reorderFolders, isLoading, loadingMessage, currentMemberRole, loadCanvases, refreshCanvasesSilent } = useProjectsStore()
   const { addToast } = useUIStore()
   const { setCanvasId } = useCanvasStore()
 
@@ -34,6 +34,7 @@ export function Sidebar({ open }: SidebarProps) {
   const [dragOverFolderId, setDragOverFolderId] = useState<number | null>(null)
   const [isRootDragOver, setIsRootDragOver] = useState(false)
   const [rowDropHint, setRowDropHint] = useState<{ canvasId: number; position: 'before' | 'after' } | null>(null)
+  const [folderDropHint, setFolderDropHint] = useState<{ folderId: number; position: 'before' | 'after' } | null>(null)
 
   const [editingProjectId, setEditingProjectId] = useState<number | null>(null)
   const [editProjectName, setEditProjectName] = useState('')
@@ -163,6 +164,37 @@ export function Sidebar({ open }: SidebarProps) {
     setDragOverFolderId(null)
     setIsRootDragOver(false)
     setRowDropHint(null)
+    setFolderDropHint(null)
+  }
+
+  /**
+   * 文件夹行排序：只认"文件夹拖到文件夹上"。
+   *
+   * 载荷带 `folder:` 前缀，所以把画布拖到文件夹上仍走"移动归属"，
+   * 两种拖拽在 dataTransfer 层就分得开，不会互相误判。
+   */
+  const handleDragOverFolderRow = (event: React.DragEvent, folderId: number) => {
+    const draggedFolderId = parseFolderDragId(event.dataTransfer.getData('text/plain'))
+    if (draggedFolderId === null || draggedFolderId === folderId) return
+    event.preventDefault()
+    event.stopPropagation()
+    event.dataTransfer.dropEffect = 'move'
+    setFolderDropHint({
+      folderId,
+      position: resolveDropPosition(event.currentTarget.getBoundingClientRect(), event.clientY),
+    })
+    setDragOverFolderId(null)
+    setIsRootDragOver(false)
+  }
+
+  const handleDropOnFolderRow = (event: React.DragEvent, folderId: number) => {
+    const draggedFolderId = parseFolderDragId(event.dataTransfer.getData('text/plain'))
+    setFolderDropHint(null)
+    if (draggedFolderId === null || draggedFolderId === folderId) return
+    event.preventDefault()
+    event.stopPropagation()
+    const position = resolveDropPosition(event.currentTarget.getBoundingClientRect(), event.clientY)
+    void reorderFolders(draggedFolderId, folderId, position)
   }
 
   // 拖拽进入文件夹
@@ -735,7 +767,7 @@ export function Sidebar({ open }: SidebarProps) {
                 {/* 文件夹列表 */}
                 {folders
                   .filter(f => !f.parentId)
-                  .sort((a, b) => a.sortOrder - b.sortOrder)
+                  .sort(byManualOrder)
                   .map((folder) => (
                     <FolderItem
                       key={folder.id}
@@ -755,13 +787,16 @@ export function Sidebar({ open }: SidebarProps) {
                       onDragLeaveRow={handleDragLeaveRow}
                       onDropOnRow={handleDropOnRow}
                       isViewer={isViewer}
+                      folderDropHint={folderDropHint}
+                      onDragOverFolderRow={handleDragOverFolderRow}
+                      onDropOnFolderRow={handleDropOnFolderRow}
                     />
                   ))}
 
                 {/* 根目录画布 */}
                 {rootCanvases.length > 0 ? (
                   rootCanvases
-                    .sort((a, b) => a.sortOrder - b.sortOrder)
+                    .sort(byManualOrder)
                     .map((canvas) => (
                       <div key={canvas.id} className="relative">
                         {rowDropHint?.canvasId === canvas.id && rowDropHint.position === 'before' && (
@@ -819,6 +854,9 @@ function FolderItem({
   onDragLeaveRow,
   onDropOnRow,
   isViewer,
+  folderDropHint,
+  onDragOverFolderRow,
+  onDropOnFolderRow,
 }: {
   folder: any
   canvases: any[]
@@ -836,6 +874,9 @@ function FolderItem({
   onDragLeaveRow?: () => void
   onDropOnRow?: (event: React.DragEvent, canvasId: number) => void
   isViewer: boolean
+  folderDropHint?: { folderId: number; position: 'before' | 'after' } | null
+  onDragOverFolderRow?: (event: React.DragEvent, folderId: number) => void
+  onDropOnFolderRow?: (event: React.DragEvent, folderId: number) => void
 }) {
   const { updateFolder, deleteFolder } = useProjectsStore()
   const { addToast } = useUIStore()
@@ -1028,16 +1069,32 @@ function FolderItem({
               e.stopPropagation()
               setContextMenu({ x: e.clientX, y: e.clientY })
             }}
-            onDragOver={(e) => onDragOverFolder(e, folder.id)}
+            draggable={!!onDragOverFolderRow && !isViewer}
+            onDragStart={(event) => {
+              if (!onDragOverFolderRow) return
+              event.dataTransfer.effectAllowed = 'move'
+              event.dataTransfer.setData('text/plain', encodeFolderDragId(folder.id))
+            }}
+            onDragOver={(e) => {
+              // 文件夹拖拽优先：载荷带前缀，画布拖拽不会被误判成文件夹排序
+              onDragOverFolderRow?.(e, folder.id)
+              onDragOverFolder(e, folder.id)
+            }}
             onDragLeave={onDragLeaveFolder}
-            onDrop={(e) => onDropOnFolder(e, folder.id)}
+            onDrop={(e) => {
+              onDropOnFolderRow?.(e, folder.id)
+              onDropOnFolder(e, folder.id)
+            }}
             className={clsx(
-              'w-full flex items-center gap-2 px-2 py-2 rounded-lg cursor-pointer transition-all duration-200',
+              'relative w-full flex items-center gap-2 px-2 py-2 rounded-lg cursor-pointer transition-all duration-200',
               dragOverFolderId === folder.id
                 ? 'bg-blue-100 dark:bg-blue-900/40 ring-2 ring-blue-500 ring-opacity-50 scale-[1.02] shadow-sm'
                 : 'hover:bg-gray-100 dark:hover:bg-gray-700'
             )}
           >
+            {folderDropHint?.folderId === folder.id && folderDropHint.position === 'before' && (
+              <span className="pointer-events-none absolute inset-x-1 top-0 z-10 h-0.5 rounded-full bg-blue-500" aria-hidden="true" />
+            )}
             {folderCanvases.length > 0 && (
               <div onClick={(e) => e.stopPropagation()}>
                 {isExpanded ? (
@@ -1066,6 +1123,9 @@ function FolderItem({
             )}>
               {folderCanvases.length}
             </span>
+            {folderDropHint?.folderId === folder.id && folderDropHint.position === 'after' && (
+              <span className="pointer-events-none absolute inset-x-1 bottom-0 z-10 h-0.5 rounded-full bg-blue-500" aria-hidden="true" />
+            )}
           </div>
 
           {isExpanded && (

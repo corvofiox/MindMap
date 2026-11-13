@@ -441,6 +441,19 @@ manuscriptFolderRouter.put(
       updates.name = name
     }
     if (typeof req.body?.collapsed === 'boolean') updates.collapsed = req.body.collapsed
+    // 拖拽排序：只收有限整数，避免 NaN/字符串把 sort_order 写坏
+    if (req.body?.sortOrder !== undefined) {
+      const sortOrder = typeof req.body.sortOrder === 'number' && Number.isFinite(req.body.sortOrder)
+        ? Math.trunc(req.body.sortOrder)
+        : null
+      if (sortOrder === null) {
+        return res.status(400).json({ success: false, error: '排序值无效' })
+      }
+      updates.sortOrder = sortOrder
+    }
+    if (Object.keys(updates).length === 0) {
+      return res.json({ success: true, data: { id } })
+    }
     await db.update(manuscriptFolders).set(updates).where(eq(manuscriptFolders.id, id))
     return res.json({ success: true, data: { id } })
   }),
