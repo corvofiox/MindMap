@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react'
-import { BookOpen } from 'lucide-react'
+import { ChevronDown, Upload } from 'lucide-react'
 import { getManuscriptFolders, getManuscripts, manuscriptToNodeCard } from '@/services/api'
 import type { ManuscriptFolder, ManuscriptSummary } from '@/services/api'
 import { useUIStore } from '@/store/useUIStore'
@@ -162,16 +162,18 @@ export function NotebookImportMenu({ onImported }: NotebookImportMenuProps) {
 
   return (
     <div className="relative">
+      {/* 与笔记本页的「从节点池导入」同款：图标 + 文字 + 下指箭头 */}
       <button
+        type="button"
         onClick={toggle}
-        className={`p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 ${
-          open ? 'text-blue-600 dark:text-blue-400' : 'text-gray-600 dark:text-gray-400'
-        }`}
-        title="从笔记本导入"
         aria-label="从笔记本导入"
         aria-expanded={open}
+        title="从笔记本导入"
+        className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12.5px] font-medium text-zinc-600 transition hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-50"
       >
-        <BookOpen className="w-4 h-4" />
+        <Upload size={14} />
+        <span>从笔记本导入</span>
+        <ChevronDown size={12} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
 
       <ImportMenuShell

@@ -462,25 +462,29 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
       className={`w-72 bg-white dark:bg-gray-800 border-l border-gray-200 dark:border-gray-700 flex flex-col transition-all duration-200 fixed right-0 top-14 h-[calc(100vh-3.5rem)] ${open ? 'transform translate-x-0' : 'transform translate-x-full'}`}
       style={{ zIndex: Z_INDEX.NODE_POOL_PANEL }}
     >
-      {/* Header */}
-      <div className="h-12 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-4 flex-shrink-0">
-        <h2 className="font-semibold text-gray-800 dark:text-white">节点池</h2>
-        <div className="flex items-center gap-1">
+      {/* Header：标题 + 面板操作一行，导入入口单独一行（与笔记本页同款文字按钮） */}
+      <div className="flex-shrink-0 border-b border-gray-200 px-3 py-2 dark:border-gray-700">
+        <div className="flex items-center justify-between">
+          <h2 className="font-semibold text-gray-800 dark:text-white">节点池</h2>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setShowNewFolderInput(!showNewFolderInput)}
+              className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400"
+              title="新建文件夹"
+            >
+              <FolderPlus className="w-4 h-4" />
+            </button>
+            <button
+              onClick={handleAddToPool}
+              className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400"
+              title="添加选中节点到池"
+            >
+              <Plus className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+        <div className="mt-1">
           <NotebookImportMenu onImported={() => { void loadNodePool() }} />
-          <button
-            onClick={() => setShowNewFolderInput(!showNewFolderInput)}
-            className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400"
-            title="新建文件夹"
-          >
-            <FolderPlus className="w-4 h-4" />
-          </button>
-          <button
-            onClick={handleAddToPool}
-            className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400"
-            title="添加选中节点到池"
-          >
-            <Plus className="w-4 h-4" />
-          </button>
         </div>
       </div>
 

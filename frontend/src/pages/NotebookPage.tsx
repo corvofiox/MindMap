@@ -342,8 +342,8 @@ export function NotebookPage() {
               className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12.5px] font-medium text-zinc-600 transition hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-50"
             >
               <Upload size={14} />
-              <span className="hidden sm:inline">从节点池导入</span>
-              <ChevronDown size={12} className={`hidden transition-transform sm:block ${importOpen ? 'rotate-180' : ''}`} />
+              <span>从节点池导入</span>
+              <ChevronDown size={12} className={`transition-transform ${importOpen ? 'rotate-180' : ''}`} />
             </button>
 
             <ImportMenuShell
