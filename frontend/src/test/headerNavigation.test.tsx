@@ -59,9 +59,12 @@ describe('顶栏', () => {
     expect(within(header).getByLabelText('账号菜单')).toBeTruthy()
   })
 
-  it('画布页不显示笔记本入口', () => {
+  it('进入项目（画布页）后，笔记本入口仍在那一批里', () => {
     renderHeader('/canvas/1')
-    expect(screen.queryByLabelText('打开笔记本')).toBeNull()
+
+    const notebook = screen.getByLabelText('打开笔记本')
+    const search = screen.getByTitle('搜索节点 (Ctrl+F)')
+    expect(notebook.compareDocumentPosition(search) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it('账号菜单里仍有笔记本入口，点击后跳转 /notebook', () => {
