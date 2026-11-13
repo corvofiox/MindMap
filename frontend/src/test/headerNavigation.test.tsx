@@ -57,6 +57,11 @@ describe('顶栏', () => {
     const header = document.querySelector('header') as HTMLElement
     expect(within(header).getByLabelText('打开笔记本')).toBeTruthy()
     expect(within(header).getByLabelText('账号菜单')).toBeTruthy()
+
+    // 笔记本与其余工具之间有一条分隔线：笔记本 → 分隔 → 搜索
+    const separator = within(header).getByRole('separator')
+    expect(notebook.compareDocumentPosition(separator) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(separator.compareDocumentPosition(search) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it('进入项目（画布页）后，笔记本入口仍在那一批里', () => {

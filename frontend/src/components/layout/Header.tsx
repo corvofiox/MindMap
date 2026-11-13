@@ -95,6 +95,13 @@ export function Header() {
           笔记本
         </button>
 
+        {/* 工作区切换（笔记本）与工具按钮之间加一条分隔，别让人以为它们是同一组 */}
+        <span
+          role="separator"
+          aria-orientation="vertical"
+          className="mx-1 h-5 w-px shrink-0 bg-gray-200 dark:bg-gray-700"
+        />
+
         {/* Node Search */}
         <button
           onClick={() => useUIStore.getState().setNodeSearchOpen(true)}
