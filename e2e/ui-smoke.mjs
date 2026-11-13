@@ -109,9 +109,13 @@ if (await ev(`location.pathname === '/login'`)) {
     })()
   `)
   await ev(`Array.from(document.querySelectorAll('button')).find(b => /登录/.test(b.textContent)).click()`)
-  await waitFor('location.pathname.startsWith("/notebook")', 15000, '登录后进入 /notebook')
+  await waitFor('location.pathname === "/projects"', 15000, '登录后进入 /projects')
 }
-record('登录后落在笔记本主页', await ev('location.pathname.startsWith("/notebook")'), await ev('location.pathname'))
+record('登录后落在项目列表（主页面是 projects）', await ev('location.pathname === "/projects"'), await ev('location.pathname'))
+
+// 后续流程都在笔记本里：从顶栏的笔记本入口进去（不再假设登录落点就是笔记本）
+await send('Page.navigate', { url: `${BASE}/notebook` })
+await sleep(3000)
 
 // ---------- 2. 新建手稿并输入 ----------
 await waitFor('/新建手稿/.test(document.body.innerText)', 10000, '新建手稿按钮')
