@@ -88,9 +88,13 @@ export function cleanHtmlContent(html: string): string {
   temp.innerHTML = html
 
   // 允许保留的标签及其属性白名单
+  // 块级标签（标题 / 引用 / 列表）是统一富文本工具栏提供的格式，必须留下：
+  // 以前白名单只有行内标签，画布上写的标题和列表一保存就被拆成纯文本，
+  // 而笔记本里同样的操作能保住——"同一套编辑器"这件事就露馅了。
   const allowedTags = new Set([
     'b', 'strong', 'i', 'em', 'u', 's', 'strike', 'sub', 'sup',
-    'span', 'br', 'div', 'p', 'font'
+    'span', 'br', 'div', 'p', 'font',
+    'h1', 'h2', 'h3', 'blockquote', 'ul', 'ol', 'li',
   ])
   const allowedAttributes = new Set(['style', 'class', 'color', 'face'])
 
@@ -1356,18 +1360,13 @@ export const NodeItem = memo(function NodeItem({ node, isSelected, zoom, onDragS
     }
 
     // 检查焦点是否转移到了富文本工具栏
+    // （旧实现靠 "fixed + bg-white + border-gray-200" 三个类名猜，富文本统一后
+    //  工具栏改用 zinc 色板，于是这里永远猜不中：点一下工具栏就被判定为失焦，
+    //  编辑状态被清掉、格式化命令全部丢失。）
     if (e?.relatedTarget) {
       const target = e.relatedTarget as HTMLElement
-      // 向上查找是否在富文本工具栏内
-      let current = target
-      while (current && current !== document.body) {
-        if (current.classList.contains('fixed') &&
-          current.classList.contains('bg-white') &&
-          current.classList.contains('border-gray-200')) {
-          // 焦点转移到了富文本工具栏，不清除编辑状态
-          return
-        }
-        current = current.parentElement
+      if (target.closest?.('[data-rich-text-toolbar="true"]')) {
+        return
       }
     }
 

@@ -220,6 +220,9 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
 
   removeFolder: async (id) => {
     await deleteManuscriptFolder(id)
-    set((state) => ({ folders: state.folders.filter((folder) => folder.id !== id) }))
+    // 删文件夹会改变别的行的归属（子文件夹上移、里面的手稿变成未归档），
+    // 只在本地删掉这一条会留下过期的层级与落点，直接按服务端重新对齐。
+    await get().loadFolders()
+    await get().load()
   },
 }))

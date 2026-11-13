@@ -223,6 +223,8 @@ export function NotebookPage() {
     flushSave()
     const card = await sendToPool(active.id)
     if (card) {
+      // 刚送过去的卡片要立刻能在「从节点池导入」里看到，否则菜单还停在旧快照上
+      void loadNodePool()
       addToast({
         type: 'success',
         title: '已送入节点池',
@@ -231,6 +233,14 @@ export function NotebookPage() {
     } else {
       addToast({ type: 'error', title: '送入失败', message: '请稍后重试' })
     }
+  }
+
+  const toggleImportMenu = () => {
+    const next = !importOpen
+    setImportOpen(next)
+    if (!next) setCardPreview(null)
+    // 每次打开都对齐一次服务端：节点池可能在别处（画布/另一标签页）变过
+    else void loadNodePool()
   }
 
   const handleRestore = async (cardId: number) => {
@@ -373,7 +383,7 @@ export function NotebookPage() {
           <div className="relative">
             <button
               type="button"
-              onClick={() => setImportOpen((value) => !value)}
+              onClick={toggleImportMenu}
               className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12.5px] font-medium text-zinc-600 transition hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-50"
             >
               <Upload size={14} />

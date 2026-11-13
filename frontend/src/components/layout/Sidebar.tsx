@@ -8,6 +8,7 @@ import clsx from 'clsx'
 import { createPortal } from 'react-dom'
 import { Z_INDEX } from '@/constants'
 import { getRecentProjects, formatRelativeTime, type RecentProject } from '@/utils/recentProjects'
+import { openProjectCanvas } from '@/utils/openProject'
 
 interface SidebarProps {
   open: boolean
@@ -296,8 +297,13 @@ export function Sidebar({ open }: SidebarProps) {
   }, [showProjectMenu])
 
   const handleSelectProject = async (project: any) => {
-    await setCurrentProject(project)
-    navigate(`/canvas/new`)
+    // 与项目卡片同一个入口逻辑：进最近的一张画布，没有就建一张
+    const canvasId = await openProjectCanvas(project)
+    if (canvasId === null) {
+      addToast({ type: 'error', title: '打不开项目', message: '创建画布失败，请稍后重试' })
+      return
+    }
+    navigate(`/canvas/${canvasId}`)
   }
 
   const handleBackToProjects = () => {

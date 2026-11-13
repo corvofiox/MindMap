@@ -8,6 +8,7 @@ import { useAuthStore } from '@/store/useAuthStore'
 import type { Project } from '@/types'
 import { Z_INDEX } from '@/constants'
 import { addRecentProject } from '@/utils/recentProjects'
+import { openProjectCanvas } from '@/utils/openProject'
 
 interface EditState {
   id: number | null
@@ -29,7 +30,7 @@ interface CollaborativeSwitchState {
 
 export function ProjectsPage() {
   const navigate = useNavigate()
-  const { projects, getFilteredProjects, loadProjects, createProject, deleteProject, updateProject, setCurrentProject, restoreCurrentProject, isLoading, loadingMessage, setProjectFilters } = useProjectsStore()
+  const { projects, getFilteredProjects, loadProjects, createProject, deleteProject, updateProject, restoreCurrentProject, isLoading, loadingMessage, setProjectFilters } = useProjectsStore()
   const { addToast, nodePoolOpen } = useUIStore()
   const { user } = useAuthStore()
 
@@ -176,8 +177,14 @@ export function ProjectsPage() {
     if (editState.id === project.id) return
     // 记录到最近访问
     addRecentProject(project)
-    await setCurrentProject(project)
-    navigate(`/canvas/new`)
+    // 进项目 = 进它最近的一张画布（没有就先建一张）；以前这里去 /canvas/new，
+    // 而那个地址没有对应画布，点开项目只会看到"请先选择一个画布"。
+    const canvasId = await openProjectCanvas(project)
+    if (canvasId === null) {
+      addToast({ type: 'error', title: '打不开项目', message: '创建画布失败，请稍后重试' })
+      return
+    }
+    navigate(`/canvas/${canvasId}`)
   }
 
   const formatDate = (dateString: string) => {

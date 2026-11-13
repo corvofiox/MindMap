@@ -157,7 +157,9 @@ export function Header() {
             </button>
           }
           items={[
-            { label: user?.nickname || user?.email || '用户', action: () => useUIStore.getState().setAccountSettingsOpen(true), icon: UserIcon },
+            // 与笔记本页顶栏的账号菜单保持一致：账号设置 / 分隔线 / 退出登录。
+            // 昵称不再当作菜单项（用户在头像与账号设置里都看得到）。
+            { label: '账号设置', action: () => useUIStore.getState().setAccountSettingsOpen(true), icon: UserIcon },
             { divider: true },
             { label: '退出登录', action: handleLogout, icon: LogOut },
           ]}

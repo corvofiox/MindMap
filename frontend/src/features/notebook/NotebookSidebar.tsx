@@ -371,7 +371,7 @@ export function NotebookSidebar({
                 role="menuitem"
                 aria-haspopup="menu"
                 aria-expanded={moveOpen}
-                onClick={() => setMoveOpen((open) => !open)}
+                onClick={() => setMoveOpen(true)}
                 className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-[12.5px] text-zinc-700 transition hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-700"
               >
                 <FolderInput size={13} className="text-zinc-400" />

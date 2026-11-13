@@ -1,9 +1,20 @@
+import { useEffect } from 'react'
 import { useUIStore } from '@/store/useUIStore'
 import { X, Settings2 } from 'lucide-react'
 import { Z_INDEX } from '@/constants'
 
 export function SettingsDialog() {
   const { settingsOpen, setSettingsOpen, theme, setTheme, dragMode, setDragMode, gridVisible, setGridVisible, zoomStep, setZoomStep } = useUIStore()
+
+  // Esc 关闭：模态弹窗只靠点遮罩关闭对键盘用户不友好
+  useEffect(() => {
+    if (!settingsOpen) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setSettingsOpen(false)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [settingsOpen, setSettingsOpen])
 
   if (!settingsOpen) return null
 
@@ -14,6 +25,9 @@ export function SettingsDialog() {
       onClick={() => setSettingsOpen(false)}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="设置"
         className="w-full max-w-2xl bg-white dark:bg-gray-800 rounded-xl shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >

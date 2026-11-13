@@ -2518,23 +2518,29 @@ export function CanvasPage() {
   // Handle click outside to end group name editing
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
-      if (editingId) {
-        const target = e.target as HTMLElement
-        if (target.tagName !== 'INPUT') {
-          const group = groups.get(editingId)
-          if (group && editingGroupName !== group.name) {
-            updateGroupWithoutHistory(editingId, { name: editingGroupName })
-          }
-          setEditingId(null)
-        }
+      if (!editingId) return
+      // 这个"点外面结束编辑"只服务于分组改名。节点标题/正文的收尾由 NodeItem 的
+      // blur 处理，富文本工具栏更是编辑的一部分：以前这里对任何 editingId 都
+      // setEditingId(null)，结果在画布上点一下工具栏（加粗/标题/颜色）编辑就被关掉，
+      // 命令还没执行就丢失了焦点——画布上的富文本等于用不了。
+      const group = groups.get(editingId)
+      if (!group) return
+
+      const target = e.target as HTMLElement
+      if (target.tagName === 'INPUT') return
+      if (target.closest('[data-rich-text-toolbar="true"]')) return
+
+      if (editingGroupName !== group.name) {
+        updateGroupWithoutHistory(editingId, { name: editingGroupName })
       }
+      setEditingId(null)
     }
 
     document.addEventListener('mousedown', handleClickOutside)
     return () => {
       document.removeEventListener('mousedown', handleClickOutside)
     }
-  }, [editingId, editingGroupName, groups, updateGroup, setEditingId])
+  }, [editingId, editingGroupName, groups, updateGroupWithoutHistory, setEditingId])
 
   // Handle connection start event from NodeItem
   useEffect(() => {
@@ -4125,10 +4131,12 @@ export function CanvasPage() {
           x = viewportWidth - toolbarWidth / 2 - padding
         }
 
-        // 垂直边界检查：优先显示在节点下方，如果空间不足则显示在上方
+        // 垂直边界检查：优先显示在节点下方，如果空间不足则显示在上方。
+        // 上方也放不下时（节点半出屏/在视口下缘）把工具栏按在视口内——
+        // 以前只判断"放上方"，节点靠下时工具栏会跑到屏幕外，看不见也点不到。
         if (y + toolbarHeight > viewportHeight - padding) {
-          // 显示在节点上方
-          y = rect.top + nodeY - node.height * zoom - toolbarHeight - 10
+          const above = rect.top + nodeY - node.height * zoom - toolbarHeight - 10
+          y = above >= padding ? above : Math.max(padding, viewportHeight - padding - toolbarHeight)
         }
 
         // 确保不超出顶部

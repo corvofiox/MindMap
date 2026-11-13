@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+﻿import { useState, useEffect, useCallback } from 'react'
 import { useUIStore } from '@/store/useUIStore'
 import { useProjectsStore } from '@/store/useProjectsStore'
 import { useCanvasStore } from '@/store/useCanvasStore'
@@ -33,7 +33,7 @@ interface PaletteCommand {
 const commands: PaletteCommand[] = [
   {
     id: 'new-canvas',
-    label: 'New Canvas',
+    label: '新建画布',
     shortcut: 'Ctrl+N',
     action: () => {
       const { currentProject, canvases, createCanvas } = useProjectsStore.getState()
@@ -60,7 +60,7 @@ const commands: PaletteCommand[] = [
   },
   {
     id: 'save',
-    label: 'Save',
+    label: '保存画布',
     shortcut: 'Ctrl+S',
     requiresCanvas: true,
     action: () => {
@@ -71,7 +71,7 @@ const commands: PaletteCommand[] = [
   },
   {
     id: 'export',
-    label: 'Export',
+    label: '导出画布 JSON',
     shortcut: 'Ctrl+E',
     requiresCanvas: true,
     action: async () => {
@@ -93,20 +93,20 @@ const commands: PaletteCommand[] = [
   },
   {
     id: 'settings',
-    label: 'Settings',
+    label: '打开设置',
     shortcut: 'Ctrl+,',
     action: () => useUIStore.getState().setSettingsOpen(true),
   },
   {
     id: 'toggle-grid',
-    label: 'Toggle Grid',
+    label: '切换网格',
     shortcut: 'H',
     requiresCanvas: true,
     action: () => useUIStore.getState().toggleGrid(),
   },
   {
     id: 'zoom-in',
-    label: 'Zoom In',
+    label: '放大',
     shortcut: 'Ctrl++',
     requiresCanvas: true,
     action: () => {
@@ -116,7 +116,7 @@ const commands: PaletteCommand[] = [
   },
   {
     id: 'zoom-out',
-    label: 'Zoom Out',
+    label: '缩小',
     shortcut: 'Ctrl+-',
     requiresCanvas: true,
     action: () => {
@@ -126,7 +126,7 @@ const commands: PaletteCommand[] = [
   },
   {
     id: 'reset-view',
-    label: 'Reset View',
+    label: '复位视图',
     shortcut: 'Ctrl+0',
     requiresCanvas: true,
     action: () => {
@@ -245,7 +245,7 @@ export function CommandPalette() {
               setQuery(e.target.value)
               setSelectedIndex(0)
             }}
-            placeholder="Type a command or search..."
+            placeholder="输入命令名称…"
             className="flex-1 bg-transparent border-0 outline-none text-gray-900 dark:text-white placeholder-gray-500"
             autoFocus
           />
@@ -281,7 +281,7 @@ export function CommandPalette() {
 
           {filteredCommands.length === 0 && (
             <div className="text-center py-8 text-gray-500 dark:text-gray-400">
-              No commands found
+              没有匹配的命令
             </div>
           )}
         </div>

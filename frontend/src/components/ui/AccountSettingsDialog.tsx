@@ -49,9 +49,19 @@ export function AccountSettingsDialog() {
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
 
-  // Delete account state
+  // 删除账号状态
   const [deletePassword, setDeletePassword] = useState('')
   const [deleteConfirmation, setDeleteConfirmation] = useState('')
+
+  // Esc 关闭：与设置弹窗同一套键盘行为（必须在提前 return 之前声明 hook）
+  useEffect(() => {
+    if (!accountSettingsOpen) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setAccountSettingsOpen(false)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [accountSettingsOpen, setAccountSettingsOpen])
 
   if (!accountSettingsOpen) return null
 
@@ -201,8 +211,10 @@ export function AccountSettingsDialog() {
       className="fixed inset-0 bg-black/50 flex items-center justify-center"
       style={{ zIndex: Z_INDEX.DIALOG }}
       onClick={() => setAccountSettingsOpen(false)}
-    >
-      <div
+    >      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="账号设置"
         className="w-full max-w-2xl bg-white dark:bg-gray-800 rounded-xl shadow-2xl flex flex-col max-h-[90vh]"
         onClick={(e) => e.stopPropagation()}
       >
@@ -211,7 +223,7 @@ export function AccountSettingsDialog() {
           <div className="flex items-center gap-2">
             <ActiveIcon className="w-5 h-5 text-gray-600 dark:text-gray-400" />
             <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
-              账户设置
+              账号设置
             </h2>
           </div>
 
