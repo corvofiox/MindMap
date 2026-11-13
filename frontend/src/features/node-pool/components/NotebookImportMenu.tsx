@@ -1,30 +1,48 @@
 import { useCallback, useMemo, useState } from 'react'
-import { BookOpen, ChevronRight, FolderClosed, Image as ImageIcon } from 'lucide-react'
+import { BookOpen } from 'lucide-react'
 import { getManuscriptFolders, getManuscripts, manuscriptToNodeCard } from '@/services/api'
 import type { ManuscriptFolder, ManuscriptSummary } from '@/services/api'
 import { useUIStore } from '@/store/useUIStore'
 import { buildFolderTree } from '@/features/notebook/NotebookFolderTree'
+import {
+  ImportMenuFolderRow,
+  ImportMenuPreview,
+  ImportMenuRow,
+  ImportMenuShell,
+} from '@/features/import-menu/ImportMenu'
 
 interface NotebookImportMenuProps {
   /** 导入成功后的回调（通常用来刷新节点池） */
   onImported: () => void
 }
 
-interface Row {
-  kind: 'folder' | 'manuscript'
+interface ManuscriptRow {
+  kind: 'manuscript'
   id: number
   label: string
   depth: number
-  imageCount?: number
-  previewText?: string
+  imageCount: number
+  previewText: string
 }
+
+interface FolderRow {
+  kind: 'folder'
+  id: number
+  label: string
+  depth: number
+  count: number
+}
+
+type Row = ManuscriptRow | FolderRow
 
 /**
  * 节点池里的「从笔记本导入」。
  *
- * 与笔记本页的「从节点池导入」互为反向：那边把卡片还原成手稿，这边把手稿
- * 转成卡片。菜单按文件夹层级展示手稿，悬停出预览——否则一长串同名手稿
- * 根本分不清要导哪一篇。
+ * 与笔记本页的「从节点池导入」互为反向；两者共用同一套菜单外壳与行样式
+ * （features/import-menu），避免同一个动作在两处长成两个样子。
+ *
+ * 文件夹默认收起：手稿可能几十篇、文件夹还带嵌套，全展开会把菜单撑成一面墙。
+ * 收起时文件夹行仍显示"含子孙"的篇数，想看内容再点开。
  */
 export function NotebookImportMenu({ onImported }: NotebookImportMenuProps) {
   const { addToast } = useUIStore()
@@ -32,8 +50,9 @@ export function NotebookImportMenu({ onImported }: NotebookImportMenuProps) {
   const [loading, setLoading] = useState(false)
   const [manuscripts, setManuscripts] = useState<ManuscriptSummary[]>([])
   const [folders, setFolders] = useState<ManuscriptFolder[]>([])
+  const [expanded, setExpanded] = useState<Set<number>>(new Set())
   const [busyId, setBusyId] = useState<number | null>(null)
-  const [preview, setPreview] = useState<{ row: Row; top: number; left: number } | null>(null)
+  const [preview, setPreview] = useState<{ row: ManuscriptRow; top: number; left: number } | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -59,9 +78,7 @@ export function NotebookImportMenu({ onImported }: NotebookImportMenuProps) {
     if (next) void load()
   }
 
-  // 文件夹树 → 扁平的行，手稿挂在所属文件夹下面，"未归档"放最后
   const rows = useMemo<Row[]>(() => {
-    const out: Row[] = []
     const byFolder = new Map<number | null, ManuscriptSummary[]>()
     for (const item of manuscripts) {
       const key = item.folderId ?? null
@@ -72,18 +89,29 @@ export function NotebookImportMenu({ onImported }: NotebookImportMenuProps) {
     const sortItems = (list: ManuscriptSummary[] = []) =>
       list.slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
 
+    const toRow = (item: ManuscriptSummary, depth: number): ManuscriptRow => ({
+      kind: 'manuscript',
+      id: item.id,
+      label: item.title || '未命名手稿',
+      depth,
+      imageCount: item.imageCount,
+      previewText: item.previewText,
+    })
+
+    const out: Row[] = []
     const walk = (nodes: ReturnType<typeof buildFolderTree>, depth: number) => {
       for (const node of nodes) {
-        out.push({ kind: 'folder', id: node.folder.id, label: node.folder.name, depth })
+        out.push({
+          kind: 'folder',
+          id: node.folder.id,
+          label: node.folder.name,
+          depth,
+          count: node.count,
+        })
+        // 收起时不展开内容；子文件夹也一并隐藏，保持一行是一个分组
+        if (!expanded.has(node.folder.id)) continue
         for (const item of sortItems(byFolder.get(node.folder.id))) {
-          out.push({
-            kind: 'manuscript',
-            id: item.id,
-            label: item.title || '未命名手稿',
-            depth: depth + 1,
-            imageCount: item.imageCount,
-            previewText: item.previewText,
-          })
+          out.push(toRow(item, depth + 1))
         }
         walk(node.children, depth + 1)
       }
@@ -91,18 +119,12 @@ export function NotebookImportMenu({ onImported }: NotebookImportMenuProps) {
 
     walk(buildFolderTree(folders, manuscripts), 0)
 
+    // 未归档始终展示（没有文件夹可收起）
     for (const item of sortItems(byFolder.get(null))) {
-      out.push({
-        kind: 'manuscript',
-        id: item.id,
-        label: item.title || '未命名手稿',
-        depth: 0,
-        imageCount: item.imageCount,
-        previewText: item.previewText,
-      })
+      out.push(toRow(item, 0))
     }
     return out
-  }, [folders, manuscripts])
+  }, [folders, manuscripts, expanded])
 
   const handleImport = async (id: number) => {
     if (busyId !== null) return
@@ -128,13 +150,14 @@ export function NotebookImportMenu({ onImported }: NotebookImportMenuProps) {
     }
   }
 
-  const showPreview = (event: React.MouseEvent<HTMLButtonElement>, row: Row) => {
-    if (row.kind !== 'manuscript') return
+  const showPreview = (event: React.MouseEvent<HTMLButtonElement>, row: ManuscriptRow) => {
     const rect = event.currentTarget.getBoundingClientRect()
     // 节点池在屏幕右侧，预览放左边；夹在视口内
-    const left = Math.max(8, rect.left - 288)
-    const top = Math.max(8, Math.min(rect.top - 8, window.innerHeight - 220))
-    setPreview({ row, top, left })
+    setPreview({
+      row,
+      left: Math.max(8, rect.left - 296),
+      top: Math.max(8, Math.min(rect.top - 8, window.innerHeight - 220)),
+    })
   }
 
   return (
@@ -151,82 +174,63 @@ export function NotebookImportMenu({ onImported }: NotebookImportMenuProps) {
         <BookOpen className="w-4 h-4" />
       </button>
 
-      {open && (
-        <>
-          <div className="fixed inset-0 z-40" onMouseDown={() => { setOpen(false); setPreview(null) }} aria-hidden="true" />
-          <div
-            data-testid="notebook-import-menu"
-            className="absolute right-0 top-full z-50 mt-1 w-72 rounded-lg border border-gray-200 bg-white p-1 shadow-xl dark:border-gray-700 dark:bg-gray-800"
-          >
-            <div className="flex items-center justify-between px-2 py-1">
-              <span className="text-[11px] font-medium uppercase tracking-wider text-gray-400">从笔记本导入</span>
-              <span className="text-[11px] text-gray-400">{manuscripts.length} 篇</span>
-            </div>
-
-            <div className="max-h-80 overflow-y-auto">
-              {loading && <p className="px-2 py-4 text-center text-xs text-gray-400">加载中…</p>}
-              {!loading && rows.length === 0 && (
-                <p className="px-2 py-4 text-center text-xs text-gray-400">笔记本里还没有手稿</p>
-              )}
-
-              {rows.map((row) => {
-                if (row.kind === 'folder') {
-                  return (
-                    <div
-                      key={`folder-${row.id}`}
-                      className="flex items-center gap-1.5 px-2 py-1 text-[11.5px] text-gray-400"
-                      style={{ paddingLeft: 8 + row.depth * 12 }}
-                    >
-                      <FolderClosed className="h-3 w-3 shrink-0" />
-                      <span className="truncate">{row.label}</span>
-                    </div>
-                  )
+      <ImportMenuShell
+        open={open}
+        onClose={() => { setOpen(false); setPreview(null) }}
+        title="从笔记本导入"
+        meta={`${manuscripts.length} 篇`}
+        testId="notebook-import-menu"
+      >
+        {loading && (
+          <p className="px-2 py-6 text-center text-[12px] text-zinc-400">加载中…</p>
+        )}
+        {!loading && rows.length === 0 && (
+          <p className="px-2 py-6 text-center text-[12px] text-zinc-400">笔记本里还没有手稿</p>
+        )}
+        {!loading && rows.map((row) =>
+          row.kind === 'folder' ? (
+              <ImportMenuFolderRow
+                key={`folder-${row.id}`}
+                testId={`import-folder-${row.id}`}
+                name={row.label}
+                count={row.count}
+                depth={row.depth}
+                open={expanded.has(row.id)}
+                onToggle={() =>
+                  setExpanded((previous) => {
+                    const next = new Set(previous)
+                    if (next.has(row.id)) next.delete(row.id)
+                    else next.add(row.id)
+                    return next
+                  })
                 }
+              />
+            ) : (
+              <ImportMenuRow
+                key={`manuscript-${row.id}`}
+                testId={`import-manuscript-${row.id}`}
+                label={row.label}
+                badge={(row.label || '未').slice(0, 1)}
+                depth={row.depth}
+                meta={row.imageCount > 0 ? `${row.imageCount} 图` : undefined}
+                disabled={busyId === row.id}
+                onClick={() => { void handleImport(row.id) }}
+                onHover={(event) => showPreview(event, row)}
+                onLeave={() => setPreview(null)}
+              />
+            ),
+        )}
+      </ImportMenuShell>
 
-                return (
-                  <button
-                    key={`manuscript-${row.id}`}
-                    onClick={() => { void handleImport(row.id) }}
-                    onMouseEnter={(event) => showPreview(event, row)}
-                    onMouseLeave={() => setPreview(null)}
-                    disabled={busyId === row.id}
-                    className="flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left transition hover:bg-gray-100 disabled:opacity-50 dark:hover:bg-gray-700"
-                    style={{ paddingLeft: 8 + row.depth * 12 }}
-                  >
-                    <ChevronRight className="h-3 w-3 shrink-0 text-gray-300" />
-                    <span className="min-w-0 flex-1 truncate text-[12.5px] text-gray-700 dark:text-gray-200">
-                      {row.label}
-                    </span>
-                    {(row.imageCount ?? 0) > 0 && (
-                      <span className="flex shrink-0 items-center gap-0.5 text-[10px] text-gray-400">
-                        <ImageIcon className="h-2.5 w-2.5" />
-                        {row.imageCount}
-                      </span>
-                    )}
-                  </button>
-                )
-              })}
-            </div>
-          </div>
-
-          {/* 悬浮预览：在菜单左侧，避免被右侧边界裁掉 */}
-          {preview && (
-            <div
-              data-testid="notebook-import-preview"
-              className="fixed z-[60] w-72 rounded-lg border border-gray-200 bg-white p-3 shadow-xl dark:border-gray-700 dark:bg-gray-800"
-              style={{ top: preview.top, left: preview.left }}
-            >
-              <p className="truncate text-sm font-semibold text-gray-800 dark:text-white">{preview.row.label}</p>
-              <p className="mt-1 line-clamp-4 text-xs leading-5 text-gray-500 dark:text-gray-400">
-                {preview.row.previewText || '空白手稿'}
-              </p>
-              <p className="mt-2 text-[11px] text-gray-400">
-                {(preview.row.imageCount ?? 0) > 0 ? `${preview.row.imageCount} 张图 · ` : ''}
-                点击即可导入节点池
-              </p>
-            </div>
-          )}
-        </>
+      {preview && (
+        <ImportMenuPreview
+          testId="notebook-import-preview"
+          top={preview.top}
+          left={preview.left}
+          title={preview.row.label}
+          lines={preview.row.previewText}
+          hint={`${preview.row.imageCount > 0 ? `${preview.row.imageCount} 张图 · ` : ''}点击即可导入节点池`}
+        />
       )}
     </div>
   )

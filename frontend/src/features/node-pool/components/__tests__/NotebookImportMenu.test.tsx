@@ -1,7 +1,8 @@
 /**
  * 节点池侧的「从笔记本导入」。
  *
- * 关注三件事：按文件夹层级展示手稿、悬停出预览、点击真正调用转换接口。
+ * 关注四件事：文件夹默认收起（可展开/收起）、层级缩进、悬停预览、点击导入。
+ * 收起是这次返工的重点——手稿多、文件夹还嵌套时，全展开会把菜单撑成一面墙。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
@@ -21,38 +22,49 @@ vi.mock('@/services/api', () => ({
 const api = await import('@/services/api')
 const { NotebookImportMenu } = await import('@/features/node-pool/components/NotebookImportMenu')
 
+const padOf = (testId: string) =>
+  Number((document.querySelector(`[data-testid="${testId}"]`) as HTMLElement)?.style.paddingLeft.replace('px', '') ?? -1)
+
+async function openMenu() {
+  render(<NotebookImportMenu onImported={() => {}} />)
+  fireEvent.click(screen.getByLabelText('从笔记本导入'))
+  await screen.findByTestId('notebook-import-menu')
+  await waitFor(() => expect(screen.getByTestId('import-folder-1')).toBeTruthy())
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
 })
 
 describe('从笔记本导入', () => {
-  it('按文件夹层级列出手稿，未归档排在最后', async () => {
-    render(<NotebookImportMenu onImported={() => {}} />)
-    fireEvent.click(screen.getByLabelText('从笔记本导入'))
+  it('文件夹默认收起：只显示文件夹与未归档手稿', async () => {
+    await openMenu()
 
-    const menu = await screen.findByTestId('notebook-import-menu')
-    await waitFor(() => expect(menu.textContent).toContain('设计稿'))
+    // 只看到顶层文件夹；嵌套文件夹与其中的手稿都随父级一起收起
+    expect(screen.getByTestId('import-folder-1')).toBeTruthy()
+    expect(screen.queryByTestId('import-folder-2')).toBeNull()
+    expect(screen.queryByText('设计稿')).toBeNull()
+    // 未归档始终展示
+    expect(screen.getByText('散记')).toBeTruthy()
+  })
 
-    // 文件夹行 + 手稿行都在
-    expect(menu.textContent).toContain('项目')
-    expect(menu.textContent).toContain('设计')
-    expect(menu.textContent).toContain('设计稿')
-    expect(menu.textContent).toContain('散记')
+  it('展开文件夹后按层级列出其中的手稿，再点收起', async () => {
+    await openMenu()
+    fireEvent.click(screen.getByTestId('import-folder-1'))
 
-    // 手稿缩进比它所属文件夹更深：用内联 paddingLeft 判断层级
-    const rows = Array.from(menu.querySelectorAll('button, div[style*="padding-left"]'))
-    const depthOf = (text: string) =>
-      Number((rows.find((el) => (el.textContent || '').trim().startsWith(text)) as HTMLElement)
-        ?.style.paddingLeft.replace('px', '') ?? -1)
+    expect(await screen.findByText('设计稿')).toBeTruthy()
+    // 文件夹 depth 0 → 10px，手稿 depth 1 → 22px；子文件夹 depth 1 → 22px
+    expect(padOf('import-folder-1')).toBe(10)
+    expect(padOf('import-manuscript-11')).toBe(22)
+    expect(padOf('import-folder-2')).toBe(22)
 
-    expect(depthOf('项目')).toBe(8)
-    expect(depthOf('设计稿')).toBe(20)
-    expect(depthOf('散记')).toBe(8)
+    fireEvent.click(screen.getByTestId('import-folder-1'))
+    await waitFor(() => expect(screen.queryByText('设计稿')).toBeNull())
   })
 
   it('悬停手稿显示预览，移开消失', async () => {
-    render(<NotebookImportMenu onImported={() => {}} />)
-    fireEvent.click(screen.getByLabelText('从笔记本导入'))
+    await openMenu()
+    fireEvent.click(screen.getByTestId('import-folder-1'))
 
     const item = await screen.findByText('设计稿')
     fireEvent.mouseEnter(item.closest('button') as HTMLElement)
@@ -69,7 +81,9 @@ describe('从笔记本导入', () => {
     const onImported = vi.fn()
     render(<NotebookImportMenu onImported={onImported} />)
     fireEvent.click(screen.getByLabelText('从笔记本导入'))
+    await screen.findByTestId('notebook-import-menu')
 
+    fireEvent.click(screen.getByTestId('import-folder-1'))
     fireEvent.click(await screen.findByText('设计稿'))
 
     await waitFor(() => expect(api.manuscriptToNodeCard).toHaveBeenCalledWith(11))

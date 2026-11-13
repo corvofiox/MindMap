@@ -22,9 +22,16 @@ import { NotebookSidebar } from '@/features/notebook/NotebookSidebar'
 import type { FolderSelection } from '@/features/notebook/NotebookFolderTree'
 import { NotebookEditor } from '@/features/notebook/NotebookEditor'
 import { RichTextToolbar } from '@/features/rich-text/RichTextToolbar'
+import {
+  ImportMenuPreview,
+  ImportMenuRow,
+  ImportMenuShell,
+} from '@/features/import-menu/ImportMenu'
+import { parseCardNodeData } from '@/features/node-pool/utils/createNodeFromCard'
 import { insertHtmlAtCaret as insertHtmlIntoEditor } from '@/features/rich-text/editorCommands'
 import { useRichTextEditor } from '@/features/rich-text/useRichTextEditor'
 import { uploadFile } from '@/services/api'
+import type { NodeCard } from '@/types'
 import '@/features/notebook/notebook.css'
 
 const AUTOSAVE_DELAY = 800
@@ -81,6 +88,7 @@ export function NotebookPage() {
 
   const [titleDraft, setTitleDraft] = useState('')
   const [importOpen, setImportOpen] = useState(false)
+  const [cardPreview, setCardPreview] = useState<{ card: NodeCard; top: number; left: number } | null>(null)
   const [stats, setStats] = useState({ chars: 0, images: 0 })
   const imageInputRef = useRef<HTMLInputElement | null>(null)
   // 选中的文件夹由页面持有：侧栏用它筛选，新建手稿也用它决定落点
@@ -338,36 +346,50 @@ export function NotebookPage() {
               <ChevronDown size={12} className={`hidden transition-transform sm:block ${importOpen ? 'rotate-180' : ''}`} />
             </button>
 
-            {importOpen && (
-              <>
-                <div className="fixed inset-0 z-30" onClick={() => setImportOpen(false)} aria-hidden="true" />
-                <div className="absolute right-0 z-40 mt-1.5 w-72 overflow-hidden rounded-xl border border-zinc-200/80 bg-white shadow-xl shadow-zinc-900/5 dark:border-zinc-800 dark:bg-zinc-900 dark:shadow-black/40">
-                  <div className="border-b border-zinc-100 px-3 py-2 text-[11px] font-medium uppercase tracking-wider text-zinc-400 dark:border-zinc-800">
-                    节点池卡片
-                  </div>
-                  <div className="notebook-scroll max-h-80 overflow-y-auto p-1">
-                    {cards.length === 0 && (
-                      <p className="px-2.5 py-6 text-center text-[12.5px] text-zinc-400">节点池还是空的</p>
-                    )}
-                    {cards.map((card) => (
-                      <button
-                        key={card.id}
-                        type="button"
-                        onClick={() => { void handleRestore(card.id) }}
-                        className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left transition hover:bg-zinc-100 dark:hover:bg-zinc-800"
-                        title={card.name}
-                      >
-                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-zinc-100 text-[11px] font-medium text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
-                          {(card.name || '未').slice(0, 1)}
-                        </span>
-                        <span className="min-w-0 flex-1 truncate text-[12.5px] text-zinc-700 dark:text-zinc-200">
-                          {card.name}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </>
+            <ImportMenuShell
+              open={importOpen}
+              onClose={() => { setImportOpen(false); setCardPreview(null) }}
+              title="从节点池导入"
+              meta={`${cards.length} 张`}
+              testId="notebook-pool-import-menu"
+            >
+              {cards.length === 0 && (
+                <p className="px-2 py-6 text-center text-[12px] text-zinc-400">节点池还是空的</p>
+              )}
+              {cards.map((card) => (
+                <ImportMenuRow
+                  key={card.id}
+                  label={card.name}
+                  badge={(card.name || '未').slice(0, 1)}
+                  onClick={() => { void handleRestore(card.id) }}
+                  onHover={(event) => {
+                    const rect = event.currentTarget.getBoundingClientRect()
+                    setCardPreview({
+                      card,
+                      left: Math.max(8, rect.left - 296),
+                      top: Math.max(8, Math.min(rect.top - 8, window.innerHeight - 220)),
+                    })
+                  }}
+                  onLeave={() => setCardPreview(null)}
+                />
+              ))}
+            </ImportMenuShell>
+
+            {cardPreview && (
+              <ImportMenuPreview
+                testId="notebook-pool-import-preview"
+                top={cardPreview.top}
+                left={cardPreview.left}
+                title={cardPreview.card.name}
+                lines={(() => {
+                  const data = parseCardNodeData(cardPreview.card)
+                  const raw = String(data.content || '')
+                  const holder = document.createElement('div')
+                  holder.innerHTML = raw
+                  return (holder.textContent || '').trim() || cardPreview.card.description || ''
+                })()}
+                hint="点击即可还原为手稿"
+              />
             )}
           </div>
 
