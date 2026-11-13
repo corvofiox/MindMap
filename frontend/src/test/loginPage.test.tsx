@@ -23,6 +23,16 @@ vi.mock('@/store/useUIStore', () => ({
 
 const { LoginPage } = await import('@/pages/LoginPage')
 
+/**
+ * 测试用的假邮箱与假密码。
+ *
+ * ⚠️ 这里刻意用 example.com 与一个明显是占位符的密码：本仓库是公开的，
+ * 之前这里写的是开发演示实例的真实账号密码，等于把它公开了。
+ * 登录逻辑只关心"把输入框里的值原样交给 login()"，用什么值无所谓。
+ */
+const TEST_EMAIL = 'user@example.com'
+const TEST_PASSWORD = 'test-password-not-real'
+
 function LocationProbe() {
   const location = useLocation()
   return <span data-testid="location">{location.pathname}</span>
@@ -41,7 +51,7 @@ function renderLogin() {
   )
 }
 
-function submit(email = 'tester@mindmap.local', password = 'Mindmap2026!') {
+function submit(email = TEST_EMAIL, password = TEST_PASSWORD) {
   fireEvent.change(screen.getByLabelText('邮箱'), { target: { value: email } })
   fireEvent.change(screen.getByLabelText('密码'), { target: { value: password } })
   fireEvent.click(screen.getByRole('button', { name: '登录' }))
@@ -58,14 +68,14 @@ describe('登录', () => {
     submit()
 
     expect((await screen.findByTestId('location')).textContent).toBe('/projects')
-    expect(mocks.login).toHaveBeenCalledWith({ email: 'tester@mindmap.local', password: 'Mindmap2026!' })
+    expect(mocks.login).toHaveBeenCalledWith({ email: TEST_EMAIL, password: TEST_PASSWORD })
     expect(mocks.addToast).toHaveBeenCalledWith(expect.objectContaining({ type: 'success' }))
   })
 
   it('登录失败留在登录页，并提示失败原因', async () => {
     mocks.login.mockRejectedValueOnce(new Error('邮箱或密码不正确'))
     renderLogin()
-    submit('tester@mindmap.local', 'wrong-password')
+    submit(TEST_EMAIL, 'wrong-password')
 
     await waitFor(() =>
       expect(mocks.addToast).toHaveBeenCalledWith(

@@ -29,7 +29,8 @@ function renderHeader(path = '/projects') {
 
 beforeEach(() => {
   useAuthStore.setState({
-    user: { id: 1, email: 'tester@mindmap.local', nickname: '测试同学', avatar: null } as never,
+    // 用明显的假账号：本仓库公开，测试里不该出现真实账号信息
+    user: { id: 1, email: 'user@example.com', nickname: '测试同学', avatar: null } as never,
   })
 })
 
