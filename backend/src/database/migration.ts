@@ -270,7 +270,7 @@ export async function runMigrations(sqlite: Database.Database) {
       sqlite.exec('ALTER TABLE node_cards ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0')
     }
 
-    // 手稿 ⇄ 卡片 的溯源列（抄送语义，不做双向绑定）
+    // 手稿 ⇄ 卡片 的溯源列（移动语义，两边不会同时存在，列只用来回显"从哪来"）
     if (!columns.includes('source_manuscript_id')) {
       sqlite.exec('ALTER TABLE node_cards ADD COLUMN source_manuscript_id INTEGER')
     }

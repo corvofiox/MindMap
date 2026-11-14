@@ -403,6 +403,8 @@ const NO_PROJECT_IMPORT_ALLOWED = new Set([
   // 源码扫描型守卫：断言的对象是文件内容而不是运行时模块，无需 import 项目代码
   'backend/src/__tests__/test-quality-guard.test.ts',
   'backend/src/__tests__/migration-guards.test.ts',
+  // 仓库卫生守卫：扫的是 git 跟踪的文件树（密钥/产物/凭据），没有可 import 的运行时对象
+  'frontend/src/test/no-secrets.test.ts',
 ])
 
 describe('源码守卫：测试必须真实有效', () => {
@@ -436,6 +438,7 @@ describe('源码守卫：测试必须真实有效', () => {
     it('frontend 测试文件都引用了项目模块（不是自造实现）', () => {
       const offenders: string[] = []
       for (const file of frontendTests) {
+        if (NO_PROJECT_IMPORT_ALLOWED.has(rel(file))) continue
         const src = readTestSource(file)
         const projectImports = importSpecifiers(src).filter(isProjectImport)
         if (projectImports.length === 0) offenders.push(rel(file))

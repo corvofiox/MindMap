@@ -426,14 +426,19 @@ export async function deleteManuscript(id: number): Promise<{ id: number }> {
   return await apiClient.delete<{ id: number }>(`${API_ENDPOINTS.MANUSCRIPTS}/${id}`)
 }
 
-/** 手稿 → 节点池卡片（抄送语义：只复制内容并记录来源）。 */
+/**
+ * 手稿 → 节点池卡片。
+ *
+ * 移动语义：服务端在同一事务里建卡片并软删这篇手稿，所以成功后调用方要把它
+ * 从笔记本列表里去掉（`useNotebookStore.sendToPool` 已代劳）。
+ */
 export async function manuscriptToNodeCard(id: number, folderId?: number | null): Promise<NodeCard> {
   return await apiClient.post<NodeCard>(`${API_ENDPOINTS.MANUSCRIPTS}/${id}/to-node-card`, {
     folderId: folderId ?? null,
   })
 }
 
-/** 节点池卡片 → 手稿。 */
+/** 节点池卡片 → 手稿。移动语义：卡片会在服务端同一事务里被删掉。 */
 export async function nodeCardToManuscript(cardId: number): Promise<Manuscript> {
   return await apiClient.post<Manuscript>(`${API_ENDPOINTS.MANUSCRIPTS}/from-card`, { cardId })
 }

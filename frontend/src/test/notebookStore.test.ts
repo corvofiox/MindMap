@@ -2,8 +2,8 @@
  * useNotebookStore —— 笔记本的加载/保存/转换编排。
  *
  * 只 mock 网络层（@/services/api），store 本体与状态流转都是真实的：
- * 保存状态机（idle→saving→saved/error）、列表与当前稿的联动、抄送语义的
- * 调用参数都在这里钉住。
+ * 保存状态机（idle→saving→saved/error）、列表与当前稿的联动、转换接口的
+ * 调用参数，以及"源被搬走后本地怎么跟上"都在这里钉住。
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
@@ -171,6 +171,29 @@ describe('与节点池的双向转换', () => {
     expect(created?.id).toBe(21)
     expect(useNotebookStore.getState().active?.title).toBe('从卡片来的')
     expect(useNotebookStore.getState().manuscripts[0].id).toBe(21)
+  })
+
+  /**
+   * 移动语义下服务端会删掉源（手稿软删 / 卡片物理删）。本地这两条路径必须
+   * 能跟着抹干净，否则列表里会留下点开就 404 的幽灵条目。
+   */
+  it('forget 只动本地：不删服务端、不动别的手稿', () => {
+    useNotebookStore.setState({ manuscripts: [summary(1), summary(2)], active: manuscript(2) })
+
+    useNotebookStore.getState().forget(2)
+
+    expect(api.deleteManuscript).not.toHaveBeenCalled()
+    expect(useNotebookStore.getState().manuscripts.map((m) => m.id)).toEqual([1])
+    // 抹掉的正好是打开的那篇 → 编辑区要一起清空
+    expect(useNotebookStore.getState().active).toBeNull()
+  })
+
+  it('forget 抹的不是当前稿时，不动 active', () => {
+    useNotebookStore.setState({ manuscripts: [summary(1), summary(2)], active: manuscript(1) })
+
+    useNotebookStore.getState().forget(2)
+
+    expect(useNotebookStore.getState().active?.id).toBe(1)
   })
 })
 

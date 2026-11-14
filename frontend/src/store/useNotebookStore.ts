@@ -43,6 +43,13 @@ interface NotebookState {
   /** 本地即时更新 + 落库；保存状态由 saveState 暴露给 UI。 */
   save: (patch: { title?: string; contentHtml?: string }) => Promise<void>
   remove: (id: number) => Promise<void>
+  /**
+   * 只从本地列表抹掉一条（服务端那行已经不在）。
+   *
+   * 用在"移动"之后：手稿转成卡片时服务端已软删，界面上必须同步消失，
+   * 否则列表里会留一个点开就 404 的幽灵条目。
+   */
+  forget: (id: number) => void
   /** 收纳：把手稿移到某个文件夹（null = 未归档）。 */
   moveToFolder: (id: number, folderId: number | null) => Promise<void>
   /** 拖拽排序：把 movedId 放到 targetId 的前/后，并落库 */
@@ -163,6 +170,10 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
 
   remove: async (id) => {
     await deleteManuscript(id)
+    get().forget(id)
+  },
+
+  forget: (id) => {
     set((state) => ({
       manuscripts: state.manuscripts.filter((item) => item.id !== id),
       active: state.active?.id === id ? null : state.active,
@@ -223,6 +234,8 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
 
   sendToPool: async (id, folderId = null) => {
     try {
+      // 转换本身是纯搬运；服务端会把这篇手稿软删，本地列表由调用方用 forget()
+      // 跟进（要先改路由再清状态，见 NotebookPage.handleSendToPool）。
       return await manuscriptToNodeCard(id, folderId)
     } catch (error) {
       logger.error('[notebook] 送入节点池失败', error)
@@ -233,6 +246,8 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
 
   restoreFromCard: async (cardId) => {
     try {
+      // 移动语义：服务端建好手稿就把那张卡片删了，调用方负责刷新节点池
+      // （节点池状态在 useNodePoolStore，这里不跨 store 直接改）
       const manuscript = await nodeCardToManuscript(cardId)
       set((state) => ({
         manuscripts: [

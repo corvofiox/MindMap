@@ -3,6 +3,7 @@ import { ChevronDown, Upload } from 'lucide-react'
 import { getManuscriptFolders, getManuscripts, manuscriptToNodeCard } from '@/services/api'
 import type { ManuscriptFolder, ManuscriptSummary } from '@/services/api'
 import { useUIStore } from '@/store/useUIStore'
+import { useNotebookStore } from '@/store/useNotebookStore'
 import { buildFolderTree } from '@/features/notebook/NotebookFolderTree'
 import {
   ImportMenuFolderRow,
@@ -131,10 +132,13 @@ export function NotebookImportMenu({ onImported }: NotebookImportMenuProps) {
     setBusyId(id)
     try {
       const card = await manuscriptToNodeCard(id)
+      // 移动语义：服务端建好卡片就把那篇手稿软删了。笔记本 store 可能还留着
+      // 旧快照，本地同步抹掉，免得切过去看到一个点开就 404 的条目。
+      useNotebookStore.getState().forget(id)
       addToast({
         type: 'success',
-        title: '已导入节点池',
-        message: `卡片「${card?.name || '手稿'}」已加入，可拖到画布上`,
+        title: '已移入节点池',
+        message: `「${card?.name || '手稿'}」已从笔记本移出，可拖到画布上`,
       })
       setOpen(false)
       setPreview(null)
@@ -231,7 +235,7 @@ export function NotebookImportMenu({ onImported }: NotebookImportMenuProps) {
           left={preview.left}
           title={preview.row.label}
           lines={preview.row.previewText}
-          hint={`${preview.row.imageCount > 0 ? `${preview.row.imageCount} 张图 · ` : ''}点击即可导入节点池`}
+          hint={`${preview.row.imageCount > 0 ? `${preview.row.imageCount} 张图 · ` : ''}点击转为卡片：手稿会从笔记本移过来`}
         />
       )}
     </div>

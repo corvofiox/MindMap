@@ -67,8 +67,9 @@ function renderPage(path = '/notebook/1') {
   return render(
     <MemoryRouter initialEntries={[path]}>
       <Routes>
-        <Route path="/notebook" element={<NotebookPage />} />
-        <Route path="/notebook/:id" element={<NotebookPage />} />
+        {/* 探针挂在同一条路由里：测试要能看到动作之后跳去了哪 */}
+        <Route path="/notebook" element={<><NotebookPage /><LocationProbe /></>} />
+        <Route path="/notebook/:id" element={<><NotebookPage /><LocationProbe /></>} />
         <Route path="/projects" element={<LocationProbe />} />
       </Routes>
     </MemoryRouter>,
@@ -154,7 +155,7 @@ describe('顶栏动作的排布', () => {
 })
 
 describe('顶栏动作的行为', () => {
-  it('「送入节点池」把当前手稿转成卡片，并弹成功提示', async () => {
+  it('「送入节点池」把当前手稿移走：调用转换接口、手稿从笔记本消失、回到列表', async () => {
     renderPage()
     fireEvent.click(headerButton('送入节点池'))
 
@@ -162,7 +163,12 @@ describe('顶栏动作的行为', () => {
 
     const toasts = useUIStore.getState().toasts
     expect(toasts).toHaveLength(1)
-    expect(toasts[0].title).toBe('已送入节点池')
+    expect(toasts[0].title).toBe('已移入节点池')
+    // 移动语义：这篇手稿已经不在笔记本里了（列表和当前打开都要清干净）
+    expect(useNotebookStore.getState().manuscripts.map((item) => item.id)).not.toContain(1)
+    expect(useNotebookStore.getState().active).toBeNull()
+    // 停在 /notebook/1 会让页面回头去 open 一个已被删掉的手稿
+    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/notebook'))
   })
 
   it('「送入节点池」失败时弹错误提示，不静默', async () => {

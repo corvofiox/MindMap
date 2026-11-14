@@ -4,8 +4,11 @@
  * 设计要点（docs/requirements-notebook.md §4/§13）：
  *   - 手稿不协作：没有 Yjs，一行 REST 记录即可。
  *   - 隔离靠 `user_id` 过滤，越权一律 404（不泄露资源是否存在）。
- *   - 转换是**抄送**语义：只复制内容 + 记录来源 id，不做双向绑定；改一边不会
- *     影响另一边。统一节点之后不再需要"判断类型"——手稿 HTML 原样搬进卡片。
+ *   - 转换是**移动**语义：同一个东西只在一个容器里存在。手稿转卡片的同时手稿
+ *     被软删除，卡片转手稿的同时卡片被物理删除；两步在同一个事务里，不会出现
+ *     "两边都有"或"两边都没有"的中间态。这与画布 ⇄ 节点池的既有行为一致
+ *     （`moveNodeToPool` / `useCard` 都是搬运而不是复制）。
+ *     内容本身不丢：转换只搬 title/content，来回转换能拿回正文。
  */
 import { Router } from 'express'
 import { and, asc, desc, eq, inArray, isNull, like, or } from 'drizzle-orm'
@@ -339,8 +342,22 @@ router.post(
       { id: manuscript.id, title: manuscript.title, contentHtml: manuscript.contentHtml, userId },
       folderId,
     )
-    const inserted = await db.insert(nodeCards).values(payload).returning()
-    log('manuscript → card', { manuscriptId: id, cardId: inserted[0]?.id })
+
+    // 建卡片 + 软删手稿：一个事务。只写一半的话要么内容变成两份（卡片建好、
+    // 手稿还在），要么内容凭空消失（手稿删了、卡片没建成），两种都不能接受。
+    //
+    // 同步回调是 drizzle-orm 0.30 + better-sqlite3 的限制，见
+    // collaboration.controller.ts:344 的同类说明；回调的返回值就是事务结果。
+    const inserted = db.transaction((tx) => {
+      const rows = tx.insert(nodeCards).values(payload).returning().all()
+      tx.update(manuscripts)
+        .set({ deletedAt: Math.floor(Date.now() / 1000) })
+        .where(eq(manuscripts.id, id))
+        .run()
+      return rows
+    })
+
+    log('manuscript → card (moved)', { manuscriptId: id, cardId: inserted[0]?.id })
 
     return res.status(201).json({ success: true, data: inserted[0] })
   }),
@@ -363,10 +380,20 @@ router.post(
 
     const payload = cardToManuscriptPayload(card)
     const now = Math.floor(Date.now() / 1000)
-    const inserted = await db
-      .insert(manuscripts)
-      .values({ userId, ...payload, updatedAt: now })
-      .returning()
+
+    // 建手稿 + 删卡片，同样一个事务：卡片是物理删除（node_cards 没有软删列），
+    // 所以"手稿没建成但卡片先没了"必须靠事务挡住。
+    const inserted = db.transaction((tx) => {
+      const rows = tx
+        .insert(manuscripts)
+        .values({ userId, ...payload, updatedAt: now })
+        .returning()
+        .all()
+      tx.delete(nodeCards).where(eq(nodeCards.id, cardId)).run()
+      return rows
+    })
+
+    log('card → manuscript (moved)', { cardId, manuscriptId: inserted[0]?.id })
 
     return res.status(201).json({ success: true, data: inserted[0] })
   }),

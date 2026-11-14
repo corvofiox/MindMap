@@ -113,7 +113,7 @@ export const nodeCards = sqliteTable('node_cards', {
   createdBy: integer('created_by').references(() => users.id, { onDelete: 'set null' }),
   folderId: integer('folder_id').references(() => nodePoolFolders.id, { onDelete: 'set null' }),
   description: text('description'),
-  /** 来自笔记本手稿时记录来源（抄送语义：只做溯源，不做双向绑定） */
+  /** 来自笔记本手稿时记录来源（移动语义：只做溯源，两边不会同时存在） */
   sourceManuscriptId: integer('source_manuscript_id'),
   /** 'canvas' | 'manuscript'，供节点池区分卡片的来路 */
   sourceKind: text('source_kind'),

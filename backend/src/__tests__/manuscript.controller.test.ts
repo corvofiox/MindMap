@@ -3,7 +3,8 @@
  *
  * 这里钉的是三条容易悄悄坏掉的契约：
  *   1. 隔离：别人的手稿在我这里必须 404（不是 403，不泄露存在性）；
- *   2. 转换是抄送：手稿 → 卡片只复制内容 + 记录来源，之后各改各的；
+ *   2. 转换是移动：手稿 → 卡片的同时手稿被移除，反向亦然；两步在一个事务里，
+ *      失败要整体不留痕（不能出现"两边都有"或"两边都没有"）；
  *   3. 统一节点：卡片里存的必须是 {title, content, cover}，不再有 type/imageUrl。
  */
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
@@ -264,19 +265,37 @@ describe('手稿 → 节点池', () => {
     expect(res.body.data.thumbnail).toBeNull()
   })
 
-  it('转换是抄送：改手稿不会改已生成的卡片', async () => {
+  it('转换是移动：卡片建好后手稿从笔记本消失', async () => {
     const created = await createManuscript({ title: '原稿', contentHtml: '<p>第一版</p>' })
     const id = created.body.data.id
     const card = (await supertest(app).post(`/api/manuscripts/${id}/to-node-card`).set(authA()).send({}))
       .body.data
 
-    await supertest(app).put(`/api/manuscripts/${id}`).set(authA()).send({ contentHtml: '<p>第二版</p>' })
+    // 手稿被软删：列表里不再出现，按 id 取也 404（软删对外就等于删除）
+    const list = await supertest(app).get('/api/manuscripts').set(authA())
+    expect((list.body.data as Array<{ id: number }>).map((item) => item.id)).not.toContain(id)
+    expect((await supertest(app).get(`/api/manuscripts/${id}`).set(authA())).status).toBe(404)
 
+    // 内容原封不动搬进卡片
     const row = testDb.raw.prepare('SELECT content FROM node_cards WHERE id = ?').get(card.id) as {
       content: string
     }
     expect(row.content).toContain('第一版')
-    expect(row.content).not.toContain('第二版')
+  })
+
+  it('转换失败不写半截：目标文件夹不存在时手稿还在', async () => {
+    const created = await createManuscript({ title: '还在', contentHtml: '<p>x</p>' })
+    const id = created.body.data.id
+
+    const res = await supertest(app)
+      .post(`/api/manuscripts/${id}/to-node-card`)
+      .set(authA())
+      .send({ folderId: 987654 })
+
+    expect(res.status).toBe(404)
+    // 校验在事务之前，手稿不该被顺手删掉
+    expect((await supertest(app).get(`/api/manuscripts/${id}`).set(authA())).status).toBe(200)
+    expect(testDb.raw.prepare('SELECT COUNT(*) AS n FROM node_cards').get()).toMatchObject({ n: 0 })
   })
 })
 
@@ -311,10 +330,26 @@ describe('节点池 → 手稿', () => {
     expect(res.body.data.imageCount).toBe(1)
   })
 
-  it('别人的卡片不能还原（404）', async () => {
+  it('别人的卡片不能还原（404），且不会被顺手删掉', async () => {
     const cardId = insertCard(JSON.stringify({ title: 'T', content: 'x' }))
     const res = await supertest(app).post('/api/manuscripts/from-card').set(authB()).send({ cardId })
     expect(res.status).toBe(404)
+    // 移动语义下越权请求必须是纯读失败：不能把别人的卡片删了
+    expect(testDb.raw.prepare('SELECT id FROM node_cards WHERE id = ?').get(cardId)).toBeTruthy()
+  })
+
+  it('转换是移动：手稿建好后卡片从池里消失', async () => {
+    const cardId = insertCard(JSON.stringify({ title: '搬走', content: '<p>正文</p>' }))
+
+    const res = await supertest(app).post('/api/manuscripts/from-card').set(authA()).send({ cardId })
+
+    expect(res.status).toBe(201)
+    // node_cards 没有软删列，这里是物理删除
+    expect(testDb.raw.prepare('SELECT id FROM node_cards WHERE id = ?').get(cardId)).toBeUndefined()
+    // 再拿同一张卡片还原一次：已经不存在了
+    expect(
+      (await supertest(app).post('/api/manuscripts/from-card').set(authA()).send({ cardId })).status,
+    ).toBe(404)
   })
 })
 

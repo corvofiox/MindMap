@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import type { ReactNode } from 'react'
 
@@ -19,12 +20,34 @@ interface ImportMenuShellProps {
 }
 
 export function ImportMenuShell({ open, onClose, title, meta, children, testId }: ImportMenuShellProps) {
+  const panelRef = useRef<HTMLDivElement | null>(null)
+
+  /**
+   * 点面板外面就关掉。
+   *
+   * 不能只靠下面那层遮罩：笔记本页的页头带 `backdrop-blur`，而 backdrop-filter
+   * 会让 `position: fixed` 的后代以页头自身为包含块——遮罩实际只盖住页头那条
+   * 56px 的横条，点正文区域完全关不掉菜单，菜单会一直挂在右上角挡住顶栏按钮。
+   * 所以再挂一个文档级监听，把真正的"点外面"兜住。
+   */
+  useEffect(() => {
+    if (!open) return
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node | null
+      if (target && panelRef.current?.contains(target)) return
+      onClose()
+    }
+    document.addEventListener('mousedown', handlePointerDown)
+    return () => document.removeEventListener('mousedown', handlePointerDown)
+  }, [open, onClose])
+
   if (!open) return null
 
   return (
     <>
       <div className="fixed inset-0 z-30" onMouseDown={onClose} aria-hidden="true" />
       <div
+        ref={panelRef}
         data-testid={testId}
         className="absolute right-0 z-40 mt-1.5 w-72 overflow-hidden rounded-xl border border-zinc-200/80 bg-white shadow-xl shadow-zinc-900/5 dark:border-zinc-800 dark:bg-zinc-900 dark:shadow-black/40"
       >

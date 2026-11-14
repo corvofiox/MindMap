@@ -79,6 +79,7 @@ export function NotebookPage() {
     create,
     save,
     remove,
+    forget,
     moveToFolder,
     reorder,
     addFolder,
@@ -142,7 +143,8 @@ export function NotebookPage() {
     }
   }, [active?.id])
 
-  const flushSave = useCallback(() => {
+  /** 取出待落库的补丁并清掉定时器；没有待写内容时返回 null。 */
+  const takePendingPatch = useCallback(() => {
     if (saveTimer.current) {
       clearTimeout(saveTimer.current)
       saveTimer.current = null
@@ -156,9 +158,24 @@ export function NotebookPage() {
       patch.title = pendingTitle.current
       pendingTitle.current = null
     }
-    if (Object.keys(patch).length === 0) return
-    void save(patch)
-  }, [save])
+    return Object.keys(patch).length === 0 ? null : patch
+  }, [])
+
+  const flushSave = useCallback(() => {
+    const patch = takePendingPatch()
+    if (patch) void save(patch)
+  }, [takePendingPatch, save])
+
+  /**
+   * 落盘并等它写完。
+   *
+   * 「送入节点池」是移动：服务端会在同一事务里软删这篇手稿。未落库的改动必须
+   * 先写完再搬，否则那次保存请求会打在已删除的行上，回一个 404 出来。
+   */
+  const flushSaveNow = useCallback(async () => {
+    const patch = takePendingPatch()
+    if (patch) await save(patch)
+  }, [takePendingPatch, save])
 
   const scheduleSave = useCallback(
     (patch: { title?: string; contentHtml?: string }) => {
@@ -233,15 +250,21 @@ export function NotebookPage() {
 
   const handleSendToPool = async () => {
     if (!active) return
-    flushSave()
-    const card = await sendToPool(active.id)
+    const id = active.id
+    // 先等改动落库：接下来服务端会把这行软删掉
+    await flushSaveNow()
+    const card = await sendToPool(id)
     if (card) {
+      // 顺序要紧：先把 URL 挪回列表，再清本地状态。停在 /notebook/:id 时清掉
+      // active 会让路由同步逻辑回头去 open 一个刚刚被删掉的手稿。
+      navigate('/notebook')
+      forget(id)
       // 刚送过去的卡片要立刻能在「从节点池导入」里看到，否则菜单还停在旧快照上
       void loadNodePool()
       addToast({
         type: 'success',
-        title: '已送入节点池',
-        message: `卡片「${card.name}」已创建，可在思维导图里拖到画布上`,
+        title: '已移入节点池',
+        message: `「${card.name}」已从笔记本移出，可在思维导图里拖到画布上`,
       })
     } else {
       addToast({ type: 'error', title: '送入失败', message: '请稍后重试' })
@@ -260,7 +283,9 @@ export function NotebookPage() {
     setImportOpen(false)
     const manuscript = await restoreFromCard(cardId)
     if (manuscript) {
-      addToast({ type: 'success', title: '已还原为手稿', message: `「${manuscript.title}」已加入笔记本` })
+      // 卡片已被服务端删掉，池子里那份列表要跟着刷新，否则还能再点一次
+      void loadNodePool()
+      addToast({ type: 'success', title: '已转为手稿', message: `「${manuscript.title}」已从节点池移入笔记本` })
       navigate(`/notebook/${manuscript.id}`)
     }
   }
@@ -468,7 +493,7 @@ export function NotebookPage() {
                   holder.innerHTML = raw
                   return (holder.textContent || '').trim() || cardPreview.card.description || ''
                 })()}
-                hint="点击即可还原为手稿"
+                hint="点击转为手稿：卡片会从节点池移过来"
               />
             )}
           </div>

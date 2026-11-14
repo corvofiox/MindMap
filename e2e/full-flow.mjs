@@ -144,13 +144,16 @@ const clickText = async (text, scope = 'button, a, [role="menuitem"], [role="opt
     el.scrollIntoView({ block: 'center' });
     const r = el.getBoundingClientRect();
     if (r.width === 0 || r.height === 0) return null;
-    return [Math.round(r.x + r.width / 2), Math.round(r.y + r.height / 2)];
+    const hit = document.elementFromPoint(Math.round(r.x + r.width / 2), Math.round(r.y + r.height / 2));
+    // 被遮罩/弹层挡住时点下去是白点一下，直接报出来比等超时好查
+    return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2), hit: !!hit && (hit === el || el.contains(hit)) };
   })()`)
   if (!rect) {
     const seen = await ev(`Array.from(document.querySelectorAll(${JSON.stringify(scope)})).slice(0, 24).map((n) => (n.textContent || '').trim().slice(0, 18)).filter(Boolean)`)
     throw new Error(`找不到可点的文案: ${text}｜当前可点文案: ${JSON.stringify(seen)}`)
   }
-  await click(rect[0], rect[1])
+  if (!rect.hit) throw new Error(`「${text}」被别的东西挡住了（点下去会落空）`)
+  await click(rect.x, rect.y)
 }
 
 /**
@@ -569,10 +572,19 @@ await step('重新建一篇手稿（上一篇随文件夹删了）', async () =>
   return 'E2E 送池手稿'
 })
 
-await step('「送入节点池」把手稿转成卡片', async () => {
+await step('「送入节点池」把手稿移进节点池（笔记本里同时消失）', async () => {
   await clickText('送入节点池')
-  await waitFor(`document.body.innerText.includes('已送入节点池')`, 20000, '成功提示')
-  return 'toast 已出现'
+  await waitFor(`document.body.innerText.includes('已移入节点池')`, 20000, '成功提示')
+  // 移动语义：源必须跟着走，人也不能停在 /notebook/:id 盯着一条已被删的稿
+  await waitFor(`location.pathname === '/notebook'`, 10000, '回到笔记本列表')
+  // 只看列表行：toast 文案里也带着稿名，用 innerText 判断会误报
+  const rows = await ev(
+    `Array.from(document.querySelectorAll('[data-row-id]')).map((n) => (n.textContent || '').trim())`,
+  )
+  if (JSON.stringify(rows ?? []).includes('E2E 送池手稿')) {
+    throw new Error(`手稿还在笔记本列表里（应该是移动，不是复制）：${JSON.stringify(rows)}`)
+  }
+  return 'toast 已出现，手稿已从列表消失'
 })
 await shot('10-notebook-sent')
 
@@ -593,9 +605,19 @@ await step('「从节点池导入」：看得到刚送的卡片，悬浮出预�
 
   const before = await ev('location.pathname')
   await clickEl(`${menu} [data-testid^="pool-card-"]`)
-  await waitFor(`document.body.innerText.includes('已还原为手稿')`, 20000, '还原成功提示')
+  await waitFor(`document.body.innerText.includes('已转为手稿')`, 20000, '还原成功提示')
   await waitFor(`location.pathname !== ${JSON.stringify(before)}`, 15000, '打开了新的手稿')
-  return `${before} → ${await ev('location.pathname')}`
+
+  // 卡片也被搬走了：再打开菜单，池子里不该还留着它
+  await clickText('从节点池导入')
+  await waitFor(`!!document.querySelector('${menu}')`, 10000, '导入菜单（复查）')
+  await sleep(800)
+  const left = await ev(`document.querySelectorAll('${menu} [data-testid^="pool-card-"]').length`)
+  // 遮罩是 onMouseDown 关的，必须发真鼠标事件（document.body.click() 关不掉，菜单会挡后续点击）
+  await click(700, 700)
+  await waitFor(`!document.querySelector('${menu}')`, 8000, '导入菜单已关闭')
+  if (left !== 0) throw new Error(`卡片还在节点池里：剩 ${left} 张`)
+  return `${before} → ${await ev('location.pathname')} · 池里已无卡片`
 })
 await shot('12-notebook-restored')
 
