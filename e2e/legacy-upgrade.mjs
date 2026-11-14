@@ -79,6 +79,40 @@ const createdBody = await created.json()
 record('升级后的库能新建手稿', created.status === 201 && createdBody.data?.id > 0,
   `id=${createdBody.data?.id} sortOrder=${createdBody.data?.sortOrder}`)
 
+// ---- 6. 本轮的「搬运」语义在旧库上同样成立 ----
+// 旧库升级只补列、不改行，所以搬运逻辑不依赖任何新列；这里用真接口验一遍，
+// 免得"新库能搬、旧库搬一半"这种只会在升级用户身上出现的偏差。
+const movable = createdBody.data.id
+const cardRes = await fetch(`${BASE}/api/manuscripts/${movable}/to-node-card`, {
+  method: 'POST',
+  headers: reorderHeaders,
+  body: JSON.stringify({}),
+})
+const cardBody = await cardRes.json()
+record('旧库上能把手稿搬成卡片', cardRes.status === 201 && cardBody.data?.id > 0,
+  `cardId=${cardBody.data?.id}`)
+
+const afterMove = await (await fetch(`${BASE}/api/manuscripts`, { headers: H })).json()
+const gone = await fetch(`${BASE}/api/manuscripts/${movable}`, { headers: H })
+record(
+  '搬走的手稿在旧库上也没了（移动而不是复制）',
+  !afterMove.data.some((m) => m.id === movable) && gone.status === 404,
+  `列表里还有=${afterMove.data.some((m) => m.id === movable)} GET=${gone.status}`,
+)
+
+const backRes = await fetch(`${BASE}/api/manuscripts/from-card`, {
+  method: 'POST',
+  headers: reorderHeaders,
+  body: JSON.stringify({ cardId: cardBody.data.id }),
+})
+const backBody = await backRes.json()
+const poolAfter = await (await fetch(`${BASE}/api/users/node-pool`, { headers: H })).json()
+record(
+  '卡片搬回手稿时卡片也没了（旧库上同样是原子的）',
+  backRes.status === 201 && !poolAfter.data.some((c) => c.id === cardBody.data.id),
+  `manuscriptId=${backBody.data?.id} 池内剩=${poolAfter.data?.length}`,
+)
+
 const failed = results.filter((r) => !r.ok)
 console.log('\n=== 汇总 ===')
 console.log(`通过 ${results.length - failed.length}/${results.length}`)
