@@ -8,6 +8,7 @@ import { transformResponse, transformResponseArray, getProperty } from '../utils
 import { log } from '../utils/logger.js'
 import { getCanvasActiveUsers, closeRoom, shouldUpsertOnlyForSnapshot } from '../websocket/index.js'
 import { loadCanvasStateFromDb, mergeJsonSnapshotIntoCanvas, removeCanvasState, snapshotMissingDocEntities } from '../websocket/canvas-state.js'
+import { resolveProjectAccess } from '../domain/access.js'
 
 export const canvasRouter = Router()
 
@@ -68,29 +69,19 @@ async function withPostSaveMutex<T>(canvasId: number, fn: () => Promise<T>): Pro
 }
 
 async function checkProjectAccess(projectId: number, userId: number): Promise<{ isOwner: boolean; isMember: boolean; canEdit: boolean; role: string | null }> {
-  const project = await db.query.projects.findFirst({
-    where: eq(projects.id, projectId),
-  })
-
-  if (!project) {
+  // Delegated to the domain layer so REST, WebSocket and MCP cannot drift apart
+  // on the owner/editor/viewer rule (they did once: MCP ignored the role and let
+  // a viewer write). Keep this wrapper's shape — it is used in ~12 places here.
+  const access = await resolveProjectAccess(projectId, userId)
+  if (!access) {
     return { isOwner: false, isMember: false, canEdit: false, role: null }
   }
-
-  const projectOwnerId = getProperty<number>(project, 'owner_id', 'ownerId') || project.ownerId
-  const isOwner = projectOwnerId === userId
-
-  const member = await db.query.projectMembers.findFirst({
-    where: and(
-      eq(projectMembers.projectId, projectId),
-      eq(projectMembers.userId, userId)
-    ),
-  })
-
-  const isMember = member && member.id !== undefined
-  const role = isOwner ? 'owner' : (member?.role || null)
-  const canEdit = isOwner || (isMember && member?.role === 'editor')
-
-  return { isOwner, isMember, canEdit, role }
+  return {
+    isOwner: access.isOwner,
+    isMember: access.isMember,
+    canEdit: access.canEdit,
+    role: access.role,
+  }
 }
 
 // Get canvas by ID (more specific route must come first)

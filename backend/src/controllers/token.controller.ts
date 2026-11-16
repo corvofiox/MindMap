@@ -18,6 +18,7 @@ import { and, desc, eq } from 'drizzle-orm'
 import { authenticate, type AuthRequest } from '../middleware/auth.middleware.js'
 import { asyncHandler } from '../middleware/error.middleware.js'
 import { generateToken } from '../utils/personalToken.js'
+import { createTokenLimiter } from '../middleware/rateLimit.middleware.js'
 
 const router = Router()
 
@@ -81,8 +82,11 @@ router.get(
  * `expiresInDays` is optional; when omitted the token does not expire, which is
  * the sensible default for a long-lived local agent integration.
  */
+// 铸令牌是凭据操作，不能共用全局限速桶（1000/15min 对一个账号的 25 个配额来说
+// 太宽松：一次脚本化请求就能把配额填满，且这些令牌之后只能逐把撤销）。
 router.post(
   '/',
+  createTokenLimiter(),
   asyncHandler(async (req: AuthRequest, res) => {
     const userId = req.user?.id
     if (!userId) {

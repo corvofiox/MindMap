@@ -20,6 +20,8 @@ vi.mock('../utils/logger.js', () => ({ log: vi.fn(), logError: vi.fn() }))
 vi.mock('../middleware/rateLimit.middleware.js', () => ({
   apiLimiter: () => (_req: unknown, _res: unknown, next: () => void) => next(),
   authLimiter: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  createMcpLimiter: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  createTokenLimiter: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }))
 
 vi.mock('../database/connection.js', async () => {

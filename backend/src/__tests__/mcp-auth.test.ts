@@ -137,7 +137,13 @@ describe('resolveTokenUser', () => {
     state.userRow = { id: 42, email: 'a@b.c', nickname: 'A' }
 
     const user = await resolveTokenUser(plaintext)
-    expect(user).toEqual({ id: 42, email: 'a@b.c', nickname: 'A' })
+    expect(user).toEqual({
+      id: 42,
+      email: 'a@b.c',
+      nickname: 'A',
+      tokenId: expect.any(Number),
+      tokenName: expect.any(String),
+    })
     expect(state.updates).toHaveLength(1)
     expect(state.updates[0].lastUsedAt).toBeGreaterThan(0)
   })
@@ -204,6 +210,11 @@ function makeResponse(): CapturedResponse {
   const res: CapturedResponse = {
     statusCode: null,
     body: undefined,
+    headers: {},
+    set(name: string, value: string) {
+      res.headers[name] = value
+      return res
+    },
     status(code: number) {
       res.statusCode = code
       return res
@@ -319,7 +330,16 @@ describe('authenticateMcp middleware', () => {
       })
 
       expect(res.statusCode, `case=${c.label}`).toBe(401)
-      expect(res.body, `case=${c.label}`).toEqual({ success: false, error: '无效或已撤销的访问令牌' })
+      expect(res.body, `case=${c.label}`).toEqual({
+        jsonrpc: '2.0',
+        id: null,
+        error: {
+          code: -32001,
+          message: '无效或已撤销的访问令牌',
+          data: expect.objectContaining({ code: 'E_FORBIDDEN' }),
+        },
+      })
+      expect(res.headers['WWW-Authenticate'], `case=${c.label}`).toContain('Bearer')
       expect(req.mcpUser, `case=${c.label}`).toBeUndefined()
       expect(nextCalls, `case=${c.label}`).toBe(0)
     }
@@ -337,7 +357,11 @@ describe('authenticateMcp middleware', () => {
     })
 
     expect(res.statusCode).toBe(500)
-    expect(res.body).toEqual({ success: false, error: '认证服务异常，请稍后重试' })
+    expect(res.body).toEqual({
+      jsonrpc: '2.0',
+      id: null,
+      error: { code: -32603, message: '认证服务异常，请稍后重试', data: { code: 'E_INTERNAL' } },
+    })
     expect(nextCalls).toBe(0)
     expect(req.mcpUser).toBeUndefined()
     expect(vi.mocked(logError)).toHaveBeenCalledTimes(1)

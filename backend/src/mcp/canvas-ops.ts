@@ -33,10 +33,40 @@ import {
  * so `undo`/`redo` revert agent operations without unwinding a human's concurrent
  * edits. A frozen object (not a bare string) keeps it collision-proof against the
  * frontend's LOCAL_ORIGIN.
+ *
+ * Per-actor origins: `MCP_ORIGIN` is the *system* origin (used when no actor is
+ * given). Tools pass `mcpOriginFor(actorKey)` so that one collaborator's agent
+ * cannot undo another's writes — with a single shared origin, `undo` used to pop
+ * whatever MCP write happened last on the canvas, no matter who made it.
  */
 export const MCP_ORIGIN: Readonly<{ source: 'mcp-server' }> = Object.freeze({
   source: 'mcp-server',
 })
+
+/** Origin used when a caller does not identify an actor (direct API use, tests). */
+export const DEFAULT_ACTOR = 'system'
+
+const actorOrigins = new Map<string, Readonly<{ source: 'mcp-server'; actor: string }>>()
+
+/**
+ * Frozen origin object for one actor, cached so identity comparison works.
+ *
+ * `Y.UndoManager` matches origins by reference (or by constructor), so the exact
+ * same object must be used for the transaction and for `trackedOrigins`.
+ */
+export function mcpOriginFor(actorKey: string = DEFAULT_ACTOR): object {
+  if (actorKey === DEFAULT_ACTOR) return MCP_ORIGIN
+  const existing = actorOrigins.get(actorKey)
+  if (existing) return existing
+  const origin = Object.freeze({ source: 'mcp-server' as const, actor: actorKey })
+  actorOrigins.set(actorKey, origin)
+  return origin
+}
+
+/** Actor key for a user id; one bucket per account, shared by that account's tokens. */
+export function actorKeyOf(userId: number): string {
+  return `user:${userId}`
+}
 
 export interface CanvasSnapshot {
   nodes: Record<string, unknown>[]
@@ -93,6 +123,7 @@ export async function getCanvasSnapshot(canvasId: number): Promise<CanvasSnapsho
 export async function upsertEntities(
   canvasId: number,
   payload: EntityPayload,
+  actorKey: string = DEFAULT_ACTOR,
 ): Promise<{ written: Record<string, string[]>; skipped: Record<string, number> }> {
   const state = await loadCanvasStateFromDb(canvasId)
   const collections = ensureRoot(state.doc)
@@ -100,7 +131,7 @@ export async function upsertEntities(
   // Create the undo manager BEFORE mutating. A Y.UndoManager only observes
   // transactions that happen after it is constructed, so creating it lazily on the
   // first `undo` call would leave the history empty and undo would be a no-op.
-  getUndoManager(state.doc)
+  getUndoManager(state.doc, actorKey)
 
   const written: Record<string, string[]> = {
     nodes: [],
@@ -150,7 +181,7 @@ export async function upsertEntities(
         written[key].push(id)
       }
     }
-  }, MCP_ORIGIN)
+  }, mcpOriginFor(actorKey))
 
   return { written, skipped }
 }
@@ -166,13 +197,14 @@ export async function upsertEntities(
 export async function deleteEntities(
   canvasId: number,
   ids: DeletedIds,
+  actorKey: string = DEFAULT_ACTOR,
 ): Promise<{ deleted: Record<string, string[]>; missing: Record<string, string[]> }> {
   const state = await loadCanvasStateFromDb(canvasId)
   const collections = ensureRoot(state.doc)
 
   // Same reason as upsertEntities: the manager must exist before the mutation it
   // is meant to be able to undo.
-  getUndoManager(state.doc)
+  getUndoManager(state.doc, actorKey)
 
   const collectionMap: Record<CollectionKey, Y.Map<Y.Map<unknown>>> = {
     nodes: collections.nodes,
@@ -210,38 +242,51 @@ export async function deleteEntities(
         }
       }
     }
-  }, MCP_ORIGIN)
+  }, mcpOriginFor(actorKey))
 
   return { deleted, missing }
 }
 
 /**
- * Undo managers tracking only MCP-origin transactions, keyed by Y.Doc.
+ * Undo managers tracking only MCP-origin transactions, keyed by doc **and** actor.
  *
- * WeakMap rather than a canvasId map on purpose: the server destroys a canvas's
- * doc whenever its room empties or the idle reclaimer runs (`removeCanvasState`),
- * and `loadCanvasStateFromDb` then swaps in a brand-new doc. Keying by the doc
- * makes both cases self-correcting — a destroyed doc's manager (and its captured
- * history) is collected with it instead of pinning a dead doc in memory forever,
- * and a swapped-in doc gets a fresh manager rather than a stale one.
+ * Two levels, both deliberate:
+ *
+ *   - WeakMap rather than a canvasId map: the server destroys a canvas's doc
+ *     whenever its room empties or the idle reclaimer runs (`removeCanvasState`),
+ *     and `loadCanvasStateFromDb` then swaps in a brand-new doc. Keying by the doc
+ *     makes both cases self-correcting — a destroyed doc's managers (and their
+ *     captured history) are collected with it instead of pinning a dead doc in
+ *     memory forever, and a swapped-in doc gets fresh managers rather than stale
+ *     ones.
+ *   - Inner Map keyed by actor: one canvas can be driven by several agents (and by
+ *     humans at the same time). With a single manager per doc, `undo` from agent A
+ *     rolled back agent B's last write — the ownership of an edit was lost. Each
+ *     actor now gets its own stack, tracking only that actor's origin object.
  *
  * Consequence to be aware of: agent undo history lives only as long as the
  * in-memory doc, so it does not survive every client disconnecting.
  */
-const undoManagers = new WeakMap<Y.Doc, Y.UndoManager>()
+const undoManagers = new WeakMap<Y.Doc, Map<string, Y.UndoManager>>()
 
-export function getUndoManager(doc: Y.Doc): Y.UndoManager {
-  const existing = undoManagers.get(doc)
+export function getUndoManager(doc: Y.Doc, actorKey: string = DEFAULT_ACTOR): Y.UndoManager {
+  let byActor = undoManagers.get(doc)
+  if (!byActor) {
+    byActor = new Map()
+    undoManagers.set(doc, byActor)
+  }
+  const existing = byActor.get(actorKey)
   if (existing) return existing
 
   const { nodes, groups, domains, connections } = ensureRoot(doc)
   const manager = new Y.UndoManager([nodes, groups, domains, connections], {
-    // Only the agent's own writes are undoable; concurrent human edits (which
-    // arrive as remote updates) are never rolled back by an MCP undo.
-    trackedOrigins: new Set([MCP_ORIGIN]),
+    // Only this actor's own writes are undoable; concurrent human edits (which
+    // arrive as remote updates) and other agents' writes are never rolled back by
+    // an MCP undo.
+    trackedOrigins: new Set([mcpOriginFor(actorKey)]),
     // One undo step per tool call rather than time-batched edits.
     captureTimeout: 0,
   })
-  undoManagers.set(doc, manager)
+  byActor.set(actorKey, manager)
   return manager
 }

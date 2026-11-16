@@ -46,7 +46,7 @@ const { MCP_SERVER_NAME } = await import('../mcp/server.js')
 const { generateToken } = await import('../utils/personalToken.js')
 
 /** The 23 tools exposed by tools.ts, used to pin the advertised set. */
-const EXPECTED_TOOL_COUNT = 23
+const EXPECTED_TOOL_COUNT = 55
 
 const NOW_SEC = () => Math.floor(Date.now() / 1000)
 
@@ -101,8 +101,9 @@ describe('mcp/http.ts (integration, real router + real DB)', () => {
         .send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} })
 
       expect(res.status).toBe(401)
-      expect(res.body.success).toBe(false)
-      expect(res.body.error).toContain('无效或已撤销')
+      expect(res.body.jsonrpc).toBe('2.0')
+      expect(res.body.error.code).toBe(-32001)
+      expect(res.body.error.message).toContain('无效或已撤销')
     })
 
     it('returns 401 for a garbage mmp_ token that is not in the database', async () => {
@@ -113,7 +114,8 @@ describe('mcp/http.ts (integration, real router + real DB)', () => {
         .send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} })
 
       expect(res.status).toBe(401)
-      expect(res.body.success).toBe(false)
+      expect(res.body.jsonrpc).toBe('2.0')
+      expect(res.body.error.code).toBe(-32001)
     })
 
     it('returns 401 for a token that does not carry the mmp_ prefix', async () => {
@@ -124,7 +126,8 @@ describe('mcp/http.ts (integration, real router + real DB)', () => {
         .send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} })
 
       expect(res.status).toBe(401)
-      expect(res.body.success).toBe(false)
+      expect(res.body.jsonrpc).toBe('2.0')
+      expect(res.body.error.code).toBe(-32001)
     })
 
     it('returns 401 for a revoked token', async () => {
@@ -137,7 +140,8 @@ describe('mcp/http.ts (integration, real router + real DB)', () => {
         .send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} })
 
       expect(res.status).toBe(401)
-      expect(res.body.success).toBe(false)
+      expect(res.body.jsonrpc).toBe('2.0')
+      expect(res.body.error.code).toBe(-32001)
     })
 
     it('returns 401 for an expired token', async () => {
@@ -356,6 +360,119 @@ describe('mcp/http.ts (integration, real router + real DB)', () => {
     it('still authenticates before answering DELETE', async () => {
       const res = await supertest(app).delete('/mcp')
       expect(res.status).toBe(401)
+    })
+
+    it('advertises Allow on 405 so a client knows POST is the supported verb', async () => {
+      const token = seedToken(t.raw, userId)
+      const res = await supertest(app).get('/mcp').set('Authorization', `Bearer ${token}`)
+      expect(res.status).toBe(405)
+      expect(res.headers.allow).toContain('POST')
+    })
+  })
+
+  describe('audit trail', () => {
+    it('records who called which tool with which ids, and flags tool-level failures', async () => {
+      const { clearMcpAudit, recentMcpCalls } = await import('../mcp/audit.js')
+      clearMcpAudit()
+      const token = seedToken(t.raw, userId)
+
+      await supertest(app)
+        .post('/mcp')
+        .set(MCP_HEADERS)
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'tools/call',
+          params: { name: 'notebookGet', arguments: { manuscriptId: 4242 } },
+        })
+      await new Promise((r) => setTimeout(r, 20))
+
+      let entries = recentMcpCalls(10)
+      expect(entries).toHaveLength(1)
+      expect(entries[0].userId).toBe(userId)
+      expect(entries[0].tool).toBe('notebookGet')
+      expect(entries[0].ids).toEqual({ manuscriptId: 4242 })
+      // The manuscript does not exist, so this call must be flagged as not-ok even
+      // though the HTTP status is 200.
+      expect(entries[0].ok).toBe(false)
+
+      // A successful read flips it back.
+      await supertest(app)
+        .post('/mcp')
+        .set(MCP_HEADERS)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })
+      await new Promise((r) => setTimeout(r, 20))
+      entries = recentMcpCalls(10)
+      expect(entries).toHaveLength(2)
+      expect(entries[1].method).toBe('tools/list')
+      expect(entries[1].ok).toBe(true)
+    })
+
+    it('never records tool arguments that could contain user prose', async () => {
+      const { clearMcpAudit, recentMcpCalls } = await import('../mcp/audit.js')
+      clearMcpAudit()
+      const token = seedToken(t.raw, userId)
+
+      await supertest(app)
+        .post('/mcp')
+        .set(MCP_HEADERS)
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          jsonrpc: '2.0',
+          id: 3,
+          method: 'tools/call',
+          params: { name: 'notebookCreate', arguments: { text: '机密正文不应该进日志', title: 'x' } },
+        })
+      await new Promise((r) => setTimeout(r, 20))
+
+      const entry = recentMcpCalls(1)[0]
+      expect(JSON.stringify(entry)).not.toContain('机密正文')
+    })
+  })
+
+  describe('pre-transport failures answer in JSON-RPC', () => {
+    /** A copy of the real mount order: body parser → router → /mcp error handler. */
+    async function buildPreciseApp() {
+      const expressModule = await import('express')
+      const express = expressModule.default
+      const { mcpErrorHandler } = await import('../mcp/http.js')
+      const a = express()
+      a.use(express.json({ limit: '1kb' }))
+      a.use('/mcp', mcpRouter)
+      a.use('/mcp', mcpErrorHandler)
+      return a
+    }
+
+    it('turns a malformed body into -32700 instead of {success:false}', async () => {
+      const local = await buildPreciseApp()
+      const token = seedToken(t.raw, userId)
+
+      const res = await supertest(local)
+        .post('/mcp')
+        .set(MCP_HEADERS)
+        .set('Authorization', `Bearer ${token}`)
+        .send('{"jsonrpc":"2.0",,}')
+
+      expect(res.status).toBe(400)
+      expect(res.body.jsonrpc).toBe('2.0')
+      expect(res.body.error.code).toBe(-32700)
+    })
+
+    it('turns an oversized body into E_LIMIT with a hint', async () => {
+      const local = await buildPreciseApp()
+      const token = seedToken(t.raw, userId)
+
+      const res = await supertest(local)
+        .post('/mcp')
+        .set(MCP_HEADERS)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'x', arguments: { blob: 'y'.repeat(4096) } } })
+
+      expect(res.status).toBe(413)
+      expect(res.body.error.data.code).toBe('E_LIMIT')
+      expect(res.body.error.message).toContain('过大')
     })
   })
 })

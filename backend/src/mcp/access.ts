@@ -4,19 +4,35 @@
  * An agent authenticates as a user (personal access token), so every canvas it
  * names must be re-checked against that user's project membership — a token must
  * never widen the reach of the account behind it. This mirrors the ownership rule
- * used by the collaboration controller: a project's owner, or an explicit
- * `project_members` row, grants access.
+ * used by the rest of the server, and it now also mirrors the *role* rule:
+ *
+ *   owner  → read + write
+ *   editor → read + write
+ *   viewer → read only
+ *
+ * That last line used to be missing here while REST (`checkProjectAccess`) and
+ * the WebSocket room both enforced it. The result was a real privilege
+ * escalation: a read-only collaborator could rewrite or delete any canvas with
+ * their own token. `canEdit` is therefore part of the access result, not
+ * something individual tools are trusted to remember.
  */
 import { db } from '../database/connection.js'
-import { canvases, projects, projectMembers } from '../database/schema.js'
-import { eq, and } from 'drizzle-orm'
+import { canvases } from '../database/schema.js'
+import { eq } from 'drizzle-orm'
 import { getProperty } from '../utils/transformResponse.js'
+import { resolveProjectAccess, type ProjectRole } from '../domain/access.js'
+
+export type { ProjectRole }
 
 export interface CanvasAccess {
   canvasId: number
   projectId: number
   canvasName: string | null
   projectName: string | null
+  /** Effective role of the calling user in the project. */
+  role: ProjectRole
+  /** True only for owner/editor. Every mutating tool must require this. */
+  canEdit: boolean
 }
 
 /**
@@ -55,25 +71,9 @@ export async function resolveCanvasAccess(
     return { status: 'denied', reason: 'forbidden' }
   }
 
-  const project = await db.query.projects.findFirst({
-    where: eq(projects.id, projectId),
-  })
-  if (!project) {
+  const project = await resolveProjectAccess(projectId, userId)
+  if (!project || project.role === null) {
     return { status: 'denied', reason: 'forbidden' }
-  }
-
-  const projectOwnerId =
-    getProperty<number>(project, 'owner_id', 'ownerId') ?? project.ownerId
-  if (projectOwnerId !== userId) {
-    const member = await db.query.projectMembers.findFirst({
-      where: and(
-        eq(projectMembers.projectId, projectId),
-        eq(projectMembers.userId, userId),
-      ),
-    })
-    if (!member) {
-      return { status: 'denied', reason: 'forbidden' }
-    }
   }
 
   return {
@@ -82,7 +82,9 @@ export async function resolveCanvasAccess(
       canvasId,
       projectId,
       canvasName: (canvas.name as string | undefined) ?? null,
-      projectName: (project.name as string | undefined) ?? null,
+      projectName: project.projectName,
+      role: project.role,
+      canEdit: project.canEdit,
     },
   }
 }
@@ -97,4 +99,18 @@ export function accessErrorMessage(canvasId: number, reason: 'not-found' | 'forb
   return reason === 'not-found'
     ? `画布 ${canvasId} 不存在。请先用 listCanvases 获取有效画布 ID。`
     : `无权访问画布 ${canvasId}。当前令牌对应的用户不是该项目成员；请让项目所有者授予成员权限。`
+}
+
+/**
+ * Message for a caller that may read but not write.
+ *
+ * Separate from `accessErrorMessage` on purpose: "you are a read-only member" is
+ * actionable (ask the owner for editor rights) while "forbidden" suggests the
+ * canvas is invisible, which would be wrong — the same token can read it fine.
+ */
+export function readOnlyErrorMessage(canvasId: number): string {
+  return (
+    `无权修改画布 ${canvasId}：当前账号在该项目里是只读（viewer）成员，` +
+    `只能读取。请让项目所有者把你的角色改为 editor 后重试。`
+  )
 }

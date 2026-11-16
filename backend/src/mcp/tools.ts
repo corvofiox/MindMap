@@ -18,38 +18,47 @@ import { nextZIndexAbove, NODE_Z_STEP, normalizeNode } from 'mindmap-shared'
 import { db } from '../database/connection.js'
 import { canvases, projects, projectMembers } from '../database/schema.js'
 import { eq, inArray, desc } from 'drizzle-orm'
-import { accessErrorMessage, resolveCanvasAccess } from './access.js'
+import { accessErrorMessage, readOnlyErrorMessage, resolveCanvasAccess } from './access.js'
+import { escapeHtml } from '../domain/rules.js'
 import {
+  actorKeyOf,
   deleteEntities,
   getCanvasSnapshot,
   getUndoManager,
   upsertEntities,
   type CanvasSnapshot,
+  type DeletedIds,
+  type EntityPayload,
 } from './canvas-ops.js'
 
 /** Identity behind the current MCP session; every call is scoped to this user. */
-export interface ToolContext {
-  userId: number
-}
-
-/** Tool reply: JSON text on success, or an `isError` result with a fix hint. */
-type ToolResult = {
-  content: Array<{ type: 'text'; text: string }>
-  isError?: boolean
-}
-
-function ok(data: unknown): ToolResult {
-  return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] }
-}
-
-function fail(message: string): ToolResult {
-  return { content: [{ type: 'text', text: message }], isError: true }
-}
+export type { ToolContext } from './types.js'
+import type { ToolContext } from './types.js'
+import { fail, ok, toolError, type ToolResult } from './result.js'
 
 /** Numeric coercion that refuses NaN/Infinity, mirroring the frontend helper. */
 function toFiniteNumber(value: unknown, fallback: number): number {
   const num = Number(value)
   return Number.isFinite(num) ? num : fallback
+}
+
+/**
+ * Boolean coercion for **unvalidated** payloads (`generateGraphFromJSON`).
+ *
+ * `Boolean("false")` is `true`, so a model that emits `"collapsed": "false"` used to
+ * create collapsed nodes — the node looks empty and the caller cannot tell why.
+ * Paths guarded by a zod `z.boolean()` must keep using the plain value; this is only
+ * for `.passthrough()` objects.
+ */
+function toBoolean(value: unknown, fallback: boolean): boolean {
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'number') return value !== 0
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase()
+    if (['false', '0', 'no', 'off', ''].includes(normalized)) return false
+    if (['true', '1', 'yes', 'on'].includes(normalized)) return true
+  }
+  return fallback
 }
 
 function generateId(prefix: string): string {
@@ -83,6 +92,55 @@ function nodesById(snapshot: CanvasSnapshot): Map<string, Record<string, unknown
     if (typeof id === 'string') map.set(id, node)
   }
   return map
+}
+
+/**
+ * What an undo/redo actually changed, per collection.
+ *
+ * `undo` used to answer `{undone:true}` and nothing else, which left the caller
+ * unable to tell a real rollback from a no-op and made multi-agent mishaps
+ * invisible. Returns counts plus the concrete ids, capped so the reply stays small.
+ */
+function summarizeSnapshotDelta(
+  before: CanvasSnapshot,
+  after: CanvasSnapshot,
+): Record<string, { added: string[]; removed: string[]; changed: string[] }> {
+  const cap = 50
+  const summarize = (a: Record<string, unknown>[], b: Record<string, unknown>[]) => {
+    const idOf = (r: Record<string, unknown>) => (typeof r.id === 'string' ? r.id : null)
+    const beforeIds = new Map<string, string>()
+    for (const r of a) {
+      const id = idOf(r)
+      if (id) beforeIds.set(id, JSON.stringify(r))
+    }
+    const afterIds = new Map<string, string>()
+    for (const r of b) {
+      const id = idOf(r)
+      if (id) afterIds.set(id, JSON.stringify(r))
+    }
+    const added: string[] = []
+    const removed: string[] = []
+    const changed: string[] = []
+    for (const [id, json] of afterIds) {
+      const prior = beforeIds.get(id)
+      if (prior === undefined) added.push(id)
+      else if (prior !== json) changed.push(id)
+    }
+    for (const id of beforeIds.keys()) {
+      if (!afterIds.has(id)) removed.push(id)
+    }
+    return {
+      added: added.slice(0, cap),
+      removed: removed.slice(0, cap),
+      changed: changed.slice(0, cap),
+    }
+  }
+  return {
+    nodes: summarize(before.nodes, after.nodes),
+    connections: summarize(before.connections, after.connections),
+    groups: summarize(before.groups, after.groups),
+    domains: summarize(before.domains, after.domains),
+  }
 }
 
 /**
@@ -122,16 +180,63 @@ function calculateNodesBounds(
   }
 }
 
-/** Resolve a canvas + access check, returning either a ctx or a tool error. */
+/**
+ * Resolve a canvas + access check, returning either a ctx or a tool error.
+ *
+ * `write: true` additionally enforces the project *role*. Reading only needs
+ * membership; writing needs owner/editor. Keeping the check here — instead of in
+ * each of the 16 mutating tools — is what makes "viewer can rewrite the canvas"
+ * unrepresentable: a tool that forgets to ask for write mode is still safe
+ * because the default is read-only.
+ */
 async function withCanvas(
   ctx: ToolContext,
   canvasId: number,
+  options: { write?: boolean } = {},
 ): Promise<{ error: ToolResult } | { snapshot: CanvasSnapshot }> {
   const access = await resolveCanvasAccess(canvasId, ctx.userId)
   if (access.status === 'denied') {
-    return { error: fail(accessErrorMessage(canvasId, access.reason)) }
+    return { error: toolError('E_NOT_FOUND', accessErrorMessage(canvasId, access.reason)) }
+  }
+  if (options.write && !access.access.canEdit) {
+    return {
+      error: toolError(
+        'E_FORBIDDEN',
+        readOnlyErrorMessage(canvasId),
+        '请项目所有者把你的角色改为 editor 后重试。',
+      ),
+    }
   }
   return { snapshot: await getCanvasSnapshot(canvasId) }
+}
+
+/**
+ * Actor key used to scope undo history and transaction origins.
+ *
+ * One bucket per account (not per token): two tokens belonging to the same human
+ * are the same principal, and one of them should be able to undo the other's
+ * last step when that human switches client.
+ */
+function actorOf(ctx: ToolContext): string {
+  return actorKeyOf(ctx.userId)
+}
+
+/** Upsert entities on behalf of `ctx`, so `undo` only ever rolls back its own actor. */
+async function upsert(
+  ctx: ToolContext,
+  canvasId: number,
+  payload: EntityPayload,
+): Promise<{ written: Record<string, string[]>; skipped: Record<string, number> }> {
+  return upsertEntities(canvasId, payload, actorOf(ctx))
+}
+
+/** Delete entities on behalf of `ctx` (see `upsert`). */
+async function remove(
+  ctx: ToolContext,
+  canvasId: number,
+  ids: DeletedIds,
+): Promise<{ deleted: Record<string, string[]>; missing: Record<string, string[]> }> {
+  return deleteEntities(canvasId, ids, actorOf(ctx))
 }
 
 /** Shared canvasId argument used by nearly every tool. */
@@ -157,8 +262,9 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
     'listCanvases',
     {
       title: '列出可访问的画布',
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
       description:
-        '列出当前令牌对应账号可访问的所有画布（自己拥有的项目 + 作为成员加入的项目）。返回画布 ID、名称、所属项目与更新时间。除 listProjects 外，其余工具都需要画布 ID，先用本工具获取。',
+        '列出当前令牌对应账号可访问的所有画布（自己拥有的项目 + 作为成员加入的项目）。返回画布 ID、名称、所属项目与更新时间。除 listCanvases 外，其余工具都需要画布 ID，先用本工具获取。',
       inputSchema: {
         projectId: z.number().int().positive().optional().describe('可选：只列出该项目的画布'),
       },
@@ -224,21 +330,25 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
     'getCanvasData',
     {
       title: '获取画布完整数据',
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
       description:
-        '获取画布的完整数据，包括所有节点、连接、组和域。节点含 x/y/width/height，可用于规划新节点位置避免重叠。画布很大时优先用 getAllNodes / searchNodes。',
+        '获取画布的完整数据，包括所有节点、连接、组和域。节点含 x/y/width/height，可用于规划新节点位置避免重叠。画布很大时优先用 getAllNodes / searchNodes。返回的节点已归一化为统一形态（content/cover），与 getAllNodes 一致。',
       inputSchema: { canvasId: canvasIdSchema },
     },
     async ({ canvasId }) => {
       const res = await withCanvas(ctx, canvasId)
       if ('error' in res) return res.error
       const { snapshot } = res
+      // 出口统一归一化：此前这里返回的是 doc 原始形态（老节点带 type/imageUrl），
+      // 而 getAllNodes 返回归一化形态，agent 读完再原样回写会踩到废弃字段。
+      const nodes = snapshot.nodes.map((node) => normalizeNode(node))
       return ok({
-        nodes: snapshot.nodes,
+        nodes,
         connections: snapshot.connections,
         groups: snapshot.groups,
         domains: snapshot.domains,
         counts: {
-          nodes: snapshot.nodes.length,
+          nodes: nodes.length,
           connections: snapshot.connections.length,
           groups: snapshot.groups.length,
           domains: snapshot.domains.length,
@@ -251,6 +361,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
     'getAllNodes',
     {
       title: '获取所有节点',
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
       description:
         '获取画布上所有节点的列表，包含节点的标题、内容、类型、坐标与尺寸等信息。',
       inputSchema: { canvasId: canvasIdSchema },
@@ -268,6 +379,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
     'getAllConnections',
     {
       title: '获取所有连接',
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
       description:
         '获取画布上所有连接的列表，包含连接的起点、终点、标签、类型、样式等信息。',
       inputSchema: { canvasId: canvasIdSchema },
@@ -286,6 +398,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
     'getAllGroups',
     {
       title: '获取所有组',
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
       description:
         '获取画布上所有组的列表，包含组的名称、描述、包含的节点、折叠状态等信息。',
       inputSchema: { canvasId: canvasIdSchema },
@@ -301,6 +414,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
     'getAllDomains',
     {
       title: '获取所有域',
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
       description: '获取画布上所有域的列表，包含域的 ID 和名称。',
       inputSchema: { canvasId: canvasIdSchema },
     },
@@ -315,6 +429,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
     'searchNodes',
     {
       title: '搜索节点',
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
       description:
         '在画布节点中搜索，按标题和/或内容匹配关键词（不区分大小写），返回匹配节点列表及命中片段。',
       inputSchema: {
@@ -376,6 +491,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
     'createNode',
     {
       title: '创建节点',
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
       description:
         '在画布上创建一个新节点。建议节点大小不小于 200x160 以确保内容显示完整。创建成功返回 nodeId。未指定 x/y 时节点默认落在 (0,0)，建议先调用 getCanvasData 查看现有节点坐标再指定 x/y 避免重叠。',
       inputSchema: {
@@ -406,7 +522,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
     },
     async (args) => {
       const { canvasId, ...rest } = args
-      const res = await withCanvas(ctx, canvasId)
+      const res = await withCanvas(ctx, canvasId, { write: true })
       if ('error' in res) return res.error
 
       const title = String(rest.title || '').trim()
@@ -442,7 +558,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
 
       // 统一节点：type/imageUrl/aspectRatio 都是废弃入参，这里折成 content/cover
       const unified = normalizeNode(node) as Record<string, unknown>
-      await upsertEntities(canvasId, { nodes: [unified] })
+      await upsert(ctx, canvasId, { nodes: [unified] })
       return ok({ nodeId, title, cover: unified.cover ?? null })
     },
   )
@@ -451,6 +567,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
     'updateNode',
     {
       title: '更新节点',
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
       description:
         '更新现有节点的属性，包括标题、内容、位置、大小、颜色、字体大小、对齐方式和折叠/锁定状态。只修改传入的字段，其余保持不变。节点 ID 通过 getAllNodes 或 createNode 获取。',
       inputSchema: {
@@ -482,7 +599,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
     },
     async (args) => {
       const { canvasId, nodeId, ...rest } = args
-      const res = await withCanvas(ctx, canvasId)
+      const res = await withCanvas(ctx, canvasId, { write: true })
       if ('error' in res) return res.error
       if (!nodeId) return fail('缺少节点 ID')
 
@@ -522,9 +639,31 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
 
       // 统一节点：type/imageUrl/aspectRatio 是废弃入参。仍然接受（老 agent 会传），
       // 但落地前折成 content/cover，绝不再写回废弃字段。
-      if (rest.type !== undefined || rest.imageUrl !== undefined || rest.aspectRatio !== undefined) {
-        const merged = normalizeNode({ ...existing, ...updates }) as Record<string, unknown>
-        updates.content = merged.content
+      //
+      // `imageUrl` 要显式追加一个 <img>：`normalizeNode` 只在正文为空时才把图片折进
+      // 正文，否则只设 cover —— 对"给现有节点加一张图"来说那等于没加。此前这三个
+      // 入参根本没进 updates，合并基里也就拿不到新图，于是"传了 imageUrl、返回成功、
+      // 图却没进节点"。同时只在真的产生了新正文时才覆盖 content，否则会把读快照时
+      // 拿到的旧正文写回去，盖掉协作者刚改的内容。
+      if (rest.imageUrl !== undefined && String(rest.imageUrl).trim() !== '') {
+        const url = String(rest.imageUrl).trim()
+        const baseContent =
+          updates.content !== undefined ? String(updates.content) : String(existing.content ?? '')
+        if (!baseContent.includes(url)) {
+          updates.content = `${baseContent}<img src="${escapeHtml(url)}" alt="">`
+          updates.cover = url
+        }
+      }
+      if (rest.type !== undefined || rest.aspectRatio !== undefined) {
+        const merged = normalizeNode({
+          ...existing,
+          ...updates,
+          ...(rest.type !== undefined ? { type: String(rest.type) } : {}),
+          ...(rest.aspectRatio !== undefined
+            ? { aspectRatio: toFiniteNumber(rest.aspectRatio, 1) }
+            : {}),
+        }) as Record<string, unknown>
+        if (merged.content !== existing.content) updates.content = merged.content
         if (merged.cover !== undefined) updates.cover = merged.cover
         delete updates.type
         delete updates.imageUrl
@@ -535,7 +674,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
         return fail('没有提供任何要更新的字段。请至少指定一个属性（如 title、content、x、y）。')
       }
 
-      await upsertEntities(canvasId, { nodes: [{ id: nodeId, ...updates }] })
+      await upsert(ctx, canvasId, { nodes: [{ id: nodeId, ...updates }] })
       return ok({ nodeId, updates })
     },
   )
@@ -544,6 +683,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
     'batchUpdateNodes',
     {
       title: '批量更新节点',
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
       description:
         '批量更新多个节点的相同属性，适用于统一修改（如全部改颜色、全部移动）。传入节点 ID 列表和要修改的字段，未提供的字段保持不变；不存在的节点会被跳过并记录。',
       inputSchema: {
@@ -570,7 +710,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
     },
     async (args) => {
       const { canvasId, nodeIds, ...rest } = args
-      const res = await withCanvas(ctx, canvasId)
+      const res = await withCanvas(ctx, canvasId, { write: true })
       if ('error' in res) return res.error
       if (!Array.isArray(nodeIds)) return fail('缺少节点 ID 列表(nodeIds)')
 
@@ -613,7 +753,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
         return fail('所有节点均不存在，可用 getAllNodes 获取有效节点 ID')
       }
 
-      await upsertEntities(canvasId, { nodes: toWrite })
+      await upsert(ctx, canvasId, { nodes: toWrite })
       return ok({ updated: toWrite.length, skipped })
     },
   )
@@ -622,6 +762,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
     'deleteNode',
     {
       title: '删除节点',
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
       description:
         '删除指定的节点及其相关连接。节点 ID 通过 getAllNodes 或 createNode 获取。',
       inputSchema: {
@@ -630,7 +771,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
       },
     },
     async ({ canvasId, nodeId }) => {
-      const res = await withCanvas(ctx, canvasId)
+      const res = await withCanvas(ctx, canvasId, { write: true })
       if ('error' in res) return res.error
       if (!nodeId) return fail('缺少节点 ID')
       if (!nodesById(res.snapshot).has(nodeId)) {
@@ -642,7 +783,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
         .filter((c) => c.fromNodeId === nodeId || c.toNodeId === nodeId)
         .map((c) => String(c.id))
 
-      const result = await deleteEntities(canvasId, {
+      const result = await remove(ctx, canvasId, {
         nodeIds: [nodeId],
         connectionIds: attached,
       })
@@ -659,6 +800,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
     'createConnection',
     {
       title: '创建连接',
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
       description:
         '在两个节点之间创建连接。未指定端口时按两节点相对位置自动选择（水平关系用左右端口，垂直关系用上下端口）。源节点和目标节点必须已存在。',
       inputSchema: {
@@ -690,7 +832,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
     },
     async (args) => {
       const { canvasId, fromNodeId, toNodeId, ...rest } = args
-      const res = await withCanvas(ctx, canvasId)
+      const res = await withCanvas(ctx, canvasId, { write: true })
       if ('error' in res) return res.error
       if (!fromNodeId || !toNodeId) return fail('缺少源节点或目标节点 ID')
 
@@ -732,8 +874,28 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
         label: String(rest.label || ''),
       }
 
-      await upsertEntities(canvasId, { connections: [connection] })
-      return ok({ connectionId, fromNodeId, toNodeId })
+      // 重试安全：同一对端点、同一对端口已经连过就返回既有连线，不再叠一条。
+      // MCP 客户端超时重发是常态，此前一次重发就会在画布上留下两条一模一样的边，
+      // 而调用方完全看不出来。
+      const existing = res.snapshot.connections.find(
+        (c) =>
+          c.fromNodeId === fromNodeId &&
+          c.toNodeId === toNodeId &&
+          (c.fromPort ?? 'bottom') === connection.fromPort &&
+          (c.toPort ?? 'top') === connection.toPort,
+      )
+      if (existing) {
+        return ok({
+          connectionId: String(existing.id),
+          fromNodeId,
+          toNodeId,
+          deduped: true,
+          note: '同样端点与端口的连接已存在，返回既有连接。',
+        })
+      }
+
+      await upsert(ctx, canvasId, { connections: [connection] })
+      return ok({ connectionId, fromNodeId, toNodeId, deduped: false })
     },
   )
 
@@ -741,6 +903,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
     'updateConnection',
     {
       title: '更新连接',
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
       description:
         '更新现有连接的属性，包括连线类型、样式、方向、箭头类型、颜色、宽度、标签和端口位置。连接 ID 通过 getAllConnections 获取。',
       inputSchema: {
@@ -767,7 +930,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
     },
     async (args) => {
       const { canvasId, connectionId, ...rest } = args
-      const res = await withCanvas(ctx, canvasId)
+      const res = await withCanvas(ctx, canvasId, { write: true })
       if ('error' in res) return res.error
       if (!connectionId) return fail('缺少连接 ID')
 
@@ -807,7 +970,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
         return fail('没有提供任何要更新的字段。请至少指定一个属性。')
       }
 
-      await upsertEntities(canvasId, { connections: [{ id: connectionId, ...updates }] })
+      await upsert(ctx, canvasId, { connections: [{ id: connectionId, ...updates }] })
       return ok({ connectionId, updates })
     },
   )
@@ -816,6 +979,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
     'deleteConnection',
     {
       title: '删除连接',
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
       description: '删除指定的连接。连接 ID 通过 getAllConnections 获取。',
       inputSchema: {
         canvasId: canvasIdSchema,
@@ -823,13 +987,13 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
       },
     },
     async ({ canvasId, connectionId }) => {
-      const res = await withCanvas(ctx, canvasId)
+      const res = await withCanvas(ctx, canvasId, { write: true })
       if ('error' in res) return res.error
       if (!connectionId) return fail('缺少连接 ID')
       if (!res.snapshot.connections.some((c) => c.id === connectionId)) {
         return fail(`连接不存在: ${connectionId}，可用 getAllConnections 获取有效连接 ID`)
       }
-      await deleteEntities(canvasId, { connectionIds: [connectionId] })
+      await remove(ctx, canvasId, { connectionIds: [connectionId] })
       return ok({ deletedConnectionId: connectionId })
     },
   )
@@ -840,6 +1004,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
     'createGroup',
     {
       title: '创建组',
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
       description:
         '创建一个新组，用于将多个相关节点组合在一起。组是带边框的容器，适合小范围紧密组合。传入节点 ID 列表后，系统会自动计算边界框覆盖所有节点。',
       inputSchema: {
@@ -854,7 +1019,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
     },
     async (args) => {
       const { canvasId, nodeIds, ...rest } = args
-      const res = await withCanvas(ctx, canvasId)
+      const res = await withCanvas(ctx, canvasId, { write: true })
       if ('error' in res) return res.error
 
       const ids = nodeIds ?? []
@@ -883,7 +1048,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
         collapsed: false,
       }
 
-      await upsertEntities(canvasId, { groups: [group] })
+      await upsert(ctx, canvasId, { groups: [group] })
       return ok({ groupId, name: group.name, nodeCount: ids.length })
     },
   )
@@ -892,6 +1057,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
     'updateGroup',
     {
       title: '更新组',
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
       description:
         '更新现有组的属性，包括名称、描述、位置、大小、颜色、边框样式和包含的节点。组 ID 通过 getAllGroups 获取。',
       inputSchema: {
@@ -916,7 +1082,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
     },
     async (args) => {
       const { canvasId, groupId, ...rest } = args
-      const res = await withCanvas(ctx, canvasId)
+      const res = await withCanvas(ctx, canvasId, { write: true })
       if ('error' in res) return res.error
       if (!groupId) return fail('缺少组 ID')
 
@@ -959,7 +1125,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
         return fail('没有提供任何要更新的字段。请至少指定一个属性。')
       }
 
-      await upsertEntities(canvasId, { groups: [{ id: groupId, ...updates }] })
+      await upsert(ctx, canvasId, { groups: [{ id: groupId, ...updates }] })
       return ok({ groupId, updates })
     },
   )
@@ -968,6 +1134,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
     'deleteGroup',
     {
       title: '删除组',
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
       description: '删除指定的组。组 ID 通过 getAllGroups 获取。删除组不会删除组内的节点。',
       inputSchema: {
         canvasId: canvasIdSchema,
@@ -975,13 +1142,13 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
       },
     },
     async ({ canvasId, groupId }) => {
-      const res = await withCanvas(ctx, canvasId)
+      const res = await withCanvas(ctx, canvasId, { write: true })
       if ('error' in res) return res.error
       if (!groupId) return fail('缺少组 ID')
       if (!res.snapshot.groups.some((g) => g.id === groupId)) {
         return fail(`组不存在: ${groupId}，可用 getAllGroups 获取有效组 ID`)
       }
-      await deleteEntities(canvasId, { groupIds: [groupId] })
+      await remove(ctx, canvasId, { groupIds: [groupId] })
       return ok({ deletedGroupId: groupId })
     },
   )
@@ -992,6 +1159,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
     'createDomain',
     {
       title: '创建域',
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
       description:
         '创建一个新域，用于划分画布的特定区域。域是背景级别的容器，适合大范围划分。传入节点 ID 列表后，系统会自动计算边界框覆盖所有节点。',
       inputSchema: {
@@ -1005,7 +1173,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
     },
     async (args) => {
       const { canvasId, nodeIds, ...rest } = args
-      const res = await withCanvas(ctx, canvasId)
+      const res = await withCanvas(ctx, canvasId, { write: true })
       if ('error' in res) return res.error
 
       const ids = nodeIds ?? []
@@ -1029,7 +1197,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
         titleVisible: true,
       }
 
-      await upsertEntities(canvasId, { domains: [domain] })
+      await upsert(ctx, canvasId, { domains: [domain] })
       return ok({ domainId, name: domain.name, nodeCount: ids.length })
     },
   )
@@ -1038,6 +1206,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
     'updateDomain',
     {
       title: '更新域',
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
       description:
         '更新现有域的属性，包括名称、位置、大小、背景颜色和标题样式。域 ID 通过 getAllDomains 获取。',
       inputSchema: {
@@ -1060,7 +1229,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
     },
     async (args) => {
       const { canvasId, domainId, ...rest } = args
-      const res = await withCanvas(ctx, canvasId)
+      const res = await withCanvas(ctx, canvasId, { write: true })
       if ('error' in res) return res.error
       if (!domainId) return fail('缺少域 ID')
 
@@ -1101,7 +1270,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
         return fail('没有提供任何要更新的字段。请至少指定一个属性。')
       }
 
-      await upsertEntities(canvasId, { domains: [{ id: domainId, ...updates }] })
+      await upsert(ctx, canvasId, { domains: [{ id: domainId, ...updates }] })
       return ok({ domainId, updates })
     },
   )
@@ -1110,6 +1279,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
     'deleteDomain',
     {
       title: '删除域',
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
       description: '删除指定的域。域 ID 通过 getAllDomains 获取。',
       inputSchema: {
         canvasId: canvasIdSchema,
@@ -1117,13 +1287,13 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
       },
     },
     async ({ canvasId, domainId }) => {
-      const res = await withCanvas(ctx, canvasId)
+      const res = await withCanvas(ctx, canvasId, { write: true })
       if ('error' in res) return res.error
       if (!domainId) return fail('缺少域 ID')
       if (!res.snapshot.domains.some((d) => d.id === domainId)) {
         return fail(`域不存在: ${domainId}，可用 getAllDomains 获取有效域 ID`)
       }
-      await deleteEntities(canvasId, { domainIds: [domainId] })
+      await remove(ctx, canvasId, { domainIds: [domainId] })
       return ok({ deletedDomainId: domainId })
     },
   )
@@ -1134,6 +1304,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
     'generateGraphFromJSON',
     {
       title: '用 JSON 批量生成图形',
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
       description: `通过 JSON 数据结构一次性生成图形。支持任意节点和连线关系，可创建复杂的对象关系图、流程图、网络拓扑图、类图等，不限于树状思维导图。追加语义：只新增实体，不会清空或替换画布上已有的节点/连线。
 
 【核心特性】
@@ -1176,7 +1347,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
       },
     },
     async ({ canvasId, data }) => {
-      const res = await withCanvas(ctx, canvasId)
+      const res = await withCanvas(ctx, canvasId, { write: true })
       if ('error' in res) return res.error
 
       // Runtime validation with actionable messages. The schema above is
@@ -1281,8 +1452,8 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
           color: String(nodeData.color ?? defaultStyle.color ?? '#ffffff'),
           fontSize: toFiniteNumber(nodeData.fontSize ?? defaultStyle.fontSize, 14),
           textAlign: nodeData.textAlign ?? defaultStyle.textAlign ?? 'center',
-          collapsed: Boolean(nodeData.collapsed ?? defaultStyle.collapsed ?? false),
-          locked: Boolean(nodeData.locked ?? defaultStyle.locked ?? false),
+          collapsed: toBoolean(nodeData.collapsed ?? defaultStyle.collapsed, false),
+          locked: toBoolean(nodeData.locked ?? defaultStyle.locked, false),
           zIndex: baseZIndex + index * NODE_Z_STEP,
         }
         const titleAlign = nodeData.titleAlign ?? defaultStyle.titleAlign
@@ -1401,7 +1572,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
             borderWidth: toFiniteNumber(groupData.borderWidth, 2),
             borderRadius: toFiniteNumber(groupData.borderRadius, 8),
             nodeIds: resolvedNodeIds,
-            collapsed: Boolean(groupData.collapsed ?? false),
+            collapsed: toBoolean(groupData.collapsed, false),
           })
         }
       }
@@ -1440,7 +1611,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
             width: toFiniteNumber(domainData.width, bounds?.width ?? 400),
             height: toFiniteNumber(domainData.height, bounds?.height ?? 300),
             backgroundColor: String(domainData.backgroundColor ?? 'rgba(139, 92, 246, 0.1)'),
-            titleVisible: Boolean(domainData.titleVisible ?? true),
+            titleVisible: toBoolean(domainData.titleVisible, true),
           }
           if (domainData.titleColor !== undefined) domain.titleColor = String(domainData.titleColor)
           if (domainData.titleFontSize !== undefined) {
@@ -1454,7 +1625,7 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
       }
 
       // Single transaction so the whole graph lands atomically for collaborators.
-      await upsertEntities(canvasId, {
+      await upsert(ctx, canvasId, {
         nodes: nodesOut,
         connections: connectionsOut,
         groups: groupsOut,
@@ -1480,21 +1651,26 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
     'undo',
     {
       title: '撤销',
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
       description:
         '撤销上一步由 MCP 执行且尚未提交的画布写操作。只撤销 agent 自己的操作，不会回退其他协作者同时进行的编辑。无可撤销操作时返回错误。',
       inputSchema: { canvasId: canvasIdSchema },
     },
     async ({ canvasId }) => {
-      const access = await resolveCanvasAccess(canvasId, ctx.userId)
-      if (access.status === 'denied') return fail(accessErrorMessage(canvasId, access.reason))
+      const res = await withCanvas(ctx, canvasId, { write: true })
+      if ('error' in res) return res.error
+      const before = res.snapshot
       // Load the doc rather than requiring it to be in memory, so a canvas with no
       // MCP history reports "nothing to undo" instead of "not loaded".
       const { loadCanvasStateFromDb } = await import('../websocket/canvas-state.js')
       const state = await loadCanvasStateFromDb(canvasId)
-      const manager = getUndoManager(state.doc)
-      if (!manager.canUndo()) return fail('没有可撤销的操作')
+      const manager = getUndoManager(state.doc, actorOf(ctx))
+      if (!manager.canUndo()) {
+        return fail('没有可撤销的操作。撤销栈按账号隔离，只记录本账号通过 MCP 做的改动。')
+      }
       manager.undo()
-      return ok({ undone: true })
+      const after = await getCanvasSnapshot(canvasId)
+      return ok({ undone: true, changes: summarizeSnapshotDelta(before, after) })
     },
   )
 
@@ -1502,18 +1678,21 @@ export function registerCanvasTools(server: McpServer, ctx: ToolContext): void {
     'redo',
     {
       title: '重做',
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
       description: '重做被 undo 撤销的画布操作。无可重做操作时返回错误。',
       inputSchema: { canvasId: canvasIdSchema },
     },
     async ({ canvasId }) => {
-      const access = await resolveCanvasAccess(canvasId, ctx.userId)
-      if (access.status === 'denied') return fail(accessErrorMessage(canvasId, access.reason))
+      const res = await withCanvas(ctx, canvasId, { write: true })
+      if ('error' in res) return res.error
+      const before = res.snapshot
       const { loadCanvasStateFromDb } = await import('../websocket/canvas-state.js')
       const state = await loadCanvasStateFromDb(canvasId)
-      const manager = getUndoManager(state.doc)
+      const manager = getUndoManager(state.doc, actorOf(ctx))
       if (!manager.canRedo()) return fail('没有可重做的操作')
       manager.redo()
-      return ok({ redone: true })
+      const after = await getCanvasSnapshot(canvasId)
+      return ok({ redone: true, changes: summarizeSnapshotDelta(before, after) })
     },
   )
 }

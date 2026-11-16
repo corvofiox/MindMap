@@ -91,6 +91,17 @@ jobs:
       - name: 前端测试
         run: npm run test:frontend:run
 
+      # 端到端：真起服务 + 真令牌 + 真 HTTP，验的是"整条链路通不通"，
+      # 单元测试用 mock transport 验不出来（viewer 越权那个洞就是这么漏掉的）。
+      - name: 构建后端（MCP 冒烟需要 dist）
+        run: npm run build:backend
+
+      - name: MCP 端到端冒烟（78 个检查点）
+        run: node scripts/mcp-e2e-smoke.mjs
+
+      - name: MCP stdio 代理冒烟
+        run: node scripts/mcp-stdio-smoke.mjs
+
   build:
     name: 构建 ${{ matrix.arch }}
     needs: [meta, test]

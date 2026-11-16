@@ -37,16 +37,61 @@ src/
 
 ## MCP 服务要点
 
-外部 agent 通过 MCP 管理画布；项目**不再内置 AI 助手**。详见根 AGENTS.md 的「MCP 服务」一节。
+外部 agent 通过 MCP 管理**画布 / 笔记本 / 节点池**三个域；项目**不再内置 AI 助手**。对外文档见 `docs/mcp.md`。
 
-- 路由：`/mcp`（Streamable HTTP，无状态 JSON 模式）+ `mcpRouter`；`/api/tokens` 管理令牌。
-- **`/mcp` 不挂 `csrfProtectionMiddleware`**：凭证是显式 `Authorization` 头，跨站表单无法设置。
-- 写操作**必须**经 `canvas-ops.ts` 的 `upsertEntities` / `deleteEntities`：它们以
-  `MCP_ORIGIN` 事务写入（undo/redo 可追踪、且不回退他人编辑），并且是实体级写入，
-  不会像 `mergeJsonSnapshotIntoCanvas` 那样整集合替换。
-- `getUndoManager` 必须在写入**之前**调用（`Y.UndoManager` 只观察构造后的事务）；
-  两个写函数内部已封装，勿绕过。
+### 分层：domain 是唯一真相
+
+```
+domain/           业务规则 + 授权（不知道 Express，也不 import mcp/）
+  access.ts       resolveProjectAccess —— owner/editor/viewer 的唯一判定处
+  rules.ts        标题清洗、正文上限、text→HTML、危险 HTML 检测
+  notebook.ts     手稿与笔记本文件夹
+  pool.ts         节点池卡片与文件夹
+  canvas.ts       画布容器与画布文件夹的生命周期
+  transfer.ts     手稿 ⇄ 卡片的搬运（REST 与 MCP 共用同一段事务）
+adapters/
+  controllers/*   HTTP 语义：状态码、CSRF、日志
+  mcp/tools/*     JSON-RPC 语义：ToolResult、错误码、annotations
+```
+
+**新功能必须落进 `domain/`，由 REST 与 MCP 两个 adapter 共同调用。** 历史教训：MCP 曾自己
+查一遍 `project_members` 而不看 `role`，导致只读成员能用令牌改写画布；REST 与 WebSocket
+两侧都拦住了，只有 MCP 没拦。授权逻辑一旦复制第二份，就一定会漂移。
+
+### 工具面（55 个）
+
+| 模块 | 内容 |
+|---|---|
+| `mcp/tools.ts` | 23 个画布**实体**工具（节点/连线/组/域/undo） |
+| `mcp/tools/canvas-lifecycle.ts` | 画布容器与画布文件夹（8） |
+| `mcp/tools/notebook.ts` | 手稿与笔记本文件夹（9） |
+| `mcp/tools/pool.ts` | 节点池卡片与文件夹（10） |
+| `mcp/tools/transfer.ts` | 搬运/复制（4） |
+| `mcp/tools/meta.ts` | `sessionInfo`（1） |
+
+- 写工具必须 `withCanvas(ctx, canvasId, { write: true })`：它除了成员身份还校验角色，
+  viewer 会拿到 `E_FORBIDDEN`。默认是只读——漏写只是少了个能力，不会越权。
+- 新工具用 `toolError(code, msg, hint)`，错误码定义在 `domain/errors.ts`，正文以 `[E_XXX]` 开头。
+- 每个工具必须有 `annotations`（readOnly/destructive/idempotent），破坏性工具还要 `confirm: true`。
+- 列表工具必须分页（`clampLimit` + `paginate`），响应体的 `ok()` 是 prettify 过的 JSON。
+
+### 写入与撤销
+
+- 画布实体写入**必须**经 `canvas-ops.ts` 的 `upsertEntities` / `deleteEntities`：实体级写入 +
+  事务 origin（`mcpOriginFor(actorKey)`），不会像 `mergeJsonSnapshotIntoCanvas` 那样整集合替换。
+- 事务 origin **按账号**隔离，undo 栈也是 `WeakMap<Y.Doc, Map<actorKey, UndoManager>>`；
+  此前共用一个 origin，agent A 能撤销 agent B 的写入。
+- `getUndoManager` 必须在写入**之前**调用（`Y.UndoManager` 只观察构造后的事务）；两个写函数
+  内部已封装，勿绕过。
 - 服务端写入会经房间级 `update` handler 广播给在线浏览器，因此 agent 的改动实时可见。
+
+### 传输与可观测
+
+- `/mcp` 无状态 JSON 模式；**所有失败都是 JSON-RPC error 对象**，不允许 `{success:false}`
+  （body-parser 的 400/413 由 `mcpErrorHandler` 在挂载点后兜住）。
+- 认证失败 401 + `WWW-Authenticate`；405 带 `Allow: POST`；限流按**账号**（300 次/分钟）。
+- 每次工具调用写一条 `mcp.call` 审计日志（`mcp/audit.ts` 在 `createMcpServer` 里包了
+  `registerTool`），只记 id 与耗时，**不记正文**。
 
 
 ## 数据库架构

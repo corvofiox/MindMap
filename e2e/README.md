@@ -113,7 +113,7 @@ cp .e2e/e2e.db-shm .e2e/legacy-real.db-shm
 # 2. 用这份库启动服务（迁移会自动执行）
 NODE_ENV=production PORT=8123 WS_PORT=8123 \
   DB_FILE=.e2e/legacy-real.db JWT_SECRET=legacy-test-secret-0123456789abcdef \
-  CSRF_SECRET=legacy-test-csrf-0123456789abcdef \
+  JWT_EXPIRES_IN=7d CSRF_SECRET=legacy-test-csrf-0123456789abcdef \
   ALLOWED_ORIGINS=http://127.0.0.1:8123 \
   node --import tsx backend/src/index.ts
 
@@ -152,9 +152,11 @@ npm run e2e:legacy:sort
    npm run build:frontend
    # backend 启动时会托管 frontend/dist；示例：
    NODE_ENV=production PORT=8000 WS_PORT=8000 DB_FILE=./mindmap.db \
-     CSRF_SECRET=xxx JWT_SECRET=xxx ALLOWED_ORIGINS=http://127.0.0.1:8000 \
+     CSRF_SECRET=xxx JWT_SECRET=xxx JWT_EXPIRES_IN=7d ALLOWED_ORIGINS=http://127.0.0.1:8000 \
      node --import tsx backend/src/index.ts
    ```
+
+   ⚠️ **`JWT_EXPIRES_IN` 也没有默认值**（`getValidatedEnv` 会 fail-fast），漏了服务直接起不来。
 
    ⚠️ **`NODE_ENV=production` 时必须给 `CSRF_SECRET`**：缺了它 `/api/csrf-token` 直接 500，
    登录/注册全部卡住，而页面看起来只是"点了没反应"。

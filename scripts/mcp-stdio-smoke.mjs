@@ -88,6 +88,9 @@ const server = spawn('node', ['dist/index.js'], {
     NODE_ENV: 'development',
     DB_FILE: path.join(tmp, 'stdio.db'),
     JWT_SECRET: 'stdio-e2e-jwt',
+    // Required by getValidatedEnv(); the script previously relied on backend/.env and
+    // therefore could not run on a clean clone.
+    JWT_EXPIRES_IN: '1h',
     CSRF_SECRET: 'stdio-e2e-csrf',
     ALLOWED_ORIGINS: 'http://localhost:5173',
   },

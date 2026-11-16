@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 笔记本 API —— 账号私有的手稿，以及与节点池之间的双向转换。
  *
  * 设计要点（docs/requirements-notebook.md §4/§13）：
@@ -13,108 +13,31 @@
 import { Router } from 'express'
 import { and, asc, desc, eq, inArray, isNull, like, or } from 'drizzle-orm'
 import { db } from '../database/connection.js'
-import { manuscriptFolders, manuscripts, nodeCards, nodePoolFolders } from '../database/schema.js'
+import { manuscriptFolders, manuscripts } from '../database/schema.js'
 import { authenticate, type AuthRequest } from '../middleware/auth.middleware.js'
 import { asyncHandler } from '../middleware/error.middleware.js'
 import { log } from '../utils/logger.js'
-import { extractFirstImageUrl, htmlToPlainText, normalizeNode } from 'mindmap-shared'
+import { htmlToPlainText } from 'mindmap-shared'
+import {
+  MAX_CONTENT,
+  countImages,
+  sanitizeTitle,
+  toPositiveInt,
+} from '../domain/rules.js'
+import {
+  cardToManuscriptPayload,
+  manuscriptToCardPayload,
+  moveCardToManuscript,
+  moveManuscriptToCard,
+} from '../domain/transfer.js'
+import { isDomainError } from '../domain/errors.js'
 
 const router = Router()
 
-const MAX_TITLE = 200
-const MAX_CONTENT = 5 * 1024 * 1024 // 5 MB of HTML per manuscript
-
-function toPositiveInt(value: unknown): number | null {
-  const n = Number(value)
-  return Number.isInteger(n) && n > 0 ? n : null
-}
-
-function sanitizeTitle(raw: unknown): string {
-  if (typeof raw !== 'string') return ''
-  // 去掉控制字符（\x00-\x1f）而不写控制字符正则——eslint 的 no-control-regex
-  // 会拦，且按码位过滤比正则更直白。
-  const cleaned = Array.from(raw)
-    .map((ch) => (ch.charCodeAt(0) < 0x20 ? ' ' : ch))
-    .join('')
-  return cleaned.trim().slice(0, MAX_TITLE)
-}
-
-function countImages(html: string): number {
-  return (html.match(/<img\b/gi) || []).length
-}
-
-/**
- * 手稿 → 卡片载荷。
- *
- * 统一节点之后这里没有"类型判定"：正文原样搬过去，第一张图作为 thumbnail。
- * 卡片仍写一个粗粒度 `type`（有图/无图），只为兼容节点池列表的缩略图样式。
- */
-export function manuscriptToCardPayload(
-  manuscript: { id: number; title: string; contentHtml: string; userId: number },
-  folderId: number | null,
-): {
-  userId: number
-  name: string
-  content: string
-  type: 'text' | 'image'
-  color: string
-  tags: null
-  sortOrder: number
-  folderId: number | null
-  thumbnail: string | undefined
-  sourceManuscriptId: number
-  sourceKind: 'manuscript'
-} {
-  const cover = extractFirstImageUrl(manuscript.contentHtml) ?? undefined
-  const content = manuscript.contentHtml || ''
-  const fallbackName = htmlToPlainText(content).slice(0, 60) || '未命名手稿'
-  return {
-    userId: manuscript.userId,
-    name: manuscript.title.trim() || fallbackName,
-    // 卡片存的是"一个节点的形状"，统一节点只有 title/content/cover
-    content: JSON.stringify({ title: manuscript.title, content, cover }),
-    type: cover ? 'image' : 'text',
-    color: '#ffffff',
-    tags: null,
-    sortOrder: 0,
-    folderId,
-    thumbnail: cover,
-    sourceManuscriptId: manuscript.id,
-    sourceKind: 'manuscript',
-  }
-}
-
-/**
- * 卡片 → 手稿载荷。
- *
- * 老卡片可能还是 `type/imageUrl` 形态，先过 normalizeNode；图片若只存在于
- * `imageUrl`，normalizeNode 已经把它折成正文里的 `<img>`。
- */
-export function cardToManuscriptPayload(card: {
-  id: number
-  userId: number
-  name: string
-  content: string
-}): { title: string; contentHtml: string; previewText: string; imageCount: number; sourceCardId: number } {
-  let parsed: Record<string, unknown> = {}
-  try {
-    const raw = JSON.parse(card.content) as unknown
-    if (raw && typeof raw === 'object') parsed = raw as Record<string, unknown>
-  } catch {
-    // 老数据可能不是 JSON：把整串当正文
-    parsed = { title: card.name, content: card.content }
-  }
-
-  const node = normalizeNode(parsed as Record<string, unknown> & { content?: string })
-  const contentHtml = typeof node.content === 'string' ? node.content : ''
-  return {
-    title: sanitizeTitle(node.title) || sanitizeTitle(card.name) || '未命名手稿',
-    contentHtml,
-    previewText: htmlToPlainText(contentHtml).slice(0, 500),
-    imageCount: countImages(contentHtml),
-    sourceCardId: card.id,
-  }
-}
+// The payload builders moved to domain/transfer.ts so the MCP transfer tools and
+// these endpoints cannot disagree on what a converted card looks like. Re-exported
+// here because existing tests import them from this module.
+export { cardToManuscriptPayload, manuscriptToCardPayload }
 
 /** 只返回当前账号的、未删除的手稿；越权 = 不存在。 */
 async function findOwnedManuscript(userId: number, id: number) {
@@ -327,39 +250,22 @@ router.post(
     if (!userId) return res.status(401).json({ success: false, error: '未提供令牌' })
     if (id === null) return res.status(404).json({ success: false, error: '手稿不存在' })
 
-    const manuscript = await findOwnedManuscript(userId, id)
-    if (!manuscript) return res.status(404).json({ success: false, error: '手稿不存在' })
-
     const folderId = toPositiveInt(req.body?.folderId)
-    if (folderId !== null) {
-      const folder = await db.query.nodePoolFolders.findFirst({
-        where: and(eq(nodePoolFolders.id, folderId), eq(nodePoolFolders.userId, userId)),
-      })
-      if (!folder) return res.status(404).json({ success: false, error: '目标文件夹不存在' })
+    try {
+      // 建卡片 + 软删手稿在一个事务里，逻辑在 domain/transfer.ts —— MCP 的
+      // transferManuscriptToCard 走同一段代码，两条入口不会出现语义漂移。
+      const card = await moveManuscriptToCard(userId, id, folderId)
+      log('manuscript → card (moved)', { manuscriptId: id, cardId: card?.id })
+      return res.status(201).json({ success: true, data: card })
+    } catch (error) {
+      if (isDomainError(error)) {
+        return res.status(error.code === 'E_NOT_FOUND' ? 404 : 400).json({
+          success: false,
+          error: error.message,
+        })
+      }
+      throw error
     }
-
-    const payload = manuscriptToCardPayload(
-      { id: manuscript.id, title: manuscript.title, contentHtml: manuscript.contentHtml, userId },
-      folderId,
-    )
-
-    // 建卡片 + 软删手稿：一个事务。只写一半的话要么内容变成两份（卡片建好、
-    // 手稿还在），要么内容凭空消失（手稿删了、卡片没建成），两种都不能接受。
-    //
-    // 同步回调是 drizzle-orm 0.30 + better-sqlite3 的限制，见
-    // collaboration.controller.ts:344 的同类说明；回调的返回值就是事务结果。
-    const inserted = db.transaction((tx) => {
-      const rows = tx.insert(nodeCards).values(payload).returning().all()
-      tx.update(manuscripts)
-        .set({ deletedAt: Math.floor(Date.now() / 1000) })
-        .where(eq(manuscripts.id, id))
-        .run()
-      return rows
-    })
-
-    log('manuscript → card (moved)', { manuscriptId: id, cardId: inserted[0]?.id })
-
-    return res.status(201).json({ success: true, data: inserted[0] })
   }),
 )
 
@@ -373,29 +279,20 @@ router.post(
     if (!userId) return res.status(401).json({ success: false, error: '未提供令牌' })
     if (cardId === null) return res.status(404).json({ success: false, error: '卡片不存在' })
 
-    const card = await db.query.nodeCards.findFirst({
-      where: and(eq(nodeCards.id, cardId), eq(nodeCards.userId, userId)),
-    })
-    if (!card) return res.status(404).json({ success: false, error: '卡片不存在' })
-
-    const payload = cardToManuscriptPayload(card)
-    const now = Math.floor(Date.now() / 1000)
-
-    // 建手稿 + 删卡片，同样一个事务：卡片是物理删除（node_cards 没有软删列），
-    // 所以"手稿没建成但卡片先没了"必须靠事务挡住。
-    const inserted = db.transaction((tx) => {
-      const rows = tx
-        .insert(manuscripts)
-        .values({ userId, ...payload, updatedAt: now })
-        .returning()
-        .all()
-      tx.delete(nodeCards).where(eq(nodeCards.id, cardId)).run()
-      return rows
-    })
-
-    log('card → manuscript (moved)', { cardId, manuscriptId: inserted[0]?.id })
-
-    return res.status(201).json({ success: true, data: inserted[0] })
+    const folderId = toPositiveInt(req.body?.folderId)
+    try {
+      const manuscript = await moveCardToManuscript(userId, cardId, folderId)
+      log('card → manuscript (moved)', { cardId, manuscriptId: manuscript?.id })
+      return res.status(201).json({ success: true, data: manuscript })
+    } catch (error) {
+      if (isDomainError(error)) {
+        return res.status(error.code === 'E_NOT_FOUND' ? 404 : 400).json({
+          success: false,
+          error: error.message,
+        })
+      }
+      throw error
+    }
   }),
 )
 

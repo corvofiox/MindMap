@@ -27,7 +27,10 @@ const state: {
   projects: any[]
   memberships: any[]
 } = {
-  access: { status: 'ok', access: { canvasId: 1, projectId: 1, canvasName: 'C', projectName: 'P' } },
+  access: {
+    status: 'ok',
+    access: { canvasId: 1, projectId: 1, canvasName: 'C', projectName: 'P', role: 'owner', canEdit: true },
+  },
   canvases: [],
   projects: [],
   memberships: [],
@@ -37,6 +40,8 @@ vi.mock('../mcp/access.js', () => ({
   resolveCanvasAccess: vi.fn(async () => state.access),
   accessErrorMessage: (canvasId: number, reason: string) =>
     reason === 'not-found' ? `画布 ${canvasId} 不存在。` : `无权访问画布 ${canvasId}。`,
+  readOnlyErrorMessage: (canvasId: number) =>
+    `无权修改画布 ${canvasId}：当前账号在该项目里是只读（viewer）成员，只能读取。`,
 }))
 
 /** Chainable Drizzle-ish stub: every builder method returns itself. */
@@ -102,7 +107,7 @@ describe('MCP server', () => {
   beforeEach(() => {
     state.access = {
       status: 'ok',
-      access: { canvasId: CANVAS_ID, projectId: 1, canvasName: 'C', projectName: 'P' },
+      access: { canvasId: CANVAS_ID, projectId: 1, canvasName: 'C', projectName: 'P', role: 'owner', canEdit: true },
     }
     state.canvases = []
     state.projects = []
@@ -114,10 +119,9 @@ describe('MCP server', () => {
     const { client } = await connect()
     const { tools } = await client.listTools()
 
-    // The full 23-name list is pinned in mcp-http.test.ts (the network truth).
-    // Here only the invariant this layer adds: the tool set is complete and every
-    // entry is callable-in-principle, i.e. carries a description and a schema.
-    expect(tools).toHaveLength(23)
+    // 23 canvas-entity tools + notebook (9) + node pool (10) + canvas lifecycle (8)
+    // + transfers (4) + sessionInfo (1).
+    expect(tools).toHaveLength(55)
 
     // Each tool must carry a description and a JSON schema for its arguments,
     // otherwise a model cannot call it correctly.
@@ -125,6 +129,161 @@ describe('MCP server', () => {
       expect(tool.description, `${tool.name} description`).toBeTruthy()
       expect(tool.inputSchema, `${tool.name} inputSchema`).toBeTruthy()
     }
+  })
+
+  it('advertises the whole tool surface by name, with no duplicates', async () => {
+    const { client } = await connect()
+    const { tools } = await client.listTools()
+    const names = tools.map((t) => t.name)
+
+    const expected = [
+      // canvas entities (unchanged, legacy names kept for compatibility)
+      'listCanvases',
+      'getCanvasData',
+      'getAllNodes',
+      'getAllConnections',
+      'getAllGroups',
+      'getAllDomains',
+      'searchNodes',
+      'createNode',
+      'updateNode',
+      'batchUpdateNodes',
+      'deleteNode',
+      'createConnection',
+      'updateConnection',
+      'deleteConnection',
+      'createGroup',
+      'updateGroup',
+      'deleteGroup',
+      'createDomain',
+      'updateDomain',
+      'deleteDomain',
+      'generateGraphFromJSON',
+      'undo',
+      'redo',
+      // canvas lifecycle
+      'canvasCreate',
+      'canvasRename',
+      'canvasMove',
+      'canvasDelete',
+      'canvasFolderList',
+      'canvasFolderCreate',
+      'canvasFolderUpdate',
+      'canvasFolderDelete',
+      // notebook
+      'notebookList',
+      'notebookGet',
+      'notebookCreate',
+      'notebookUpdate',
+      'notebookDelete',
+      'notebookFolderList',
+      'notebookFolderCreate',
+      'notebookFolderUpdate',
+      'notebookFolderDelete',
+      // node pool
+      'poolList',
+      'poolGet',
+      'poolCreate',
+      'poolUpdate',
+      'poolDelete',
+      'poolNoteUsage',
+      'poolFolderList',
+      'poolFolderCreate',
+      'poolFolderUpdate',
+      'poolFolderDelete',
+      // transfers
+      'transferManuscriptToCard',
+      'transferCardToManuscript',
+      'transferNodeToCard',
+      'copyCardToCanvas',
+      // meta
+      'sessionInfo',
+    ]
+
+    expect(new Set(names).size).toBe(names.length)
+    expect(names.sort()).toEqual(expected.sort())
+  })
+
+  it('updateNode folds a legacy imageUrl into the body instead of silently ignoring it', async () => {
+    const { client } = await connect()
+    const created = await callTool(client, 'createNode', {
+      canvasId: CANVAS_ID,
+      title: '图文',
+      content: '正文不能被清掉',
+    })
+
+    const updated = await callTool(client, 'updateNode', {
+      canvasId: CANVAS_ID,
+      nodeId: created.parsed.nodeId,
+      imageUrl: 'https://example.test/a.png',
+    })
+    expect(updated.result.isError).toBeFalsy()
+
+    const nodes = await callTool(client, 'getAllNodes', { canvasId: CANVAS_ID })
+    const node = nodes.parsed.nodes[0]
+    // The image becomes an <img> in the body and the cover, and the existing text
+    // survives: the old code wrote the *snapshot's* content back, which both lost
+    // the image and clobbered concurrent edits.
+    expect(node.content).toContain('<img')
+    expect(node.content).toContain('https://example.test/a.png')
+    expect(node.content).toContain('正文不能被清掉')
+    expect(node.cover).toBe('https://example.test/a.png')
+  })
+
+  it('dedupes a repeated createConnection instead of stacking parallel edges', async () => {
+    const { client } = await connect()
+    const a = await callTool(client, 'createNode', { canvasId: CANVAS_ID, title: 'A' })
+    const b = await callTool(client, 'createNode', { canvasId: CANVAS_ID, title: 'B' })
+
+    const first = await callTool(client, 'createConnection', {
+      canvasId: CANVAS_ID,
+      fromNodeId: a.parsed.nodeId,
+      toNodeId: b.parsed.nodeId,
+    })
+    const second = await callTool(client, 'createConnection', {
+      canvasId: CANVAS_ID,
+      fromNodeId: a.parsed.nodeId,
+      toNodeId: b.parsed.nodeId,
+    })
+
+    expect(first.parsed.deduped).toBe(false)
+    expect(second.parsed.deduped).toBe(true)
+    expect(second.parsed.connectionId).toBe(first.parsed.connectionId)
+    const conns = await callTool(client, 'getAllConnections', { canvasId: CANVAS_ID })
+    expect(conns.parsed.count).toBe(1)
+  })
+
+  it('does not treat the string "false" as truthy in graphGenerate', async () => {
+    const { client } = await connect()
+    await callTool(client, 'generateGraphFromJSON', {
+      canvasId: CANVAS_ID,
+      data: { nodes: [{ title: 'N', collapsed: 'false', locked: 'false' }] },
+    })
+
+    const nodes = await callTool(client, 'getAllNodes', { canvasId: CANVAS_ID })
+    expect(nodes.parsed.nodes[0].collapsed).toBe(false)
+    expect(nodes.parsed.nodes[0].locked).toBe(false)
+  })
+
+  it('gives every tool behavioural annotations (read-only vs destructive)', async () => {    const { client } = await connect()
+    const { tools } = await client.listTools()
+
+    for (const tool of tools) {
+      expect(tool.annotations, `${tool.name} annotations`).toBeTruthy()
+      expect(typeof tool.annotations.readOnlyHint, `${tool.name} readOnlyHint`).toBe('boolean')
+    }
+
+    const readOnly = tools.filter((t) => t.annotations.readOnlyHint).map((t) => t.name)
+    const destructive = tools.filter((t) => t.annotations.destructiveHint).map((t) => t.name)
+
+    // A model must be able to tell reads from destroys before it calls anything.
+    expect(readOnly).toContain('notebookGet')
+    expect(readOnly).not.toContain('notebookDelete')
+    expect(destructive).toEqual(
+      expect.arrayContaining(['notebookDelete', 'poolDelete', 'canvasDelete', 'canvasFolderDelete', 'poolFolderDelete', 'notebookFolderDelete']),
+    )
+    // undo/redo mutate the canvas but are not destructive in the "deletes data" sense.
+    expect(destructive).not.toContain('undo')
   })
 
   it('creates, reads, updates and deletes a node end to end', async () => {
@@ -201,7 +360,7 @@ describe('MCP server', () => {
     // And nothing was written.
     state.access = {
       status: 'ok',
-      access: { canvasId: CANVAS_ID, projectId: 1, canvasName: 'C', projectName: 'P' },
+      access: { canvasId: CANVAS_ID, projectId: 1, canvasName: 'C', projectName: 'P', role: 'owner', canEdit: true },
     }
     const listed = await callTool(client, 'getAllNodes', { canvasId: CANVAS_ID })
     expect(listed.parsed.count).toBe(0)
@@ -393,6 +552,90 @@ describe('MCP server', () => {
     expect(text).toContain('没有可撤销的操作')
   })
 
+  it('reports what undo actually changed instead of a bare {undone:true}', async () => {
+    const { client } = await connect()
+    const created = await callTool(client, 'createNode', { canvasId: CANVAS_ID, title: 'A' })
+
+    const undone = await callTool(client, 'undo', { canvasId: CANVAS_ID })
+
+    expect(undone.parsed.undone).toBe(true)
+    expect(undone.parsed.changes.nodes.removed).toEqual([created.parsed.nodeId])
+  })
+
+  it('undo stack is per account: one user cannot roll back another user\'s agent', async () => {
+    const alice = await connect(USER_ID)
+    const bob = await connect(USER_ID + 1)
+
+    await callTool(alice.client, 'createNode', { canvasId: CANVAS_ID, title: 'written by alice' })
+
+    // Bob has the same (owner) access through the mocked access layer, so this is
+    // purely about undo ownership, not permissions.
+    const bobUndo = await callTool(bob.client, 'undo', { canvasId: CANVAS_ID })
+    expect(bobUndo.result.isError).toBe(true)
+    expect(bobUndo.text).toContain('没有可撤销的操作')
+
+    const nodesAfterBob = await callTool(alice.client, 'getAllNodes', { canvasId: CANVAS_ID })
+    expect(nodesAfterBob.parsed.count).toBe(1)
+
+    // ...while alice still can.
+    const aliceUndo = await callTool(alice.client, 'undo', { canvasId: CANVAS_ID })
+    expect(aliceUndo.result.isError).toBeFalsy()
+    const nodesAfterAlice = await callTool(alice.client, 'getAllNodes', { canvasId: CANVAS_ID })
+    expect(nodesAfterAlice.parsed.count).toBe(0)
+  })
+
+  describe('role enforcement (owner/editor/viewer)', () => {
+    /** Make the mocked access layer answer with a specific project role. */
+    function asRole(role: 'owner' | 'editor' | 'viewer') {
+      state.access = {
+        status: 'ok',
+        access: {
+          canvasId: CANVAS_ID,
+          projectId: 1,
+          canvasName: 'C',
+          projectName: 'P',
+          role,
+          canEdit: role !== 'viewer',
+        },
+      }
+    }
+
+    it('a viewer can read the canvas', async () => {
+      asRole('viewer')
+      const { client } = await connect()
+      const read = await callTool(client, 'getCanvasData', { canvasId: CANVAS_ID })
+      expect(read.result.isError).toBeFalsy()
+      expect(read.parsed.counts.nodes).toBe(0)
+    })
+
+    it('a viewer cannot create, update or delete anything', async () => {
+      asRole('viewer')
+      const { client } = await connect()
+
+      for (const [name, args] of [
+        ['createNode', { canvasId: CANVAS_ID, title: 'nope' }],
+        ['updateNode', { canvasId: CANVAS_ID, nodeId: 'x', title: 'nope' }],
+        ['deleteNode', { canvasId: CANVAS_ID, nodeId: 'x' }],
+        ['generateGraphFromJSON', { canvasId: CANVAS_ID, data: { nodes: [{ title: 'nope' }] } }],
+        ['createGroup', { canvasId: CANVAS_ID, name: 'g' }],
+        ['createDomain', { canvasId: CANVAS_ID, name: 'd' }],
+        ['undo', { canvasId: CANVAS_ID }],
+        ['redo', { canvasId: CANVAS_ID }],
+      ] as Array<[string, Record<string, unknown>]>) {
+        const res = await callTool(client, name, args)
+        expect(res.result.isError, `${name} must be refused for a viewer`).toBe(true)
+        expect(res.text).toContain('只读')
+      }
+    })
+
+    it('an editor keeps full write access', async () => {
+      asRole('editor')
+      const { client } = await connect()
+      const created = await callTool(client, 'createNode', { canvasId: CANVAS_ID, title: 'editor node' })
+      expect(created.result.isError).toBeFalsy()
+    })
+  })
+
   it('rejects an invalid canvasId at the schema level', async () => {
     const { client } = await connect()
     // The SDK reports schema violations as an isError result (JSON-RPC -32602),
@@ -501,7 +744,7 @@ describe('MCP tools — error paths and options', () => {
   beforeEach(() => {
     state.access = {
       status: 'ok',
-      access: { canvasId: CANVAS_ID, projectId: 1, canvasName: 'C', projectName: 'P' },
+      access: { canvasId: CANVAS_ID, projectId: 1, canvasName: 'C', projectName: 'P', role: 'owner', canEdit: true },
     }
     state.canvases = []
     state.projects = []

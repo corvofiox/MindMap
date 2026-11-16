@@ -30,7 +30,7 @@ import {
 
 setTestEnv()
 
-const { resolveCanvasAccess, accessErrorMessage } = await import('../mcp/access.js')
+const { resolveCanvasAccess, accessErrorMessage, readOnlyErrorMessage } = await import('../mcp/access.js')
 
 describe('resolveCanvasAccess (real DB)', () => {
   let t: TestDatabase
@@ -58,6 +58,8 @@ describe('resolveCanvasAccess (real DB)', () => {
       projectId,
       canvasName: 'Canvas Name',
       projectName: 'Project Name',
+      role: 'owner',
+      canEdit: true,
     })
   })
 
@@ -70,13 +72,35 @@ describe('resolveCanvasAccess (real DB)', () => {
     expect(result.status).toBe('ok')
     expect(result.access.canvasId).toBe(canvasId)
     expect(result.access.projectId).toBe(projectId)
+    expect(result.access.role).toBe('editor')
+    expect(result.access.canEdit).toBe(true)
   })
 
-  it('grants a viewer-role member too (role is not consulted here)', async () => {
+  it('lets a viewer-role member READ but never write', async () => {
     const canvasId = seedCanvas(t.raw, projectId, 'Readonly')
     seedMember(t.raw, projectId, memberId, 'viewer')
 
-    expect((await resolveCanvasAccess(canvasId, memberId)).status).toBe('ok')
+    const result = await resolveCanvasAccess(canvasId, memberId)
+
+    expect(result.status).toBe('ok')
+    expect(result.access.role).toBe('viewer')
+    // The role guard that previously did not exist: read yes, write no. Without
+    // this a read-only collaborator could rewrite the canvas through MCP while
+    // REST and the WebSocket room both refused.
+    expect(result.access.canEdit).toBe(false)
+  })
+
+  it('treats an unknown role as read-only instead of silently granting write', async () => {
+    const canvasId = seedCanvas(t.raw, projectId, 'Weird')
+    t.raw
+      .prepare('INSERT INTO project_members (project_id, user_id, role, joined_at) VALUES (?,?,?,?)')
+      .run(projectId, memberId, 'superuser', Math.floor(Date.now() / 1000))
+
+    const result = await resolveCanvasAccess(canvasId, memberId)
+
+    expect(result.status).toBe('ok')
+    expect(result.access.role).toBe('viewer')
+    expect(result.access.canEdit).toBe(false)
   })
 
   it('denies an unrelated user with reason forbidden', async () => {
@@ -144,5 +168,17 @@ describe('accessErrorMessage', () => {
 
   it('returns distinct strings for the two reasons', () => {
     expect(accessErrorMessage(1, 'not-found')).not.toBe(accessErrorMessage(1, 'forbidden'))
+  })
+})
+
+describe('readOnlyErrorMessage', () => {
+  it('names the canvas, the viewer role and the fix, without claiming the canvas is invisible', () => {
+    const message = readOnlyErrorMessage(7)
+
+    expect(message).toContain('7')
+    expect(message).toContain('只读')
+    expect(message).toContain('editor')
+    // "does not exist" would be a lie: the same token can read it fine.
+    expect(message).not.toContain('不存在')
   })
 })

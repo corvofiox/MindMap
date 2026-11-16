@@ -22,7 +22,7 @@ import { logRouter } from './controllers/log.routes.js'
 import { uploadRouter } from './controllers/upload.controller.js'
 import { collaborationRouter } from './controllers/collaboration.controller.js'
 import { tokenRouter } from './controllers/token.controller.js'
-import { mcpRouter } from './mcp/http.js'
+import { mcpRouter, mcpErrorHandler } from './mcp/http.js'
 import { apiLimiter } from './middleware/rateLimit.middleware.js'
 import { csrfProtectionMiddleware, getCsrfTokenRoute } from './middleware/csrf.middleware.js'
 import { setupWebSocket } from './websocket/index.js'
@@ -121,6 +121,9 @@ app.use('/api/manuscript-folders', apiLimiter(), csrfProtectionMiddleware, manus
 // one), so CSRF does not apply, and requiring a token here would force agents to
 // scrape a browser session. Authentication is the PAT check inside the router.
 app.use('/mcp', apiLimiter(), mcpRouter)
+// 紧跟在 /mcp 之后：body-parser 的 400/413 发生在 transport 之前，若不在这里
+// 截住就会落到全局 errorHandler，返回 {success:false} —— MCP 客户端解析不了。
+app.use('/mcp', mcpErrorHandler)
 // A1: /api/logs 同样受全局限速保护（日志写入/读取/清空均可被滥用）
 // B13: 与其余受保护路由一致补挂 CSRF——前端 debugLogger.saveToServer 已
 // 携带 x-csrf-token 头（GET 读取被 doubleCsrf ignoredMethods 豁免）。
