@@ -215,7 +215,7 @@ curl -s http://<你的地址>:8000/mcp \
 # 单元层（协议 + 领域 + 权限矩阵，约 30s）
 npm run test:backend:run
 
-# 端到端：真起服务、真令牌、真 HTTP，78 个检查点
+# 端到端：真起服务、真令牌、真 HTTP，79 个检查点
 npm run build:backend
 npm run smoke:mcp
 

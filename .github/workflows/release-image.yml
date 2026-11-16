@@ -96,7 +96,7 @@ jobs:
       - name: 构建后端（MCP 冒烟需要 dist）
         run: npm run build:backend
 
-      - name: MCP 端到端冒烟（78 个检查点）
+      - name: MCP 端到端冒烟（79 个检查点）
         run: node scripts/mcp-e2e-smoke.mjs
 
       - name: MCP stdio 代理冒烟

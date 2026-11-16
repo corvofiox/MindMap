@@ -243,47 +243,67 @@ const openManuscript = (title) =>
     return true;
   })()`)
 
-/** 节点池：「在面板里对某个文件夹点右键 → 删除」，返回弹框原文 */
+/**
+ * 节点池：「在面板里对某个文件夹右键 → 删除」，返回弹框原文。
+ *
+ * 这里**不发送真实鼠标事件**：面板是靠 transform 滑出的，真实右键要命中一个
+ * 计算出来的屏幕坐标，面板一旦在"取坐标"和"发事件"之间收起，点击就会落到遮罩上
+ * 把面板关掉——这条用例因此偶发失败（点 (1589,229) 在视口外）。
+ * 改成在行元素上直接派发 contextmenu 事件：菜单照样由 React 的冒泡处理器打开，
+ * 但不再依赖面板此刻的位置。菜单项与确认框也都用 DOM 点击 / CDP 弹框处理。
+ */
 const deletePoolFolder = async (name, accept) => {
   dialogs.length = 0
   dialogAction = { accept }
-  const point = await ev(`(() => {
-    const panel = document.querySelector('[data-node-pool="true"]');
-    if (!panel) return { error: 'no-panel' };
-    const node = Array.from(panel.querySelectorAll('*'))
-      .find((el) => el.children.length === 0 && (el.textContent || '').trim() === ${JSON.stringify(name)});
-    if (!node) return { error: 'no-row' };
-    const r = node.getBoundingClientRect();
-    return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
-  })()`)
-  if (point.error) throw new Error(`节点池里找不到「${name}」: ${point.error}`)
-  if (point.x <= 0 || point.y <= 0 || point.x >= 1440 || point.y >= 900) {
-    throw new Error(`「${name}」不在视口里（点=(${point.x},${point.y})），面板可能还是收起状态`)
+
+  const openMenu = async () =>
+    ev(`(() => {
+      const panel = document.querySelector('[data-node-pool="true"]');
+      if (!panel) return { error: 'no-panel' };
+      const pr = panel.getBoundingClientRect();
+      const leaf = Array.from(panel.querySelectorAll('*'))
+        .find((el) => el.children.length === 0 && (el.textContent || '').trim() === ${JSON.stringify(name)});
+      if (!leaf) return { error: 'no-row' };
+      const r = (leaf.closest('[title]') || leaf).getBoundingClientRect();
+      const x = Math.max(4, Math.min(Math.round(r.x + r.width / 2), window.innerWidth - 8));
+      const y = Math.max(4, Math.min(Math.round(r.y + r.height / 2), window.innerHeight - 8));
+      leaf.dispatchEvent(
+        new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: x, clientY: y }),
+      );
+      return { ok: true, x, y, panelX: Math.round(pr.x) };
+    })()`)
+
+  let opened = await openMenu()
+  if (opened.error === 'no-row') {
+    // 面板可能还没渲染出文件夹：点一次开关再试，仍然失败才算真失败
+    await ev(`document.querySelector('button[title^="切换节点池"]')?.click()`)
+    await sleep(900)
+    opened = await openMenu()
   }
+  if (opened.error) throw new Error(`节点池里找不到「${name}」: ${opened.error}`)
 
-  const under = await ev(`(() => {
-    const el = document.elementFromPoint(${point.x}, ${point.y});
-    return el ? { tag: el.tagName, cls: String(el.className).slice(0, 60), text: (el.textContent || '').trim().slice(0, 20) } : null;
-  })()`)
-
-  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: point.x, y: point.y })
-  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: point.x, y: point.y, button: 'right', clickCount: 1 })
-  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: point.x, y: point.y, button: 'right', clickCount: 1 })
-  await sleep(700)
-
-  const clicked = await ev(`(() => {
-    const item = Array.from(document.querySelectorAll('button')).find((b) => (b.textContent || '').trim() === '删除');
-    if (!item) return 'no-item';
-    item.click();
-    return 'clicked';
-  })()`)
+  // React 渲染菜单需要一帧；轮询而不是死等固定时间
+  let clicked = 'no-item'
+  for (let attempt = 0; attempt < 25; attempt++) {
+    clicked = await ev(`(() => {
+      const item = Array.from(document.querySelectorAll('button')).find((b) => (b.textContent || '').trim() === '删除');
+      if (!item) return 'no-item';
+      item.click();
+      return 'clicked';
+    })()`)
+    if (clicked === 'clicked') break
+    await sleep(120)
+  }
   if (clicked !== 'clicked') {
     const menuTexts = await ev(`Array.from(document.querySelectorAll('button')).map((b) => (b.textContent || '').trim()).filter(Boolean).slice(0, 20)`)
     throw new Error(
-      `右键菜单里没有「删除」（点=(${point.x},${point.y}) 命中=${JSON.stringify(under)}）: ${JSON.stringify(menuTexts)}`,
+      `右键菜单里没有「删除」（点=(${opened.x},${opened.y}) 面板x=${opened.panelX}）: ${JSON.stringify(menuTexts)}`,
     )
   }
-  await sleep(1200)
+
+  for (let attempt = 0; attempt < 25 && dialogs.length === 0; attempt++) {
+    await sleep(120)
+  }
   if (dialogs.length === 0) throw new Error(`节点池删除「${name}」没有弹确认框`)
   const message = dialogs[dialogs.length - 1].message
   // 弹框必须说的是这个文件夹：菜单残留时很容易点到上一次的项
