@@ -1674,7 +1674,7 @@ export const NodeItem = memo(function NodeItem({ node, isSelected, zoom, onDragS
               overflow: 'hidden',
               display: 'flex',
               flexDirection: 'column',
-              backgroundColor: node.color,
+              backgroundColor: node.color || '#ffffff',
               borderRadius: 'inherit',
             }}
             onMouseDown={handleMouseDown}

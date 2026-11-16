@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Node-pool (节点池) domain service.
  *
  * A pool card is one row whose `content` column holds a *JSON snapshot of a canvas
@@ -48,6 +48,47 @@ export interface ListCardsQuery {
 }
 
 const PREVIEW_LENGTH = 300
+
+/**
+ * Style defaults for a card's node snapshot.
+ *
+ * A card is "a node you can drop on a canvas", so the JSON it stores has to be a
+ * complete node — not just `{title, content}`. Cards that only carried the text
+ * produced nodes with no `color`, and `NodeItem` paints `backgroundColor: node.color`,
+ * so they rendered with a fully transparent background (users read that as a
+ * half-transparent card). Cards created by dragging a node off a canvas always had
+ * these fields; the ones created by the converter / the MCP tools did not.
+ */
+export const CARD_NODE_DEFAULTS = {
+  width: 200,
+  height: 160,
+  color: '#ffffff',
+  fontSize: 14,
+  textAlign: 'left' as const,
+  collapsed: false,
+  locked: false,
+}
+
+/** Build the canonical node snapshot stored in `node_cards.content`. */
+export function buildCardNodeJson(input: {
+  title: string
+  content: string
+  cover?: string
+  color?: string
+  fontSize?: number
+}): string {
+  const node: Record<string, unknown> = {
+    ...CARD_NODE_DEFAULTS,
+    title: input.title,
+    content: input.content,
+  }
+  if (input.color) node.color = input.color
+  if (input.fontSize !== undefined) node.fontSize = input.fontSize
+  if (input.cover) node.cover = input.cover
+  else delete node.cover
+  return JSON.stringify(node)
+}
+
 
 /** Parse a card's `content` JSON, tolerating pre-unification shapes. */
 export function parseCardContent(raw: string): Record<string, unknown> {
@@ -173,7 +214,7 @@ function resolveBody(input: WriteCardInput, current: string): string {
 }
 
 function serializeCard(title: string, contentHtml: string): string {
-  const payload = JSON.stringify({ title, content: contentHtml })
+  const payload = buildCardNodeJson({ title, content: contentHtml })
   if (payload.length > MAX_CARD_CONTENT) {
     throw domainErrors.limit(
       `卡片正文超过上限（序列化后 ${payload.length} 字符，上限 ${MAX_CARD_CONTENT}）`,

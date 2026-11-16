@@ -4,9 +4,8 @@
  * The semantic is **move**, not copy: converting a manuscript to a card soft-deletes
  * the manuscript, converting a card to a manuscript physically deletes the card,
  * and both happen in one SQLite transaction so there is never a moment with two
- * copies or none. (The canvas ⇄ pool direction is different — dropping a card on a
- * canvas is a *copy* that bumps `use_count`, which is why that path lives in the
- * canvas service instead.)
+ * copies or none. (The canvas ⇄ pool directions live in `mcp/tools/transfer.ts` and are
+ * moves too: dropping a card on a canvas removes it from the pool.)
  *
  * This module is shared by the REST controller and the MCP tools. The payload
  * shapes are exported because tests pin the "first paragraph as fallback name"
@@ -18,6 +17,7 @@ import { manuscriptFolders, manuscripts, nodeCards, nodePoolFolders } from '../d
 import { extractFirstImageUrl, htmlToPlainText, normalizeNode } from 'mindmap-shared'
 import { domainErrors } from './errors.js'
 import { MAX_CARD_CONTENT, PREVIEW_LENGTH, countImages, sanitizeTitle } from './rules.js'
+import { buildCardNodeJson } from './pool.js'
 
 /** Manuscript → card row payload. */
 export function manuscriptToCardPayload(
@@ -42,9 +42,9 @@ export function manuscriptToCardPayload(
   return {
     userId: manuscript.userId,
     name: manuscript.title.trim() || fallbackName,
-    // A card stores "the shape of one node" — after the unified-node migration that
-    // is just title/content/cover.
-    content: JSON.stringify({ title: manuscript.title, content, cover }),
+    // A card stores a complete node snapshot (title/content/cover + the style defaults
+    // a canvas node needs), so dropping it on a canvas renders like any other node.
+    content: buildCardNodeJson({ title: manuscript.title, content, cover }),
     type: cover ? 'image' : 'text',
     color: '#ffffff',
     tags: null,
@@ -107,7 +107,15 @@ export function nodeToCardPayload(
   const content = typeof normalized.content === 'string' ? normalized.content : ''
   const cover =
     typeof normalized.cover === 'string' && normalized.cover.length > 0 ? normalized.cover : undefined
-  const serialized = JSON.stringify({ title, content, cover })
+  // 保留节点自己的颜色/字号，其余几何与边框用卡片默认值补齐：卡片拖回画布时
+  // 必须是"一个完整节点"，否则会因为缺 color 渲染成透明卡片。
+  const serialized = buildCardNodeJson({
+    title,
+    content,
+    cover,
+    color: typeof normalized.color === 'string' ? normalized.color : undefined,
+    fontSize: typeof normalized.fontSize === 'number' ? normalized.fontSize : undefined,
+  })
   if (serialized.length > MAX_CARD_CONTENT) {
     throw domainErrors.limit(
       `节点内容超过节点池卡片上限（序列化后 ${serialized.length} 字符，上限 ${MAX_CARD_CONTENT}）`,

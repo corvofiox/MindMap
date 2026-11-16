@@ -154,6 +154,20 @@ describe('createNodeFromCard', () => {
     expect(node.color).toBe('#123456')
   })
 
+  it('卡片里没有样式字段时补齐节点默认样式（否则画布上就是一张全透明卡片）', () => {
+    // 手稿转卡片、MCP 建卡都只写 {title, content}：不像"从画布拖进池"的卡片那样
+    // 带整份节点快照。缺 color 时 NodeItem 的 backgroundColor 会是 undefined，
+    // 卡片就透出画布网格，看起来像半透明。
+    const card = makeCard({ content: JSON.stringify({ title: '只有文字', content: '<p>x</p>' }) })
+
+    const node = createNodeFromCard(card, POS)
+
+    expect(node.color).toBe('#ffffff')
+    expect(node.width).toBe(200)
+    expect(node.fontSize).toBe(14)
+    expect(node.textAlign).toBe('left')
+  })
+
   it('老图片卡：imageUrl/aspectRatio 折成正文 <img> 与 cover', () => {
     const card = makeCard({
       type: 'image',

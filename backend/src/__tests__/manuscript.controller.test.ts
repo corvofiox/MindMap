@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 笔记本 API —— 手稿 CRUD、账号隔离、以及与节点池的双向转换。
  *
  * 这里钉的是三条容易悄悄坏掉的契约：
@@ -251,6 +251,10 @@ describe('手稿 → 节点池', () => {
     expect(payload.cover).toBe(`/api/files/${sha}`)
     expect(payload.type).toBeUndefined()
     expect(payload.imageUrl).toBeUndefined()
+    // 卡片转成画布节点后要能直接渲染：缺 color 会变成透明卡片
+    expect(payload.color).toBe('#ffffff')
+    expect(payload.width).toBe(200)
+    expect(payload.fontSize).toBe(14)
   })
 
   it('纯文字手稿 → 卡片 type 为 text', async () => {

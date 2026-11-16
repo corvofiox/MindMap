@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
+﻿/* eslint-disable @typescript-eslint/no-explicit-any */
 /**
  * Workspace MCP tools against a real (in-memory) database and a real Yjs doc.
  *
@@ -252,6 +252,13 @@ describe('pool tools', () => {
     expect(body.content).toContain('轻量')
     expect(row.name).toBe('卖点')
     expect(row.tags).toBe('产品,文案')
+    // 卡片必须是一个**完整节点**：缺 color 时画布按 node.color 上色，结果是全透明卡片
+    // （用户看到的就是"半透明"）。这几个字段是拖回画布时的渲染前提。
+    expect(body.color).toBe('#ffffff')
+    expect(body.width).toBe(200)
+    expect(body.fontSize).toBe(14)
+    expect(body.textAlign).toBe('left')
+    expect(body.collapsed).toBe(false)
   })
 
   it('enforces the 5000-character card cap', async () => {
