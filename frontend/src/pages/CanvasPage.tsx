@@ -4464,6 +4464,11 @@ export function CanvasPage() {
                     return
                   }
 
+                  // 中键平移画布是全局手势，组不能把它拦下来。
+                  // 以前这里无条件 stopPropagation，于是鼠标落在组的覆盖区域内时
+                  // 中键拖不动画布——右键因为上面提前 return 过反而正常。
+                  if (e.button === 1) return
+
                   e.stopPropagation()
                   // E13-fix: 组拖拽 handle 的 stopPropagation 会绕过 handleMouseDown
                   // 中的去重重置。此处同步重置，避免快速双击组时第二次 mouseup 被
