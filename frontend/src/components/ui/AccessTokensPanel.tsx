@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+﻿import { useCallback, useEffect, useRef, useState } from 'react'
 import { AlertTriangle, Check, Copy, Key, Loader2, Plus, RefreshCw, Trash2 } from 'lucide-react'
 import { useUIStore } from '@/store/useUIStore'
 import {
@@ -184,6 +184,8 @@ export function AccessTokensPanel() {
   }
 
   const mcpUrl = resolveMcpUrl()
+  // stdio 代理要的是服务端根地址（不含 /mcp），且必须跟随当前部署端口。
+  const mcpBaseUrl = mcpUrl.replace(/\/mcp$/, '')
 
   return (
     <div className="space-y-6">
@@ -461,14 +463,18 @@ export function AccessTokensPanel() {
           如何用令牌接入 MCP
         </h4>
         <p className="text-sm text-blue-800 dark:text-blue-200 mb-2">
-          远程 / HTTP 客户端直接连接 MCP 端点，并在请求头带上令牌：
+          远程 / HTTP 客户端直接连接 MCP 端点，并在请求头带上令牌
+          （<span className="font-mono">Accept</span> 必须同时包含两种媒体类型，否则会 406）：
         </p>
         <pre className="p-2 bg-white dark:bg-gray-900 rounded border border-blue-200 dark:border-blue-800 text-xs font-mono text-gray-800 dark:text-gray-200 overflow-x-auto">
           {`POST ${mcpUrl}
+Content-Type: application/json
+Accept: application/json, text/event-stream
 Authorization: Bearer <令牌>`}
         </pre>
         <p className="text-sm text-blue-800 dark:text-blue-200 mt-3 mb-2">
-          本地 stdio 客户端（如 Claude Desktop）使用内置代理，通过环境变量传入令牌与地址：
+          本地 stdio 客户端（如 Claude Desktop）使用内置代理，通过环境变量传入令牌与地址
+          （容器部署请把地址换成实际端口）：
         </p>
         <pre className="p-2 bg-white dark:bg-gray-900 rounded border border-blue-200 dark:border-blue-800 text-xs font-mono text-gray-800 dark:text-gray-200 overflow-x-auto">
           {`{
@@ -477,7 +483,7 @@ Authorization: Bearer <令牌>`}
       "command": "node",
       "args": ["backend/dist/mcp/stdio.js"],
       "env": {
-        "MINDMAP_API_URL": "http://127.0.0.1:3000",
+        "MINDMAP_API_URL": "${mcpBaseUrl}",
         "MINDMAP_TOKEN": "<令牌>"
       }
     }
@@ -486,6 +492,7 @@ Authorization: Bearer <令牌>`}
         </pre>
         <p className="text-xs text-blue-700 dark:text-blue-300 mt-2">
           令牌等同于你的账号权限，请勿分享或提交到代码仓库；怀疑泄露时立即撤销并重建。
+          可用工具覆盖画布、笔记本、节点池（共 55 个），详见仓库 <span className="font-mono">docs/mcp.md</span>。
         </p>
       </section>
     </div>

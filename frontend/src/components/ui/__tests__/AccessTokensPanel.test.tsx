@@ -212,4 +212,21 @@ describe('AccessTokensPanel', () => {
 
     await waitFor(() => expect(screen.getByText('网络连接失败')).toBeTruthy())
   })
+
+  it('接入示例带上 Accept 头，且不把开发端口写死给容器用户', async () => {
+    vi.mocked(listPersonalAccessTokens).mockResolvedValue([])
+
+    render(<AccessTokensPanel />)
+    await waitFor(() => expect(listPersonalAccessTokens).toHaveBeenCalled())
+
+    const text = document.body.textContent ?? ''
+    // MCP 客户端必须同时接受两种媒体类型，否则服务端 406 —— 这是接入时最常见的坑，
+    // 示例里不写出来，用户一定会踩。
+    expect(text).toContain('Accept: application/json, text/event-stream')
+    expect(text).toContain('Content-Type: application/json')
+    // stdio 的地址应跟随当前部署，而不是固定 3000（Docker 下是 8000）。
+    expect(text).not.toContain('127.0.0.1:3000')
+    expect(text).toContain('MINDMAP_API_URL')
+    expect(text).toContain('docs/mcp.md')
+  })
 })
