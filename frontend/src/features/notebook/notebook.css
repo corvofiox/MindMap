@@ -45,7 +45,21 @@
   background-color: rgb(63 63 70);
 }
 
-/* 正文编辑区获得焦点时：只保留柔和的外发光（"高光"），**不要**把边框染成蓝色。
+/* 正文编辑区（contentEditable）获得焦点时不要任何焦点框。
+   浏览器的 UA 样式会给可编辑元素画一圈 `outline: auto`（Edge/Chrome 下就是一个
+   蓝色 1px 矩形），`.rich-text-content` 上虽然已有 `outline: none`，但在用户机器上
+   仍会被 UA/无障碍焦点指示器覆盖，所以这里用 !important 把它钉死，并同时覆盖
+   :focus-visible（键盘聚焦）与 :focus-within。 */
+.rich-text-content:focus,
+.rich-text-content:focus-visible,
+.notebook-paper [contenteditable]:focus,
+.notebook-paper [contenteditable]:focus-visible {
+  outline: none !important;
+  outline-offset: 0 !important;
+  box-shadow: none !important;
+}
+
+/* 纸张获得焦点时：只保留柔和的外发光（"高光"），**不要**把边框染成蓝色。
    之前这条规则同时改了 border-color（blue-200 / dark 下 blue-900）和 box-shadow，
    用户看到的就是"正文四周出现一个蓝色矩形"，而他要保留的是那圈很淡的光。
    所以这里只留 box-shadow，边框维持纸张自带的中性色。 */
