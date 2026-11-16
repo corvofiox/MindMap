@@ -30,6 +30,13 @@ interface NotebookState {
   manuscripts: ManuscriptSummary[]
   folders: ManuscriptFolder[]
   active: Manuscript | null
+  /**
+   * 列表是否在加载（首次进入、搜索、刷新）。**只**给侧栏的骨架屏用。
+   *
+   * 切换手稿时不能碰这个标志：以前 open() 也写 loading，而侧栏拿它决定
+   * "显示骨架屏还是列表"——于是每点一篇手稿，左侧整个列表就被骨架屏替换
+   * 一下，视觉上闪一下，很突兀。列表数据没变，列表就不该渲染成加载态。
+   */
   loading: boolean
   saveState: SaveState
   error: string | null
@@ -96,13 +103,15 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
   },
 
   open: async (id) => {
-    set({ loading: true, error: null })
+    // 只影响正文区，不碰列表的 loading：侧栏的骨架屏由 load() 独占，
+    // 切换手稿时列表数据没变，不该被替换成加载态（会闪一下）。
+    set({ error: null })
     try {
       const manuscript = await getManuscript(id)
-      set({ active: manuscript, loading: false, saveState: 'idle' })
+      set({ active: manuscript, saveState: 'idle' })
     } catch (error) {
       logger.error('[notebook] 打开手稿失败', error)
-      set({ loading: false, error: error instanceof Error ? error.message : '打开失败', active: null })
+      set({ error: error instanceof Error ? error.message : '打开失败', active: null })
     }
   },
 

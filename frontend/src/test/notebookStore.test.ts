@@ -94,6 +94,33 @@ describe('加载与打开', () => {
     expect(useNotebookStore.getState().active).toBeNull()
     expect(useNotebookStore.getState().error).toBe('404')
   })
+
+  /**
+   * 用户反馈：点击左侧列表切换笔记时，列表会闪一下。
+   *
+   * 真因是 open() 把全局 loading 置成了 true，而侧栏拿它决定"骨架屏还是列表"，
+   * 于是每切一篇就把整个列表换成骨架屏一瞬。loading 必须只属于列表加载。
+   */
+  it('open 不设置 loading（否则侧栏列表会被骨架屏替换，闪一下）', async () => {
+    vi.mocked(api.getManuscript).mockResolvedValue(manuscript(5))
+    expect(useNotebookStore.getState().loading).toBe(false)
+
+    const pending = useNotebookStore.getState().open(5)
+
+    // 请求还没回来时就断言：此刻列表数据没变，就不能处于加载态
+    expect(useNotebookStore.getState().loading).toBe(false)
+    await pending
+    expect(useNotebookStore.getState().loading).toBe(false)
+    expect(useNotebookStore.getState().active?.id).toBe(5)
+  })
+
+  it('open 失败也不残留 loading', async () => {
+    vi.mocked(api.getManuscript).mockRejectedValue(new Error('404'))
+
+    await useNotebookStore.getState().open(404)
+
+    expect(useNotebookStore.getState().loading).toBe(false)
+  })
 })
 
 describe('保存', () => {
