@@ -215,6 +215,11 @@ await send('Emulation.setDeviceMetricsOverride', {
 
 // ---------------------------------------------------------------- 1. 未登录
 await step('未登录访问根路径 → 登录页', async () => {
+  // 只清 localStorage 不够：当前页面（可能停在上一次跑完时的已登录状态）里的
+  // zustand 状态还在内存里，isAuthenticated 仍为 true，`/` 就不会跳登录页。
+  // 必须先真正加载一次页面让 store 重建，再清存储，然后再进目标页。
+  await send('Page.navigate', { url: `${BASE}/login` })
+  await sleep(800)
   await ev('localStorage.clear(); sessionStorage.clear()')
   await goto(`${BASE}/`, `location.pathname === '/login' && !!document.querySelector('#email')`)
   return await ev('location.pathname')

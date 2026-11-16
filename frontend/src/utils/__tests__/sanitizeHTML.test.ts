@@ -548,6 +548,12 @@ describe('safeHTML — 主路径 vs 兜底路径契约', () => {
     expect(safeHTML({ toString: () => '<script>a</script>' } as unknown as string)).toBe('')
   })
 
+  /**
+   * 2000 层嵌套要过 jsdom 的 insertBefore/removeChild，而它们是 O(位置) 的：
+   * 单跑约 1.8s，正常够用。但全量套件里几十个测试文件并发抢 CPU，这一条会被
+   * 挤到 5s 默认超时之上，于是偶发红灯——那不是净化器坏了，是 jsdom 慢。
+   * 给它一个与"真实浏览器"无关的宽限，保证跑的是语义而不是机器负载。
+   */
   it('深度嵌套不被截断且 safeHTML 不抛错（净化器无递归上限）', () => {
     const deep = `${'<b>'.repeat(2000)}x${'</b>'.repeat(2000)}`
     const out = safeHTML(deep)
@@ -555,7 +561,7 @@ describe('safeHTML — 主路径 vs 兜底路径契约', () => {
     expect(out.length).toBe(14001)
     expect(out.startsWith('<b><b><b>')).toBe(true)
     expect(out.endsWith('</b></b></b>')).toBe(true)
-  })
+  }, 30_000)
 
   it('超长输入：合法内容完整通过，白名单外内容解包且不抛错', () => {
     // 规模取 2000：语义断言（不截断/不抛/净化干净）在 2k 已完全成立。
