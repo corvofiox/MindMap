@@ -1,4 +1,4 @@
-﻿/* eslint-disable @typescript-eslint/no-explicit-any */
+/* eslint-disable @typescript-eslint/no-explicit-any */
 /**
  * Workspace MCP tools against a real (in-memory) database and a real Yjs doc.
  *
@@ -350,27 +350,29 @@ describe('transfer tools', () => {
     expect((await call(client, 'poolList', {})).parsed.total).toBe(0)
   })
 
-  it('copies a card onto a canvas, keeping the card and bumping use_count', async () => {
+  it('moves a card onto a canvas and removes it from the pool', async () => {
     const { client } = await connect()
     const card = await call(client, 'poolCreate', { title: '可复用', text: 'x' })
 
-    const copied = await call(client, 'copyCardToCanvas', {
+    const moved = await call(client, 'moveCardToCanvas', {
       canvasId,
       cardId: card.parsed.cardId,
       x: 40,
       y: 60,
     })
-    expect(copied.isError).toBeFalsy()
-    expect(copied.parsed.useCount).toBe(1)
+    expect(moved.isError).toBeFalsy()
+    expect(moved.parsed.moved).toBe('card-to-canvas')
 
     const nodes = await call(client, 'getAllNodes', { canvasId })
     expect(nodes.parsed.count).toBe(1)
     expect(nodes.parsed.nodes[0].x).toBe(40)
     expect(nodes.parsed.nodes[0].title).toBe('可复用')
 
-    // COPY semantics: the card is still in the pool
-    expect((await call(client, 'poolList', {})).parsed.total).toBe(1)
-    expect((await call(client, 'poolGet', { cardId: card.parsed.cardId })).parsed.useCount).toBe(1)
+    // MOVE semantics — identical to dragging the card onto a canvas in the UI.
+    expect((await call(client, 'poolList', {})).parsed.total).toBe(0)
+    const gone = await call(client, 'poolGet', { cardId: card.parsed.cardId })
+    expect(gone.isError).toBe(true)
+    expect(gone.text).toContain('E_NOT_FOUND')
   })
 
   it('moves a canvas node into the pool, removing the node and its connections', async () => {

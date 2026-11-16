@@ -1,4 +1,4 @@
-// services/api.ts 端点契约测试。
+﻿// services/api.ts 端点契约测试。
 // 只 stub 真正的边界 fetch：被测模块 api.ts 与它的协作者 apiClient 都是真货，
 // 因为这一层的全部风险就是"端点写错 / 动词写错 / 信封解包写错"。
 // 断言对象是 fetch 实际收到的请求（method / URL / headers / body）与解包后的返回值。
@@ -316,12 +316,6 @@ describe('services/api.ts', () => {
         url: '/api/users/node-pool/3',
         call: (api) => api.updateNodeCard(3, { name: '改名' }),
         body: JSON.stringify({ name: '改名' }),
-      },
-      {
-        name: 'incrementNodeCardUseCount → POST /api/users/node-pool/:id/increment-use',
-        method: 'POST',
-        url: '/api/users/node-pool/3/increment-use',
-        call: (api) => api.incrementNodeCardUseCount(3),
       },
       // Node pool folders
       {

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * User controller integration tests.
  *
  * These exercise the REAL `userRouter` mounted on a real Express app against a
@@ -89,13 +89,13 @@ function seedNodeCard(
   t: TestDatabase,
   userId: number,
   name = 'Node',
-  opts: { content?: string; folderId?: number | null; useCount?: number; sortOrder?: number } = {},
+  opts: { content?: string; folderId?: number | null; sortOrder?: number; createdAt?: number } = {},
 ): number {
   const now = Math.floor(Date.now() / 1000)
   return Number(
     t.raw
       .prepare(
-        'INSERT INTO node_cards (user_id, name, content, type, color, use_count, created_by, folder_id, sort_order, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
+        'INSERT INTO node_cards (user_id, name, content, type, color, created_by, folder_id, sort_order, created_at) VALUES (?,?,?,?,?,?,?,?,?)',
       )
       .run(
         userId,
@@ -103,11 +103,10 @@ function seedNodeCard(
         opts.content ?? 'content',
         'text',
         '#ffffff',
-        opts.useCount ?? 0,
         userId,
         opts.folderId ?? null,
         opts.sortOrder ?? 0,
-        now,
+        opts.createdAt ?? now,
       ).lastInsertRowid,
   )
 }
@@ -674,17 +673,17 @@ describe('user.controller (integration, real router + real DB)', () => {
   })
 
   describe('node pool — GET /node-pool', () => {
-    it('returns only the caller nodes, ordered by useCount desc', async () => {
-      const low = seedNodeCard(t, userId, 'Low', { useCount: 1 })
-      const high = seedNodeCard(t, userId, 'High', { useCount: 9 })
-      seedNodeCard(t, otherId, 'Theirs', { useCount: 100 })
+    it('returns only the caller nodes, newest first', async () => {
+      const older = seedNodeCard(t, userId, 'Older', { createdAt: 1_700_000_000 })
+      const newer = seedNodeCard(t, userId, 'Newer', { createdAt: 1_700_000_500 })
+      seedNodeCard(t, otherId, 'Theirs', { createdAt: 1_700_000_900 })
 
       const res = await supertest(app).get('/api/users/node-pool').set(authHeader(userId))
 
       expect(res.status).toBe(200)
       expect(res.body.success).toBe(true)
       expect(res.body.data).toHaveLength(2)
-      expect(res.body.data.map((n: { id: number }) => n.id)).toEqual([high, low])
+      expect(res.body.data.map((n: { id: number }) => n.id)).toEqual([newer, older])
     })
 
     it('returns an empty array for a user with no nodes', async () => {
@@ -1008,57 +1007,6 @@ describe('user.controller (integration, real router + real DB)', () => {
 
       expect(res.status).toBe(401)
       expect(countRows(t.raw, 'node_cards', 'id = ?', nodeId)).toBe(1)
-    })
-  })
-
-  describe('node pool — POST /node-pool/:id/increment-use', () => {
-    it('increments useCount and persists it', async () => {
-      const nodeId = seedNodeCard(t, userId, 'Counted', { useCount: 3 })
-
-      const res = await supertest(app)
-        .post(`/api/users/node-pool/${nodeId}/increment-use`)
-        .set(authHeader(userId))
-
-      expect(res.status).toBe(200)
-      expect(res.body.success).toBe(true)
-      expect(res.body.data.useCount).toBe(4)
-      expect(readColumn<number>(t.raw, 'SELECT use_count FROM node_cards WHERE id = ?', nodeId)).toBe(4)
-    })
-
-    it('returns 403 for another user node and does not increment it', async () => {
-      const nodeId = seedNodeCard(t, otherId, 'Theirs', { useCount: 2 })
-
-      const res = await supertest(app)
-        .post(`/api/users/node-pool/${nodeId}/increment-use`)
-        .set(authHeader(userId))
-
-      expect(res.status).toBe(403)
-      expect(readColumn<number>(t.raw, 'SELECT use_count FROM node_cards WHERE id = ?', nodeId)).toBe(2)
-    })
-
-    it('returns 404 for a node that does not exist', async () => {
-      const res = await supertest(app)
-        .post('/api/users/node-pool/999999/increment-use')
-        .set(authHeader(userId))
-
-      expect(res.status).toBe(404)
-    })
-
-    it('returns 400 for a non-numeric node id', async () => {
-      const res = await supertest(app)
-        .post('/api/users/node-pool/abc/increment-use')
-        .set(authHeader(userId))
-
-      expect(res.status).toBe(400)
-    })
-
-    it('rejects an unauthenticated call', async () => {
-      const nodeId = seedNodeCard(t, userId, 'Counted', { useCount: 1 })
-
-      const res = await supertest(app).post(`/api/users/node-pool/${nodeId}/increment-use`)
-
-      expect(res.status).toBe(401)
-      expect(readColumn<number>(t.raw, 'SELECT use_count FROM node_cards WHERE id = ?', nodeId)).toBe(1)
     })
   })
 

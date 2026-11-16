@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 节点池面板的排序挡位（手动 / 名称 / 创建时间）。
  *
  * 这一段钉住两个曾经出过问题的行为：
@@ -38,7 +38,6 @@ function makeCard(overrides: Partial<NodeCard> = {}): NodeCard {
     type: 'text',
     color: '#ffffff',
     tags: null,
-    useCount: 0,
     createdBy: 1,
     createdAt: '2026-01-01T00:00:00.000Z',
     folderId: null,

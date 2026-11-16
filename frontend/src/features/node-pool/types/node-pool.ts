@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Node Pool Feature - Type Definitions
  *
  * This file contains all type definitions for the node pool feature.
@@ -84,7 +84,7 @@ export interface TemporaryCard {
   getCard: (id: number) => NodeCard | undefined
   setCards: (cards: NodeCard[]) => void
   loadNodePool: () => Promise<void>
-  addCard: (data: Omit<NodeCard, 'id' | 'createdAt' | 'useCount' | 'userId' | 'createdBy'>) => Promise<NodeCard>
+  addCard: (data: Omit<NodeCard, 'id' | 'createdAt' | 'userId' | 'createdBy'>) => Promise<NodeCard>
   updateCard: (id: number, data: Partial<NodeCard>) => Promise<void>
   removeCard: (id: number) => Promise<void>
   useCard: (card: NodeCard, addNodeToCanvas: (node: any) => void) => Promise<void>
@@ -158,7 +158,7 @@ export interface SortCalculateOptions {
 export interface UseNodePoolSortOptions {
   /** Whether to enable sorting */
   enabled?: boolean
-  /** Sort by field (name, createdAt, or useCount) */
+  /** Sort by field (name or createdAt) */
   sortBy?: NodePoolSortOption
   /** Sort order (asc or desc) */
   sortOrder?: NodePoolSortOrder

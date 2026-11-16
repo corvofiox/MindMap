@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
+﻿/* eslint-disable @typescript-eslint/no-explicit-any */
 /**
  * End-to-end MCP server tests.
  *
@@ -119,9 +119,9 @@ describe('MCP server', () => {
     const { client } = await connect()
     const { tools } = await client.listTools()
 
-    // 23 canvas-entity tools + notebook (9) + node pool (10) + canvas lifecycle (8)
+    // 23 canvas-entity tools + notebook (9) + node pool (9) + canvas lifecycle (8)
     // + transfers (4) + sessionInfo (1).
-    expect(tools).toHaveLength(55)
+    expect(tools).toHaveLength(54)
 
     // Each tool must carry a description and a JSON schema for its arguments,
     // otherwise a model cannot call it correctly.
@@ -186,7 +186,6 @@ describe('MCP server', () => {
       'poolCreate',
       'poolUpdate',
       'poolDelete',
-      'poolNoteUsage',
       'poolFolderList',
       'poolFolderCreate',
       'poolFolderUpdate',
@@ -195,7 +194,7 @@ describe('MCP server', () => {
       'transferManuscriptToCard',
       'transferCardToManuscript',
       'transferNodeToCard',
-      'copyCardToCanvas',
+      'moveCardToCanvas',
       // meta
       'sessionInfo',
     ]

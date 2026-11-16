@@ -184,7 +184,6 @@ export async function runMigrations(sqlite: Database.Database) {
           type TEXT NOT NULL DEFAULT 'text',
           color TEXT NOT NULL DEFAULT '#ffffff',
           tags TEXT,
-          use_count INTEGER NOT NULL DEFAULT 0,
           created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
           folder_id INTEGER REFERENCES node_pool_folders(id) ON DELETE SET NULL,
           description TEXT,
@@ -612,6 +611,11 @@ export async function runMigrations(sqlite: Database.Database) {
         // node_cards: user_id CASCADE, created_by/folder_id SET NULL
         // 列名必须显式列出：`SELECT *` 在给 node_cards 加列（source_manuscript_id /
         // source_kind）后会因列数不匹配整批回滚——files 表踩过同一个坑。
+        //
+        // use_count 已下线：新库没有这一列，老库有。重建目标一律不带它，源列清单
+        // 按实际表结构拼接，否则这个分支在"新结构 + 触发重建"的库上会
+        // `no such column: use_count`（migration-ai-removal.test.ts 复现过）。
+        const legacyHasUseCount = getColumns(sqlite, 'node_cards').includes('use_count')
         sqlite.exec(`
           CREATE TABLE node_cards_new (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -621,7 +625,6 @@ export async function runMigrations(sqlite: Database.Database) {
             type TEXT NOT NULL DEFAULT 'text',
             color TEXT NOT NULL DEFAULT '#ffffff',
             tags TEXT,
-            use_count INTEGER NOT NULL DEFAULT 0,
             created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
             folder_id INTEGER REFERENCES node_pool_folders(id) ON DELETE SET NULL,
             description TEXT,
@@ -634,10 +637,14 @@ export async function runMigrations(sqlite: Database.Database) {
         `)
         sqlite.exec(`
           INSERT INTO node_cards_new
-            (id, user_id, name, content, type, color, tags, use_count, created_by,
-             folder_id, description, thumbnail, sort_order, source_manuscript_id, source_kind, created_at)
-          SELECT id, user_id, name, content, type, color, tags, use_count, created_by,
-                 folder_id, description, thumbnail, sort_order, source_manuscript_id, source_kind, created_at
+            (${['id', 'user_id', 'name', 'content', 'type', 'color', 'tags']
+              .concat(legacyHasUseCount ? ['use_count'] : [])
+              .concat(['created_by', 'folder_id', 'description', 'thumbnail', 'sort_order', 'source_manuscript_id', 'source_kind', 'created_at'])
+              .join(', ')})
+          SELECT ${['id', 'user_id', 'name', 'content', 'type', 'color', 'tags']
+            .concat(legacyHasUseCount ? ['use_count'] : [])
+            .concat(['created_by', 'folder_id', 'description', 'thumbnail', 'sort_order', 'source_manuscript_id', 'source_kind', 'created_at'])
+            .join(', ')}
           FROM node_cards
         `)
         sqlite.exec(`DROP TABLE node_cards`)
@@ -733,6 +740,23 @@ export async function runMigrations(sqlite: Database.Database) {
         sqlite.exec(`DROP TABLE IF EXISTS ${legacyAiTable}`)
         log(`${legacyAiTable} dropped`)
       }
+    }
+
+    // One-time cleanup: drop `node_cards.use_count`.
+    //
+    // The counter belonged to a "a card can be used many times, +1 each time" model
+    // that never shipped: nothing incremented it from the UI, nothing displayed it,
+    // and the sort option it fed was unreachable. The product semantics are **move**
+    // (dragging a card onto a canvas removes it from the pool), so a usage count is
+    // meaningless. Dropped here rather than in the CREATE TABLE only, because old
+    // databases still carry the column and the two rebuild migrations above copy it
+    // along; new databases are created without it and simply skip this step.
+    //
+    // Idempotent by column check, and safe to re-run: SQLite ≥ 3.35 supports
+    // DROP COLUMN, and nothing indexes or references this column.
+    if (getColumns(sqlite, 'node_cards').includes('use_count')) {
+      log('Dropping obsolete node_cards.use_count')
+      sqlite.exec('ALTER TABLE node_cards DROP COLUMN use_count')
     }
 
     log('Migrations completed successfully')

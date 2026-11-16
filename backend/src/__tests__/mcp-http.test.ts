@@ -1,4 +1,4 @@
-/**
+﻿/**
  * MCP Streamable HTTP transport tests.
  *
  * `http.ts` had 0% coverage. It is the network edge of the whole MCP feature, so
@@ -46,7 +46,7 @@ const { MCP_SERVER_NAME } = await import('../mcp/server.js')
 const { generateToken } = await import('../utils/personalToken.js')
 
 /** The 23 tools exposed by tools.ts, used to pin the advertised set. */
-const EXPECTED_TOOL_COUNT = 55
+const EXPECTED_TOOL_COUNT = 54
 
 const NOW_SEC = () => Math.floor(Date.now() / 1000)
 

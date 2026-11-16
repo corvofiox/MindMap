@@ -1,19 +1,23 @@
-﻿/**
+/**
  * Transfer tools — the four "move something between containers" operations.
  *
- * The semantics differ per direction and that difference is the whole reason these
- * are separate tools rather than one `convert` with a flag:
+ * All four are **moves**: the source disappears and the target gains the content, so
+ * nothing is duplicated and no counter is needed to track reuse. (An earlier version
+ * had a "copy card onto canvas" tool with a `use_count`; the product never worked that
+ * way — dragging a card onto a canvas has always removed it from the pool — so both
+ * the tool and the column are gone.)
  *
  *   manuscript ⇄ card   MOVE   (the source row disappears)
  *   canvas node → card  MOVE   (node + its connections disappear)
- *   card → canvas       COPY   (the card stays; `use_count` increments)
+ *   card → canvas       MOVE   (the card disappears; undo on the canvas restores the node)
  *
  * The two manuscript directions are shared with the REST endpoints
  * (`domain/transfer.ts`), so an agent and the UI cannot produce different results.
- * The canvas-node direction is implemented here because it has to read the live Yjs
- * doc, and it is written as "create the card first, delete the node second": if the
- * card insert fails (size cap, DB error) the node is still on the canvas. There is no
- * cross-store transaction, so the only safe failure mode is "nothing moved".
+ * The canvas directions are implemented here because they have to read/write the live
+ * Yjs doc. Both are written as "write the destination first, delete the source
+ * second": if the destination write fails (size cap, DB error) the source is still
+ * intact. There is no cross-store transaction, so the only safe failure mode is
+ * "nothing moved".
  */
 import { z } from 'zod'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
@@ -26,7 +30,7 @@ import {
   moveManuscriptToCard,
   nodeToCardPayload,
 } from '../../domain/transfer.js'
-import { getCard, incrementUseCount } from '../../domain/pool.js'
+import { deleteCard, getCard } from '../../domain/pool.js'
 import { getManuscript } from '../../domain/notebook.js'
 import { deleteEntities, getCanvasSnapshot, upsertEntities, actorKeyOf } from '../canvas-ops.js'
 import { accessErrorMessage, readOnlyErrorMessage, resolveCanvasAccess } from '../access.js'
@@ -36,7 +40,6 @@ import type { ToolContext } from '../types.js'
 
 const idSchema = z.number().int().positive()
 const MOVE = { readOnlyHint: false, destructiveHint: true, idempotentHint: false } as const
-const COPY = { readOnlyHint: false, destructiveHint: false, idempotentHint: false } as const
 
 /** Canvas editor access, or a tool error explaining why not. */
 async function requireCanvasEditor(ctx: ToolContext, canvasId: number) {
@@ -158,21 +161,21 @@ export function registerTransferTools(server: McpServer, ctx: ToolContext): void
   )
 
   server.registerTool(
-    'copyCardToCanvas',
+    'moveCardToCanvas',
     {
-      title: '卡片复制到画布',
+      title: '卡片移到画布（搬运）',
       description:
-        '把卡片复制成一个画布节点（COPY：卡片保留，使用次数 +1）。不指定 x/y 时放在 (0,0)；建议先 canvasGet 规划位置，避免与已有节点重叠。需要画布写权限。',
+        '把卡片搬成一个画布节点：节点出现在画布上，卡片从节点池消失（与界面里把卡片拖到画布完全一致）。不指定 x/y 时放在 (0,0)；建议先 canvasGet 规划位置，避免与已有节点重叠。需要画布写权限。',
       inputSchema: {
         canvasId: idSchema,
         cardId: idSchema,
         x: z.number().optional().describe('新节点左上角 X，默认 0'),
         y: z.number().optional().describe('新节点左上角 Y，默认 0'),
       },
-      annotations: { title: '卡片复制到画布', ...COPY },
+      annotations: { title: '卡片移到画布（搬运）', ...MOVE },
     },
     async (args) =>
-      runTool({ tool: 'copyCardToCanvas', userId: ctx.userId }, async () => {
+      runTool({ tool: 'moveCardToCanvas', userId: ctx.userId }, async () => {
         const guard = await requireCanvasEditor(ctx, args.canvasId)
         if ('error' in guard) return guard.error
 
@@ -180,8 +183,7 @@ export function registerTransferTools(server: McpServer, ctx: ToolContext): void
         const snapshot = await getCanvasSnapshot(args.canvasId)
         const nodeId = `node-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
 
-        // Identity and geometry belong to the destination, not the card: dropping the
-        // same card twice must not collide, and the caller's x/y wins.
+        // Identity and geometry belong to the destination, not the card.
         const unified = normalizeNode({
           ...card.node,
           id: nodeId,
@@ -192,10 +194,17 @@ export function registerTransferTools(server: McpServer, ctx: ToolContext): void
           zIndex: nextZIndexAbove(snapshot.nodes as { zIndex?: number }[]),
         } as never) as Record<string, unknown>
 
+        // Destination first, source second: if the node cannot be written the card is
+        // still in the pool. The reverse order could lose the card's content.
         await upsertEntities(args.canvasId, { nodes: [unified] }, actorKeyOf(ctx.userId))
-        const { useCount } = await incrementUseCount(ctx.userId, args.cardId)
+        await deleteCard(ctx.userId, args.cardId)
 
-        return ok({ copied: true, nodeId, cardId: args.cardId, useCount, note: '卡片保留在节点池。' })
+        return ok({
+          moved: 'card-to-canvas',
+          nodeId,
+          cardId: args.cardId,
+          note: '卡片已从节点池移入画布。',
+        })
       }),
   )
 }
@@ -205,6 +214,6 @@ export const TRANSFER_TOOL_NAMES = [
   'transferManuscriptToCard',
   'transferCardToManuscript',
   'transferNodeToCard',
-  'copyCardToCanvas',
+  'moveCardToCanvas',
 ] as const
 

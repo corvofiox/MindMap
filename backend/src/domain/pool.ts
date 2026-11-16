@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Node-pool (节点池) domain service.
  *
  * A pool card is one row whose `content` column holds a *JSON snapshot of a canvas
@@ -30,7 +30,6 @@ export interface CardSummary {
   color: string
   tags: string | null
   folderId: number | null
-  useCount: number
   createdAt: number | null
 }
 
@@ -75,7 +74,6 @@ function toSummary(row: Record<string, unknown>): CardSummary {
     color: (row.color as string) ?? '#ffffff',
     tags: (row.tags as string | null) ?? null,
     folderId: row.folderId === null || row.folderId === undefined ? null : Number(row.folderId),
-    useCount: Number(row.useCount ?? 0),
     createdAt:
       row.createdAt === null || row.createdAt === undefined ? null : Number(row.createdAt),
   }
@@ -272,17 +270,6 @@ export async function deleteCard(userId: number, cardId: number): Promise<{ card
   // node_cards has no soft-delete column: this is a physical delete.
   await db.delete(nodeCards).where(eq(nodeCards.id, cardId))
   return { cardId }
-}
-
-/** Bump the "used N times" counter (called when a card is dropped on a canvas). */
-export async function incrementUseCount(userId: number, cardId: number): Promise<{ useCount: number }> {
-  const existing = await findOwned(userId, cardId)
-  if (!existing) {
-    throw domainErrors.notFound(`卡片 ${cardId} `, '先用 poolList 获取有效的卡片 ID。')
-  }
-  const next = Number(existing.useCount ?? 0) + 1
-  await db.update(nodeCards).set({ useCount: next }).where(eq(nodeCards.id, cardId))
-  return { useCount: next }
 }
 
 /** First `<img src>` in the HTML, used as the pool thumbnail. */

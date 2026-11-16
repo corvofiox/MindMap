@@ -1,4 +1,4 @@
-// User types
+﻿// User types
 export interface User {
   id: number
   email: string
@@ -169,7 +169,6 @@ export interface NodeCard {
   type: string
   color: string
   tags: string | null
-  useCount: number
   createdBy: number
   createdAt: string
   folderId?: number | null
@@ -197,7 +196,7 @@ export interface NodePoolFolder {
 // Node Pool sorting types
 // 'manual' = 按用户拖拽出来的顺序（默认）；其余三种是按字段自动排。
 // 自动排会覆盖手动顺序，所以界面上必须能切回 manual，否则拖一次就再也回不去。
-export type NodePoolSortOption = 'manual' | 'name' | 'createdAt' | 'useCount'
+export type NodePoolSortOption = 'manual' | 'name' | 'createdAt'
 export type NodePoolSortOrder = 'asc' | 'desc'
 
 // Group (Organization) types
@@ -510,11 +509,6 @@ export interface AddNodePoolApiResponse {
 }
 
 export interface UpdateNodeCardApiResponse {
-  success: boolean
-  data: NodeCard
-}
-
-export interface IncrementUseCountApiResponse {
   success: boolean
   data: NodeCard
 }

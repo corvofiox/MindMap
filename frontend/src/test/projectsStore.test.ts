@@ -68,7 +68,6 @@ const CARD: NodeCard = {
   type: 'text',
   color: '#ffffff',
   tags: null,
-  useCount: 2,
   createdBy: 1,
   createdAt: ISO,
   sortOrder: 0,
@@ -951,38 +950,14 @@ describe('useProjectsStore', () => {
       expect(store.getState().nodePool).toEqual([updated])
     })
 
-    it('incrementNodeCardUseCount 成功写入服务端计数', async () => {
-      const updated: NodeCard = { ...CARD, useCount: 3 }
-      const { store } = await freshStore({
-        '/api/users/node-pool/31/increment-use': () => ok(updated),
-      })
-      store.setState({ nodePool: [CARD] })
-
-      await store.getState().incrementNodeCardUseCount(31)
-
-      expect(store.getState().nodePool).toEqual([updated])
-    })
-
-    it('incrementNodeCardUseCount 失败时静默（非关键操作，不写 error）', async () => {
-      const { store } = await freshStore({
-        '/api/users/node-pool/31/increment-use': () => fail(500, '炸了'),
-      })
-      store.setState({ nodePool: [CARD], error: null })
-
-      await expect(store.getState().incrementNodeCardUseCount(31)).resolves.toBeUndefined()
-
-      expect(store.getState().nodePool).toEqual([CARD])
-      expect(store.getState().error).toBeNull()
-    })
-
     it('排序字段只改自己那一个', async () => {
       const { store } = await freshStore()
 
-      store.getState().setNodePoolSortBy('useCount')
+      store.getState().setNodePoolSortBy('name')
       store.getState().setNodePoolSortOrder('asc')
 
       const state = store.getState()
-      expect(state.nodePoolSortBy).toBe('useCount')
+      expect(state.nodePoolSortBy).toBe('name')
       expect(state.nodePoolSortOrder).toBe('asc')
     })
 

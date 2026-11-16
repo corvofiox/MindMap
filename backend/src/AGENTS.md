@@ -1,4 +1,4 @@
-# Backend 源码知识库
+﻿# Backend 源码知识库
 
 **父级**: 根 AGENTS.md
 **评分**: 18（高复杂度）
@@ -58,15 +58,15 @@ adapters/
 查一遍 `project_members` 而不看 `role`，导致只读成员能用令牌改写画布；REST 与 WebSocket
 两侧都拦住了，只有 MCP 没拦。授权逻辑一旦复制第二份，就一定会漂移。
 
-### 工具面（55 个）
+### 工具面（54 个）
 
 | 模块 | 内容 |
 |---|---|
 | `mcp/tools.ts` | 23 个画布**实体**工具（节点/连线/组/域/undo） |
 | `mcp/tools/canvas-lifecycle.ts` | 画布容器与画布文件夹（8） |
 | `mcp/tools/notebook.ts` | 手稿与笔记本文件夹（9） |
-| `mcp/tools/pool.ts` | 节点池卡片与文件夹（10） |
-| `mcp/tools/transfer.ts` | 搬运/复制（4） |
+| `mcp/tools/pool.ts` | 节点池卡片与文件夹（9） |
+| `mcp/tools/transfer.ts` | 搬运（4，全部是搬运，没有复制） |
 | `mcp/tools/meta.ts` | `sessionInfo`（1） |
 
 - 写工具必须 `withCanvas(ctx, canvasId, { write: true })`：它除了成员身份还校验角色，

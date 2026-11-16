@@ -83,7 +83,7 @@ curl -s http://<你的地址>:8000/mcp \
 
 ---
 
-## 3. 工具目录（55 个）
+## 3. 工具目录（54 个）
 
 ### 3.1 画布内容（23 个，实时生效）
 
@@ -109,7 +109,7 @@ curl -s http://<你的地址>:8000/mcp \
 
 ### 3.4 节点池（10 个）
 
-`poolList` `poolGet` `poolCreate` `poolUpdate` `poolDelete` `poolNoteUsage` `poolFolderList` `poolFolderCreate` `poolFolderUpdate` `poolFolderDelete`
+`poolList` `poolGet` `poolCreate` `poolUpdate` `poolDelete` `poolFolderList` `poolFolderCreate` `poolFolderUpdate` `poolFolderDelete`
 
 ### 3.5 搬运（4 个）
 
@@ -118,9 +118,11 @@ curl -s http://<你的地址>:8000/mcp \
 | `transferManuscriptToCard` | **搬运** | 手稿从笔记本消失，卡片出现在节点池 |
 | `transferCardToManuscript` | **搬运** | 卡片从节点池消失，手稿出现在笔记本 |
 | `transferNodeToCard` | **搬运** | 节点与它的连线从画布消失，卡片出现在节点池 |
-| `copyCardToCanvas` | **复制** | 画布上多一个节点，卡片保留、`useCount + 1` |
+| `moveCardToCanvas` | **搬运** | 卡片从节点池消失，节点出现在画布上 |
 
-搬运在两个方向上都用事务/先建后删保护：**要么整个搬过去，要么原样不动**。
+四个方向**全部是搬运**：源消失、目标得到内容，不会留下副本。搬运在两个方向上都用事务/先写目标后删源保护：**要么整个搬过去，要么原样不动**。
+
+（早期的“卡片复制到画布 + 使用次数”已随 `use_count` 字段一起下线：产品语义从来就是搬运，拖到画布后卡片就该消失。界面右键菜单里原来写着「复制到画布」的那一项也已改成「移到画布」。）
 
 ### 3.6 会话（1 个）
 

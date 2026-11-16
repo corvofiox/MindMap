@@ -462,7 +462,20 @@ await step('正在编辑的手稿，删掉它所在的文件夹：编辑区退�
   const beforePath = await ev('location.pathname')
 
   const message = await deleteFolder('打开着', true)
-  await sleep(1800)
+  // 先立刻盯提示：toast 默认 3 秒自动消失，而 deleteFolder 自己已经等了 1.2 秒，
+  // 再固定 sleep 1.8 秒才去找就正好踩在消失边界上（曾偶发"没有提示"）。
+  let sawToast = false
+  try {
+    await waitFor(
+      `document.body.innerText.includes('手稿已随文件夹删除')`,
+      2000,
+      '删除提示',
+    )
+    sawToast = true
+  } catch {
+    sawToast = false
+  }
+  await sleep(1200)
 
   const folders = await uiFolders()
   if (folders.includes('打开着')) throw new Error('「打开着」没被删掉')
@@ -471,7 +484,7 @@ await step('正在编辑的手稿，删掉它所在的文件夹：编辑区退�
   // 当前这篇已经不存在了：应该退回 /notebook，而不是把编辑器留在一个幽灵手稿上
   const afterPath = await ev('location.pathname')
   if (afterPath !== '/notebook') throw new Error(`删完应停在 /notebook，实际=${afterPath}（之前 ${beforePath}）`)
-  if (!(await ev(`document.body.innerText.includes('手稿已随文件夹删除')`))) {
+  if (!sawToast) {
     throw new Error('没有提示"手稿已随文件夹删除"')
   }
   return message

@@ -17,7 +17,6 @@ import {
   deleteCard,
   deleteFolder,
   getCard,
-  incrementUseCount,
   listCards,
   listFolders,
   updateCard,
@@ -42,7 +41,7 @@ export function registerPoolTools(server: McpServer, ctx: ToolContext): void {
     {
       title: '列出节点池卡片',
       description:
-        '列出当前账号节点池里的卡片。支持关键词（匹配名称/正文预览/标签）与文件夹过滤，分页同 notebookList。返回 cardId、名称、正文预览、类型、颜色、标签、使用次数与所属文件夹。',
+        '列出当前账号节点池里的卡片。支持关键词（匹配名称/正文预览/标签）与文件夹过滤，分页同 notebookList。返回 cardId、名称、正文预览、类型、颜色、标签与所属文件夹。',
       inputSchema: {
         q: z.string().optional().describe('关键词'),
         tag: z.string().optional().describe('按标签过滤'),
@@ -168,23 +167,6 @@ export function registerPoolTools(server: McpServer, ctx: ToolContext): void {
   )
 
   server.registerTool(
-    'poolNoteUsage',
-    {
-      title: '记录一次使用',
-      description:
-        '把卡片的使用次数 +1，用于统计。通过 copyCardToCanvas 投放时已自动计数，通常不需要单独调用。',
-      inputSchema: { cardId: idSchema },
-      annotations: { title: '记录一次使用', ...WRITE, idempotentHint: false },
-    },
-    async ({ cardId }) =>
-      runTool({ tool: 'poolNoteUsage', userId: ctx.userId }, async () => {
-        return ok(await incrementUseCount(ctx.userId, cardId))
-      }),
-  )
-
-  // ------------------------------------------------------------- folders
-
-  server.registerTool(
     'poolFolderList',
     {
       title: '列出节点池文件夹',
@@ -277,7 +259,6 @@ export const POOL_TOOL_NAMES = [
   'poolCreate',
   'poolUpdate',
   'poolDelete',
-  'poolNoteUsage',
   'poolFolderList',
   'poolFolderCreate',
   'poolFolderUpdate',

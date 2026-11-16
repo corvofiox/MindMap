@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Session/self-description tools.
  *
  * `sessionInfo` exists because the alternative is expensive: an agent that wants to
@@ -124,7 +124,7 @@ export function registerMetaTools(server: McpServer, ctx: ToolContext): void {
             'transferManuscriptToCard': 'MOVE：手稿从笔记本消失',
             'transferCardToManuscript': 'MOVE：卡片从节点池消失',
             'transferNodeToCard': 'MOVE：节点及连线从画布消失',
-            'copyCardToCanvas': 'COPY：卡片保留，use_count +1',
+            'moveCardToCanvas': 'MOVE：卡片从节点池消失',
           },
         })
       }),

@@ -1,10 +1,10 @@
-import { createPortal } from 'react-dom'
+﻿import { createPortal } from 'react-dom'
 import { useState, useCallback } from 'react'
 import {
   Edit2,
   Trash2,
   Folder,
-  Copy,
+  MoveRight,
 } from 'lucide-react'
 import { useNodePoolStore } from '../stores/useNodePoolStore'
 import { useUIStore } from '@/store/useUIStore'
@@ -43,7 +43,7 @@ export function NodeCardContextMenu({ card, position, onClose, onRename, onMoveT
     onClose()
   }, [card.id, removeCard, addToast, onClose])
 
-  const handleCopyToCanvas = useCallback(() => {
+  const handleMoveToCanvas = useCallback(() => {
     const customEvent = new CustomEvent('canvasDrop', {
       detail: { card, clientX: finalPosition.x, clientY: finalPosition.y },
     })
@@ -74,9 +74,9 @@ export function NodeCardContextMenu({ card, position, onClose, onRename, onMoveT
         }}
       >
         <MenuItem
-          icon={Copy}
-          label="复制到画布"
-          onClick={handleCopyToCanvas}
+          icon={MoveRight}
+          label="移到画布"
+          onClick={handleMoveToCanvas}
         />
         <MenuDivider />
         <button

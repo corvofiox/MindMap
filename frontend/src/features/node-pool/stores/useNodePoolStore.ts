@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Node Pool Store - Zustand Store
  *
  * A dedicated store for node pool state management with operation queue system.
@@ -320,7 +320,7 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => {
   },
 
   // Add card to node pool with operation queue
-  addCard: async (data: Omit<NodeCard, 'id' | 'createdAt' | 'useCount' | 'userId' | 'createdBy'>) => {
+  addCard: async (data: Omit<NodeCard, 'id' | 'createdAt' | 'userId' | 'createdBy'>) => {
     const operationId = generateOperationId()
     const tempId = generateTempId()
 
@@ -329,8 +329,7 @@ export const useNodePoolStore = create<NodePoolStore>((set, get) => {
       userId: 0,
       createdBy: 0,
       ...data,
-      createdAt: new Date().toISOString(),
-      useCount: 0
+      createdAt: new Date().toISOString()
     }
 
     const operation: Operation = {

@@ -1,4 +1,4 @@
-// useUIStore 真实行为测试：每个用例 vi.resetModules() 后动态 import 全新的 store。
+﻿// useUIStore 真实行为测试：每个用例 vi.resetModules() 后动态 import 全新的 store。
 // 不 mock 被测模块；主题走真实 DOM（documentElement.classList），持久化走真实
 // localStorage（setup.ts 的内存实现），toast 计时用 fake timers 驱动真实 setTimeout。
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -344,7 +344,6 @@ describe('useUIStore', () => {
         type: 'text',
         color: '#fff',
         tags: null,
-        useCount: 0,
         createdBy: 1,
         createdAt: '2026-01-01T00:00:00.000Z',
         sortOrder: 0,

@@ -1,4 +1,4 @@
-import { create } from 'zustand'
+﻿import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { Project, Canvas, Folder, NodeCard, NodePoolFolder, NodePoolSortOption, NodePoolSortOrder } from '@/types'
 import * as api from '@/services/api'
@@ -60,10 +60,9 @@ interface ProjectsState {
   reorderFolders: (movedId: number, targetId: number, position: 'before' | 'after') => Promise<void>
 
   // Node pool actions (User-specific)
-  addToNodePool: (data: Omit<NodeCard, 'id' | 'createdAt' | 'useCount' | 'userId'>) => Promise<NodeCard>
+  addToNodePool: (data: Omit<NodeCard, 'id' | 'createdAt' | 'userId'>) => Promise<NodeCard>
   removeFromNodePool: (id: number) => Promise<void>
   updateNodeCard: (id: number, data: Partial<NodeCard>) => Promise<void>
-  incrementNodeCardUseCount: (id: number) => Promise<void>
   setNodePoolSortBy: (sortBy: NodePoolSortOption) => void
   setNodePoolSortOrder: (order: NodePoolSortOrder) => void
 
@@ -650,8 +649,7 @@ export const useProjectsStore = create<ProjectsState>()(
             id: tempId,
             userId: 0, // Will be set by server
             ...data,
-            createdAt: new Date().toISOString(),
-            useCount: 0
+            createdAt: new Date().toISOString()
           }
 
           // 乐观更新：立即添加到本地状态
@@ -715,17 +713,6 @@ export const useProjectsStore = create<ProjectsState>()(
             }))
           } catch (error) {
             handleError(error, '更新节点卡片失败')
-          }
-        },
-
-        incrementNodeCardUseCount: async (id) => {
-          try {
-            const updated = await api.incrementNodeCardUseCount(id)
-            set((state) => ({
-              nodePool: state.nodePool.map((c) => (c.id === id ? updated : c)),
-            }))
-          } catch (error) {
-            // Silently fail for non-critical operation
           }
         },
 

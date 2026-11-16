@@ -1,4 +1,4 @@
-import type {
+﻿import type {
   User,
   LoginCredentials,
   RegisterData,
@@ -272,7 +272,7 @@ export async function getNodePool(): Promise<NodeCard[]> {
 }
 
 export async function addToNodePool(
-  data: Omit<NodeCard, 'id' | 'createdAt' | 'useCount' | 'userId' | 'createdBy'>
+  data: Omit<NodeCard, 'id' | 'createdAt' | 'userId' | 'createdBy'>
 ): Promise<NodeCard> {
   return await apiClient.post<NodeCard>(API_ENDPOINTS.NODE_POOL, data)
 }
@@ -283,10 +283,6 @@ export async function removeFromNodePool(id: number): Promise<void> {
 
 export async function updateNodeCard(id: number, data: Partial<NodeCard>): Promise<NodeCard> {
   return await apiClient.put<NodeCard>(API_ENDPOINTS.NODE_POOL_UPDATE(id), data)
-}
-
-export async function incrementNodeCardUseCount(id: number): Promise<NodeCard> {
-  return await apiClient.post<NodeCard>(API_ENDPOINTS.NODE_POOL_INCREMENT_USE(id))
 }
 
 // Node Pool Folders API (User-specific)

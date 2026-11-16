@@ -441,7 +441,9 @@ userRouter.get('/node-pool', authenticate, asyncHandler(async (req: AuthRequest,
 
   const nodes = await db.query.nodeCards.findMany({
     where: eq(nodeCards.userId, userId),
-    orderBy: (nodeCards, { desc }) => [desc(nodeCards.useCount)],
+    // 曾经按 use_count 倒序（"最常用的在前"），但那个计数器从未被前端递增、也从未
+    // 展示，纯属历史包袱；列已随迁移删除。现在按创建时间倒序，顺序稳定可预测。
+    orderBy: (nodeCards, { desc }) => [desc(nodeCards.createdAt), desc(nodeCards.id)],
   })
 
   const transformedNodes = transformResponseArray(nodes, ['createdAt'])
@@ -644,53 +646,6 @@ userRouter.delete('/node-pool/:id', authenticate, asyncHandler(async (req: AuthR
   res.json({
     success: true,
     data: { message: 'Node removed from pool' },
-  })
-}))
-
-// Increment node card use count
-userRouter.post('/node-pool/:id/increment-use', authenticate, asyncHandler(async (req: AuthRequest, res) => {
-  const userId = req.user!.id
-  const nodeId = parseInt(req.params.id, 10)
-  if (isNaN(nodeId)) {
-    return res.status(400).json({
-      success: false,
-      error: 'Invalid node ID format',
-    })
-  }
-
-  const node = await db.query.nodeCards.findFirst({
-    where: eq(nodeCards.id, nodeId),
-  })
-
-  if (!node) {
-    return res.status(404).json({
-      success: false,
-      error: '节点未找到',
-    })
-  }
-
-  if (getUserId(node) !== userId) {
-    return res.status(403).json({
-      success: false,
-      error: '无权操作此节点',
-    })
-  }
-
-  const currentUseCount = node.useCount || 0
-
-  const [updatedNode] = await db
-    .update(nodeCards)
-    .set({
-      useCount: currentUseCount + 1,
-    })
-    .where(eq(nodeCards.id, nodeId))
-    .returning()
-
-  const transformedNode = transformResponse(updatedNode, ['createdAt'])
-
-  res.json({
-    success: true,
-    data: transformedNode,
   })
 }))
 

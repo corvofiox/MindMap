@@ -109,7 +109,6 @@ export const nodeCards = sqliteTable('node_cards', {
   type: text('type').notNull().default('text'),
   color: text('color').notNull().default('#ffffff'),
   tags: text('tags'), // Comma-separated
-  useCount: integer('use_count').notNull().default(0),
   createdBy: integer('created_by').references(() => users.id, { onDelete: 'set null' }),
   folderId: integer('folder_id').references(() => nodePoolFolders.id, { onDelete: 'set null' }),
   description: text('description'),

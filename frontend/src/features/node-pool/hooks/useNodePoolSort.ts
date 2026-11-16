@@ -136,8 +136,6 @@ function sortCards(cards: NodeCard[], sortBy: NodePoolSortOption, sortOrder: Nod
       comparison = a.name.localeCompare(b.name, 'zh-CN')
     } else if (sortBy === 'createdAt') {
       comparison = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-    } else if (sortBy === 'useCount') {
-      comparison = a.useCount - b.useCount
     }
 
     return sortOrder === 'asc' ? comparison : -comparison

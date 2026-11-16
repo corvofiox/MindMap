@@ -61,13 +61,13 @@ const INSTRUCTIONS = `MindMap 内容管理服务（画布 / 笔记本 / 节点�
 
 节点池（账号私有，非实时）
 - poolList / poolGet / poolCreate / poolUpdate / poolDelete，卡片正文上限 5000 字符。
-- 拖到画布是「复制」（卡片保留、使用次数 +1）；转成手稿是「搬运」（卡片消失）。
+- 拖到画布是「搬运」（卡片消失）；转成手稿也是「搬运」。
 
-跨容器搬运（会删除源）
+跨容器搬运（都会删除源）
 - transferManuscriptToCard：手稿变卡片，手稿从笔记本消失。
 - transferCardToManuscript：卡片变手稿，卡片从节点池消失。
 - transferNodeToCard：画布节点变卡片，节点与其连线从画布消失。
-- copyCardToCanvas：卡片复制到画布，卡片保留。
+- moveCardToCanvas：卡片变画布节点，卡片从节点池消失（与界面拖拽一致）。
 
 错误契约
 - 工具失败时 isError=true，正文以 [E_XXX] 开头：E_NOT_FOUND / E_FORBIDDEN / E_VALIDATION / E_CONFLICT / E_LIMIT / E_INTERNAL / E_UNSUPPORTED。

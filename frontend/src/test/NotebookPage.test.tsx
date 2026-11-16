@@ -1,4 +1,4 @@
-/**
+﻿/**
  * NotebookPage —— 笔记本工作台的界面契约。
  *
  * 重点在「粘贴采集」：网页复制的 HTML 必须保留结构（图片/加粗），
@@ -189,7 +189,6 @@ describe('动作接线', () => {
             type: 'text' as const,
             color: '#ffffff',
             tags: null,
-            useCount: 0,
             folderId: null,
             description: null,
             sourceManuscriptId: null,

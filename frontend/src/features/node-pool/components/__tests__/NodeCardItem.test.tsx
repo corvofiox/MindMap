@@ -1,4 +1,4 @@
-/**
+﻿/**
  * NodeCardItem 真实行为测试
  *
  * 只 mock 网络层(@/services/api)——组件本体、useNodePoolStore、useUIStore、
@@ -65,7 +65,6 @@ function makeCard(overrides: Partial<NodeCard> = {}): NodeCard {
     type: 'text',
     color: '#fff',
     tags: null,
-    useCount: 0,
     createdBy: 1,
     createdAt: '2026-01-02T03:04:05.000Z',
     folderId: null,

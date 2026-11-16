@@ -360,8 +360,6 @@ export function NodePoolPanel({ open }: NodePoolPanelProps) {
         cmp = a.name.localeCompare(b.name, 'zh-CN')
       } else if (sortBy === 'createdAt') {
         cmp = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-      } else {
-        cmp = (a.useCount ?? 0) - (b.useCount ?? 0)
       }
       // 同值时退回手动顺序，避免每次渲染顺序抖动
       return cmp * dir || byManualOrder(a, b)

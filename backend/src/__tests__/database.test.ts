@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars */
+﻿/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import Database from 'better-sqlite3'
 import { drizzle } from 'drizzle-orm/better-sqlite3'
@@ -94,7 +94,6 @@ describe('Database Integration Tests', () => {
         type TEXT NOT NULL DEFAULT 'text',
         color TEXT NOT NULL DEFAULT '#ffffff',
         tags TEXT,
-        use_count INTEGER NOT NULL DEFAULT 0,
         created_by INTEGER NOT NULL,
         folder_id INTEGER,
         description TEXT,

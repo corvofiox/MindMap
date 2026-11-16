@@ -313,7 +313,7 @@ try {
   const toolsList = await mcp(alice.pat, { jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} })
   const tools = toolsList.json?.result?.tools ?? []
   const names = tools.map((t) => t.name)
-  check('tools/list advertises 55 tools', names.length === 55, `count=${names.length}`)
+  check('tools/list advertises 54 tools', names.length === 54, `count=${names.length}`)
   check('no duplicate tool names', new Set(names).size === names.length)
   for (const expected of [
     'notebookList',
@@ -321,7 +321,7 @@ try {
     'poolCreate',
     'canvasCreate',
     'transferManuscriptToCard',
-    'copyCardToCanvas',
+    'moveCardToCanvas',
     'sessionInfo',
   ]) {
     check(`tool present: ${expected}`, names.includes(expected))
@@ -402,29 +402,32 @@ try {
 
   // ------------------------------------------------------- transfer + canvas
   console.log('\n[6] Transfers and canvas writes')
-  const copied = await tool(alice.pat, 'copyCardToCanvas', { canvasId, cardId, x: 40, y: 60 })
-  check('copyCardToCanvas succeeds', !copied.isError, copied.text.slice(0, 200))
-  check('card survives the copy (COPY semantics)', (await tool(alice.pat, 'poolList', {})).parsed?.total === 1)
-  check('use_count incremented', (await tool(alice.pat, 'poolGet', { cardId })).parsed?.useCount === 1)
+  check('poolList no longer exposes useCount', !('useCount' in (poolList.parsed?.items?.[0] ?? {})))
+
+  const movedToCanvas = await tool(alice.pat, 'moveCardToCanvas', { canvasId, cardId, x: 40, y: 60 })
+  check('moveCardToCanvas succeeds', !movedToCanvas.isError, movedToCanvas.text.slice(0, 200))
+  check('card left the pool (MOVE semantics)', (await tool(alice.pat, 'poolList', {})).parsed?.total === 0)
+  check('moved card is gone', (await tool(alice.pat, 'poolGet', { cardId })).isError)
 
   const nodes = await tool(alice.pat, 'getAllNodes', { canvasId })
-  check('canvas has the copied node', nodes.parsed?.count === 1, JSON.stringify(nodes.parsed?.count))
+  check('canvas has the moved node', nodes.parsed?.count === 1, JSON.stringify(nodes.parsed?.count))
   check('node landed at the requested position', nodes.parsed?.nodes?.[0]?.x === 40 && nodes.parsed?.nodes?.[0]?.y === 60)
 
   const moved = await tool(alice.pat, 'transferNodeToCard', { canvasId, nodeId: nodes.parsed.nodes[0].id })
   check('transferNodeToCard succeeds', !moved.isError, moved.text.slice(0, 200))
+  const roundTripCardId = moved.parsed?.cardId
   check('node gone from canvas', (await tool(alice.pat, 'getAllNodes', { canvasId })).parsed?.count === 0)
-  check('card added to pool', (await tool(alice.pat, 'poolList', {})).parsed?.total === 2)
+  check('card added to pool', (await tool(alice.pat, 'poolList', {})).parsed?.total === 1)
 
   const movedDoc = await tool(alice.pat, 'transferManuscriptToCard', { manuscriptId })
   check('transferManuscriptToCard succeeds', !movedDoc.isError, movedDoc.text.slice(0, 200))
   const docGone = await api('GET', `/api/manuscripts/${manuscriptId}`, { token: alice.jwt, jar: alice.jar })
   check('manuscript is gone through REST too (moved, not copied)', docGone.status === 404, `status=${docGone.status}`)
-  check('pool now holds both cards', (await tool(alice.pat, 'poolList', {})).parsed?.total === 3)
+  check('pool now holds both cards', (await tool(alice.pat, 'poolList', {})).parsed?.total === 2)
 
-  const backToDoc = await tool(alice.pat, 'transferCardToManuscript', { cardId })
+  const backToDoc = await tool(alice.pat, 'transferCardToManuscript', { cardId: roundTripCardId })
   check('transferCardToManuscript succeeds', !backToDoc.isError, backToDoc.text.slice(0, 160))
-  check('card gone from pool', (await tool(alice.pat, 'poolGet', { cardId })).isError)
+  check('card gone from pool', (await tool(alice.pat, 'poolGet', { cardId: roundTripCardId })).isError)
 
   // ------------------------------------------------------------ canvas lifecycle
   console.log('\n[7] Canvas lifecycle')

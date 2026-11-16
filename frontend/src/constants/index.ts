@@ -1,4 +1,4 @@
-import { SHARED_NODE_DEFAULTS, type NodeDefaults } from '@shared/constants'
+﻿import { SHARED_NODE_DEFAULTS, type NodeDefaults } from '@shared/constants'
 
 // API endpoints
 export const API_ENDPOINTS = {
@@ -42,7 +42,6 @@ export const API_ENDPOINTS = {
   NODE_POOL: '/api/users/node-pool',
   NODE_POOL_DELETE: (id: number) => `/api/users/node-pool/${id}`,
   NODE_POOL_UPDATE: (id: number) => `/api/users/node-pool/${id}`,
-  NODE_POOL_INCREMENT_USE: (id: number) => `/api/users/node-pool/${id}/increment-use`,
   NODE_POOL_FOLDERS: '/api/users/node-pool-folders',
   NODE_POOL_FOLDER_BY_ID: (id: number) => `/api/users/node-pool-folders/${id}`,
 

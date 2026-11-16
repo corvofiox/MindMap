@@ -1,4 +1,4 @@
-/**
+﻿/**
  * useNodePoolStore 真实行为测试
  *
  * 只 mock 真正的外部:`@/services/api`(网络层)。store 本体、`createNodeFromCard`
@@ -52,7 +52,6 @@ function makeCard(overrides: Partial<NodeCard> = {}): NodeCard {
     type: 'text',
     color: '#fff',
     tags: null,
-    useCount: 3,
     createdBy: 1,
     createdAt: '2026-01-01T00:00:00.000Z',
     folderId: null,
@@ -82,7 +81,6 @@ function serverCard(id: number, overrides: Partial<NodeCard> = {}): NodeCard {
     id,
     userId: 7,
     createdBy: 7,
-    useCount: 5,
     createdAt: '2020-05-05T05:05:05.000Z',
     ...overrides,
   })
@@ -255,7 +253,6 @@ describe('addCard:乐观更新与替换', () => {
     expect(state().pendingCardIds.has(tempId)).toBe(true)
     expect(state().getCard(tempId)?.name).toBe('新卡片')
     expect(state().getCard(tempId)?.id).toBe(tempId)
-    expect(state().getCard(tempId)?.useCount).toBe(0)
     expect(state().temporaryCards.get(tempId)?.status).toBe('creating')
     expect(ops().map((o) => o.status)).toEqual(['processing'])
     expect(ops()[0].cardId).toBe(tempId)
@@ -280,10 +277,8 @@ describe('addCard:乐观更新与替换', () => {
     expect(real?.sortOrder).toBe(4)
     // 合并规则:finalCard 保留服务端 id,其余字段以临时卡为准(临时卡值与服务端不同则覆盖)
     expect(real?.userId).toBe(0)
-    expect(real?.useCount).toBe(0)
     // 返回值是服务端原始对象(未合并)
     expect(created.userId).toBe(7)
-    expect(created.useCount).toBe(5)
 
     const temp = Array.from(state().temporaryCards.keys())[0]
     expect(state().temporaryCards.get(temp)).toMatchObject({ realCardId: 99, status: 'created' })

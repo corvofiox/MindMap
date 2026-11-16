@@ -1,4 +1,4 @@
-/**
+﻿/**
  * createNodeFromCard / parseCardNodeData 真实行为测试
  *
  * 覆盖:
@@ -23,7 +23,6 @@ function makeCard(overrides: Partial<NodeCard> = {}): NodeCard {
     type: 'text',
     color: '#ffffff',
     tags: null,
-    useCount: 0,
     createdBy: 1,
     createdAt: '2026-01-01T00:00:00.000Z',
     folderId: null,

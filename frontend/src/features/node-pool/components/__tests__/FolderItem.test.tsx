@@ -1,4 +1,4 @@
-/**
+﻿/**
  * FolderItem 真实行为测试
  *
  * 不 mock 被测组件:FolderItem / NodeCardItem / useUIStore / useNodePoolStore 全部真实渲染。
@@ -51,7 +51,6 @@ function makeCard(overrides: Partial<NodeCard> = {}): NodeCard {
     type: 'text',
     color: '#fff',
     tags: null,
-    useCount: 0,
     createdBy: 1,
     createdAt: '2026-01-01T00:00:00.000Z',
     folderId: 10,
