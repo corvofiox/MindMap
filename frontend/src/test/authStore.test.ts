@@ -271,6 +271,36 @@ describe('useAuthStore', () => {
       expect(localStorage.getItem('mindmap_token')).toBeNull()
       expect(client.apiClient.getToken()).toBeNull()
     })
+
+    // 真实事故：服务端返回 429（限流）时，旧实现在 catch 里一律清 token，
+    // 用户被踢回登录页且本地令牌被删，只能重新输密码。只有 401 才算身份作废。
+    it('非鉴权类失败（429 限流）不清凭据、保持登录态', async () => {
+      installRouter(happyRoutes({ '/api/users/profile': () => fail(429, '请求过于频繁，请稍后再试') }))
+      const { auth, client } = await freshAuth()
+      auth.useAuthStore.setState({ user: USER, token: 'jwt-1', isAuthenticated: true })
+      localStorage.setItem('mindmap_token', 'jwt-1')
+      client.apiClient.setToken('jwt-1')
+
+      await auth.useAuthStore.getState().validateToken()
+
+      const state = auth.useAuthStore.getState()
+      expect(state.token).toBe('jwt-1')
+      expect(state.isAuthenticated).toBe(true)
+      expect(localStorage.getItem('mindmap_token')).toBe('jwt-1')
+      expect(client.apiClient.getToken()).toBe('jwt-1')
+    })
+
+    it('服务端 500 同样不清凭据', async () => {
+      installRouter(happyRoutes({ '/api/users/profile': () => fail(500, '服务器内部错误') }))
+      const { auth } = await freshAuth()
+      auth.useAuthStore.setState({ user: USER, token: 'jwt-1', isAuthenticated: true })
+      localStorage.setItem('mindmap_token', 'jwt-1')
+
+      await auth.useAuthStore.getState().validateToken()
+
+      expect(localStorage.getItem('mindmap_token')).toBe('jwt-1')
+      expect(auth.useAuthStore.getState().isAuthenticated).toBe(true)
+    })
   })
 
   describe('updateProfile', () => {

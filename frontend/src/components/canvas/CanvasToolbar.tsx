@@ -132,16 +132,12 @@ export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToo
   const handleSave = useCallback(async () => {
     if (!onSave || isSaving) return
 
-    // In collaboration mode, changes are saved in real-time via WebSocket
-    if (isCollabConnected) {
-      addToast({
-        type: 'info',
-        title: '已实时保存',
-        message: '协作模式下编辑内容会实时同步到服务器',
-        duration: 3000,
-      })
-      return
-    }
+    // 协作模式下**不能**只弹一句「已实时保存」就返回：
+    // WS 同步进的只是服务端内存里的 Yjs doc，落库是防抖 + 1s 周期刷盘，
+    // 用户看到"保存成功"就刷新时最后一段改动可能还没写进 yjs_update
+    // （这正是"显示保存成功、刷新后内容回退"的来源）。
+    // onSave 内部在协作模式会显式触发 /flush，并按真实结果提示，
+    // 所以这里两种模式走同一条路。
 
     setIsSaving(true)
     setSaveSuccess(false)
@@ -155,13 +151,16 @@ export function CanvasToolbar({ onSave, isViewer, isCollabConnected }: CanvasToo
         setSaveSuccess(true)
         setTimeout(() => setSaveSuccess(false), 2000)
 
-        // Show success toast
-        addToast({
-          type: 'success',
-          title: '保存成功',
-          message: '画布内容已保存到服务器',
-          duration: 3000,
-        })
+        // 协作模式下 handleManualSave 已经提示「已保存 / 内容已写入服务器」，
+        // 这里不再叠第二条，避免一次点击弹两个成功提示。
+        if (!isCollabConnected) {
+          addToast({
+            type: 'success',
+            title: '保存成功',
+            message: '画布内容已保存到服务器',
+            duration: 3000,
+          })
+        }
       }
     } catch (error) {
       // Show error toast

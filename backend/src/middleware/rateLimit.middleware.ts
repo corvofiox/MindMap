@@ -1,4 +1,4 @@
-import rateLimit from 'express-rate-limit'
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit'
 
 /**
  * Rate limiting configuration
@@ -62,7 +62,10 @@ export const createMcpLimiter = () =>
     legacyHeaders: false,
     keyGenerator: (req) => {
       const user = (req as unknown as { mcpUser?: { id?: number } }).mcpUser
-      return user?.id ? `mcp-user:${user.id}` : `mcp-ip:${req.ip}`
+      // 未带令牌时按来源 IP 兜底。ipKeyGenerator 会把 IPv6 归一到 /56：
+      // 直接用 req.ip 的话，一个 IPv6 客户端换地址就能刷满每个新桶（绕过限流），
+      // 新版 express-rate-limit 也会为此打出一条 ValidationError。
+      return user?.id ? `mcp-user:${user.id}` : `mcp-ip:${ipKeyGenerator(req.ip ?? '')}`
     },
     handler: (_req, res) => {
       res.status(429).json({

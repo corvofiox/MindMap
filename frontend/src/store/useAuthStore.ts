@@ -93,11 +93,21 @@ export const useAuthStore = create<AuthState>()(
             safeStorage.setItem(TOKEN_KEY, token)
             set({ user: profile, token, isAuthenticated: true })
             return true
-          } catch {
-            safeStorage.removeItem(TOKEN_KEY)
-            set({ user: null, token: null, isAuthenticated: false })
-            api.apiClient.setToken(null)
-            return false
+          } catch (error) {
+            // 只有 401 才是"令牌真的失效"。网络断了、服务端 429 限流、500 报错
+            // 都不能当作用户身份作废——以前这里一律清 token，一次限流就把人踢回
+            // 登录页，而且本地令牌被删干净（必须重新输密码）。
+            const status = (error as { status?: number } | null)?.status
+            if (status === 401) {
+              safeStorage.removeItem(TOKEN_KEY)
+              set({ user: null, token: null, isAuthenticated: false })
+              api.apiClient.setToken(null)
+              return false
+            }
+
+            // 非鉴权失败：保留令牌与登录态，让用户/页面自己重试。
+            logger.error('Token validation failed with a non-auth error', error)
+            return get().isAuthenticated
           }
         },
 
