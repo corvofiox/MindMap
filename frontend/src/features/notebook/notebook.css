@@ -45,25 +45,19 @@
   background-color: rgb(63 63 70);
 }
 
-/* 正文编辑区（contentEditable）获得焦点时不要任何焦点框。
-   浏览器的 UA 样式会给可编辑元素画一圈 `outline: auto`（Edge/Chrome 下就是一个
-   蓝色 1px 矩形），`.rich-text-content` 上虽然已有 `outline: none`，但在用户机器上
-   仍会被 UA/无障碍焦点指示器覆盖，所以这里用 !important 把它钉死，并同时覆盖
-   :focus-visible（键盘聚焦）与 :focus-within。 */
+/* 浏览器（Edge/Chrome）会给 contentEditable 自动画一圈焦点框——就是那个蓝色
+   1px 矩形。它不受 `.rich-text-content { outline: none }` 约束（UA 样式/无障碍焦点
+   指示器会盖回来），只有 !important 能压住。这是笔记本正文蓝框的真正来源。 */
 .rich-text-content:focus,
-.rich-text-content:focus-visible,
-.notebook-paper [contenteditable]:focus,
-.notebook-paper [contenteditable]:focus-visible {
+.rich-text-content:focus-visible {
   outline: none !important;
   outline-offset: 0 !important;
   box-shadow: none !important;
 }
 
-/* 纸张获得焦点时：只保留柔和的外发光（"高光"），**不要**把边框染成蓝色。
-   之前这条规则同时改了 border-color（blue-200 / dark 下 blue-900）和 box-shadow，
-   用户看到的就是"正文四周出现一个蓝色矩形"，而他要保留的是那圈很淡的光。
-   所以这里只留 box-shadow，边框维持纸张自带的中性色。 */
+/* 用户要求"少一点控制感"：编辑区获得焦点时给纸张一圈极淡的描边 */
 .notebook-paper:focus-within {
+  border-color: rgb(191 219 254); /* blue-200 */
   box-shadow:
     0 1px 2px rgba(24, 24, 27, 0.04),
     0 12px 32px -16px rgba(24, 24, 27, 0.16),
@@ -71,6 +65,7 @@
 }
 
 .dark .notebook-paper:focus-within {
+  border-color: rgb(30 58 138); /* blue-900 */
   box-shadow:
     0 1px 2px rgba(0, 0, 0, 0.3),
     0 12px 32px -16px rgba(0, 0, 0, 0.5),
