@@ -1,4 +1,4 @@
-﻿/**
+/**
  * NotebookPage —— 笔记本工作台的界面契约。
  *
  * 重点在「粘贴采集」：网页复制的 HTML 必须保留结构（图片/加粗），
@@ -225,5 +225,65 @@ describe('动作接线', () => {
     // 池子里已经没有这张卡了，本地列表必须重新对齐
     await waitFor(() => expect(vi.mocked(api.getNodePool).mock.calls.length).toBeGreaterThan(before))
     expect(useUIStore.getState().toasts.some((t) => String(t.title).includes('已转为手稿'))).toBe(true)
+  })
+
+  /**
+   * 用户反馈：从节点池导入后，卡片的悬浮预览不消失，一直悬在页面上。
+   *
+   * 预览是独立的 portal 浮层，靠行的 mouseleave 关闭。可点了行之后菜单立刻卸载，
+   * mouseleave 永远不会触发——必须在点下去的那一刻主动清掉。
+   */
+  it('点卡片导入后悬浮预览必须消失（不能一直挂在页面上）', async () => {
+    useNodePoolStore.setState({
+      cardsMap: new Map([
+        [
+          7,
+          {
+            id: 7,
+            userId: 1,
+            createdBy: 1,
+            name: '预览中的卡片',
+            content: JSON.stringify({ title: '预览中的卡片', content: '<p>预览正文</p>' }),
+            type: 'text' as const,
+            color: '#ffffff',
+            tags: null,
+            folderId: null,
+            description: null,
+            sourceManuscriptId: null,
+            sourceKind: null,
+            thumbnail: null,
+            sortOrder: 0,
+            createdAt: '2026-01-01T00:00:00.000Z',
+          },
+        ],
+      ]),
+    })
+    vi.mocked(api.nodeCardToManuscript).mockResolvedValue({
+      id: 3,
+      folderId: null,
+      title: '预览中的卡片',
+      previewText: '预览正文',
+      imageCount: 0,
+      createdAt: 0,
+      updatedAt: 0,
+      contentHtml: '<p>预览正文</p>',
+      sourceCardId: 7,
+    })
+
+    renderPage()
+    fireEvent.click(screen.getByText('从节点池导入'))
+
+    const cardRow = await screen.findByTestId('pool-card-7')
+    // 悬浮出预览
+    fireEvent.mouseEnter(cardRow)
+    const preview = await screen.findByTestId('notebook-pool-import-preview')
+    expect(preview).toBeTruthy()
+
+    // 点下去导入：菜单卸载的同时预览也必须消失
+    fireEvent.click(cardRow)
+
+    await waitFor(() =>
+      expect(screen.queryByTestId('notebook-pool-import-preview')).toBeNull(),
+    )
   })
 })

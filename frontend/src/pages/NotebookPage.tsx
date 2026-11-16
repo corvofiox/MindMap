@@ -281,6 +281,9 @@ export function NotebookPage() {
 
   const handleRestore = async (cardId: number) => {
     setImportOpen(false)
+    // 预览是独立的 fixed 浮层，不受菜单开关控制。点了行之后菜单立刻卸载，
+    // 行的 mouseleave 也就永远不会触发，不在这里手动清掉，预览会一直悬在页面上。
+    setCardPreview(null)
     const manuscript = await restoreFromCard(cardId)
     if (manuscript) {
       // 卡片已被服务端删掉，池子里那份列表要跟着刷新，否则还能再点一次
