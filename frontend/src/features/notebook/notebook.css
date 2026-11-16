@@ -45,22 +45,10 @@
   background-color: rgb(63 63 70);
 }
 
-/* 用户要求"少一点控制感"：编辑区获得焦点时给纸张一圈极淡的描边 */
-.notebook-paper:focus-within {
-  border-color: rgb(191 219 254); /* blue-200 */
-  box-shadow:
-    0 1px 2px rgba(24, 24, 27, 0.04),
-    0 12px 32px -16px rgba(24, 24, 27, 0.16),
-    0 0 0 4px rgba(59, 130, 246, 0.06);
-}
-
-.dark .notebook-paper:focus-within {
-  border-color: rgb(30 58 138); /* blue-900 */
-  box-shadow:
-    0 1px 2px rgba(0, 0, 0, 0.3),
-    0 12px 32px -16px rgba(0, 0, 0, 0.5),
-    0 0 0 4px rgba(59, 130, 246, 0.1);
-}
+/* 正文编辑区获得焦点时**不加任何描边/光晕**。
+   这里原本有一条 .notebook-paper:focus-within 规则：把纸张边框染成 blue-200，
+   再叠一圈 4px 的蓝色外发光。用户实测后认为"一选中正文，四周就出现一个蓝色矩形"
+   很干扰，遂移除。纸张本身已有中性边框与阴影，去掉焦点装饰不影响可用性。 */
 
 /* 文件夹树的滚动条：只要 6px 一条细线，不要箭头、不要把行切开。
    注意 scrollbar-width 与 ::-webkit-scrollbar 会互相覆盖——Chromium 里设了
