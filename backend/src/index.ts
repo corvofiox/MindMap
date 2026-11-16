@@ -131,7 +131,16 @@ app.use('/api/logs', apiLimiter(), csrfProtectionMiddleware, logRouter)
 
 // 静态文件服务
 const frontendDistPath = path.join(__dirname, '../../frontend/dist')
-app.use(express.static(frontendDistPath))
+// 静态资源：构建产物带内容哈希，可以长缓存；但 index.html **必须**每次都重新验证，
+// 否则浏览器可能一直用旧的 HTML → 引用旧的 JS/CSS bundle，前端改动"怎么刷新都不生效"
+// （今天排查笔记本焦点样式时踩到：服务端已经换了 bundle，浏览器还在跑上一版）。
+app.use(express.static(frontendDistPath, {
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('index.html')) {
+      res.setHeader('Cache-Control', 'no-cache, must-revalidate')
+    }
+  },
+}))
 
 // B16: 未匹配的 /api/* 路径返回 JSON 404，而非 index.html
 // （避免前端 SPA 兜底把未知 API 请求当作页面返回，掩盖接口拼写错误）
@@ -146,7 +155,9 @@ app.get('*', (req, res, next) => {
   if (req.headers.upgrade?.toLowerCase() === 'websocket') {
     return next()
   }
-  res.sendFile(path.join(frontendDistPath, 'index.html'))
+  res.sendFile(path.join(frontendDistPath, 'index.html'), {
+    headers: { 'Cache-Control': 'no-cache, must-revalidate' },
+  })
 })
 
 // Error handling
