@@ -6,6 +6,7 @@ import { normalizeNode } from '@shared/node'
 import { logger } from '@/utils/logger'
 import { computeOptimalPorts } from '@/utils/canvas'
 import { useAuthStore } from '@/store/useAuthStore'
+import { recordLocalDeletion, removeLocalDeletion } from '@/services/yjsProvider'
 
 /**
  * Yjs binding injection point.
@@ -118,11 +119,70 @@ function captureSnapshot(state: MapsSnapshot): MapsSnapshot | null {
  * (captureSnapshot skipped the copy), or when the binding is currently
  * applying remote changes (prevents feedback loops).
  */
-function syncDiffToYDoc(before: MapsSnapshot | null, after: MapsSnapshot): void {
+function syncDiffToYDoc(
+  before: MapsSnapshot | null,
+  after: MapsSnapshot,
+  options: { bulkLoad?: boolean } = {},
+): void {
+  // 整份替换（加载/导入/清空/切画布）不是"用户删除"：只重置基准，不写删除声明，
+  // 否则一次缓存加载就会把画布上所有旧 id 都声明成已删除。
+  if (options.bulkLoad) resetDeletionBaseline(after)
+  else syncDeletionLedger(after)
   if (!before) return
   if (!yjsBinding) return
   if (yjsBinding.isApplyingRemoteChanges) return
   yjsBinding.applyDiff(before, after)
+}
+
+/** 只记 id 集合，比整份克隆便宜得多。 */
+type KeySets = Record<'nodes' | 'groups' | 'domains' | 'connections', Set<string>>
+
+function keysOf(state: MapsSnapshot): KeySets {
+  return {
+    nodes: new Set(state.nodes.keys()),
+    groups: new Set(state.groups.keys()),
+    domains: new Set(state.domains.keys()),
+    connections: new Set(state.connections.keys()),
+  }
+}
+
+/**
+ * 上一次已知的实体 id 集合，按画布记住。
+ *
+ * 为什么需要它：协作模式的删除声明由 `yjsBinding.applyDiff` 记录；而非协作画布根本
+ * 没有 binding，`captureSnapshot` 直接返回 null，于是"用户删了节点"这件事从未被声明。
+ * 保存时 POST 的全量快照缺少这些实体，服务端按 R1 反幽灵逻辑判定为"过期快照漏掉了
+ * 别人的实体"，走 upsertOnly 保护 → 删除被静默丢弃 → 刷新后节点原样回来。
+ *
+ * 这里不依赖 binding，按每次 mutation 前后的 id 集合差补上声明；undo 把实体加回来时
+ * 撤销声明。基准只在实体真正消失/出现时变化，所以普通字段编辑不会产生噪声。
+ */
+const deletionBaselines = new Map<number, KeySets>()
+
+function syncDeletionLedger(after: MapsSnapshot): void {
+  const canvasId = (after as MapsSnapshot & { canvasId?: number | null }).canvasId
+  if (typeof canvasId !== 'number') return
+  const next = keysOf(after)
+  const prev = deletionBaselines.get(canvasId)
+  if (prev) {
+    const collections: Array<keyof KeySets> = ['nodes', 'groups', 'domains', 'connections']
+    for (const collection of collections) {
+      for (const id of prev[collection]) {
+        if (!next[collection].has(id)) recordLocalDeletion(canvasId, collection, id)
+      }
+      for (const id of next[collection]) {
+        if (!prev[collection].has(id)) removeLocalDeletion(canvasId, collection, id)
+      }
+    }
+  }
+  deletionBaselines.set(canvasId, next)
+}
+
+/** 整份替换（加载/导入/清空）不是删除动作，只重置基准，不产生声明。 */
+function resetDeletionBaseline(state: MapsSnapshot): void {
+  const canvasId = (state as MapsSnapshot & { canvasId?: number | null }).canvasId
+  if (typeof canvasId !== 'number') return
+  deletionBaselines.set(canvasId, keysOf(state))
 }
 
 /**
@@ -1556,7 +1616,7 @@ moveNodeToPool: (nodeId: string, nodeData: Node, afterExecute?: () => Promise<vo
           : {}),
       }
     })
-    syncDiffToYDoc(before, get())
+    syncDiffToYDoc(before, get(), { bulkLoad: true })
   },
 
   importCanvasData: (data, viewState) => {
@@ -1602,5 +1662,7 @@ moveNodeToPool: (nodeId: string, nodeData: Node, afterExecute?: () => Promise<vo
     // to peers. All callers use it before loading new canvas data or when
     // navigating away from a deleted canvas; in neither case should the empty
     // store propagate to the Y.Doc.
+    // 同理：这也不是"用户删除了所有节点"，只重置删除声明基准。
+    resetDeletionBaseline(get())
   },
 }))

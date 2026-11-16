@@ -1,13 +1,15 @@
-import { Router } from 'express'
+﻿import { Router } from 'express'
 import { db } from '../database/connection.js'
 import { canvases, folders, projects, projectMembers } from '../database/schema.js'
 import { eq, inArray, and, lte } from 'drizzle-orm'
 import { authenticate, type AuthRequest } from '../middleware/auth.middleware.js'
 import { asyncHandler } from '../middleware/error.middleware.js'
 import { transformResponse, transformResponseArray, getProperty } from '../utils/transformResponse.js'
-import { log } from '../utils/logger.js'
+import { log, logError } from '../utils/logger.js'
 import { getCanvasActiveUsers, closeRoom, shouldUpsertOnlyForSnapshot } from '../websocket/index.js'
-import { loadCanvasStateFromDb, mergeJsonSnapshotIntoCanvas, removeCanvasState, snapshotMissingDocEntities } from '../websocket/canvas-state.js'
+import { loadCanvasStateFromDb, mergeJsonSnapshotIntoCanvas, persistCanvasState, removeCanvasState, snapshotMissingDocEntities } from '../websocket/canvas-state.js'
+import { flushCanvasToDisk } from '../domain/canvas.js'
+import { DomainError, isDomainError } from '../domain/errors.js'
 import { resolveProjectAccess } from '../domain/access.js'
 
 export const canvasRouter = Router()
@@ -803,11 +805,47 @@ canvasRouter.post('/:id/data', authenticate, asyncHandler(async (req: AuthReques
 
     log('POST canvas data - Saved (Yjs merge)', { canvasId })
 
+    // 落盘后才回 success：合并只写进内存 doc，靠 100ms 防抖 + 1s 周期刷盘。
+    // 用户看到"保存成功"就刷新时，最后一段改动可能还在内存里 —— 直接把这次合并
+    // 同步写进 yjs_update，让"保存成功"真的等于"已在数据库里"。
+    try {
+      await persistCanvasState(canvasId)
+    } catch (error) {
+      logError('POST canvas data - persist after merge failed', {
+        canvasId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+
     res.json({
       success: true,
       data: { message: 'Canvas data saved' },
     })
   })
+}))
+
+// Flush the in-memory canvas doc to the database.
+//
+// 协作模式下（WS 连接中）工具栏保存按钮走这条路径：内容早就通过 WebSocket 写进了
+// 服务端内存里的 Yjs doc，但"落库"是 100ms 防抖 + 1s 周期刷盘。用户看到"已保存"
+// 立刻刷新时，最后一段改动可能还没进 yjs_update。这里同步落盘，并如实返回
+// persisted=false（说明仍在内存里没写成功），前端据此提示。
+canvasRouter.post('/:id/flush', authenticate, asyncHandler(async (req: AuthRequest, res) => {
+  const canvasId = parseInt(req.params.id, 10)
+  if (isNaN(canvasId)) {
+    return res.status(400).json({ success: false, error: 'Invalid canvas ID format' })
+  }
+
+  try {
+    const result = await flushCanvasToDisk(req.user!.id, canvasId)
+    return res.json({ success: true, data: result })
+  } catch (error) {
+    if (isDomainError(error)) {
+      const status = error.code === 'E_NOT_FOUND' ? 404 : error.code === 'E_FORBIDDEN' ? 403 : 400
+      return res.status(status).json({ success: false, error: error.message })
+    }
+    throw error
+  }
 }))
 
 // Get folders for project

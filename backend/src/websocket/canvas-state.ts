@@ -499,6 +499,19 @@ export function flushPendingPersist(canvasId: number): void {
 }
 
 /**
+ * 内存里的 doc 还有没落库的改动吗？
+ *
+ * `persistCanvasState()` 在"没有改动"和"持久化失败"两种情况下都返回 false，
+ * 调用方无法区分"已经是最新的"和"没写成"。手动保存需要如实回答"到底写进数据库了没"，
+ * 所以这里把脏标记单独暴露出来：先尝试持久化，再用它判断结果。
+ */
+export function isCanvasDocDirty(canvasId: number): boolean {
+  const state = canvasStates.get(canvasId)
+  if (!state) return false
+  return state.lastSeenUpdateCount > state.lastPersistedUpdateCount
+}
+
+/**
  * Apply a remote Yjs update to a canvas doc (used by the REST POST /data
  * endpoint when a single-user client uploads a fresh snapshot).
  * Returns true on success.

@@ -1823,13 +1823,33 @@ export function CanvasPage() {
       if (hasCanvasContent(nodes, domains, groups)) {
         await generateThumbnail(id)
       }
-      addToast({
-        type: 'info',
-        title: '已实时保存',
-        message: '协作模式下编辑内容会实时同步到服务器',
-        duration: 3000,
-      })
-      return true
+      // 内容早就通过 WebSocket 写进服务端内存里的 Yjs doc，但"落库"是防抖 + 1s
+      // 周期刷盘：用户看到"已实时保存"就刷新时，最后一段改动可能还没进 yjs_update。
+      // 这里显式触发一次落盘，并按真实结果提示——保存按钮不能只报喜。
+      try {
+        const flushed = await apiClient.post<{ persisted: boolean }>(
+          `/api/canvases/${id}/flush`,
+          {},
+        )
+        if (flushed?.persisted === false) {
+          addToast({
+            type: 'warning',
+            title: '保存未完成',
+            message: '内容还在服务端内存里没写进数据库，请稍后再试',
+            duration: 4000,
+          })
+          return false
+        }
+        addToast({ type: 'success', title: '已保存', message: '内容已写入服务器', duration: 2000 })
+        return true
+      } catch (error) {
+        addToast({
+          type: 'error',
+          title: '保存失败',
+          message: error instanceof Error ? error.message : '保存画布时发生错误',
+        })
+        return false
+      }
     }
 
     // R1 统一防线（与自动保存/keepalive 一致）：有协作证据时跳过 REST 全量快照，

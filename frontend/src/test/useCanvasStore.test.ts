@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+﻿import { describe, it, expect, beforeEach } from 'vitest'
 import { useCanvasStore } from '../store/useCanvasStore'
 import type { Node, NodeGroup, Domain, Connection } from '../types'
 import { compareNodeZIndex, nextZIndexAbove, NODE_Z_STEP } from '@shared/z-order'
+import { clearLocalDeletions, getLocalDeletions } from '../services/yjsProvider'
 
 function createTestNode(id: string, overrides?: Partial<Node>): Node {
   return {
@@ -606,6 +607,62 @@ describe('统一节点（老形态在入口处折算）', () => {
       useCanvasStore.getState().addNode(createTestNode('fresh'))
       // 新节点一定在旧节点之上
       expect(sortedIds()).toEqual(['legacy-1', 'legacy-2', 'fresh'])
+    })
+  })
+
+  /**
+   * 单用户画布没有 Yjs binding，删除声明原本只有协作模式才会记录；服务端的 R1
+   * 反幽灵逻辑据此判定"快照里缺失的实体"是过期快照，走 upsertOnly 保护 →
+   * 删除被静默丢弃、刷新后节点复活。这里钉住 store 层补上的声明。
+   */
+  describe('单用户删除声明', () => {
+    const loadTwoNodes = () => {
+      useCanvasStore.setState({ canvasId: 7 })
+      useCanvasStore.getState().setCanvasData({
+        nodes: [createTestNode('n1'), createTestNode('n2')],
+        groups: [],
+        domains: [],
+        connections: [],
+      })
+      clearLocalDeletions(7)
+    }
+
+    it('删除节点后留下删除声明（保存时才敢真删）', () => {
+      loadTwoNodes()
+      useCanvasStore.getState().removeNode('n1')
+
+      expect(getLocalDeletions(7).nodes).toEqual(['n1'])
+    })
+
+    it('undo 把节点加回来时撤销声明，避免下次保存又把它删掉', async () => {
+      loadTwoNodes()
+      useCanvasStore.getState().removeNode('n1')
+      expect(getLocalDeletions(7).nodes).toEqual(['n1'])
+
+      await useCanvasStore.getState().undo()
+
+      expect(useCanvasStore.getState().nodes.has('n1')).toBe(true)
+      expect(getLocalDeletions(7).nodes ?? []).not.toContain('n1')
+    })
+
+    it('整份加载（setCanvasData）不产生删除声明', () => {
+      useCanvasStore.setState({ canvasId: 7 })
+      useCanvasStore.getState().setCanvasData({
+        nodes: [createTestNode('a'), createTestNode('b')],
+        groups: [],
+        domains: [],
+        connections: [],
+      })
+      clearLocalDeletions(7)
+
+      useCanvasStore.getState().setCanvasData({
+        nodes: [createTestNode('a')],
+        groups: [],
+        domains: [],
+        connections: [],
+      })
+
+      expect(getLocalDeletions(7).nodes ?? []).toEqual([])
     })
   })
 })

@@ -222,6 +222,40 @@ export async function deleteCanvas(
   return { canvasId, name: (row.name as string) ?? '' }
 }
 
+/**
+ * Force the in-memory canvas doc to disk, and report whether it really landed.
+ *
+ * Why this exists: the toolbar's save button used to answer "已实时保存" whenever the
+ * WebSocket was connected, without writing anything — durability depended on a
+ * debounced persist that can lag, and a reload right after the "success" toast could
+ * lose the last edits. A save action must either really persist or say it failed.
+ *
+ * Returns `{ persisted: false }` only when the doc is still dirty after a retry
+ * (e.g. a concurrent persist is stuck); `persisted: true` covers both "was dirty and we
+ * wrote it" and "was already up to date".
+ */
+export async function flushCanvasToDisk(
+  userId: number,
+  canvasId: number,
+): Promise<{ persisted: boolean }> {
+  await requireCanvasEditor(userId, canvasId)
+  const { persistCanvasState, isCanvasDocDirty, flushPendingPersist } = await import(
+    '../websocket/canvas-state.js'
+  )
+
+  // 取消挂起的防抖持久化，立刻自己来一次（否则会被马上触发的定时器抢走 isPersisting）
+  flushPendingPersist(canvasId)
+  if (isCanvasDocDirty(canvasId)) {
+    await persistCanvasState(canvasId)
+  }
+  // 可能正好有一次持久化在飞：等它落地再判断一次
+  if (isCanvasDocDirty(canvasId)) {
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    await persistCanvasState(canvasId)
+  }
+  return { persisted: !isCanvasDocDirty(canvasId) }
+}
+
 // ---------------------------------------------------------------------------
 // Canvas folders (project-scoped)
 // ---------------------------------------------------------------------------
