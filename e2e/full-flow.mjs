@@ -215,11 +215,17 @@ await send('Emulation.setDeviceMetricsOverride', {
 
 // ---------------------------------------------------------------- 1. 未登录
 await step('未登录访问根路径 → 登录页', async () => {
-  // 只清 localStorage 不够：当前页面（可能停在上一次跑完时的已登录状态）里的
-  // zustand 状态还在内存里，isAuthenticated 仍为 true，`/` 就不会跳登录页。
-  // 必须先真正加载一次页面让 store 重建，再清存储，然后再进目标页。
+  // 只清 localStorage 不够，两件事都会让上一次跑完的登录态活下来：
+  //   1. 当前页面里的 zustand 状态还在内存里，isAuthenticated 仍为 true；
+  //   2. 刷新令牌在 httpOnly cookie 里，localStorage 清掉它照样能换回 access token。
+  // 所以：先真正加载一次页面让 store 重建 → 清 cookie 与存储 → 再进目标页。
   await send('Page.navigate', { url: `${BASE}/login` })
   await sleep(800)
+  await send('Network.clearBrowserCookies')
+  await send('Storage.clearDataForOrigin', {
+    origin: BASE,
+    storageTypes: 'local_storage,session_storage,cookies,indexeddb',
+  })
   await ev('localStorage.clear(); sessionStorage.clear()')
   await goto(`${BASE}/`, `location.pathname === '/login' && !!document.querySelector('#email')`)
   return await ev('location.pathname')
@@ -528,6 +534,18 @@ await step('搜索：输入关键词后只剩匹配的手稿', async () => {
 })
 
 await step('删文件夹：整棵子树连手稿一起删', async () => {
+  // 上一步把手稿移进了「素材」，当前范围却是「未归档」（里面已经空了）。
+  // 先切到「素材」，否则列表里没有那一行，「更多操作」点不到。
+  const picked = await ev(`(() => {
+    const row = Array.from(document.querySelectorAll('aside [data-folder-row]'))
+      .find((r) => r.title === '素材');
+    if (!row) return false;
+    row.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    return true;
+  })()`)
+  if (!picked) throw new Error('左栏找不到「素材」文件夹')
+  await sleep(800)
+
   // 先把当前手稿移进「素材」，再删「素材」——手稿应该跟着一起没
   await clickEl('[aria-label="更多操作"]')
   await waitFor(`!!document.querySelector('[data-testid="notebook-item-menu"]')`, 8000, '列表项菜单')

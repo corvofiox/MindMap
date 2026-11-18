@@ -99,6 +99,24 @@ async function findOwned(userId: number, id: number): Promise<Record<string, unk
   return (row as Record<string, unknown> | undefined) ?? null
 }
 
+/**
+ * 关键词的匹配条件：标题 / 预览正文 / 完整正文。
+ *
+ * `previewText` 只存正文前 500 字（`PREVIEW_LENGTH`），长文后半段光靠它搜不到，
+ * 所以再压一条 `contentHtml` 的匹配。存的是 HTML，跨标签的词会被标签切开
+ * （中文正文基本无影响），换来的是"搜得到"。
+ *
+ * REST 与 MCP 共用这一处：两边各写一份必然有一天会分叉。
+ */
+export function manuscriptSearchMatch(q: string) {
+  const pattern = `%${q}%`
+  return or(
+    like(manuscripts.title, pattern),
+    like(manuscripts.previewText, pattern),
+    like(manuscripts.contentHtml, pattern),
+  )
+}
+
 export async function listManuscripts(
   userId: number,
   query: ListManuscriptsQuery,
@@ -106,8 +124,7 @@ export async function listManuscripts(
   const conditions = [eq(manuscripts.userId, userId), isNull(manuscripts.deletedAt)]
   const q = query.q?.trim()
   if (q) {
-    const pattern = `%${q}%`
-    const match = or(like(manuscripts.title, pattern), like(manuscripts.previewText, pattern))
+    const match = manuscriptSearchMatch(q)
     if (match) conditions.push(match)
   }
   if (query.folderId !== undefined) {

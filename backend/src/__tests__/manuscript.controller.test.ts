@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 笔记本 API —— 手稿 CRUD、账号隔离、以及与节点池的双向转换。
  *
  * 这里钉的是三条容易悄悄坏掉的契约：
@@ -131,6 +131,23 @@ describe('manuscripts CRUD', () => {
 
     expect(res.body.data).toHaveLength(1)
     expect(res.body.data[0].title).toBe('香蕉笔记')
+  })
+
+  it('正文 500 字之后的内容也搜得到（previewText 只管前 500 字）', async () => {
+    // previewText = 纯文本前 500 字，所以关键词必须埋在第 500 字之后才测得准
+    const filler = '铺垫'.repeat(400)
+    const created = await createManuscript({
+      title: '长文',
+      contentHtml: `<p>${filler}</p><p>结尾处的关键词蓝鲸</p>`,
+    })
+
+    const stored = testDb.raw
+      .prepare('SELECT preview_text FROM manuscripts WHERE id = ?')
+      .get(created.body.data.id) as { preview_text: string }
+    expect(stored.preview_text).not.toContain('蓝鲸')
+
+    const res = await supertest(app).get('/api/manuscripts?q=蓝鲸').set(authA())
+    expect(res.body.data.map((m: { title: string }) => m.title)).toEqual(['长文'])
   })
 
   it('拖拽排序：批量写 sortOrder 后列表按手排顺序返回', async () => {

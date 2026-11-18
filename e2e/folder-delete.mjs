@@ -3,10 +3,10 @@
  *
  * 覆盖：
  *   1. 空文件夹          → 弹框写「这个文件夹是空的」，取消就不动
- *   2. 有子文件夹+手稿   → 弹框写清「N 个子文件夹一起删 / M 篇手稿退回未归档」，取消不动
- *   3. 确认删除          → 整棵子树消失、旁系不动、手稿进「未归档」、选中回落到全部
- *   4. 退回未归档的手稿  → 能打开、正文原样（内容不陪葬）
- *   5. 单层文件夹        → 手稿同样退回未归档
+ *   2. 有子文件夹+手稿   → 弹框写清「N 个子文件夹一起删 / M 篇手稿会一起删」，取消不动
+ *   3. 确认删除          → 整棵子树消失、旁系不动、手稿跟着删、选中回落到「未归档」
+ *   4. 旁系文件夹里的手稿 → 切到那个文件夹能看到、能打开、正文原样
+ *   5. 单层文件夹        → 里面的手稿同样一起删
  *   6. 刷新页面          → 树与列表跟服务端完全一致（没有幽灵目录）
  *   7. 删完立刻建同名文件夹 → 正常创建，旧子树不会回来
  *
@@ -234,6 +234,16 @@ const activeRow = () =>
     return row ? row.getAttribute('data-folder-row') : null;
   })()`)
 
+/** 点某个文件夹行，把左栏范围切过去（默认范围是「未归档」） */
+const selectFolder = (name) =>
+  ev(`(() => {
+    const row = Array.from(document.querySelectorAll('aside [data-folder-row]'))
+      .find((r) => r.title === ${JSON.stringify(name)});
+    if (!row) return false;
+    row.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    return true;
+  })()`)
+
 const openManuscript = (title) =>
   ev(`(() => {
     const target = Array.from(document.querySelectorAll('aside *'))
@@ -375,7 +385,7 @@ await step('有子文件夹与手稿：弹框给出准确数字，取消后一�
   return message
 })
 
-await step('确认删除：整棵子树消失、旁系不动、里面的手稿一起删、选中回落到全部', async () => {
+await step('确认删除：整棵子树消失、旁系不动、里面的手稿一起删、选中回落到「未归档」', async () => {
   // 先选中孙级，验证"选中项落在被删子树里"时的回落
   await ev(`(() => {
     const rows = Array.from(document.querySelectorAll('aside [data-folder-row]'));
@@ -403,7 +413,7 @@ await step('确认删除：整棵子树消失、旁系不动、里面的手稿�
   if (titles.includes('深层手稿')) throw new Error('服务端还能看到「深层手稿」: ' + JSON.stringify(titles))
 
   const active = await activeRow()
-  if (active !== 'all') throw new Error('选中项没有回落到全部手稿，当前选中=' + active)
+  if (active !== 'unfiled') throw new Error('选中项没有回落到未归档，当前选中=' + active)
 
   return `${message}｜剩余=${JSON.stringify(folders)}`
 })
@@ -412,6 +422,8 @@ await shot('after-cascade')
 await step('同一批里别的手稿不受影响：没被删的还在、能打开', async () => {
   const titles = await apiManuscripts()
   if (!titles.includes('单层手稿')) throw new Error('旁系文件夹里的手稿被误删: ' + JSON.stringify(titles))
+  if (!(await selectFolder('单层'))) throw new Error('左栏找不到「单层」文件夹')
+  await sleep(400)
   if (!(await openManuscript('单层手稿'))) throw new Error('列表里找不到「单层手稿」')
   await waitFor(`!!document.querySelector('[data-testid="manuscript-editor"]')`, 10000, '编辑器')
   await sleep(800)
@@ -476,6 +488,9 @@ await step('删完立刻建同名文件夹：正常创建，旧子树不会回�
 await shot('recreated')
 
 await step('正在编辑的手稿，删掉它所在的文件夹：编辑区退出、手稿一起删', async () => {
+  // 默认范围是「未归档」，这篇在「打开着」里：先切过去才看得到
+  if (!(await selectFolder('打开着'))) throw new Error('左栏找不到「打开着」文件夹')
+  await sleep(400)
   if (!(await openManuscript('打开中的手稿'))) throw new Error('列表里找不到「打开中的手稿」')
   await waitFor(`!!document.querySelector('[data-testid="manuscript-editor"]')`, 10000, '编辑器')
   await sleep(900)

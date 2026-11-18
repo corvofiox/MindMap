@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Notebook (手稿) tools.
  *
  * Design notes that are not obvious from the schemas:
@@ -58,9 +58,9 @@ export function registerNotebookTools(server: McpServer, ctx: ToolContext): void
     {
       title: '列出手稿',
       description:
-        '列出当前账号笔记本里的手稿（不含已删除）。支持关键词（匹配标题与正文预览）和文件夹过滤。分页：limit 默认 50、最多 200，用 nextOffset 继续翻页。返回 manuscriptId、标题、预览、图片数、所属文件夹与更新时间。',
+        '列出当前账号笔记本里的手稿（不含已删除）。支持关键词（匹配标题与正文全文）和文件夹过滤。分页：limit 默认 50、最多 200，用 nextOffset 继续翻页。返回 manuscriptId、标题、预览、图片数、所属文件夹与更新时间。',
       inputSchema: {
-        q: z.string().optional().describe('关键词，匹配标题或正文预览'),
+        q: z.string().optional().describe('关键词，匹配标题或正文（全文，不只是前 500 字的预览）'),
         folderId: idSchema.optional().describe('只列该文件夹下的手稿'),
         rootOnly: z.boolean().optional().describe('只列不在任何文件夹里的手稿'),
         limit: limitSchema,

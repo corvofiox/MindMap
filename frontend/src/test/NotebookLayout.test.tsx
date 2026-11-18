@@ -78,9 +78,9 @@ function seed() {
   })
 }
 
-function renderPage() {
+function renderPage(path = '/notebook/1') {
   return render(
-    <MemoryRouter initialEntries={['/notebook/1']}>
+    <MemoryRouter initialEntries={[path]}>
       <Routes>
         <Route path="/notebook" element={<NotebookPage />} />
         <Route path="/notebook/:id" element={<NotebookPage />} />
@@ -331,7 +331,7 @@ describe('移动到子菜单的鼠标路径', () => {
 })
 
 describe('未归档的筛选与落点', () => {
-  it('点「未归档」只列出未归档手稿', async () => {
+  it('默认落点是「未归档」：进页面只列未归档手稿，切文件夹再切回来', async () => {
     vi.mocked(api.getManuscriptFolders).mockResolvedValueOnce([
       { id: 7, userId: 1, name: '素材', parentId: null, sortOrder: 0, collapsed: false, createdAt: 0 },
     ])
@@ -341,13 +341,35 @@ describe('未归档的筛选与落点', () => {
     ])
     renderPage()
 
+    // 进来就是「未归档」：文件夹里的那篇不出现
     await screen.findByText('素材')
-    expect(screen.getByText('文件夹里的')).toBeTruthy()
-
-    fireEvent.click(screen.getByText('未归档'))
-
     expect(screen.getByText('未归一篇')).toBeTruthy()
     expect(screen.queryByText('文件夹里的')).toBeNull()
+    expect(document.querySelector('[data-folder-row="unfiled"]')?.className).toContain('bg-blue-50')
+
+    // 点文件夹：只剩文件夹里的
+    fireEvent.click(screen.getByText('素材'))
+    expect(screen.getByText('文件夹里的')).toBeTruthy()
+    expect(screen.queryByText('未归一篇')).toBeNull()
+
+    // 回到未归档
+    fireEvent.click(screen.getByText('未归档'))
+    expect(screen.getByText('未归一篇')).toBeTruthy()
+    expect(screen.queryByText('文件夹里的')).toBeNull()
+  })
+
+  it('未归档空了但文件夹里还有稿子：不能说成「还没有手稿」', async () => {
+    vi.mocked(api.getManuscriptFolders).mockResolvedValueOnce([
+      { id: 7, userId: 1, name: '素材', parentId: null, sortOrder: 0, collapsed: false, createdAt: 0 },
+    ])
+    vi.mocked(api.getManuscripts).mockResolvedValueOnce([
+      { id: 2, folderId: 7, title: '文件夹里的', previewText: '', imageCount: 0, createdAt: 0, updatedAt: 0 },
+    ])
+    renderPage()
+
+    await screen.findByText('素材')
+    expect(screen.getByText('未归档里还没有手稿')).toBeTruthy()
+    expect(screen.queryByText('还没有手稿')).toBeNull()
   })
 
   it('在「未归档」下新建手稿，落点仍是未归档（不会被上一个文件夹带走）', async () => {
@@ -374,6 +396,71 @@ describe('未归档的筛选与落点', () => {
 
     await waitFor(() => expect(api.createManuscript).toHaveBeenCalled())
     expect(vi.mocked(api.createManuscript).mock.calls[0][0]).toMatchObject({ folderId: null })
+  })
+})
+
+describe('落点与搜索范围', () => {
+  const folderRow = (id: string) => document.querySelector(`[data-folder-row="${id}"]`)
+
+  it('没有 :id 时落在「未归档」，左栏不再有「全部手稿」', async () => {
+    renderPage('/notebook')
+
+    await waitFor(() => expect(folderRow('unfiled')?.className).toContain('bg-blue-50'))
+    expect(folderRow('all')).toBeNull()
+    expect(screen.queryByText('全部手稿')).toBeNull()
+  })
+
+  it('带 /notebook/:id 进来时，左栏落在那篇手稿所属的文件夹上', async () => {
+    vi.mocked(api.getManuscriptFolders).mockResolvedValueOnce([
+      { id: 7, userId: 1, name: '素材', parentId: null, sortOrder: 0, collapsed: false, createdAt: 0 },
+    ])
+    vi.mocked(api.getManuscripts).mockResolvedValueOnce([
+      { id: 2, folderId: 7, title: '文件夹里的', previewText: '', imageCount: 0, createdAt: 0, updatedAt: 0 },
+    ])
+    vi.mocked(api.getManuscript).mockResolvedValueOnce({
+      id: 2,
+      folderId: 7,
+      title: '文件夹里的',
+      previewText: '',
+      imageCount: 0,
+      createdAt: 0,
+      updatedAt: 0,
+      contentHtml: '',
+      sourceCardId: null,
+    } as never)
+    renderPage('/notebook/2')
+
+    // 否则会出现「选中未归档、正文却是别的文件夹里的手稿」
+    await waitFor(() => expect(folderRow('7')?.className).toContain('bg-blue-50'))
+  })
+
+  it('选中某个文件夹时，搜索仍能找到别的文件夹里的手稿', async () => {
+    vi.mocked(api.getManuscriptFolders).mockResolvedValueOnce([
+      { id: 7, userId: 1, name: '素材', parentId: null, sortOrder: 0, collapsed: false, createdAt: 0 },
+      { id: 8, userId: 1, name: '设计', parentId: null, sortOrder: 0, collapsed: false, createdAt: 0 },
+    ])
+    vi.mocked(api.getManuscripts).mockResolvedValueOnce([
+      { id: 1, folderId: 7, title: '素材里的笔记', previewText: '', imageCount: 0, createdAt: 0, updatedAt: 0 },
+      { id: 2, folderId: 8, title: '设计里的笔记', previewText: '', imageCount: 0, createdAt: 0, updatedAt: 0 },
+    ])
+    renderPage()
+    await screen.findByText('设计')
+
+    // 选中「素材」：列表只剩素材里的那篇
+    fireEvent.click(screen.getByText('素材'))
+    expect(screen.getByText('素材里的笔记')).toBeTruthy()
+    expect(screen.queryByText('设计里的笔记')).toBeNull()
+
+    // 搜索：服务端按关键词返回跨文件夹的命中，左栏不能再用选中范围二次过滤
+    vi.mocked(api.getManuscripts).mockResolvedValueOnce([
+      { id: 1, folderId: 7, title: '素材里的笔记', previewText: '', imageCount: 0, createdAt: 0, updatedAt: 0 },
+      { id: 2, folderId: 8, title: '设计里的笔记', previewText: '', imageCount: 0, createdAt: 0, updatedAt: 0 },
+    ])
+    fireEvent.change(screen.getByPlaceholderText('搜索标题或正文'), { target: { value: '笔记' } })
+
+    await waitFor(() => expect(screen.getByText('设计里的笔记')).toBeTruthy())
+    expect(screen.getByText('素材里的笔记')).toBeTruthy()
+    expect(vi.mocked(api.getManuscripts).mock.lastCall?.[0]).toMatchObject({ q: '笔记' })
   })
 })
 
@@ -439,7 +526,7 @@ describe('删除文件夹：整棵子树连手稿一起删', () => {
     confirmSpy.mockRestore()
   })
 
-  it('选中项落在被删的子树里时，选中回落到「全部手稿」', async () => {
+  it('选中项落在被删的子树里时，选中回落到「未归档」', async () => {
     seedTree()
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
     renderPage()
@@ -451,7 +538,7 @@ describe('删除文件夹：整棵子树连手稿一起删', () => {
     fireEvent.click(screen.getByLabelText('删除文件夹 素材'))
 
     await waitFor(() =>
-      expect(document.querySelector('[data-folder-row="all"]')?.className).toContain('bg-blue-50'),
+      expect(document.querySelector('[data-folder-row="unfiled"]')?.className).toContain('bg-blue-50'),
     )
     confirmSpy.mockRestore()
   })

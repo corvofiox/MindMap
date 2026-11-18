@@ -97,8 +97,9 @@ export function NotebookPage() {
   const [expandedPoolFolders, setExpandedPoolFolders] = useState<Set<number>>(new Set())
   const [stats, setStats] = useState({ chars: 0, images: 0 })
   const imageInputRef = useRef<HTMLInputElement | null>(null)
-  // 选中的文件夹由页面持有：侧栏用它筛选，新建手稿也用它决定落点
-  const [folderSelection, setFolderSelection] = useState<FolderSelection>('all')
+  // 选中的文件夹由页面持有：侧栏用它筛选，新建手稿也用它决定落点。
+  // 默认「未归档」——它是收件箱，也是左栏里唯一的伪目录。
+  const [folderSelection, setFolderSelection] = useState<FolderSelection>('unfiled')
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     try {
       return localStorage.getItem(SIDEBAR_STORAGE_KEY) === '1'
@@ -112,11 +113,42 @@ export function NotebookPage() {
   const pendingHtml = useRef<string | null>(null)
   const pendingTitle = useRef<string | null>(null)
 
-  // 首次进入：拉列表与文件夹
+  // 首帧的 routeId 才是「带链接进来」的那篇；后续导航不参与落点决策
+  const initialRouteId = useRef(routeId)
+  const landedRef = useRef(false)
+  // 用户自己点过左栏就不再替他决定落点：首屏那一趟取数还没回来时手快点了文件夹，
+  // 落点算完再把它改掉，就成了"点了没反应"。
+  const selectionTouchedRef = useRef(false)
+
+  const selectFolder = useCallback((next: FolderSelection) => {
+    selectionTouchedRef.current = true
+    setFolderSelection(next)
+  }, [])
+
+  // 首次进入：拉列表与文件夹，然后定下左栏的落点。
+  //
+  // 带 /notebook/:id 进来时跟随那篇手稿所在的文件夹：否则会出现「左栏选中未归档、
+  // 正文却是别的文件夹里的手稿」这种自相矛盾的状态。列表回来之前不知道它属于谁，
+  // 所以要等这一趟取完再定。
+  // 只在首次生效——之后在列表里点别的篇目，不该顺带把左栏的范围也换掉。
   useEffect(() => {
-    void load()
-    void loadFolders()
+    let cancelled = false
+    void (async () => {
+      await Promise.all([load(), loadFolders()])
+      if (cancelled || landedRef.current) return
+      landedRef.current = true
+      if (selectionTouchedRef.current) return
+      const raw = initialRouteId.current
+      if (!raw) return
+      const numeric = Number(raw)
+      if (!Number.isInteger(numeric) || numeric <= 0) return
+      const target = useNotebookStore.getState().manuscripts.find((item) => item.id === numeric)
+      if (target) setFolderSelection(target.folderId ?? 'unfiled')
+    })()
     void loadNodePool()
+    return () => {
+      cancelled = true
+    }
   }, [load, loadFolders, loadNodePool])
 
   // 路由/选中同步：URL 里有 id 就打开它
@@ -582,7 +614,7 @@ export function NotebookPage() {
               query={query}
               loading={loading}
               folderSelection={folderSelection}
-              onSelectFolder={setFolderSelection}
+              onSelectFolder={selectFolder}
               onSearch={(value) => { void load({ q: value }) }}
               onCreate={() => { void handleCreate() }}
               onOpen={(id) => navigate(`/notebook/${id}`)}

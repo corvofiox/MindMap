@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { ChevronRight, Folder, FolderPlus, Inbox, LayoutGrid, Trash2 } from 'lucide-react'
+import { ChevronRight, Folder, FolderPlus, Inbox, Trash2 } from 'lucide-react'
 import type { ManuscriptFolder, ManuscriptSummary } from '@/services/api'
 import {
   byManualOrder,
@@ -9,8 +9,14 @@ import {
   type DropPosition,
 } from '@/features/drag-sort/reorder'
 
-/** 左栏的选中项：全部 / 未归档 / 某个具体文件夹 */
-export type FolderSelection = number | 'all' | 'unfiled'
+/**
+ * 左栏的选中项：未归档 / 某个具体文件夹。
+ *
+ * 没有「全部」这一档：它是左栏顶部的一个伪目录，跟真实的"范围"混在同一列里，
+ * 让人分不清「全部」是筛选还是容器。移掉之后「未归档」是默认落点（收件箱的位置），
+ * 归档进文件夹的手稿靠搜索找——搜索本来就跨全部手稿，不受这里的选择限制。
+ */
+export type FolderSelection = number | 'unfiled'
 
 /** 只要求树需要的四个字段：手稿文件夹与节点池文件夹都满足 */
 export interface FolderLike {
@@ -88,7 +94,7 @@ export function collectSubtreeIds(folders: ManuscriptFolder[], rootId: number): 
 interface NotebookFolderTreeProps {
   folders: ManuscriptFolder[]
   manuscripts: ManuscriptSummary[]
-  /** null = 全部手稿 */
+  /** 当前范围：'unfiled' 或某个文件夹 id */
   selectedId: FolderSelection
   onSelect: (selection: FolderSelection) => void
   onCreate: (parentId: number | null) => void
@@ -118,7 +124,6 @@ export function NotebookFolderTree({
   onReorder,
 }: NotebookFolderTreeProps) {
   const tree = useMemo(() => buildFolderTree(folders, manuscripts), [folders, manuscripts])
-  const total = manuscripts.length
   const unfiled = manuscripts.filter((item) => item.folderId === null || item.folderId === undefined).length
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set())
   const [dropHint, setDropHint] = useState<{ id: number; position: DropPosition } | null>(null)
@@ -151,7 +156,7 @@ export function NotebookFolderTree({
         <div
           className={rowClass(active)}
           style={{ paddingLeft: 6 + depth * 16 }}
-          onClick={() => onSelect(active ? 'all' : node.folder.id)}
+          onClick={() => onSelect(node.folder.id)}
           data-folder-row={node.folder.id}
           data-depth={depth}
           title={node.folder.name}
@@ -263,32 +268,32 @@ export function NotebookFolderTree({
     )
   }
 
-  const shortcut = (id: 'all' | 'unfiled', label: string, count: number, Icon: typeof LayoutGrid, active: boolean, onClick: () => void) => (
-    <button
-      type="button"
-      onClick={onClick}
-      data-folder-row={id}
-      data-depth="0"
-      className={rowClass(active)}
-    >
-      {active && (
-        <span className="absolute left-0 top-1 bottom-1 w-[2px] rounded-full bg-blue-500" aria-hidden="true" />
-      )}
-      <span className="w-3.5 shrink-0" aria-hidden="true" />
-      <Icon
-        size={14}
-        className={`shrink-0 ${active ? 'text-blue-500 dark:text-blue-400' : 'text-zinc-400 dark:text-zinc-500'}`}
-      />
-      <span className="min-w-0 truncate text-[13px] leading-none">{label}</span>
-      <span className={countClass}>{count}</span>
-    </button>
-  )
+  const unfiledActive = selectedId === 'unfiled'
 
   return (
     <div className="mt-1" data-testid="folder-tree" role="tree" aria-label="文件夹">
       <div className="space-y-0.5">
-        {shortcut('all', '全部手稿', total, LayoutGrid, selectedId === 'all', () => onSelect('all'))}
-        {shortcut('unfiled', '未归档', unfiled, Inbox, selectedId === 'unfiled', () => onSelect('unfiled'))}
+        {/* 唯一的伪目录。它是默认落点，所以选中态要在首帧就亮起来 */}
+        <button
+          type="button"
+          onClick={() => onSelect('unfiled')}
+          data-folder-row="unfiled"
+          data-depth="0"
+          className={rowClass(unfiledActive)}
+        >
+          {unfiledActive && (
+            <span className="absolute left-0 top-1 bottom-1 w-[2px] rounded-full bg-blue-500" aria-hidden="true" />
+          )}
+          <span className="w-3.5 shrink-0" aria-hidden="true" />
+          <Inbox
+            size={14}
+            className={`shrink-0 ${
+              unfiledActive ? 'text-blue-500 dark:text-blue-400' : 'text-zinc-400 dark:text-zinc-500'
+            }`}
+          />
+          <span className="min-w-0 truncate text-[13px] leading-none">未归档</span>
+          <span className={countClass}>{unfiled}</span>
+        </button>
       </div>
 
       <div className="my-1.5 h-px bg-zinc-100 dark:bg-zinc-800/80" aria-hidden="true" />

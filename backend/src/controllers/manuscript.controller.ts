@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 笔记本 API —— 账号私有的手稿，以及与节点池之间的双向转换。
  *
  * 设计要点（docs/requirements-notebook.md §4/§13）：
@@ -11,7 +11,7 @@
  *     内容本身不丢：转换只搬 title/content，来回转换能拿回正文。
  */
 import { Router } from 'express'
-import { and, asc, desc, eq, inArray, isNull, like, or } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, isNull } from 'drizzle-orm'
 import { db } from '../database/connection.js'
 import { manuscriptFolders, manuscripts } from '../database/schema.js'
 import { authenticate, type AuthRequest } from '../middleware/auth.middleware.js'
@@ -31,6 +31,7 @@ import {
   moveManuscriptToCard,
 } from '../domain/transfer.js'
 import { isDomainError } from '../domain/errors.js'
+import { manuscriptSearchMatch } from '../domain/notebook.js'
 
 const router = Router()
 
@@ -61,8 +62,9 @@ router.get(
 
     const conditions = [eq(manuscripts.userId, userId), isNull(manuscripts.deletedAt)]
     if (q) {
-      const pattern = `%${q}%`
-      const match = or(like(manuscripts.title, pattern), like(manuscripts.previewText, pattern))
+      // 匹配范围（标题 / 预览 / 完整正文）由 domain 定义，MCP 那边用的是同一处，
+      // 免得"网页搜得到、MCP 搜不到"或者反过来。
+      const match = manuscriptSearchMatch(q)
       if (match) conditions.push(match)
     }
     if (folderId !== undefined) {

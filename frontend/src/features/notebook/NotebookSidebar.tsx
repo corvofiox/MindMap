@@ -101,9 +101,11 @@ export function NotebookSidebar({
   // 用一点关闭延迟 + 透明桥接来解决
   const submenuTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // 全部 / 未归档 / 某个文件夹（选中父级时连同所有子孙一起列出）
+  // 有检索词时跨全部手稿列命中：搜索的职责是"找得到"，再按左栏范围过滤一道，
+  // 就会出现"明明有这篇却搜不到"（因为它在别的文件夹里）。清空检索词回到当前范围。
+  // 没有检索词时：未归档 / 某个文件夹（选中父级时连同所有子孙一起列出）
   const visible = useMemo(() => {
-    if (folderSelection === 'all') return manuscripts
+    if (query) return manuscripts
     if (folderSelection === 'unfiled') {
       return manuscripts.filter((m) => m.folderId === null || m.folderId === undefined)
     }
@@ -119,7 +121,11 @@ export function NotebookSidebar({
       }
     }
     return manuscripts.filter((m) => m.folderId !== null && m.folderId !== undefined && ids.has(m.folderId))
-  }, [manuscripts, folders, folderSelection])
+  }, [manuscripts, folders, folderSelection, query])
+
+  // 空态文案要分清「整本笔记是空的」和「只是未归档里空了」：后者很常见
+  // （稿子都归档进文件夹了），说成"还没有手稿"会让人以为稿子丢了。
+  const unfiledEmpty = folderSelection === 'unfiled' && manuscripts.length > 0
 
   // "移动到"子菜单：按树的顺序拍平，带层级缩进
   const flatFolders = useMemo(() => {
@@ -161,7 +167,7 @@ export function NotebookSidebar({
 
     onDeleteFolder(id)
     // 选中的文件夹可能正好在被删的子树里：一起清掉选中，避免停在一个已不存在的目录上
-    if (typeof folderSelection === 'number' && subtree.has(folderSelection)) onSelectFolder('all')
+    if (typeof folderSelection === 'number' && subtree.has(folderSelection)) onSelectFolder('unfiled')
   }
 
   const openMenu = (itemId: number, event: React.MouseEvent<HTMLButtonElement>) => {
@@ -305,11 +311,17 @@ export function NotebookSidebar({
             <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-zinc-100 text-zinc-400 dark:bg-zinc-800 dark:text-zinc-500">
               <FileText size={20} />
             </div>
+            {/* 「未归档」空了不等于整个笔记本空了：归档进文件夹的那些还在，
+                只是不在这里列着。文案必须说准，否则会让人以为稿子丢了。 */}
             <p className="mt-3 text-[13px] font-medium text-zinc-700 dark:text-zinc-200">
-              {query ? '没有匹配的手稿' : '还没有手稿'}
+              {query ? '没有匹配的手稿' : unfiledEmpty ? '未归档里还没有手稿' : '还没有手稿'}
             </p>
             <p className="mt-1 text-[12px] leading-5 text-zinc-400">
-              {query ? '换个关键词试试' : '新建一篇，随手写点东西'}
+              {query
+                ? '换个关键词试试'
+                : unfiledEmpty
+                  ? '新建的会落在这里，归档过的用上面的搜索找'
+                  : '新建一篇，随手写点东西'}
             </p>
             {!query && (
               <button

@@ -6,7 +6,7 @@
  * 选中父文件夹时其子文件夹里的手稿也要出现。
  */
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent, cleanup } from '@testing-library/react'
+import { render, screen, fireEvent } from '@testing-library/react'
 import {
   NotebookFolderTree,
   type FolderSelection,
@@ -42,7 +42,7 @@ function renderTree(overrides: Partial<React.ComponentProps<typeof NotebookFolde
   const props = {
     folders: FOLDERS,
     manuscripts: MANUSCRIPTS,
-    selectedId: 'all' as FolderSelection,
+    selectedId: 'unfiled' as FolderSelection,
     onSelect: vi.fn(),
     onCreate: vi.fn(),
     onDelete: vi.fn(),
@@ -109,28 +109,34 @@ describe('NotebookFolderTree', () => {
     expect(screen.getByText('设计')).toBeTruthy()
   })
 
-  it('点文件夹行触发筛选，点「全部手稿」回到全部', () => {
+  it('点文件夹行触发筛选', () => {
     const props = renderTree()
 
     fireEvent.click(screen.getByText('设计'))
     expect(props.onSelect).toHaveBeenCalledWith(2)
-
-    fireEvent.click(screen.getByText('全部手稿'))
-    expect(props.onSelect).toHaveBeenCalledWith('all')
   })
 
-  it('「未归档」是可选中项，不会被当成「全部手稿」', () => {
-    const props = renderTree()
+  it('左栏没有「全部手稿」这一项，伪目录只剩未归档', () => {
+    renderTree()
+
+    expect(screen.queryByText('全部手稿')).toBeNull()
+    expect(document.querySelector('[data-folder-row="all"]')).toBeNull()
+
+    // 文件夹行的 data-folder-row 是数字 id，剩下的非数字行就是伪目录
+    const pseudo = Array.from(document.querySelectorAll('[data-folder-row]')).filter(
+      (row) => !/^\d+$/.test(row.getAttribute('data-folder-row') || ''),
+    )
+    expect(pseudo.map((row) => row.getAttribute('data-folder-row'))).toEqual(['unfiled'])
+  })
+
+  it('「未归档」是默认落点，选中态回显在这一行上', () => {
+    const props = renderTree({ selectedId: 'unfiled' })
+
+    const row = document.querySelector('[data-folder-row="unfiled"]') as HTMLElement
+    expect(row.className).toContain('bg-blue-50')
 
     fireEvent.click(screen.getByText('未归档'))
     expect(props.onSelect).toHaveBeenCalledWith('unfiled')
-    expect(props.onSelect).not.toHaveBeenCalledWith('all')
-
-    // 选中态要能回显在「未归档」这一行上
-    cleanup()
-    renderTree({ selectedId: 'unfiled' })
-    const row = document.querySelector('[data-folder-row="unfiled"]') as HTMLElement
-    expect(row.className).toContain('bg-blue-50')
   })
 
   it('行内 + 新建的是子文件夹（带上 parentId）', () => {
