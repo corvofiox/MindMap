@@ -38,6 +38,15 @@ interface NotebookState {
    * 一下，视觉上闪一下，很突兀。列表数据没变，列表就不该渲染成加载态。
    */
   loading: boolean
+  /**
+   * 列表是否成功加载过至少一次。
+   *
+   * 存在的意义只有一个：区分"首屏还没东西"和"正在重新取"。
+   * 搜索框每改一次关键词都会走 load()，如果每次都拿 loading 去渲染骨架屏，
+   * 骨架屏会插在列表上方、把整列往下推 158px——敲字时就是"狂闪"。
+   * 加载过一次之后，刷新期间保留旧行不动，等结果回来原位替换。
+   */
+  loaded: boolean
   saveState: SaveState
   error: string | null
   query: string
@@ -70,24 +79,39 @@ interface NotebookState {
   reorderFolders: (movedId: number, targetId: number, position: 'before' | 'after') => Promise<void>
 }
 
+/**
+ * 列表请求的序号，用来丢弃"先发后到"的过期响应。
+ *
+ * 放在模块作用域而不是 state 里：它只服务于 load() 内部的竞态判定，
+ * 不需要触发渲染，也不该让别处的组件依赖它。
+ */
+let loadSeq = 0
+
 export const useNotebookStore = create<NotebookState>((set, get) => ({
   manuscripts: [],
   folders: [],
   active: null,
   loading: false,
+  loaded: false,
   saveState: 'idle',
   error: null,
   query: '',
 
   load: async (options = {}) => {
+    // 每次取列表都领一个序号：搜索框敲得快时会有多个请求同时在路上，
+    // 先发后到的那次会把新结果覆盖回旧结果（列表"跳回去"）。
+    // 只有最后一次请求有权写 state。
+    const seq = ++loadSeq
     set({ loading: true, error: null, ...(options.q !== undefined ? { query: options.q } : {}) })
     try {
       const list = await getManuscripts({
         q: options.q ?? get().query,
         folderId: options.folderId,
       })
-      set({ manuscripts: list, loading: false })
+      if (seq !== loadSeq) return
+      set({ manuscripts: list, loading: false, loaded: true })
     } catch (error) {
+      if (seq !== loadSeq) return
       logger.error('[notebook] 加载手稿列表失败', error)
       set({ loading: false, error: error instanceof Error ? error.message : '加载失败' })
     }

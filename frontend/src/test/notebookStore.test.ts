@@ -49,6 +49,7 @@ beforeEach(() => {
     folders: [],
     active: null,
     loading: false,
+    loaded: false,
     saveState: 'idle',
     error: null,
     query: '',
@@ -73,6 +74,39 @@ describe('加载与打开', () => {
 
     expect(useNotebookStore.getState().error).toBe('网络炸了')
     expect(useNotebookStore.getState().loading).toBe(false)
+  })
+
+  /**
+   * 搜索框敲得快时会有多个请求同时在路上。先发的那次如果后到，会把新结果覆盖回
+   * 旧结果——列表看起来就是"跳回去闪一下"。只有最后一个请求有权写 state。
+   */
+  it('先发后到的旧响应不会覆盖新结果', async () => {
+    let resolveFirst: (v: unknown) => void = () => {}
+    const first = new Promise((resolve) => {
+      resolveFirst = resolve
+    })
+    vi.mocked(api.getManuscripts)
+      .mockReturnValueOnce(first as never)
+      .mockResolvedValueOnce([summary(2, '新结果')] as never)
+
+    const pending = useNotebookStore.getState().load({ q: '旧' })
+    await useNotebookStore.getState().load({ q: '新' })
+
+    // 旧请求这时才回来
+    resolveFirst([summary(1, '旧结果')])
+    await pending
+
+    const state = useNotebookStore.getState()
+    expect(state.manuscripts.map((m) => m.title)).toEqual(['新结果'])
+    expect(state.query).toBe('新')
+    expect(state.loading).toBe(false)
+  })
+
+  it('loaded 只在第一次成功加载后翻真', async () => {
+    expect(useNotebookStore.getState().loaded).toBe(false)
+    vi.mocked(api.getManuscripts).mockResolvedValue([summary(1)])
+    await useNotebookStore.getState().load()
+    expect(useNotebookStore.getState().loaded).toBe(true)
   })
 
   it('open 拉取详情并设为当前稿', async () => {

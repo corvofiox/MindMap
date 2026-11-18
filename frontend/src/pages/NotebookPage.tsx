@@ -71,6 +71,7 @@ export function NotebookPage() {
     folders,
     active,
     loading,
+    loaded,
     saveState,
     query,
     load,
@@ -613,6 +614,7 @@ export function NotebookPage() {
               activeId={active?.id}
               query={query}
               loading={loading}
+              loaded={loaded}
               folderSelection={folderSelection}
               onSelectFolder={selectFolder}
               onSearch={(value) => { void load({ q: value }) }}

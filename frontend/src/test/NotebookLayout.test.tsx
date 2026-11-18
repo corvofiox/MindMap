@@ -72,6 +72,7 @@ function seed() {
       sourceCardId: null,
     },
     loading: false,
+    loaded: true,
     saveState: 'idle',
     error: null,
     query: '',

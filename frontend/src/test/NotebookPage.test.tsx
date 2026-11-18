@@ -74,6 +74,7 @@ function seedActive(contentHtml = '<p>正文</p>') {
       sourceCardId: null,
     },
     loading: false,
+    loaded: true,
     saveState: 'idle',
     error: null,
     query: '',

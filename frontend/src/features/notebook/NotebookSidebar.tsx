@@ -15,13 +15,23 @@ import type { ManuscriptFolder, ManuscriptSummary } from '@/services/api'
 import { NotebookFolderTree, buildFolderTree, collectSubtreeIds, type FolderSelection } from './NotebookFolderTree'
 import { SortableRow } from '@/features/drag-sort/SortableRow'
 
+/**
+ * 搜索的防抖窗口。
+ *
+ * 敲一个字就发一次请求，等于每按一下就重排一次列表（后端还要对 content_html
+ * 做一次 LIKE 全扫）。180ms 足够覆盖正常打字的间隔，又短到感觉不出延迟。
+ */
+const SEARCH_DEBOUNCE = 180
+
 interface NotebookSidebarProps {
   manuscripts: ManuscriptSummary[]
   folders: ManuscriptFolder[]
   activeId?: number
   query: string
   loading: boolean
-  /** 当前选中的范围：全部 / 未归档 / 某个文件夹。由页面持有，新建手稿时要带进对应文件夹。 */
+  /** 列表是否加载过至少一次：只有首屏才铺骨架屏，重新取数据时保留旧行 */
+  loaded: boolean
+  /** 当前选中的范围：未归档 / 某个文件夹。由页面持有，新建手稿时要带进对应文件夹。 */
   folderSelection: FolderSelection
   onSelectFolder: (selection: FolderSelection) => void
   onSearch: (query: string) => void
@@ -82,6 +92,7 @@ export function NotebookSidebar({
   activeId,
   query,
   loading,
+  loaded,
   folderSelection,
   onSelectFolder,
   onSearch,
@@ -97,6 +108,13 @@ export function NotebookSidebar({
 }: NotebookSidebarProps) {
   const [menu, setMenu] = useState<{ itemId: number; x: number; y: number; up: boolean } | null>(null)
   const [moveOpen, setMoveOpen] = useState(false)
+  // 搜索框的即时值。store 里的 query 是"已经发给服务端的那个词"，两者之间隔一个
+  // 防抖窗口；直接拿 query 绑 input 的话，敲字要等请求回来才看见，还会掉字符。
+  const [draft, setDraft] = useState(query)
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // 记住"我们自己发出去的那个词"：外部把 query 改了（清空、换范围）才需要回灌，
+  // 自己刚发的那次回灌会把防抖窗口里用户新敲的字抹掉。
+  const lastEmitted = useRef(query)
   // 从「移动到」斜向移到子菜单时会经过 4px 空隙，立刻关闭会永远点不到子菜单；
   // 用一点关闭延迟 + 透明桥接来解决
   const submenuTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -204,6 +222,29 @@ export function NotebookSidebar({
     }, 180)
   }
 
+  useEffect(() => {
+    if (query === lastEmitted.current) return
+    lastEmitted.current = query
+    setDraft(query)
+  }, [query])
+
+  useEffect(
+    () => () => {
+      if (searchTimer.current) clearTimeout(searchTimer.current)
+    },
+    [],
+  )
+
+  /** 键入只改本地 draft，停手 180ms 才真的发请求。 */
+  const handleSearchInput = (value: string) => {
+    setDraft(value)
+    if (searchTimer.current) clearTimeout(searchTimer.current)
+    searchTimer.current = setTimeout(() => {
+      lastEmitted.current = value
+      onSearch(value)
+    }, SEARCH_DEBOUNCE)
+  }
+
   useEffect(() => () => cancelSubmenuClose(), [])
 
   // Esc 关闭菜单：浮层挡住了整页，只靠点空白关闭对键盘用户不友好
@@ -245,8 +286,8 @@ export function NotebookSidebar({
         <div className="relative">
           <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400" />
           <input
-            value={query}
-            onChange={(event) => onSearch(event.target.value)}
+            value={draft}
+            onChange={(event) => handleSearchInput(event.target.value)}
             placeholder="搜索标题或正文"
             className="w-full rounded-lg border border-transparent bg-zinc-100/80 py-1.5 pl-8 pr-2.5 text-[13px] text-zinc-800 outline-none transition placeholder:text-zinc-400 focus:border-blue-300 focus:bg-white focus:ring-2 focus:ring-blue-500/10 dark:bg-zinc-800/70 dark:text-zinc-100 dark:focus:border-blue-700 dark:focus:bg-zinc-900"
           />
@@ -295,8 +336,10 @@ export function NotebookSidebar({
 
       {/* 列表 */}
       <div className="notebook-scroll mt-2 flex-1 overflow-y-auto border-t border-zinc-100 px-2 pb-3 pt-1.5 dark:border-zinc-800">
-        {loading && (
-          <div className="space-y-1 px-1">
+        {/* 骨架屏只给首屏。之后每次重新取（搜索、新建、移动）都保留旧行等结果，
+            否则骨架屏会插在列表上方把整列顶下去——敲字时就是"狂闪"。 */}
+        {loading && !loaded && (
+          <div className="space-y-1 px-1" data-testid="notebook-list-skeleton">
             {[0, 1, 2].map((key) => (
               <div key={key} className="animate-pulse rounded-lg px-2 py-2.5">
                 <div className="h-3 w-2/3 rounded bg-zinc-100 dark:bg-zinc-800" />
@@ -306,7 +349,9 @@ export function NotebookSidebar({
           </div>
         )}
 
-        {!loading && visible.length === 0 && (
+        {/* 空态同样不跟 loading 走：搜索没结果时，从"旧结果 → 空态"是内容替换，
+            不该先塌下去再弹回来 */}
+        {loaded && visible.length === 0 && (
           <div className="flex flex-col items-center px-4 py-10 text-center">
             <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-zinc-100 text-zinc-400 dark:bg-zinc-800 dark:text-zinc-500">
               <FileText size={20} />
