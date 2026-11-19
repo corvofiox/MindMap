@@ -72,9 +72,14 @@ export function NotebookPage() {
     active,
     loading,
     loaded,
+    counts,
+    hasMore,
+    loadingMore,
     saveState,
     query,
     load,
+    loadMore,
+    loadCounts,
     loadFolders,
     open,
     create,
@@ -117,40 +122,73 @@ export function NotebookPage() {
   // 首帧的 routeId 才是「带链接进来」的那篇；后续导航不参与落点决策
   const initialRouteId = useRef(routeId)
   const landedRef = useRef(false)
+  // 首帧带 :id 进来时，落点要等详情回来（详情里有 folderId）才算得了
+  const landingRef = useRef(Boolean(routeId))
   // 用户自己点过左栏就不再替他决定落点：首屏那一趟取数还没回来时手快点了文件夹，
   // 落点算完再把它改掉，就成了"点了没反应"。
   const selectionTouchedRef = useRef(false)
+  // effect 里要读"当前落点"，但不能把它放进依赖（程序改写落点会多取一次列表）
+  const folderSelectionRef = useRef<FolderSelection>('unfiled')
 
   const selectFolder = useCallback((next: FolderSelection) => {
     selectionTouchedRef.current = true
+    folderSelectionRef.current = next
     setFolderSelection(next)
   }, [])
 
-  // 首次进入：拉列表与文件夹，然后定下左栏的落点。
+  // 首次进入：先拉文件夹（要拿它展开子树），再取第一页。
   //
-  // 带 /notebook/:id 进来时跟随那篇手稿所在的文件夹：否则会出现「左栏选中未归档、
-  // 正文却是别的文件夹里的手稿」这种自相矛盾的状态。列表回来之前不知道它属于谁，
-  // 所以要等这一趟取完再定。
-  // 只在首次生效——之后在列表里点别的篇目，不该顺带把左栏的范围也换掉。
+  // 带 /notebook/:id 进来时落点要跟随那篇手稿所在的文件夹——但归属在详情里，
+  // 而详情由下面那个"路由同步"effect 去拉。所以这里只负责"不带 id"的情况，
+  // 带 id 的落点交给落点 effect（等 active 到了再定），避免同一篇拉两次。
   useEffect(() => {
     let cancelled = false
     void (async () => {
-      await Promise.all([load(), loadFolders()])
+      await loadFolders()
+      // 计数在渲染树之前拿到：徽标与"删文件夹会连带删几篇"的文案都要用它，
+      // 晚到就会先显示 0，用户可能正好在那一瞬间点删除
+      await loadCounts()
       if (cancelled || landedRef.current) return
       landedRef.current = true
-      if (selectionTouchedRef.current) return
-      const raw = initialRouteId.current
-      if (!raw) return
-      const numeric = Number(raw)
-      if (!Number.isInteger(numeric) || numeric <= 0) return
-      const target = useNotebookStore.getState().manuscripts.find((item) => item.id === numeric)
-      if (target) setFolderSelection(target.folderId ?? 'unfiled')
+
+      const numeric = initialRouteId.current ? Number(initialRouteId.current) : Number.NaN
+      if (Number.isInteger(numeric) && numeric > 0) return // 等详情回来定落点
+
+      await load({ scope: folderSelectionRef.current })
     })()
     void loadNodePool()
     return () => {
       cancelled = true
     }
-  }, [load, loadFolders, loadNodePool])
+  }, [load, loadFolders, loadNodePool, loadCounts])
+
+  // 首帧带 id 进来：详情回来才知道它属于哪个文件夹，这时才定落点。
+  // 只在首帧生效；用户已经手动点过左栏（selectionTouchedRef）就不动他的选择。
+  useEffect(() => {
+    if (!landingRef.current || !active) return
+    // 必须等到"URL 里要的那一篇"，而不是任何一篇（store 里可能残留着上一次的 active）
+    const wanted = initialRouteId.current ? Number(initialRouteId.current) : Number.NaN
+    if (active.id !== wanted) return
+    landingRef.current = false
+    if (selectionTouchedRef.current) {
+      void load({ scope: folderSelectionRef.current })
+      return
+    }
+    const next = active.folderId ?? 'unfiled'
+    if (next !== folderSelectionRef.current) {
+      folderSelectionRef.current = next
+      setFolderSelection(next) // 触发下面那个 effect 取数
+      return
+    }
+    void load({ scope: next })
+  }, [active, load])
+
+  // 范围变了就重新取第一页（分页在服务端，范围换了行集合也换了）
+  useEffect(() => {
+    folderSelectionRef.current = folderSelection
+    if (!landedRef.current) return
+    void load({ scope: folderSelection })
+  }, [folderSelection, load])
 
   // 路由/选中同步：URL 里有 id 就打开它
   useEffect(() => {
@@ -615,9 +653,13 @@ export function NotebookPage() {
               query={query}
               loading={loading}
               loaded={loaded}
+              counts={counts}
+              hasMore={hasMore}
+              loadingMore={loadingMore}
+              onLoadMore={() => { void loadMore() }}
               folderSelection={folderSelection}
               onSelectFolder={selectFolder}
-              onSearch={(value) => { void load({ q: value }) }}
+              onSearch={(value) => { void load({ q: value, scope: folderSelectionRef.current }) }}
               onCreate={() => { void handleCreate() }}
               onOpen={(id) => navigate(`/notebook/${id}`)}
               onCollapse={toggleSidebar}

@@ -11,7 +11,7 @@
  *     内容本身不丢：转换只搬 title/content，来回转换能拿回正文。
  */
 import { Router } from 'express'
-import { and, asc, desc, eq, inArray, isNull } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
 import { db } from '../database/connection.js'
 import { manuscriptFolders, manuscripts } from '../database/schema.js'
 import { authenticate, type AuthRequest } from '../middleware/auth.middleware.js'
@@ -48,6 +48,35 @@ async function findOwnedManuscript(userId: number, id: number) {
   return row ?? null
 }
 
+// ---- 分页 ---------------------------------------------------------------
+/**
+ * 一页最多多少条。
+ *
+ * 上限就是 200：前端左栏滚到底再取下一页，让 DOM 里的行数随"滚了多远"增长，
+ * 而不是一次把几千条全塞进去（2000 行曾实测首屏 573ms、一次 340ms 长帧）。
+ */
+const PAGE_MAX = 200
+const PAGE_DEFAULT = 200
+
+/** 非负整数（offset 允许 0，非法值回退到 fallback）。 */
+function toNonNegativeInt(value: unknown, fallback: number): number {
+  if (value === undefined || value === null || value === '') return fallback
+  const n = Number(value)
+  if (!Number.isInteger(n) || n < 0) return fallback
+  return n
+}
+
+/** `folderIds=3,4,5` → `[3,4,5]`；空或全非法时返回空数组。 */
+function parseIdList(value: unknown): number[] {
+  if (typeof value !== 'string' || value.trim() === '') return []
+  const out: number[] = []
+  for (const part of value.split(',')) {
+    const id = toPositiveInt(part)
+    if (id !== null) out.push(id)
+  }
+  return out
+}
+
 // ---- 列表 ---------------------------------------------------------------
 router.get(
   '/',
@@ -59,6 +88,11 @@ router.get(
     const q = typeof req.query.q === 'string' ? req.query.q.trim() : ''
     const folderParam = req.query.folderId
     const folderId = folderParam === undefined ? undefined : toPositiveInt(folderParam)
+    // 左栏选中父文件夹时要连同子孙一起列出。树的展开放在前端做（它本来就有树），
+    // 服务端只按 id 集合过滤，不重复实现一遍层级逻辑。
+    const folderIds = parseIdList(req.query.folderIds)
+    const limit = Math.min(PAGE_MAX, Math.max(1, toNonNegativeInt(req.query.limit, PAGE_DEFAULT)))
+    const offset = toNonNegativeInt(req.query.offset, 0)
 
     const conditions = [eq(manuscripts.userId, userId), isNull(manuscripts.deletedAt)]
     if (q) {
@@ -67,9 +101,13 @@ router.get(
       const match = manuscriptSearchMatch(q)
       if (match) conditions.push(match)
     }
-    if (folderId !== undefined) {
+    if (folderIds.length > 0) {
+      conditions.push(inArray(manuscripts.folderId, folderIds))
+    } else if (folderId !== undefined) {
       conditions.push(folderId === null ? isNull(manuscripts.folderId) : eq(manuscripts.folderId, folderId))
     }
+
+    const where = and(...conditions)
 
     const rows = await db
       .select({
@@ -83,12 +121,50 @@ router.get(
         createdAt: manuscripts.createdAt,
       })
       .from(manuscripts)
-      .where(and(...conditions))
+      .where(where)
       // 拖过顺序就按手排（sortOrder 升序）；没拖过的都是 0，自然按更新时间倒序
       .orderBy(asc(manuscripts.sortOrder), desc(manuscripts.updatedAt))
-      .limit(200)
+      .limit(limit)
+      .offset(offset)
 
-    return res.json({ success: true, data: rows })
+    // total 用同一套条件再数一次：翻页要知道"还有没有下一页"，也用来显示"共 N 篇"
+    const totals = await db
+      .select({ n: sql<number>`cast(count(*) as integer)` })
+      .from(manuscripts)
+      .where(where)
+    const total = Number(totals[0]?.n ?? 0)
+
+    return res.json({ success: true, data: rows, total, hasMore: offset + rows.length < total })
+  }),
+)
+
+// ---- 计数（左栏徽标） ---------------------------------------------------
+// 徽标不能靠"数一数已经加载的那一页"：1928 篇的文件夹只会显示成 200。
+// 这里一次 GROUP BY 把所有文件夹的条数拿全，前端只在本地做子树的加总。
+router.get(
+  '/counts',
+  authenticate,
+  asyncHandler(async (req: AuthRequest, res) => {
+    const userId = req.user?.id
+    if (!userId) return res.status(401).json({ success: false, error: '未提供令牌' })
+
+    const rows = await db
+      .select({ folderId: manuscripts.folderId, n: sql<number>`cast(count(*) as integer)` })
+      .from(manuscripts)
+      .where(and(eq(manuscripts.userId, userId), isNull(manuscripts.deletedAt)))
+      .groupBy(manuscripts.folderId)
+
+    let total = 0
+    let unfiled = 0
+    const byFolder: Record<string, number> = {}
+    for (const row of rows) {
+      const n = Number(row.n ?? 0)
+      total += n
+      if (row.folderId === null || row.folderId === undefined) unfiled += n
+      else byFolder[String(row.folderId)] = n
+    }
+
+    return res.json({ success: true, data: { total, unfiled, byFolder } })
   }),
 )
 

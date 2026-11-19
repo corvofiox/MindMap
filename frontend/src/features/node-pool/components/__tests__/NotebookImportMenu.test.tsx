@@ -11,10 +11,14 @@ vi.mock('@/services/api', async () => {
   const actual = await vi.importActual<typeof import('@/services/api')>('@/services/api')
   return {
     ...actual,
-    getManuscripts: vi.fn(async () => [
-      { id: 11, folderId: 1, title: '设计稿', previewText: '配色与间距的说明', imageCount: 2, createdAt: 0, updatedAt: 20 },
-      { id: 12, folderId: null, title: '散记', previewText: '未归档的一篇', imageCount: 0, createdAt: 0, updatedAt: 10 },
-    ]),
+    getManuscripts: vi.fn(async () => ({
+      items: [
+        { id: 11, folderId: 1, title: '设计稿', previewText: '配色与间距的说明', imageCount: 2, createdAt: 0, updatedAt: 20 },
+        { id: 12, folderId: null, title: '散记', previewText: '未归档的一篇', imageCount: 0, createdAt: 0, updatedAt: 10 },
+      ],
+      total: 2,
+      hasMore: false,
+    })),
     getManuscriptFolders: vi.fn(async () => [
       { id: 1, userId: 1, name: '项目', parentId: null, sortOrder: 0, collapsed: false, createdAt: 0 },
       { id: 2, userId: 1, name: '设计', parentId: 1, sortOrder: 0, collapsed: false, createdAt: 0 },

@@ -15,9 +15,13 @@ vi.mock('@/services/api', async () => {
     ...actual,
     getNodePool: vi.fn(async () => []),
     getNodePoolFolders: vi.fn(async () => []),
-    getManuscripts: vi.fn(async () => [
-      { id: 5, folderId: null, title: '待导入的手稿', previewText: '正文摘要', imageCount: 0, createdAt: 0, updatedAt: 0 },
-    ]),
+    getManuscripts: vi.fn(async () => ({
+      items: [
+        { id: 5, folderId: null, title: '待导入的手稿', previewText: '正文摘要', imageCount: 0, createdAt: 0, updatedAt: 0 },
+      ],
+      total: 1,
+      hasMore: false,
+    })),
     getManuscriptFolders: vi.fn(async () => []),
     manuscriptToNodeCard: vi.fn(async () => ({ id: 12, name: '待导入的手稿' })),
     createNodePoolFolder: vi.fn(),
@@ -28,6 +32,9 @@ vi.mock('@/services/api', async () => {
 const api = await import('@/services/api')
 const { NodePoolPanel } = await import('@/features/node-pool/components/NodePoolPanel')
 const { useNodePoolStore } = await import('@/features/node-pool/stores/useNodePoolStore')
+
+/** getManuscripts 现在返回一页（items/total/hasMore），测试里用这个包一下。 */
+const page = <T,>(items: T[], hasMore = false) => ({ items, total: items.length, hasMore })
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -104,7 +111,7 @@ describe('节点池面板头部', () => {
   })
 
   it('笔记本没有手稿时给出明确的空态', async () => {
-    vi.mocked(api.getManuscripts).mockResolvedValueOnce([])
+    vi.mocked(api.getManuscripts).mockResolvedValueOnce(page([]))
     render(<NodePoolPanel open />)
     fireEvent.click(screen.getByText('从笔记本导入'))
 

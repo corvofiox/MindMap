@@ -12,6 +12,7 @@ vi.mock('@/services/api', async () => {
   return {
     ...actual,
     getManuscripts: vi.fn(),
+    getManuscriptCounts: vi.fn(async () => ({ total: 0, unfiled: 0, byFolder: {} })),
     getManuscript: vi.fn(),
     createManuscript: vi.fn(),
     updateManuscript: vi.fn(),
@@ -25,6 +26,9 @@ vi.mock('@/services/api', async () => {
 
 const api = await import('@/services/api')
 const { useNotebookStore } = await import('@/store/useNotebookStore')
+
+/** getManuscripts 现在返回一页（items/total/hasMore），测试里用这个包一下。 */
+const page = <T,>(items: T[], hasMore = false) => ({ items, total: items.length, hasMore })
 
 function summary(id: number, title = `稿 ${id}`) {
   return {
@@ -56,13 +60,86 @@ beforeEach(() => {
   })
 })
 
+describe('分页与范围', () => {
+  it('load 取第一页，loadMore 追加下一页', async () => {
+    vi.mocked(api.getManuscripts)
+      .mockResolvedValueOnce(page([summary(1), summary(2)], true))
+      .mockResolvedValueOnce(page([summary(3)], false))
+
+    await useNotebookStore.getState().load({ scope: 'unfiled' })
+    expect(useNotebookStore.getState().manuscripts.map((m) => m.id)).toEqual([1, 2])
+    expect(useNotebookStore.getState().hasMore).toBe(true)
+
+    await useNotebookStore.getState().loadMore()
+    expect(useNotebookStore.getState().manuscripts.map((m) => m.id)).toEqual([1, 2, 3])
+    expect(useNotebookStore.getState().hasMore).toBe(false)
+    // 第二页的 offset 必须接着第一页，否则会重复取
+    expect(api.getManuscripts).toHaveBeenLastCalledWith(expect.objectContaining({ offset: 2 }))
+  })
+
+  it('没有下一页时 loadMore 不发请求', async () => {
+    vi.mocked(api.getManuscripts).mockResolvedValue(page([summary(1)], false))
+    await useNotebookStore.getState().load({ scope: 'unfiled' })
+    const before = vi.mocked(api.getManuscripts).mock.calls.length
+
+    await useNotebookStore.getState().loadMore()
+    expect(vi.mocked(api.getManuscripts).mock.calls.length).toBe(before)
+  })
+
+  it('范围翻译成参数：未归档 → folderId null；文件夹 → folderIds（含子孙）', async () => {
+    useNotebookStore.setState({
+      folders: [
+        { id: 7, userId: 1, name: 'A', parentId: null, sortOrder: 0, collapsed: false, createdAt: 0 },
+        { id: 8, userId: 1, name: 'B', parentId: 7, sortOrder: 0, collapsed: false, createdAt: 0 },
+      ],
+    } as never)
+    vi.mocked(api.getManuscripts).mockResolvedValue(page([]))
+
+    await useNotebookStore.getState().load({ scope: 'unfiled' })
+    expect(api.getManuscripts).toHaveBeenLastCalledWith(expect.objectContaining({ folderId: null }))
+
+    await useNotebookStore.getState().load({ scope: 7 })
+    expect(api.getManuscripts).toHaveBeenLastCalledWith(
+      expect.objectContaining({ folderIds: [7, 8] }),
+    )
+  })
+
+  it('搜索跨全部手稿：带关键词时请求里没有任何文件夹范围', async () => {
+    vi.mocked(api.getManuscripts).mockResolvedValue(page([]))
+
+    await useNotebookStore.getState().load({ scope: 7, q: '笔记' })
+
+    const params = vi.mocked(api.getManuscripts).mock.lastCall?.[0]
+    expect(params).toMatchObject({ q: '笔记' })
+    expect(params?.folderId).toBeUndefined()
+    expect(params?.folderIds).toBeUndefined()
+  })
+
+  it('计数来自服务端，不数已加载的那一页', async () => {
+    vi.mocked(api.getManuscriptCounts).mockResolvedValue({
+      total: 1947,
+      unfiled: 5,
+      byFolder: { '6': 1928 },
+    })
+
+    await useNotebookStore.getState().loadCounts()
+
+    expect(useNotebookStore.getState().counts?.total).toBe(1947)
+    expect(useNotebookStore.getState().counts?.byFolder['6']).toBe(1928)
+  })
+})
+
 describe('加载与打开', () => {
   it('load 把列表写进 store，并带上搜索词', async () => {
-    vi.mocked(api.getManuscripts).mockResolvedValue([summary(1), summary(2)])
+    vi.mocked(api.getManuscripts).mockResolvedValue(page([summary(1), summary(2)]))
 
     await useNotebookStore.getState().load({ q: '关键词' })
 
-    expect(api.getManuscripts).toHaveBeenCalledWith({ q: '关键词', folderId: undefined })
+    expect(api.getManuscripts).toHaveBeenCalledWith({
+      q: '关键词',
+      limit: expect.any(Number),
+      offset: 0,
+    })
     expect(useNotebookStore.getState().manuscripts).toHaveLength(2)
     expect(useNotebookStore.getState().query).toBe('关键词')
   })
@@ -87,7 +164,7 @@ describe('加载与打开', () => {
     })
     vi.mocked(api.getManuscripts)
       .mockReturnValueOnce(first as never)
-      .mockResolvedValueOnce([summary(2, '新结果')] as never)
+      .mockResolvedValueOnce(page([summary(2, '新结果')]) as never)
 
     const pending = useNotebookStore.getState().load({ q: '旧' })
     await useNotebookStore.getState().load({ q: '新' })
@@ -104,7 +181,7 @@ describe('加载与打开', () => {
 
   it('loaded 只在第一次成功加载后翻真', async () => {
     expect(useNotebookStore.getState().loaded).toBe(false)
-    vi.mocked(api.getManuscripts).mockResolvedValue([summary(1)])
+    vi.mocked(api.getManuscripts).mockResolvedValue(page([summary(1)]))
     await useNotebookStore.getState().load()
     expect(useNotebookStore.getState().loaded).toBe(true)
   })

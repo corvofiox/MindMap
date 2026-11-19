@@ -79,6 +79,14 @@ async function createManuscript(overrides: Record<string, unknown> = {}) {
   return res
 }
 
+async function createFolder(name: string, parentId: number | null = null): Promise<number> {
+  const res = await supertest(app)
+    .post('/api/manuscript-folders')
+    .set(authA())
+    .send({ name, parentId })
+  return res.body.data.id as number
+}
+
 describe('manuscripts CRUD', () => {
   it('新建后能按 id 读回，列表里也有', async () => {
     const created = await createManuscript()
@@ -148,6 +156,64 @@ describe('manuscripts CRUD', () => {
 
     const res = await supertest(app).get('/api/manuscripts?q=蓝鲸').set(authA())
     expect(res.body.data.map((m: { title: string }) => m.title)).toEqual(['长文'])
+  })
+
+  it('分页：limit/offset 切片，同时回 total 与 hasMore', async () => {
+    for (let i = 1; i <= 5; i++) await createManuscript({ title: `稿 ${i}` })
+
+    const first = await supertest(app).get('/api/manuscripts?limit=2&offset=0').set(authA())
+    expect(first.body.data).toHaveLength(2)
+    expect(first.body.total).toBe(5)
+    expect(first.body.hasMore).toBe(true)
+
+    const last = await supertest(app).get('/api/manuscripts?limit=2&offset=4').set(authA())
+    expect(last.body.data).toHaveLength(1)
+    expect(last.body.total).toBe(5)
+    expect(last.body.hasMore).toBe(false)
+  })
+
+  it('folderIds：按 id 集合过滤（父夹连子孙由前端展开后传进来）', async () => {
+    const parent = await createFolder('父夹')
+    const child = await createFolder('子夹', parent)
+    await createManuscript({ title: '父里的', folderId: parent })
+    await createManuscript({ title: '子里的', folderId: child })
+    await createManuscript({ title: '外面的' })
+
+    const res = await supertest(app)
+      .get(`/api/manuscripts?folderIds=${parent},${child}`)
+      .set(authA())
+
+    expect(res.body.data.map((m: { title: string }) => m.title).sort()).toEqual(['子里的', '父里的'])
+    expect(res.body.total).toBe(2)
+  })
+
+  it('counts：一次给出总数 / 未归档 / 每个文件夹的条数', async () => {
+    const a = await createFolder('甲')
+    const b = await createFolder('乙')
+    await createManuscript({ title: 'a1', folderId: a })
+    await createManuscript({ title: 'a2', folderId: a })
+    await createManuscript({ title: 'b1', folderId: b })
+    await createManuscript({ title: 'u1' })
+
+    const res = await supertest(app).get('/api/manuscripts/counts').set(authA())
+
+    expect(res.status).toBe(200)
+    expect(res.body.data.total).toBe(4)
+    expect(res.body.data.unfiled).toBe(1)
+    expect(res.body.data.byFolder[String(a)]).toBe(2)
+    expect(res.body.data.byFolder[String(b)]).toBe(1)
+  })
+
+  it('counts：不算别人的，也不算已删的', async () => {
+    await createManuscript({ title: '我的' })
+    await supertest(app).post('/api/manuscripts').set(authB()).send({ title: '别人的' })
+    const doomed = await createManuscript({ title: '要删的' })
+    await supertest(app).delete(`/api/manuscripts/${doomed.body.data.id}`).set(authA())
+
+    const res = await supertest(app).get('/api/manuscripts/counts').set(authA())
+
+    expect(res.body.data.total).toBe(1)
+    expect(res.body.data.unfiled).toBe(1)
   })
 
   it('拖拽排序：批量写 sortOrder 后列表按手排顺序返回', async () => {

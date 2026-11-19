@@ -1,4 +1,4 @@
-﻿# Backend 源码知识库
+# Backend 源码知识库
 
 **父级**: 根 AGENTS.md
 **评分**: 18（高复杂度）
@@ -286,3 +286,8 @@ ALLOWED_ORIGINS=http://localhost:5173,http://localhost:8001
 UPLOAD_DIR=./uploads
 MAX_FILE_SIZE=5242880
 ```
+
+> ⚠️ `UPLOAD_DIR` 是相对**后端进程 cwd** 解析的（`path.resolve(UPLOAD_DIR || './uploads')`）。
+> 容器里后端 cwd 是 `/app/backend`，而持久卷只挂了 `/app/backend/data`——所以必须在
+> compose 里显式设 `UPLOAD_DIR=/app/backend/data/uploads`，否则容器一重建（升级即重建）
+> 图片字节全丢、`files` 表还在，旧图变成 404。`docker-compose.yml` 已按此配置。

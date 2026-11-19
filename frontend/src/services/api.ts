@@ -1,4 +1,4 @@
-﻿import type {
+import type {
   User,
   LoginCredentials,
   RegisterData,
@@ -384,12 +384,61 @@ export interface ManuscriptFolder {
   createdAt: number | null
 }
 
-export async function getManuscripts(params: { q?: string; folderId?: number | null } = {}): Promise<ManuscriptSummary[]> {
-  const query = new URLSearchParams()
-  if (params.q) query.set('q', params.q)
-  if (params.folderId !== undefined && params.folderId !== null) query.set('folderId', String(params.folderId))
-  const suffix = query.toString() ? `?${query.toString()}` : ''
-  return await apiClient.get<ManuscriptSummary[]>(`${API_ENDPOINTS.MANUSCRIPTS}${suffix}`)
+export interface ManuscriptPage {
+  items: ManuscriptSummary[]
+  /** 当前查询条件下的总条数（不受分页限制） */
+  total: number
+  /** 还有没有下一页 */
+  hasMore: boolean
+}
+
+/**
+ * 取一页手稿。
+ *
+ * 范围由服务端过滤：`folderId=null` 只要未归档，`folderIds=1,2,3` 是"这个文件夹
+ * 连同所有子孙"（树在前端展开）。分页是为了左栏无限滚动——一页最多 200 条，
+ * 别把几千条一次塞进 DOM。
+ */
+export async function getManuscripts(
+  params: {
+    q?: string
+    folderId?: number | null
+    folderIds?: number[]
+    limit?: number
+    offset?: number
+  } = {},
+): Promise<ManuscriptPage> {
+  const query: Record<string, string> = {}
+  if (params.q) query.q = params.q
+  if (params.limit !== undefined) query.limit = String(params.limit)
+  if (params.offset !== undefined) query.offset = String(params.offset)
+  if (params.folderIds && params.folderIds.length > 0) {
+    query.folderIds = params.folderIds.join(',')
+  } else if (params.folderId === null) {
+    query.folderId = 'null'
+  } else if (params.folderId !== undefined) {
+    query.folderId = String(params.folderId)
+  }
+
+  const body = await apiClient.getEnvelope<ManuscriptSummary[]>(API_ENDPOINTS.MANUSCRIPTS, query)
+  const items = body.data ?? []
+  return {
+    items,
+    total: typeof body.total === 'number' ? body.total : items.length,
+    hasMore: body.hasMore === true,
+  }
+}
+
+export interface ManuscriptCounts {
+  total: number
+  unfiled: number
+  /** 文件夹 id → 直属手稿数（子树由前端加总） */
+  byFolder: Record<string, number>
+}
+
+/** 全部计数，一次 GROUP BY。左栏徽标用它，不能数"已经加载的那一页"。 */
+export async function getManuscriptCounts(): Promise<ManuscriptCounts> {
+  return await apiClient.get<ManuscriptCounts>(`${API_ENDPOINTS.MANUSCRIPTS}/counts`)
 }
 
 export async function getManuscript(id: number): Promise<Manuscript> {

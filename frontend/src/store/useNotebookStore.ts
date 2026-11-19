@@ -5,7 +5,7 @@
  * 也不该被画布的撤销栈/脏标记影响。两边只通过 `api` 层打交道。
  */
 import { create } from 'zustand'
-import type { Manuscript, ManuscriptSummary, ManuscriptFolder } from '@/services/api'
+import type { Manuscript, ManuscriptSummary, ManuscriptFolder, ManuscriptCounts } from '@/services/api'
 import type { NodeCard } from '@/types'
 import {
   createManuscript,
@@ -13,6 +13,7 @@ import {
   deleteManuscript,
   deleteManuscriptFolder,
   getManuscript,
+  getManuscriptCounts,
   getManuscriptFolders,
   getManuscripts,
   manuscriptToNodeCard,
@@ -22,9 +23,40 @@ import {
   updateManuscriptFolder,
 } from '@/services/api'
 import { computeReorder } from '@/features/drag-sort/reorder'
+import { collectSubtreeIds, type FolderSelection } from '@/features/notebook/NotebookFolderTree'
 import { logger } from '@/utils/logger'
 
 export type SaveState = 'idle' | 'dirty' | 'saving' | 'saved' | 'error'
+
+/** 列表范围：'all' 只用于搜索（跨全部手稿）。 */
+export type NotebookScope = FolderSelection | 'all'
+
+/** 一页取多少条。与后端 PAGE_DEFAULT/PAGE_MAX 对齐。 */
+export const PAGE_SIZE = 200
+
+/**
+ * 把左栏范围翻译成请求参数。
+ *
+ * 「选中父文件夹要连同子孙一起列出」这件事由前端做：它本来就有整棵树，
+ * 服务端只按 id 集合过滤，不用再实现一遍层级逻辑。
+ */
+export function scopeToQuery(
+  scope: NotebookScope,
+  folders: ManuscriptFolder[],
+): { folderId?: number | null; folderIds?: number[] } {
+  if (scope === 'all') return {}
+  if (scope === 'unfiled') return { folderId: null }
+  const ids = Array.from(collectSubtreeIds(folders, scope))
+  return { folderIds: ids.length > 0 ? ids : [scope] }
+}
+
+/** 某个归属是否落在当前范围内（移动之后决定这一行该不该留在列表里）。 */
+function scopeContains(scope: NotebookScope, folderId: number | null, folders: ManuscriptFolder[]): boolean {
+  if (scope === 'all') return true
+  if (scope === 'unfiled') return folderId === null
+  if (folderId === null) return false
+  return collectSubtreeIds(folders, scope).has(folderId)
+}
 
 interface NotebookState {
   manuscripts: ManuscriptSummary[]
@@ -47,11 +79,26 @@ interface NotebookState {
    * 加载过一次之后，刷新期间保留旧行不动，等结果回来原位替换。
    */
   loaded: boolean
+  /** 当前查询条件下的总条数（不受分页限制）。左栏"共 N 篇"用它。 */
+  total: number
+  /** 还有下一页：左栏滚到底据此决定要不要继续取 */
+  hasMore: boolean
+  /** 正在取下一页（与首屏 loading 分开，避免滚到底时整列表变成加载态） */
+  loadingMore: boolean
+  /** 各文件夹的条数，来自服务端 GROUP BY。徽标不能数"已经加载的那一页"。 */
+  counts: ManuscriptCounts | null
+  /** 当前列表范围（内部用；搜索词非空时按 'all' 处理） */
+  scope: NotebookScope
   saveState: SaveState
   error: string | null
   query: string
 
-  load: (options?: { q?: string; folderId?: number | null }) => Promise<void>
+  /** 取第一页。scope 变了（点文件夹）或关键词变了（搜索）都要重新走这里。 */
+  load: (options?: { q?: string; scope?: NotebookScope }) => Promise<void>
+  /** 取下一页并追加。滚到底触发。 */
+  loadMore: () => Promise<void>
+  /** 拉各文件夹的条数。 */
+  loadCounts: () => Promise<void>
   loadFolders: () => Promise<void>
   open: (id: number) => Promise<void>
   close: () => void
@@ -93,6 +140,11 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
   active: null,
   loading: false,
   loaded: false,
+  total: 0,
+  hasMore: false,
+  loadingMore: false,
+  counts: null,
+  scope: 'unfiled',
   saveState: 'idle',
   error: null,
   query: '',
@@ -102,18 +154,69 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
     // 先发后到的那次会把新结果覆盖回旧结果（列表"跳回去"）。
     // 只有最后一次请求有权写 state。
     const seq = ++loadSeq
-    set({ loading: true, error: null, ...(options.q !== undefined ? { query: options.q } : {}) })
+    const scope = options.scope ?? get().scope
+    const q = options.q ?? get().query
+    // 搜索跨全部手稿：有关键词时不带文件夹范围，否则"在某个文件夹里搜不到别处"。
+    const { folders } = get()
+    const range = q ? {} : scopeToQuery(scope, folders)
+
+    set({ loading: true, error: null, query: q, scope })
     try {
-      const list = await getManuscripts({
-        q: options.q ?? get().query,
-        folderId: options.folderId,
-      })
+      const page = await getManuscripts({ ...range, q: q || undefined, limit: PAGE_SIZE, offset: 0 })
       if (seq !== loadSeq) return
-      set({ manuscripts: list, loading: false, loaded: true })
+      set({
+        manuscripts: page.items,
+        total: page.total,
+        hasMore: page.hasMore,
+        loading: false,
+        loaded: true,
+      })
     } catch (error) {
       if (seq !== loadSeq) return
       logger.error('[notebook] 加载手稿列表失败', error)
       set({ loading: false, error: error instanceof Error ? error.message : '加载失败' })
+    }
+  },
+
+  loadMore: async () => {
+    const { hasMore, loadingMore, loading, manuscripts, query, scope, folders } = get()
+    if (!hasMore || loadingMore || loading) return
+    const seq = loadSeq
+    const range = query ? {} : scopeToQuery(scope, folders)
+    set({ loadingMore: true })
+    try {
+      const page = await getManuscripts({
+        ...range,
+        q: query || undefined,
+        limit: PAGE_SIZE,
+        offset: manuscripts.length,
+      })
+      // 期间换过范围/搜索词：这次结果作废，但要把 loadingMore 放掉，否则再也翻不动
+      if (seq !== loadSeq) {
+        set({ loadingMore: false })
+        return
+      }
+      set((state) => ({
+        manuscripts: [...state.manuscripts, ...page.items],
+        total: page.total,
+        hasMore: page.hasMore,
+        loadingMore: false,
+      }))
+    } catch (error) {
+      if (seq !== loadSeq) {
+        set({ loadingMore: false })
+        return
+      }
+      logger.error('[notebook] 加载下一页失败', error)
+      set({ loadingMore: false, error: error instanceof Error ? error.message : '加载失败' })
+    }
+  },
+
+  loadCounts: async () => {
+    try {
+      set({ counts: await getManuscriptCounts() })
+    } catch (error) {
+      logger.error('[notebook] 加载手稿计数失败', error)
     }
   },
 
@@ -157,9 +260,11 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
           },
           ...state.manuscripts,
         ],
+        total: state.total + 1,
         active: manuscript,
         saveState: 'idle',
       }))
+      void get().loadCounts()
       return manuscript
     } catch (error) {
       logger.error('[notebook] 新建手稿失败', error)
@@ -209,19 +314,32 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
   forget: (id) => {
     set((state) => ({
       manuscripts: state.manuscripts.filter((item) => item.id !== id),
+      // 真的从列表里删掉一条才减总数；调用方可能重复调
+      total: state.manuscripts.some((item) => item.id === id)
+        ? Math.max(0, state.total - 1)
+        : state.total,
       active: state.active?.id === id ? null : state.active,
     }))
+    void get().loadCounts()
   },
 
   moveToFolder: async (id, folderId) => {
     try {
       const updated = await updateManuscript(id, { folderId })
+      const { scope, folders } = get()
+      // 移到当前范围之外（比如从头看未归档，把它收进某个夹）就该从列表里消失，
+      // 否则它会一直挂在原地，点开才发现归属早变了。
+      const stays = scopeContains(scope, updated.folderId ?? null, folders)
       set((state) => ({
-        manuscripts: state.manuscripts.map((item) =>
-          item.id === id ? { ...item, folderId: updated.folderId } : item,
-        ),
+        manuscripts: stays
+          ? state.manuscripts.map((item) =>
+              item.id === id ? { ...item, folderId: updated.folderId } : item,
+            )
+          : state.manuscripts.filter((item) => item.id !== id),
+        total: stays ? state.total : Math.max(0, state.total - 1),
         active: state.active?.id === id ? { ...state.active, folderId: updated.folderId } : state.active,
       }))
+      void get().loadCounts()
     } catch (error) {
       logger.error('[notebook] 移动到手稿夹失败', error)
       set({ error: error instanceof Error ? error.message : '移动失败' })
@@ -295,8 +413,10 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
           },
           ...state.manuscripts,
         ],
+        total: state.total + 1,
         active: manuscript,
       }))
+      void get().loadCounts()
       return manuscript
     } catch (error) {
       logger.error('[notebook] 卡片还原失败', error)
@@ -316,6 +436,7 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
     // 只在本地删掉这一条会留下过期的层级与落点，直接按服务端重新对齐。
     await get().loadFolders()
     await get().load()
+    void get().loadCounts()
   },
 
   /**

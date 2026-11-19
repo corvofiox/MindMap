@@ -14,10 +14,15 @@ vi.mock('@/services/api', async () => {
   return {
     ...actual,
     // 挂载时页面会真的拉一次列表，这里返回与 seed 一致的一条，否则 seed 会被覆盖
-    getManuscripts: vi.fn(async () => [
-      { id: 1, folderId: null, title: '第一篇', previewText: '预览一', imageCount: 0, createdAt: 0, updatedAt: 0 },
-    ]),
+    getManuscripts: vi.fn(async () => ({
+      items: [
+        { id: 1, folderId: null, title: '第一篇', previewText: '预览一', imageCount: 0, createdAt: 0, updatedAt: 0 },
+      ],
+      total: 1,
+      hasMore: false,
+    })),
     getManuscript: vi.fn(),
+    getManuscriptCounts: vi.fn(async () => ({ total: 1, unfiled: 1, byFolder: {} })),
     createManuscript: vi.fn(),
     updateManuscript: vi.fn(async (id: number, patch: Record<string, unknown>) => ({
       id,

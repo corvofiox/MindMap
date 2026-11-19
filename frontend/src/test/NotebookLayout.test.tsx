@@ -16,10 +16,15 @@ vi.mock('@/services/api', async () => {
   const actual = await vi.importActual<typeof import('@/services/api')>('@/services/api')
   return {
     ...actual,
-    getManuscripts: vi.fn(async () => [
-      { id: 1, folderId: null, title: '第一篇', previewText: '预览一', imageCount: 0, createdAt: 0, updatedAt: 0 },
-    ]),
+    getManuscripts: vi.fn(async () => ({
+      items: [
+        { id: 1, folderId: null, title: '第一篇', previewText: '预览一', imageCount: 0, createdAt: 0, updatedAt: 0 },
+      ],
+      total: 1,
+      hasMore: false,
+    })),
     getManuscript: vi.fn(),
+    getManuscriptCounts: vi.fn(async () => ({ total: 1, unfiled: 1, byFolder: {} })),
     createManuscript: vi.fn(),
     updateManuscript: vi.fn(async (id: number, patch: Record<string, unknown>) => ({
       id,
@@ -52,6 +57,9 @@ vi.mock('@/services/api', async () => {
 const api = await import('@/services/api')
 const { NotebookPage } = await import('@/pages/NotebookPage')
 const { useNotebookStore } = await import('@/store/useNotebookStore')
+
+/** getManuscripts 现在返回一页（items/total/hasMore），测试里用这个包一下。 */
+const page = <T,>(items: T[], hasMore = false) => ({ items, total: items.length, hasMore })
 const { useUIStore } = await import('@/store/useUIStore')
 
 function seed() {
@@ -332,44 +340,55 @@ describe('移动到子菜单的鼠标路径', () => {
 })
 
 describe('未归档的筛选与落点', () => {
-  it('默认落点是「未归档」：进页面只列未归档手稿，切文件夹再切回来', async () => {
+  it('默认落点是「未归档」：进页面按未归档取数，切文件夹改按文件夹取', async () => {
     vi.mocked(api.getManuscriptFolders).mockResolvedValueOnce([
       { id: 7, userId: 1, name: '素材', parentId: null, sortOrder: 0, collapsed: false, createdAt: 0 },
     ])
-    vi.mocked(api.getManuscripts).mockResolvedValueOnce([
-      { id: 1, folderId: null, title: '未归一篇', previewText: '', imageCount: 0, createdAt: 0, updatedAt: 0 },
-      { id: 2, folderId: 7, title: '文件夹里的', previewText: '', imageCount: 0, createdAt: 0, updatedAt: 0 },
-    ])
+    // 范围过滤在服务端：这里按参数回不同的页，验证客户端"发对了范围"
+    vi.mocked(api.getManuscripts).mockImplementation(async (params) => {
+      if (params.folderId === null) {
+        return page([
+          { id: 1, folderId: null, title: '未归一篇', previewText: '', imageCount: 0, createdAt: 0, updatedAt: 0 },
+        ])
+      }
+      return page([
+        { id: 2, folderId: 7, title: '文件夹里的', previewText: '', imageCount: 0, createdAt: 0, updatedAt: 0 },
+      ])
+    })
     renderPage()
 
-    // 进来就是「未归档」：文件夹里的那篇不出现
+    // 进来就是「未归档」：服务端被要求只给未归档
     await screen.findByText('素材')
-    expect(screen.getByText('未归一篇')).toBeTruthy()
-    expect(screen.queryByText('文件夹里的')).toBeNull()
+    await waitFor(() => expect(screen.getByText('未归一篇')).toBeTruthy())
+    expect(vi.mocked(api.getManuscripts).mock.lastCall?.[0]).toMatchObject({ folderId: null })
     expect(document.querySelector('[data-folder-row="unfiled"]')?.className).toContain('bg-blue-50')
 
-    // 点文件夹：只剩文件夹里的
+    // 点文件夹：按那个文件夹（连子孙）取
     fireEvent.click(screen.getByText('素材'))
-    expect(screen.getByText('文件夹里的')).toBeTruthy()
-    expect(screen.queryByText('未归一篇')).toBeNull()
+    await waitFor(() => expect(screen.getByText('文件夹里的')).toBeTruthy())
+    expect(vi.mocked(api.getManuscripts).mock.lastCall?.[0]).toMatchObject({ folderIds: [7] })
 
     // 回到未归档
     fireEvent.click(screen.getByText('未归档'))
-    expect(screen.getByText('未归一篇')).toBeTruthy()
-    expect(screen.queryByText('文件夹里的')).toBeNull()
+    await waitFor(() => expect(screen.getByText('未归一篇')).toBeTruthy())
+    expect(vi.mocked(api.getManuscripts).mock.lastCall?.[0]).toMatchObject({ folderId: null })
   })
 
   it('未归档空了但文件夹里还有稿子：不能说成「还没有手稿」', async () => {
     vi.mocked(api.getManuscriptFolders).mockResolvedValueOnce([
       { id: 7, userId: 1, name: '素材', parentId: null, sortOrder: 0, collapsed: false, createdAt: 0 },
     ])
-    vi.mocked(api.getManuscripts).mockResolvedValueOnce([
-      { id: 2, folderId: 7, title: '文件夹里的', previewText: '', imageCount: 0, createdAt: 0, updatedAt: 0 },
-    ])
+    vi.mocked(api.getManuscripts).mockResolvedValue(page([]))
+    // 空态文案看的是服务端计数，不是"这一页有没有行"
+    vi.mocked(api.getManuscriptCounts).mockResolvedValue({
+      total: 1,
+      unfiled: 0,
+      byFolder: { '7': 1 },
+    })
     renderPage()
 
     await screen.findByText('素材')
-    expect(screen.getByText('未归档里还没有手稿')).toBeTruthy()
+    await waitFor(() => expect(screen.getByText('未归档里还没有手稿')).toBeTruthy())
     expect(screen.queryByText('还没有手稿')).toBeNull()
   })
 
@@ -415,9 +434,9 @@ describe('落点与搜索范围', () => {
     vi.mocked(api.getManuscriptFolders).mockResolvedValueOnce([
       { id: 7, userId: 1, name: '素材', parentId: null, sortOrder: 0, collapsed: false, createdAt: 0 },
     ])
-    vi.mocked(api.getManuscripts).mockResolvedValueOnce([
+    vi.mocked(api.getManuscripts).mockResolvedValueOnce(page([
       { id: 2, folderId: 7, title: '文件夹里的', previewText: '', imageCount: 0, createdAt: 0, updatedAt: 0 },
-    ])
+    ]))
     vi.mocked(api.getManuscript).mockResolvedValueOnce({
       id: 2,
       folderId: 7,
@@ -440,28 +459,38 @@ describe('落点与搜索范围', () => {
       { id: 7, userId: 1, name: '素材', parentId: null, sortOrder: 0, collapsed: false, createdAt: 0 },
       { id: 8, userId: 1, name: '设计', parentId: null, sortOrder: 0, collapsed: false, createdAt: 0 },
     ])
-    vi.mocked(api.getManuscripts).mockResolvedValueOnce([
-      { id: 1, folderId: 7, title: '素材里的笔记', previewText: '', imageCount: 0, createdAt: 0, updatedAt: 0 },
-      { id: 2, folderId: 8, title: '设计里的笔记', previewText: '', imageCount: 0, createdAt: 0, updatedAt: 0 },
-    ])
+    // 搜索时不能带文件夹范围：带了就"在素材里搜不到设计里的那篇"
+    vi.mocked(api.getManuscripts).mockImplementation(async (params) => {
+      if (params.q) {
+        return page([
+          { id: 1, folderId: 7, title: '素材里的笔记', previewText: '', imageCount: 0, createdAt: 0, updatedAt: 0 },
+          { id: 2, folderId: 8, title: '设计里的笔记', previewText: '', imageCount: 0, createdAt: 0, updatedAt: 0 },
+        ])
+      }
+      if (params.folderIds) {
+        return page([
+          { id: 1, folderId: 7, title: '素材里的笔记', previewText: '', imageCount: 0, createdAt: 0, updatedAt: 0 },
+        ])
+      }
+      return page([])
+    })
     renderPage()
     await screen.findByText('设计')
 
-    // 选中「素材」：列表只剩素材里的那篇
+    // 选中「素材」：服务端按这个文件夹取，设计里的那篇不在结果里
     fireEvent.click(screen.getByText('素材'))
-    expect(screen.getByText('素材里的笔记')).toBeTruthy()
+    await waitFor(() => expect(screen.getByText('素材里的笔记')).toBeTruthy())
     expect(screen.queryByText('设计里的笔记')).toBeNull()
 
-    // 搜索：服务端按关键词返回跨文件夹的命中，左栏不能再用选中范围二次过滤
-    vi.mocked(api.getManuscripts).mockResolvedValueOnce([
-      { id: 1, folderId: 7, title: '素材里的笔记', previewText: '', imageCount: 0, createdAt: 0, updatedAt: 0 },
-      { id: 2, folderId: 8, title: '设计里的笔记', previewText: '', imageCount: 0, createdAt: 0, updatedAt: 0 },
-    ])
     fireEvent.change(screen.getByPlaceholderText('搜索标题或正文'), { target: { value: '笔记' } })
 
     await waitFor(() => expect(screen.getByText('设计里的笔记')).toBeTruthy())
     expect(screen.getByText('素材里的笔记')).toBeTruthy()
-    expect(vi.mocked(api.getManuscripts).mock.lastCall?.[0]).toMatchObject({ q: '笔记' })
+    const lastCall = vi.mocked(api.getManuscripts).mock.lastCall?.[0]
+    expect(lastCall).toMatchObject({ q: '笔记' })
+    // 关键：搜索请求里不带任何文件夹范围
+    expect(lastCall?.folderId).toBeUndefined()
+    expect(lastCall?.folderIds).toBeUndefined()
   })
 })
 
@@ -471,9 +500,9 @@ describe('删除文件夹：整棵子树连手稿一起删', () => {
       { id: 7, userId: 1, name: '素材', parentId: null, sortOrder: 0, collapsed: false, createdAt: 0 },
       { id: 8, userId: 1, name: '配色', parentId: 7, sortOrder: 0, collapsed: false, createdAt: 0 },
     ])
-    vi.mocked(api.getManuscripts).mockResolvedValueOnce([
+    vi.mocked(api.getManuscripts).mockResolvedValueOnce(page([
       { id: 1, folderId: 8, title: '深层手稿', previewText: '', imageCount: 0, createdAt: 0, updatedAt: 0 },
-    ])
+    ]))
   }
 
   it('确认框把后果说准：子文件夹与手稿一起删（不再说"上移一层"或"退回未归档"）', async () => {

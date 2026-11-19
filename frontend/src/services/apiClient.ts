@@ -230,25 +230,26 @@ export class ApiClient {
   private async retryWithNewCsrfToken<T>(
     endpoint: string,
     options: RequestInit
-  ): Promise<T> {
+  ): Promise<ApiResponse<T>> {
     try {
       // 获取新的 CSRF token
       await this.getCsrfTokenFromServer()
 
       // 重试原始请求（标记为已重试，再次 403 不再递归）
-      return this.request<T>(endpoint, options, this.defaultTimeout, true)
+      return this.requestEnvelope<T>(endpoint, options, this.defaultTimeout, true)
     } catch (error) {
       throw new Error(this.handleError(error, '重试请求失败'))
     }
   }
 
-  // 通用请求方法
-  private async request<T>(
+  // 通用请求方法（返回完整信封：分页接口的 total / hasMore 与 data 同级，
+  // 只取 data 就丢了。所有错误处理都收敛在这里，两种返回值共用。）
+  private async requestEnvelope<T>(
     endpoint: string,
     options: RequestInit = {},
     timeout: number = this.defaultTimeout,
     isCsrfRetry: boolean = false
-  ): Promise<T> {
+  ): Promise<ApiResponse<T>> {
     // N8: timedOut 标记需在下方 catch 中使用,故在 try 外创建
     const { controller, cleanup, timedOut } = this.createTimeoutController(timeout, options.signal)
     try {
@@ -316,7 +317,7 @@ export class ApiClient {
       }
 
       // 空响应体视为无数据,避免 data.data 访问抛 TypeError
-      return data ? (data as ApiResponse<T>).data as T : undefined as unknown as T
+      return (data ?? { success: true, data: undefined as unknown as T }) as ApiResponse<T>
     } catch (error) {
       // 处理网络错误
       if (error instanceof TypeError && error.message.includes('Failed to fetch')) {
@@ -340,6 +341,17 @@ export class ApiClient {
     }
   }
 
+  // 通用请求方法：只要 data
+  private async request<T>(
+    endpoint: string,
+    options: RequestInit = {},
+    timeout: number = this.defaultTimeout,
+    isCsrfRetry: boolean = false
+  ): Promise<T> {
+    const envelope = await this.requestEnvelope<T>(endpoint, options, timeout, isCsrfRetry)
+    return envelope.data as T
+  }
+
   // GET请求
   async get<T>(endpoint: string, params?: Record<string, any>): Promise<T> {
     // 构建查询参数
@@ -350,6 +362,21 @@ export class ApiClient {
     return this.request<T>(`${endpoint}${queryString}`, {
       method: 'GET',
     })
+  }
+
+  /**
+   * GET，返回完整信封。
+   *
+   * 分页接口把 `total` / `hasMore` 放在与 `data` 同级的信封里，只取 `data`
+   * 就永远不知道"还有没有下一页"。只给这类接口用，其余一律走 `get`。
+   */
+  async getEnvelope<T>(endpoint: string, params?: Record<string, any>): Promise<ApiResponse<T> & Record<string, unknown>> {
+    const queryString = params
+      ? '?' + new URLSearchParams(params as Record<string, string>).toString()
+      : ''
+    return this.requestEnvelope<T>(`${endpoint}${queryString}`, { method: 'GET' }) as Promise<
+      ApiResponse<T> & Record<string, unknown>
+    >
   }
 
   // POST请求

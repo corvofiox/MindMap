@@ -42,10 +42,14 @@ export interface FolderNode<F extends FolderLike = ManuscriptFolder> {
  *
  * 容错：父节点不存在（被删了/数据不干净）时把它当根节点，不要让它从界面上
  * 消失——用户看不到自己的文件夹比看到层级错乱更糟。
+ *
+ * 计数来源二选一：`directCounts`（服务端 GROUP BY 的直属条数，给手稿树用）优先；
+ * 否则按 `manuscripts` 现数（节点池的卡片走这条）。子树加总始终在这里做。
  */
 export function buildFolderTree<F extends FolderLike>(
   folders: F[],
   manuscripts: CountableItem[] = [],
+  directCounts?: Map<number, number>,
 ): FolderNode<F>[] {
   const ids = new Set(folders.map((folder) => folder.id))
   const byParent = new Map<number | null, F[]>()
@@ -57,9 +61,13 @@ export function buildFolderTree<F extends FolderLike>(
   }
 
   const directCount = new Map<number, number>()
-  for (const manuscript of manuscripts) {
-    if (manuscript.folderId === null || manuscript.folderId === undefined) continue
-    directCount.set(manuscript.folderId, (directCount.get(manuscript.folderId) ?? 0) + 1)
+  if (directCounts) {
+    for (const [id, n] of directCounts) directCount.set(id, n)
+  } else {
+    for (const manuscript of manuscripts) {
+      if (manuscript.folderId === null || manuscript.folderId === undefined) continue
+      directCount.set(manuscript.folderId, (directCount.get(manuscript.folderId) ?? 0) + 1)
+    }
   }
 
   const build = (parent: number | null): FolderNode<F>[] =>
@@ -94,6 +102,13 @@ export function collectSubtreeIds(folders: ManuscriptFolder[], rootId: number): 
 interface NotebookFolderTreeProps {
   folders: ManuscriptFolder[]
   manuscripts: ManuscriptSummary[]
+  /**
+   * 服务端给的直属条数（文件夹 id → 条数）与未归档条数。
+   *
+   * 一定要用它而不是数 `manuscripts`：列表是分页的，数出来的只是"已经加载的
+   * 那几页"——1928 篇的文件夹会显示成 200。
+   */
+  counts?: { unfiled: number; byFolder: Record<string, number> } | null
   /** 当前范围：'unfiled' 或某个文件夹 id */
   selectedId: FolderSelection
   onSelect: (selection: FolderSelection) => void
@@ -117,14 +132,27 @@ interface NotebookFolderTreeProps {
 export function NotebookFolderTree({
   folders,
   manuscripts,
+  counts,
   selectedId,
   onSelect,
   onCreate,
   onDelete,
   onReorder,
 }: NotebookFolderTreeProps) {
-  const tree = useMemo(() => buildFolderTree(folders, manuscripts), [folders, manuscripts])
-  const unfiled = manuscripts.filter((item) => item.folderId === null || item.folderId === undefined).length
+  const tree = useMemo(() => {
+    if (counts) {
+      const direct = new Map<number, number>()
+      for (const [id, n] of Object.entries(counts.byFolder)) {
+        const numeric = Number(id)
+        if (Number.isInteger(numeric)) direct.set(numeric, n)
+      }
+      return buildFolderTree(folders, [], direct)
+    }
+    return buildFolderTree(folders, manuscripts)
+  }, [folders, manuscripts, counts])
+  const unfiled = counts
+    ? counts.unfiled
+    : manuscripts.filter((item) => item.folderId === null || item.folderId === undefined).length
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set())
   const [dropHint, setDropHint] = useState<{ id: number; position: DropPosition } | null>(null)
 

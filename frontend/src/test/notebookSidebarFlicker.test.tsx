@@ -9,7 +9,7 @@
  *   - 搜索输入有防抖，连续敲字只发一次请求。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, act } from '@testing-library/react'
+import { render, screen, fireEvent, act, waitFor } from '@testing-library/react'
 import { NotebookSidebar } from '@/features/notebook/NotebookSidebar'
 import type { ManuscriptSummary } from '@/services/api'
 
@@ -26,6 +26,10 @@ function renderSidebar(overrides: Partial<Parameters<typeof NotebookSidebar>[0]>
     query: '',
     loading: false,
     loaded: true,
+    counts: null,
+    hasMore: false,
+    loadingMore: false,
+    onLoadMore: vi.fn(),
     folderSelection: 'unfiled' as const,
     onSelectFolder: vi.fn(),
     onSearch: vi.fn(),
@@ -69,8 +73,7 @@ describe('笔记本左栏：重新取数据时不闪', () => {
   })
 })
 
-describe('笔记本左栏：搜索去抖', () => {
-  beforeEach(() => {
+describe('笔记本左栏：搜索去抖', () => {  beforeEach(() => {
     vi.clearAllMocks()
     vi.useFakeTimers()
   })
@@ -92,5 +95,71 @@ describe('笔记本左栏：搜索去抖', () => {
     expect(props.onSearch).toHaveBeenCalledTimes(1)
     expect(props.onSearch).toHaveBeenCalledWith('发版回归')
     vi.useRealTimers()
+  })
+})
+
+describe('笔记本左栏：滚到底自动加载', () => {
+  let fire: ((entries: { isIntersecting: boolean }[]) => void) | null = null
+
+  const stubObserver = () => {
+    fire = null
+    class FakeObserver {
+      constructor(cb: (entries: { isIntersecting: boolean }[]) => void) {
+        fire = cb
+      }
+      observe() {}
+      disconnect() {}
+      unobserve() {}
+    }
+    vi.stubGlobal('IntersectionObserver', FakeObserver as never)
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    stubObserver()
+  })
+
+  it('哨兵进入视口就取下一页', async () => {
+    const props = renderSidebar({ hasMore: true })
+    await waitFor(() => expect(fire).not.toBeNull())
+
+    act(() => {
+      fire?.([{ isIntersecting: true }])
+    })
+
+    expect(props.onLoadMore).toHaveBeenCalled()
+  })
+
+  it('没有下一页时不挂观察器', async () => {
+    const props = renderSidebar({ hasMore: false })
+    expect(document.querySelector('[data-testid="notebook-load-sentinel"]')).toBeNull()
+    act(() => {
+      fire?.([{ isIntersecting: true }])
+    })
+    expect(props.onLoadMore).not.toHaveBeenCalled()
+  })
+
+  it('正在取下一页时不重复触发', async () => {
+    const props = renderSidebar({ hasMore: true, loadingMore: true })
+    act(() => {
+      fire?.([{ isIntersecting: true }])
+    })
+    expect(props.onLoadMore).not.toHaveBeenCalled()
+  })
+})
+
+describe('笔记本左栏：徽标计数', () => {
+  it('用服务端计数，不数已加载的行', () => {
+    renderSidebar({
+      counts: { total: 1947, unfiled: 5, byFolder: { '7': 1928 } },
+      folders: [
+        { id: 7, userId: 1, name: '大夹子', parentId: null, sortOrder: 0, collapsed: false, createdAt: 0 },
+      ],
+      // 列表只有一页 200 条，计数不能来自它
+      manuscripts: ROWS,
+    })
+
+    expect(screen.getByText('1928')).toBeTruthy()
+    expect(screen.getByText('5')).toBeTruthy()
   })
 })

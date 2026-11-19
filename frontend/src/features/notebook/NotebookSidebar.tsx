@@ -31,6 +31,12 @@ interface NotebookSidebarProps {
   loading: boolean
   /** 列表是否加载过至少一次：只有首屏才铺骨架屏，重新取数据时保留旧行 */
   loaded: boolean
+  /** 各文件夹条数（服务端 GROUP BY）。徽标不能数已加载的那一页。 */
+  counts: { total: number; unfiled: number; byFolder: Record<string, number> } | null
+  /** 还有下一页：滚到底自动取 */
+  hasMore: boolean
+  loadingMore: boolean
+  onLoadMore: () => void
   /** 当前选中的范围：未归档 / 某个文件夹。由页面持有，新建手稿时要带进对应文件夹。 */
   folderSelection: FolderSelection
   onSelectFolder: (selection: FolderSelection) => void
@@ -93,6 +99,10 @@ export function NotebookSidebar({
   query,
   loading,
   loaded,
+  counts,
+  hasMore,
+  loadingMore,
+  onLoadMore,
   folderSelection,
   onSelectFolder,
   onSearch,
@@ -118,32 +128,17 @@ export function NotebookSidebar({
   // 从「移动到」斜向移到子菜单时会经过 4px 空隙，立刻关闭会永远点不到子菜单；
   // 用一点关闭延迟 + 透明桥接来解决
   const submenuTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const listRef = useRef<HTMLDivElement | null>(null)
+  const sentinelRef = useRef<HTMLDivElement | null>(null)
 
-  // 有检索词时跨全部手稿列命中：搜索的职责是"找得到"，再按左栏范围过滤一道，
-  // 就会出现"明明有这篇却搜不到"（因为它在别的文件夹里）。清空检索词回到当前范围。
-  // 没有检索词时：未归档 / 某个文件夹（选中父级时连同所有子孙一起列出）
-  const visible = useMemo(() => {
-    if (query) return manuscripts
-    if (folderSelection === 'unfiled') {
-      return manuscripts.filter((m) => m.folderId === null || m.folderId === undefined)
-    }
-    const ids = new Set<number>([folderSelection])
-    let changed = true
-    while (changed) {
-      changed = false
-      for (const folder of folders) {
-        if (folder.parentId !== null && ids.has(folder.parentId) && !ids.has(folder.id)) {
-          ids.add(folder.id)
-          changed = true
-        }
-      }
-    }
-    return manuscripts.filter((m) => m.folderId !== null && m.folderId !== undefined && ids.has(m.folderId))
-  }, [manuscripts, folders, folderSelection, query])
+  // 服务端已经按范围过滤过分页了，这里不再自己筛一遍：再筛一次就会出现
+  // "页面里 200 行、可见只剩 3 行"的错位（而 hasMore 还按 200 算）。
+  const visible = manuscripts
 
   // 空态文案要分清「整本笔记是空的」和「只是未归档里空了」：后者很常见
   // （稿子都归档进文件夹了），说成"还没有手稿"会让人以为稿子丢了。
-  const unfiledEmpty = folderSelection === 'unfiled' && manuscripts.length > 0
+  // 总数必须看服务端计数——列表只有一页，数不出全局。
+  const unfiledEmpty = folderSelection === 'unfiled' && (counts?.total ?? manuscripts.length) > 0
 
   // "移动到"子菜单：按树的顺序拍平，带层级缩进
   const flatFolders = useMemo(() => {
@@ -170,9 +165,13 @@ export function NotebookSidebar({
     // 确认框必须把这个后果说准——这里既不"上移一层"，也不"手稿退回未归档"。
     const subtree = collectSubtreeIds(folders, id)
     const subFolders = subtree.size - 1
-    const manuscriptsInside = manuscripts.filter(
-      (m) => m.folderId !== null && m.folderId !== undefined && subtree.has(m.folderId),
-    ).length
+    // 里面的手稿数要看服务端计数：列表是按当前范围分页取的，被删的那个夹子里的
+    // 行根本不在这一页里，数 manuscripts 会得出 0（文案就会漏掉"N 篇手稿"）。
+    const manuscriptsInside = counts
+      ? Array.from(subtree).reduce((sum, fid) => sum + (counts.byFolder[String(fid)] ?? 0), 0)
+      : manuscripts.filter(
+          (m) => m.folderId !== null && m.folderId !== undefined && subtree.has(m.folderId),
+        ).length
     const doomed = [
       subFolders > 0 ? `${subFolders} 个子文件夹` : '',
       manuscriptsInside > 0 ? `${manuscriptsInside} 篇手稿` : '',
@@ -246,6 +245,28 @@ export function NotebookSidebar({
   }
 
   useEffect(() => () => cancelSubmenuClose(), [])
+
+  // 滚到底自动取下一页。
+  //
+  // 用 IntersectionObserver 而不是监听 scroll：后者每帧都要读 scrollTop 和
+  // 布局，列表长了会拖慢滚动本身（而这正是我们要避免的）。
+  // 依赖里带 manuscripts.length：每追加一页重新挂一次，若哨兵仍在视口内会立刻
+  // 再触发，直到填满或没有下一页——这就是无限滚动该有的行为。
+  useEffect(() => {
+    if (!hasMore || loadingMore || !loaded) return
+    if (typeof IntersectionObserver === 'undefined') return
+    const sentinel = sentinelRef.current
+    const root = listRef.current
+    if (!sentinel || !root) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) onLoadMore()
+      },
+      { root, rootMargin: '120px 0px' },
+    )
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [hasMore, loadingMore, loaded, onLoadMore, manuscripts.length])
 
   // Esc 关闭菜单：浮层挡住了整页，只靠点空白关闭对键盘用户不友好
   useEffect(() => {
@@ -326,6 +347,7 @@ export function NotebookSidebar({
         <NotebookFolderTree
           folders={folders}
           manuscripts={manuscripts}
+          counts={counts}
           selectedId={folderSelection}
           onSelect={onSelectFolder}
           onCreate={(parentId) => handleAddFolder(parentId)}
@@ -335,7 +357,10 @@ export function NotebookSidebar({
       </div>
 
       {/* 列表 */}
-      <div className="notebook-scroll mt-2 flex-1 overflow-y-auto border-t border-zinc-100 px-2 pb-3 pt-1.5 dark:border-zinc-800">
+      <div
+        ref={listRef}
+        className="notebook-scroll mt-2 flex-1 overflow-y-auto border-t border-zinc-100 px-2 pb-3 pt-1.5 dark:border-zinc-800"
+      >
         {/* 骨架屏只给首屏。之后每次重新取（搜索、新建、移动）都保留旧行等结果，
             否则骨架屏会插在列表上方把整列顶下去——敲字时就是"狂闪"。 */}
         {loading && !loaded && (
@@ -437,6 +462,13 @@ export function NotebookSidebar({
             </SortableRow>
           )
         })}
+
+        {/* 无限滚动的哨兵：进入视口（提前 120px）就取下一页。
+            用它而不是监听 scroll——后者每帧读 layout，列表长了会拖慢滚动本身。 */}
+        {hasMore && <div ref={sentinelRef} data-testid="notebook-load-sentinel" className="h-6" aria-hidden="true" />}
+        {loadingMore && (
+          <div className="px-3 py-1.5 text-center text-[11.5px] text-zinc-400 dark:text-zinc-500">加载中…</div>
+        )}
       </div>
 
       {/* 手稿操作菜单：浮层，不占布局；"移动到"再向右展开二级列表 */}

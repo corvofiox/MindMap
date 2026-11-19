@@ -58,8 +58,9 @@ export function NotebookImportMenu({ onImported }: NotebookImportMenuProps) {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [list, folderList] = await Promise.all([getManuscripts(), getManuscriptFolders()])
-      setManuscripts(list)
+      const [page, folderList] = await Promise.all([getManuscripts(), getManuscriptFolders()])
+      // 导入菜单只要第一页（最近 200 篇）：它是个快速入口，不是浏览全部手稿的地方
+      setManuscripts(page.items)
       setFolders(folderList)
     } catch (error) {
       addToast({

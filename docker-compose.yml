@@ -19,7 +19,14 @@ services:
       #     为空会一次性轮换三键(所有会话失效一次 + AI 密钥需重配)
       # ⚠️ 如需使用注入,生产环境必须改为强随机值(openssl rand -hex 32)。
       # 修改注入值同样会使会话失效/AI 密钥需重配,请谨慎操作。
+      #
+      # 图床目录必须显式指定：
+      #   storageRoot() = path.resolve(UPLOAD_DIR || './uploads')，相对**后端进程 cwd**。
+      #   容器里后端 cwd 是 /app/backend，而卷只挂了 /app/backend/data ——
+      #   不设这个变量，图片会落到 /app/backend/uploads，容器一重建（升级就是重建）
+      #   字节全丢，files 表却还在，旧图从此 404。
+      - UPLOAD_DIR=/app/backend/data/uploads
     volumes:
-      # 持久化数据库数据
+      # 持久化数据库数据（含上面的 UPLOAD_DIR 图床目录）
       - ./data:/app/backend/data
     restart: unless-stopped

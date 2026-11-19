@@ -16,9 +16,14 @@ vi.mock('@/services/api', async () => {
   const actual = await vi.importActual<typeof import('@/services/api')>('@/services/api')
   return {
     ...actual,
-    getManuscripts: vi.fn(async () => [
-      { id: 1, folderId: null, title: '第一篇', previewText: '预览一', imageCount: 0, createdAt: 0, updatedAt: 0 },
-    ]),
+    getManuscripts: vi.fn(async () => ({
+      items: [
+        { id: 1, folderId: null, title: '第一篇', previewText: '预览一', imageCount: 0, createdAt: 0, updatedAt: 0 },
+      ],
+      total: 1,
+      hasMore: false,
+    })),
+    getManuscriptCounts: vi.fn(async () => ({ total: 1, unfiled: 1, byFolder: {} })),
     getManuscript: vi.fn(async (id: number) => ({
       id,
       folderId: null,
@@ -56,6 +61,9 @@ vi.mock('@/services/api', async () => {
 const api = await import('@/services/api')
 const { NotebookPage } = await import('@/pages/NotebookPage')
 const { useNotebookStore } = await import('@/store/useNotebookStore')
+
+/** getManuscripts 现在返回一页（items/total/hasMore），测试里用这个包一下。 */
+const page = <T,>(items: T[], hasMore = false) => ({ items, total: items.length, hasMore })
 const { useUIStore } = await import('@/store/useUIStore')
 
 function LocationProbe() {
@@ -203,7 +211,9 @@ describe('侧栏搜索', () => {
   })
 
   it('没有任何手稿时的空态文案区分"搜不到"与"还没写"', async () => {
-    vi.mocked(api.getManuscripts).mockResolvedValue([])
+    vi.mocked(api.getManuscripts).mockResolvedValue(page([]))
+    // 整本笔记确实是空的：计数也是 0，才会说"还没有手稿"而不是"未归档里还没有手稿"
+    vi.mocked(api.getManuscriptCounts).mockResolvedValue({ total: 0, unfiled: 0, byFolder: {} })
     useNotebookStore.setState({ manuscripts: [] })
     renderPage()
 
