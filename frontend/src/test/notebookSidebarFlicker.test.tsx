@@ -162,4 +162,14 @@ describe('笔记本左栏：徽标计数', () => {
     expect(screen.getByText('1928')).toBeTruthy()
     expect(screen.getByText('5')).toBeTruthy()
   })
+
+  it('标题旁的「笔记本 N」也是全部手稿数，不是这一页', () => {
+    renderSidebar({
+      counts: { total: 1947, unfiled: 5, byFolder: { '7': 1928 } },
+      manuscripts: ROWS, // 只加载了 2 行
+    })
+
+    expect(screen.getByText('1947')).toBeTruthy()
+    expect(screen.queryByText('2')).toBeNull()
+  })
 })

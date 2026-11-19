@@ -289,7 +289,8 @@ export function NotebookSidebar({
         </span>
         <span className="text-[15px] font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">笔记本</span>
         <span className="rounded-full bg-zinc-100 px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
-          {manuscripts.length}
+          {/* 全部手稿数，不是当前这一页的条数：列表是分页的 */}
+          {counts?.total ?? manuscripts.length}
         </span>
         <button
           type="button"

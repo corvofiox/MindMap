@@ -145,4 +145,20 @@ describe('从笔记本导入', () => {
 
     expect(screen.getByTestId('notebook-import-menu')).toBeTruthy()
   })
+
+  it('标题上的「N 篇」是全部手稿数，不是这一页的条数', async () => {
+    // 菜单只取第一页，但标题必须说全部——否则 1900 多篇会显示成 200
+    vi.mocked(api.getManuscripts).mockResolvedValue({
+      items: [
+        { id: 11, folderId: 1, title: '设计稿', previewText: '', imageCount: 0, createdAt: 0, updatedAt: 20 },
+      ],
+      total: 1947,
+      hasMore: true,
+    })
+
+    await openMenu()
+
+    expect(screen.getByText('1947 篇')).toBeTruthy()
+    expect(screen.queryByText('1 篇')).toBeNull()
+  })
 })

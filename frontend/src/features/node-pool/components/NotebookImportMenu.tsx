@@ -50,6 +50,8 @@ export function NotebookImportMenu({ onImported }: NotebookImportMenuProps) {
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(false)
   const [manuscripts, setManuscripts] = useState<ManuscriptSummary[]>([])
+  /** 全部手稿数（服务端给的），不是这一页的条数——菜单只取第一页 */
+  const [total, setTotal] = useState(0)
   const [folders, setFolders] = useState<ManuscriptFolder[]>([])
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
   const [busyId, setBusyId] = useState<number | null>(null)
@@ -59,8 +61,10 @@ export function NotebookImportMenu({ onImported }: NotebookImportMenuProps) {
     setLoading(true)
     try {
       const [page, folderList] = await Promise.all([getManuscripts(), getManuscriptFolders()])
-      // 导入菜单只要第一页（最近 200 篇）：它是个快速入口，不是浏览全部手稿的地方
+      // 导入菜单只要第一页（最近 200 篇）：它是个快速入口，不是浏览全部手稿的地方。
+      // 但标题上的"N 篇"必须是全部——数这一页会显示成 200。
       setManuscripts(page.items)
+      setTotal(page.total)
       setFolders(folderList)
     } catch (error) {
       addToast({
@@ -185,7 +189,7 @@ export function NotebookImportMenu({ onImported }: NotebookImportMenuProps) {
         open={open}
         onClose={() => { setOpen(false); setPreview(null) }}
         title="从笔记本导入"
-        meta={`${manuscripts.length} 篇`}
+        meta={`${total} 篇`}
         testId="notebook-import-menu"
       >
         {loading && (
